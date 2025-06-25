@@ -13,34 +13,28 @@ The Asyncpg database also demonstrates how to use the plugin loader and `secrets
 # ]
 # ///
 
-from typing import Annotated, Optional
+from typing import Annotated, Any
 
 from litestar import Litestar, get
 from litestar.params import Dependency
 
-from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgPoolConfig
+from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec, providers
-from sqlspec.filters import FilterTypes
+from sqlspec.statement import SQLResult
+from sqlspec.statement.filters import FilterTypes
 
 
-@get(
-    "/",
-    dependencies=providers.create_filter_dependencies({"search": "greeting", "search_ignore_case": True}),
-)
+@get("/", dependencies=providers.create_filter_dependencies({"search": "greeting", "search_ignore_case": True}))
 async def simple_asyncpg(
     db_session: AsyncpgDriver, filters: Annotated[list[FilterTypes], Dependency(skip_validation=True)]
-) -> Optional[dict[str, str]]:
-    return await db_session.select_one_or_none(
-        "SELECT greeting FROM (select 'Hello, world!' as greeting) as t", *filters
-    )
+) -> SQLResult[dict[str, Any]]:
+    return await db_session.execute("SELECT greeting FROM (select 'Hello, world!' as greeting) as t", *filters)
 
 
 sqlspec = SQLSpec(
     config=[
         DatabaseConfig(
-            config=AsyncpgConfig(
-                pool_config=AsyncpgPoolConfig(dsn="postgres://app:app@localhost:15432/app", min_size=1, max_size=3),
-            ),
+            config=AsyncpgConfig(dsn="postgres://app:app@localhost:15432/app", min_size=1, max_size=3),
             commit_mode="autocommit",
         )
     ]

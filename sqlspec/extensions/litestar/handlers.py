@@ -1,4 +1,3 @@
-# ruff: noqa: PLC2801
 import contextlib
 import inspect
 from collections.abc import AsyncGenerator
@@ -22,9 +21,8 @@ if TYPE_CHECKING:
     from litestar.datastructures.state import State
     from litestar.types import Message, Scope
 
-    from sqlspec.base import DatabaseConfigProtocol, DriverT
+    from sqlspec.config import DatabaseConfigProtocol, DriverT
     from sqlspec.typing import ConnectionT, PoolT
-
 
 SESSION_TERMINUS_ASGI_EVENTS = {HTTP_RESPONSE_START, HTTP_DISCONNECT, WEBSOCKET_DISCONNECT, WEBSOCKET_CLOSE}
 """ASGI events that terminate a session scope."""
@@ -125,8 +123,7 @@ def autocommit_handler_maker(
 
 
 def lifespan_handler_maker(
-    config: "DatabaseConfigProtocol[Any, Any, Any]",
-    pool_key: str,
+    config: "DatabaseConfigProtocol[Any, Any, Any]", pool_key: str
 ) -> "Callable[[Litestar], AbstractAsyncContextManager[None]]":
     """Build the lifespan handler for managing the database connection pool.
 
@@ -158,7 +155,7 @@ def lifespan_handler_maker(
             app.state.pop(pool_key, None)
             try:
                 await ensure_async_(config.close_pool)()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 if app.logger:  # pragma: no cover
                     app.logger.warning("Error closing database pool for %s. Error: %s", pool_key, e)
 
@@ -208,9 +205,7 @@ def pool_provider_maker(
 
 
 def connection_provider_maker(
-    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]",
-    pool_key: str,
-    connection_key: str,
+    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", pool_key: str, connection_key: str
 ) -> "Callable[[State, Scope], AsyncGenerator[ConnectionT, None]]":
     async def provide_connection(state: "State", scope: "Scope") -> "AsyncGenerator[ConnectionT, None]":
         db_pool = state.get(pool_key)

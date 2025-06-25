@@ -1,91 +1,127 @@
-"""Tests for ADBC configuration."""
+"""Unit tests for ADBC configuration."""
 
-from __future__ import annotations
-
-from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any
-from unittest.mock import MagicMock
-
-import pytest
-from adbc_driver_manager.dbapi import Connection
-
-from sqlspec.adapters.adbc import AdbcConfig
-
-if TYPE_CHECKING:
-    from collections.abc import Generator
+from sqlspec.adapters.adbc import CONNECTION_FIELDS, AdbcConfig, AdbcDriver
+from sqlspec.statement.sql import SQLConfig
 
 
-class MockAdbc(AdbcConfig):
-    """Mock implementation of ADBC for testing."""
-
-    def __init__(self, mock_connection: MagicMock | None = None, **kwargs: Any) -> None:
-        """Initialize with optional mock connection."""
-        super().__init__(**kwargs)  # pyright: ignore
-        self._mock_connection = mock_connection
-
-    def create_connection(*args: Any, **kwargs: Any) -> Connection:
-        """Mock create_connection method."""
-        return MagicMock(spec=Connection)  # pyright: ignore
-
-    @property
-    def connection_config_dict(self) -> dict[str, Any]:
-        """Mock connection_config_dict property."""
-        _ = super().connection_config_dict  # pyright: ignore
-        return {"driver": "test_driver"}
-
-    @contextmanager
-    def provide_connection(self, *args: Any, **kwargs: Any) -> Generator[Connection, None, None]:
-        """Mock provide_connection context manager."""
-        if self._mock_connection is not None:
-            yield self._mock_connection
-        else:
-            yield MagicMock(spec=Connection)  # pyright: ignore
-
-
-@pytest.fixture(scope="session")
-def mock_adbc_connection() -> Generator[MagicMock, None, None]:
-    """Create a mock ADBC connection."""
-    return MagicMock(spec=Connection)  # pyright: ignore
-
-
-def test_default_values() -> None:
-    """Test default values for ADBC."""
-    config = AdbcConfig()
-    assert config.connection_config_dict == {}  # pyright: ignore
-
-
-def test_with_all_values() -> None:
-    """Test ADBC with all values set."""
-    config = AdbcConfig(
-        uri="localhost",
-        driver_name="test_driver",
-        db_kwargs={"user": "test_user", "password": "test_pass", "database": "test_db"},
-    )
-
-    assert config.connection_config_dict == {
-        "uri": "localhost",
-        "user": "test_user",
-        "password": "test_pass",
-        "database": "test_db",
+def test_adbc_field_constants() -> None:
+    """Test ADBC CONNECTION_FIELDS constants."""
+    expected_connection_fields = {
+        "uri",
+        "driver_name",
+        "db_kwargs",
+        "conn_kwargs",
+        "adbc_driver_manager_entrypoint",
+        "autocommit",
+        "isolation_level",
+        "batch_size",
+        "query_timeout",
+        "connection_timeout",
+        "ssl_mode",
+        "ssl_cert",
+        "ssl_key",
+        "ssl_ca",
+        "username",
+        "password",
+        "token",
+        "project_id",
+        "dataset_id",
+        "account",
+        "warehouse",
+        "database",
+        "schema",
+        "role",
+        "authorization_header",
+        "grpc_options",
     }
+    assert CONNECTION_FIELDS == expected_connection_fields
 
 
-def test_connection_config_dict() -> None:
-    """Test connection_config_dict property."""
+def test_adbc_config_basic_creation() -> None:
+    """Test ADBC config creation with basic parameters."""
+    # Test minimal config creation
+    config = AdbcConfig(driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory")
+    assert config.driver_name == "adbc_driver_sqlite"
+    assert config.uri == "file::memory:?mode=memory"
+
+    # Test with all parameters
+    config_full = AdbcConfig(driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory", custom="value")
+    assert config_full.driver_name == "adbc_driver_sqlite"
+    assert config_full.uri == "file::memory:?mode=memory"
+    assert config_full.extras["custom"] == "value"
+
+
+def test_adbc_config_extras_handling() -> None:
+    """Test ADBC config extras parameter handling."""
+    # Test with kwargs going to extras
     config = AdbcConfig(
-        uri="localhost",
-        driver_name="test_driver",
-        db_kwargs={"user": "test_user", "password": "test_pass", "database": "test_db"},
+        driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory", custom_param="value", debug=True
     )
-    config_dict = config.connection_config_dict
-    assert config_dict["uri"] == "localhost"
-    assert config_dict["user"] == "test_user"
-    assert config_dict["password"] == "test_pass"
-    assert config_dict["database"] == "test_db"
+    assert config.extras["custom_param"] == "value"
+    assert config.extras["debug"] is True
+
+    # Test with kwargs going to extras
+    config2 = AdbcConfig(
+        driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory", unknown_param="test", another_param=42
+    )
+    assert config2.extras["unknown_param"] == "test"
+    assert config2.extras["another_param"] == 42
 
 
-def test_provide_connection(mock_adbc_connection: MagicMock) -> None:
-    """Test provide_connection context manager."""
-    config = MockAdbc(mock_connection=mock_adbc_connection)  # pyright: ignore
-    with config.provide_connection() as connection:  # pyright: ignore
-        assert connection is mock_adbc_connection
+def test_adbc_config_initialization() -> None:
+    """Test ADBC config initialization."""
+    # Test with default parameters
+    config = AdbcConfig(driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory")
+    assert isinstance(config.statement_config, SQLConfig)
+    # Test with custom parameters
+    custom_statement_config = SQLConfig()
+    config = AdbcConfig(
+        driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory", statement_config=custom_statement_config
+    )
+    assert config.statement_config is custom_statement_config
+
+
+def test_adbc_config_provide_session() -> None:
+    """Test ADBC config provide_session context manager."""
+    config = AdbcConfig(driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory")
+
+    # Test session context manager behavior
+    with config.provide_session() as session:
+        assert isinstance(session, AdbcDriver)
+        # Check that parameter styles were set
+        assert session.config.allowed_parameter_styles == ("qmark", "named_colon")
+        assert session.config.target_parameter_style == "qmark"
+
+
+def test_adbc_config_driver_type() -> None:
+    """Test ADBC config driver_type property."""
+    config = AdbcConfig(driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory")
+    assert config.driver_type is AdbcDriver
+
+
+def test_adbc_config_is_async() -> None:
+    """Test ADBC config is_async attribute."""
+    config = AdbcConfig(driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory")
+    assert config.is_async is False
+    assert AdbcConfig.is_async is False
+
+
+def test_adbc_config_supports_connection_pooling() -> None:
+    """Test ADBC config supports_connection_pooling attribute."""
+    config = AdbcConfig(driver_name="adbc_driver_sqlite", uri="file::memory:?mode=memory")
+    assert config.supports_connection_pooling is False
+    assert AdbcConfig.supports_connection_pooling is False
+
+
+def test_adbc_config_from_connection_config() -> None:
+    """Test ADBC config initialization with various parameters."""
+    # Test basic initialization
+    config = AdbcConfig(driver_name="test_driver", uri="test_uri", db_kwargs={"test_key": "test_value"})
+    assert config.driver_name == "test_driver"
+    assert config.uri == "test_uri"
+    assert config.db_kwargs == {"test_key": "test_value"}
+
+    # Test with extras (passed as kwargs)
+    config_extras = AdbcConfig(driver_name="test_driver", uri="test_uri", unknown_param="test_value", another_param=42)
+    assert config_extras.extras["unknown_param"] == "test_value"
+    assert config_extras.extras["another_param"] == 42

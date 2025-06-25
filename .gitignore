@@ -17,7 +17,9 @@ site/
 target/
 .idea/
 .vscode/
+.claude/
 .cursor/
+.zed/
 
 # files
 **/*.so
@@ -31,3 +33,13 @@ target/
 /docs/_build/
 coverage.*
 setup.py
+tmp/
+*.log
+.bugs
+.tmp
+.todos
+todo/
+CLAUDE.md
+CLAUDE.*.md
+TODO*
+.claudedocs

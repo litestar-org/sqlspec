@@ -17,7 +17,7 @@ repos:
       - id: mixed-line-ending
       - id: trailing-whitespace
   - repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: "v0.11.9"
+    rev: "v0.12.0"
     hooks:
       - id: ruff
         args: ["--fix"]
@@ -29,7 +29,7 @@ repos:
         additional_dependencies:
           - tomli
   - repo: https://github.com/python-formate/flake8-dunder-all
-    rev: v0.4.1
+    rev: v0.5.0
     hooks:
       - id: ensure-dunder-all
         exclude: "test*|tools"

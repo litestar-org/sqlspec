@@ -1,1 +1,3 @@
-"""Tests for ADBC adapter."""
+"""Unit tests for ADBC adapter."""
+
+__all__ = ()

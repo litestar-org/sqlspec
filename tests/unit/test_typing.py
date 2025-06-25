@@ -188,11 +188,7 @@ def test_extract_dataclass_items(sample_dataclass: SampleDataclass) -> None:
     """Test dataclass item extraction."""
     items = extract_dataclass_items(sample_dataclass)
     assert len(items) == 3
-    assert dict(items) == {
-        "name": "test",
-        "value": 42,
-        "empty_field": Empty,
-    }
+    assert dict(items) == {"name": "test", "value": 42, "empty_field": Empty}
 
 
 def test_dataclass_to_dict() -> None:
@@ -216,12 +212,7 @@ def test_dataclass_to_dict() -> None:
         items: list[str] = field(default_factory=list)
 
     nested = NestedDataclass(x=1, y=2)
-    obj = ComplexDataclass(
-        name="test",
-        nested=nested,
-        value=42,
-        items=["a", "b"],
-    )
+    obj = ComplexDataclass(name="test", nested=nested, value=42, items=["a", "b"])
 
     # Test basic conversion
     result = dataclass_to_dict(obj)

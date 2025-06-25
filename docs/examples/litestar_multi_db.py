@@ -22,8 +22,9 @@ from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec
 
 @get("/test", sync_to_thread=True)
 def simple_select(etl_session: DuckDBDriver) -> dict[str, str]:
-    result = etl_session.select_one("SELECT 'Hello, ETL world!' AS greeting")
-    return {"greeting": result["greeting"]}
+    result = etl_session.execute("SELECT 'Hello, ETL world!' AS greeting")
+    greeting = result.get_first()
+    return {"greeting": greeting["greeting"] if greeting is not None else "hi"}
 
 
 @get("/")
@@ -42,7 +43,7 @@ sqlspec = SQLSpec(
             connection_key="etl_connection",
             session_key="etl_session",
         ),
-    ],
+    ]
 )
 app = Litestar(route_handlers=[simple_sqlite, simple_select], plugins=[sqlspec])
 

@@ -1,1 +1,3 @@
-"""Tests for OracleDB adapter."""
+"""Unit tests for Psycopg adapter."""
+
+__all__ = ()

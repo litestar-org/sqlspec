@@ -1,6 +1,6 @@
 [project]
 authors = [{ name = "Cody Fincher", email = "cody@litestar.dev" }]
-dependencies = ["typing-extensions", "sqlglot", "eval_type_backport; python_version < \"3.10\""]
+dependencies = ["typing-extensions", "eval_type_backport; python_version < \"3.10\"", "click", "sqlglot>=19.9.0"]
 description = "SQL Experiments in Python"
 license = "MIT"
 maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
@@ -17,27 +17,35 @@ Source = "https://github.com/litestar-org/sqlspec"
 [project.optional-dependencies]
 adbc = ["adbc_driver_manager", "pyarrow"]
 aioodbc = ["aioodbc"]
+aiosql = ["aiosql"]
 aiosqlite = ["aiosqlite"]
 asyncmy = ["asyncmy"]
 asyncpg = ["asyncpg"]
 bigquery = ["google-cloud-bigquery"]
+cli = ["rich-click"]
 duckdb = ["duckdb"]
 fastapi = ["fastapi"]
 flask = ["flask"]
+fsspec = ["fsspec"]
 litestar = ["litestar"]
 msgspec = ["msgspec"]
 nanoid = ["fastnanoid>=0.4.1"]
+obstore = ["obstore"]
+opentelemetry = ["opentelemetry-instrumentation"]
 oracledb = ["oracledb"]
 orjson = ["orjson"]
+pandas = ["pandas", "pyarrow"]
 performance = ["sqlglot[rs]", "msgspec"]
 polars = ["polars", "pyarrow"]
+prometheus = ["prometheus-client"]
 psqlpy = ["psqlpy"]
 psycopg = ["psycopg[binary,pool]"]
 pydantic = ["pydantic", "pydantic-extra-types"]
 pymssql = ["pymssql"]
 pymysql = ["pymysql"]
 spanner = ["google-cloud-spanner"]
-uuid = ["uuid-utils>=0.6.1"]
+uuid = ["uuid-utils"]
+
 
 [dependency-groups]
 build = ["bump-my-version"]
@@ -81,7 +89,10 @@ lint = [
   "slotscheck>=0.16.5",
   "types-Pygments",
   "types-colorama",
+  "types-cffi",
+  "types-protobuf",
   "asyncpg-stubs",
+  "pyarrow-stubs",
 ]
 test = [
   "anyio",
@@ -89,7 +100,7 @@ test = [
   "pytest>=8.0.0",
   "pytest-asyncio>=0.23.8",
   "pytest-cov>=5.0.0",
-  "pytest-databases[postgres,oracle,mysql,bigquery,spanner]>=0.12.2",
+  "pytest-databases[postgres,oracle,mysql,bigquery,spanner,minio]>=0.12.2",
   "pytest-mock>=3.14.0",
   "pytest-sugar>=1.0.0",
   "pytest-xdist>=3.6.1",
@@ -146,7 +157,7 @@ version = "{current_version}"
 """
 
 [tool.codespell]
-ignore-words-list = "te"
+ignore-words-list = "te,ECT"
 skip = 'uv.lock'
 
 [tool.coverage.run]
@@ -224,6 +235,7 @@ markers = [
 testpaths = ["tests"]
 
 [tool.mypy]
+exclude = ["tmp/", ".tmp/", ".bugs/"]
 packages = ["sqlspec", "tests"]
 python_version = "3.9"
 
@@ -235,7 +247,7 @@ show_error_codes = true
 strict = true
 warn_redundant_casts = true
 warn_return_any = true
-warn_unreachable = true
+warn_unreachable = false
 warn_unused_configs = true
 warn_unused_ignores = true
 
@@ -253,34 +265,47 @@ module = [
   "asyncmy.*",
   "pyarrow",
   "pyarrow.*",
+  "opentelemetry.*",
+  "opentelemetry.instrumentation.*",
+  "opentelemetry",
+  "prometheus_client",
+  "prometheus_client.*",
+  "aiosql",
+  "aiosql.*",
+  "fsspec",
+  "fsspec.*",
+  "sqlglot",
+  "sqlglot.*",
 ]
 
 [[tool.mypy.overrides]]
 disable_error_code = "ignore-without-code"
 module = "sqlspec.extensions.litestar.providers"
 
+[[tool.mypy.overrides]]
+disable_error_code = "ignore-without-code,method-assign,attr-defined,unused-ignore,assignment"
+module = "tests.*"
+
+
 [tool.pyright]
 disableBytesTypePromotions = true
-exclude = ["**/node_modules", "**/__pycache__", ".venv", "tools", "docs"]
+exclude = ["**/node_modules", "**/__pycache__", ".venv", "tools", "docs", "tmp", ".tmp", ".bugs"]
 include = ["sqlspec", "tests"]
 pythonVersion = "3.9"
 reportMissingTypeStubs = false
 reportPrivateImportUsage = false
 reportPrivateUsage = false
+reportTypedDictNotRequiredAccess = false
 reportUnknownArgumentType = false
-reportUnknownMemberType = false
-reportUnknownVariableType = false
-reportUnnecessaryComparison = false
-reportUnnecessaryIsInstance = false
-reportUnnecessaryTypeIgnoreComments = true
+reportUnnecessaryTypeIgnoreComments = "information"
 root = "."
-
+venv = ".venv"
 
 [tool.slotscheck]
 strict-imports = false
 
 [tool.ruff]
-exclude = [".venv", "node_modules"]
+exclude = [".venv", "node_modules", "tmp", ".tmp", ".bugs"]
 line-length = 120
 src = ["sqlspec", "tests", "docs/examples", "tools"]
 target-version = "py39"
@@ -288,6 +313,8 @@ target-version = "py39"
 [tool.ruff.format]
 docstring-code-format = true
 docstring-code-line-length = 60
+skip-magic-trailing-comma = true
+
 
 [tool.ruff.lint]
 extend-safe-fixes = ["TC"]
@@ -295,6 +322,7 @@ fixable = ["ALL"]
 ignore = [
   "A003",    # flake8-builtins - class attribute {name} is shadowing a python builtin
   "B010",    # flake8-bugbear - do not call setattr with a constant attribute value
+  "B904",    # Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None`
   "D100",    # pydocstyle - missing docstring in public module
   "D101",    # pydocstyle - missing docstring in public class
   "D102",    # pydocstyle - missing docstring in public method
@@ -306,6 +334,7 @@ ignore = [
   "D202",    # pydocstyle - no blank lines allowed after function docstring
   "D205",    # pydocstyle - 1 blank line required between summary line and description
   "D415",    # pydocstyle - first line should end with a period, question mark, or exclamation point
+  "DOC501",  # pydocstyle - Missing raise information in docstring
   "E501",    # pycodestyle line too long, handled by ruff format
   "PLW2901", # pylint - for loop variable overwritten by assignment target
   "RUF012",  # Ruff-specific rule - annotated with classvar
@@ -323,6 +352,25 @@ ignore = [
   "RUF029",  # Ruff - function is declared as async but has no awaitable calls
   "COM812",  # flake8-comma - Missing trailing comma
   "PGH003",  # Use Specific ignore for pyright
+  "PLR0911", # pylint - Too many return statements
+  "PLR0912", # pylint - Too many branches
+  "PLR0914", # pylint - Too many statements
+  "PLR0915", # pylint - Too many lines in module
+  "PLR0916", # pylint - Too many statements in function
+  "PLR0917", # pylint - Too many statements in class
+  "DOC201",  # pydocstyle - Missing return statement
+  "BLE001",  # pylint -  Blind exception
+  "S101",    # S101 - Use of assert
+  "FIX002",  # Ruff - Allow the use of TODO in comments
+  "TD003",   # Ruff - Missing issue link for TODO
+  "TD002",   # Ruff - Missing author for TODO
+  "PYI036",  # pyright - Missing type annotation for `__aexit__`
+  "A002",    # ruff - function argument is shadowing a python builtin
+  "DOC202",  # pydocstyle - Code should not have a return section in the docstring
+  "SLF001",  # ruff - access of private method outside of class
+  "S608",    # ruff - Possible sql injection
+  "PLR0904", # too many public methods
+  "PLR6301", # method could be static or class method
 ]
 select = ["ALL"]
 
@@ -336,6 +384,7 @@ max-complexity = 25
 max-bool-expr = 10
 max-branches = 20
 max-locals = 20
+max-nested-blocks = 7
 max-returns = 15
 
 [tool.ruff.lint.pep8-naming]
@@ -343,10 +392,12 @@ classmethod-decorators = ["classmethod"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["sqlspec", "tests"]
+split-on-trailing-comma = false
 
 [tool.ruff.lint.per-file-ignores]
 "docs/**/*.*" = ["S", "B", "DTZ", "A", "TC", "ERA", "D", "RET", "PLW0127"]
 "docs/examples/**" = ["T201"]
+"sqlspec/statement/builder/mixins/**/*.*" = ["SLF001"]
 "tests/**/*.*" = [
   "A",
   "ARG",
@@ -373,7 +424,12 @@ known-first-party = ["sqlspec", "tests"]
   "PT012",
   "INP001",
   "DOC",
+  "ERA001",
+  "SLF001",
   "PLC",
+  "PT",
+  "PERF203",
+  "ANN",
 ]
 "tools/**/*.*" = ["D", "ARG", "EM", "TRY", "G", "FBT", "S603", "F811", "PLW0127", "PLR0911"]
 "tools/prepare_release.py" = ["S603", "S607"]

@@ -46,9 +46,7 @@ PY_OBJ = "py:obj"
 
 nitpicky = True
 nitpick_ignore: list[str] = []
-nitpick_ignore_regex = [
-    (PY_RE, r"sqlspec.*\.T"),
-]
+nitpick_ignore_regex = [(PY_RE, r"sqlspec.*\.T")]
 
 napoleon_google_docstring = True
 napoleon_include_special_with_doc = True
@@ -79,11 +77,7 @@ html_show_sourcelink = False
 html_title = "SQLSpec"
 # html_favicon = "_static/logo.png"
 # html_logo = "_static/logo.png"
-html_context = {
-    "source_type": "github",
-    "source_user": "cofin",
-    "source_repo": project.replace("_", "-"),
-}
+html_context = {"source_type": "github", "source_user": "cofin", "source_repo": project.replace("_", "-")}
 
 brand_colors = {
     "--brand-primary": {"rgb": "245, 0, 87", "hex": "#f50057"},

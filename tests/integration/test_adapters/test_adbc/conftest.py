@@ -20,9 +20,9 @@ def xfail_if_driver_missing(func: F) -> F:
         try:
             return func(*args, **kwargs)
         except Exception as e:
-            if "cannot open shared object file" in str(e):
-                pytest.xfail(f"ADBC driver shared object file not found: {e}")
-            raise e  # Reraise other exceptions
+            if "cannot open shared object file" in str(e) or "No module named" in str(e):
+                pytest.xfail(f"ADBC driver not available: {e}")
+            raise e
 
     return cast("F", wrapper)
 
@@ -31,5 +31,5 @@ def xfail_if_driver_missing(func: F) -> F:
 def adbc_session(postgres_service: PostgresService) -> AdbcConfig:
     """Create an ADBC session for PostgreSQL."""
     return AdbcConfig(
-        uri=f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+        uri=f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
     )

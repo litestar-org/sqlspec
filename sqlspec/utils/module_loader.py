@@ -1,18 +1,11 @@
 """General utility functions."""
 
-import sys
-from importlib import import_module
+import importlib
 from importlib.util import find_spec
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any, Optional
 
-if TYPE_CHECKING:
-    from types import ModuleType
-
-__all__ = (
-    "import_string",
-    "module_to_os_path",
-)
+__all__ = ("import_string", "module_to_os_path")
 
 
 def module_to_os_path(dotted_path: str = "app") -> "Path":
@@ -51,42 +44,51 @@ def import_string(dotted_path: str) -> "Any":
     Args:
         dotted_path: The path of the module to import.
 
-    Raises:
-        ImportError: Could not import the module.
-
     Returns:
         object: The imported object.
     """
 
-    def _is_loaded(module: "Optional[ModuleType]") -> bool:
-        spec = getattr(module, "__spec__", None)
-        initializing = getattr(spec, "_initializing", False)
-        return bool(module and spec and not initializing)
+    def _raise_import_error(msg: str, exc: "Optional[Exception]" = None) -> None:
+        if exc is not None:
+            raise ImportError(msg) from exc
+        raise ImportError(msg)
 
-    def _cached_import(module_path: str, class_name: str) -> Any:
-        """Import and cache a class from a module.
-
-        Args:
-            module_path: dotted path to module.
-            class_name: Class or function name.
-
-        Returns:
-            object: The imported class or function
-        """
-        # Check whether module is loaded and fully initialized.
-        module = sys.modules.get(module_path)
-        if not _is_loaded(module):
-            module = import_module(module_path)
-        return getattr(module, class_name)
-
+    obj: Any = None
     try:
-        module_path, class_name = dotted_path.rsplit(".", 1)
-    except ValueError as e:
-        msg = "%s doesn't look like a module path"
-        raise ImportError(msg, dotted_path) from e
+        parts = dotted_path.split(".")
+        module = None
+        i = len(parts)  # Initialize to full length
 
-    try:
-        return _cached_import(module_path, class_name)
-    except AttributeError as e:
-        msg = "Module '%s' does not define a '%s' attribute/class"
-        raise ImportError(msg, module_path, class_name) from e
+        for i in range(len(parts), 0, -1):
+            module_path = ".".join(parts[:i])
+            try:
+                module = importlib.import_module(module_path)
+                break
+            except ModuleNotFoundError:
+                continue
+        else:
+            _raise_import_error(f"{dotted_path} doesn't look like a module path")
+
+        if module is None:
+            _raise_import_error(f"Failed to import any module from {dotted_path}")
+
+        obj = module
+        attrs = parts[i:]
+        if not attrs and i == len(parts) and len(parts) > 1:
+            parent_module_path = ".".join(parts[:-1])
+            attr = parts[-1]
+            try:
+                parent_module = importlib.import_module(parent_module_path)
+            except Exception:
+                return obj
+            if not hasattr(parent_module, attr):
+                _raise_import_error(f"Module '{parent_module_path}' has no attribute '{attr}' in '{dotted_path}'")
+        for attr in attrs:
+            if not hasattr(obj, attr):
+                _raise_import_error(
+                    f"Module '{module.__name__ if module is not None else 'unknown'}' has no attribute '{attr}' in '{dotted_path}'"
+                )
+            obj = getattr(obj, attr)
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        _raise_import_error(f"Could not import '{dotted_path}': {e}", e)
+    return obj

@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from litestar.datastructures.state import State
     from litestar.types import BeforeMessageSendHookHandler, Scope
 
-    from sqlspec.base import AsyncConfigT, DriverT, SyncConfigT
+    from sqlspec.config import AsyncConfigT, DriverT, SyncConfigT
     from sqlspec.typing import ConnectionT, PoolT
 
 
@@ -48,6 +48,7 @@ class DatabaseConfig:
     commit_mode: "CommitMode" = field(default=DEFAULT_COMMIT_MODE)
     extra_commit_statuses: "Optional[set[int]]" = field(default=None)
     extra_rollback_statuses: "Optional[set[int]]" = field(default=None)
+    enable_correlation_middleware: bool = field(default=True)
     connection_provider: "Callable[[State, Scope], AsyncGenerator[ConnectionT, None]]" = field(  # pyright: ignore[reportGeneralTypeIssues]
         init=False, repr=False, hash=False
     )
@@ -55,14 +56,12 @@ class DatabaseConfig:
     session_provider: "Callable[[Any], AsyncGenerator[DriverT, None]]" = field(init=False, repr=False, hash=False)  # pyright: ignore[reportGeneralTypeIssues]
     before_send_handler: "BeforeMessageSendHookHandler" = field(init=False, repr=False, hash=False)
     lifespan_handler: "Callable[[Litestar], AbstractAsyncContextManager[None]]" = field(
-        init=False,
-        repr=False,
-        hash=False,
+        init=False, repr=False, hash=False
     )
     annotation: "type[Union[SyncConfigT, AsyncConfigT]]" = field(init=False, repr=False, hash=False)  # type: ignore[valid-type]   # pyright: ignore[reportGeneralTypeIssues]
 
     def __post_init__(self) -> None:
-        if not self.config.support_connection_pooling and self.pool_key == DEFAULT_POOL_KEY:  # type: ignore[union-attr,unused-ignore]
+        if not self.config.supports_connection_pooling and self.pool_key == DEFAULT_POOL_KEY:  # type: ignore[union-attr,unused-ignore]
             """If the database configuration does not support connection pooling, the pool key must be unique.  We just automatically generate a unique identify so it won't conflict with other configs that may get added"""
             self.pool_key = f"_{self.pool_key}_{id(self.config)}"
         if self.commit_mode == "manual":
@@ -82,7 +81,7 @@ class DatabaseConfig:
                 connection_scope_key=self.connection_key,
             )
         else:
-            msg = f"Invalid commit mode: {self.commit_mode}"  # type: ignore[unreachable]
+            msg = f"Invalid commit mode: {self.commit_mode}"
             raise ImproperConfigurationError(detail=msg)
         self.lifespan_handler = lifespan_handler_maker(config=self.config, pool_key=self.pool_key)
         self.connection_provider = connection_provider_maker(

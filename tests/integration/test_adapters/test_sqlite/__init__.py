@@ -1,5 +1,1 @@
-"""Integration tests for sqlspec adapters."""
-
-import pytest
-
-pytestmark = pytest.mark.sqlite
+"""SQLite integration tests."""

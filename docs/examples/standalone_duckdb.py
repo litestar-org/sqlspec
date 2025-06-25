@@ -11,8 +11,8 @@ This example demonstrates how to generate embeddings with Gemini using only Duck
 
 import os
 
-from sqlspec import SQLSpec
 from sqlspec.adapters.duckdb import DuckDBConfig
+from sqlspec.base import SQLSpec
 
 EMBEDDING_MODEL = "gemini-embedding-exp-03-07"
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -20,8 +20,8 @@ API_URL = (
     f"https://generativelanguage.googleapis.com/v1beta/models/{EMBEDDING_MODEL}:embedContent?key=${GOOGLE_API_KEY}"
 )
 
-sql = SQLSpec()
-etl_config = sql.add_config(
+sqlspec = SQLSpec()
+etl_config = sqlspec.add_config(
     DuckDBConfig(
         extensions=[{"name": "vss"}, {"name": "http_client"}],
         on_connection_create=lambda connection: connection.execute(f"""
@@ -46,8 +46,6 @@ etl_config = sql.add_config(
     )
 )
 
-
-if __name__ == "__main__":
-    with sql.provide_session(etl_config) as session:
-        result = session.select_one("SELECT generate_embedding('example text')")
-        print(result)
+with sqlspec.provide_session(etl_config) as session:
+    result = session.execute("SELECT generate_embedding('example text')")
+    print(result)

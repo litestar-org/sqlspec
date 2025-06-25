@@ -1,32 +1,53 @@
+from collections.abc import Iterable, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import Field, fields
 from functools import lru_cache
-from typing import TYPE_CHECKING, Annotated, Any, Optional, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Annotated, Any, Optional, Union, cast
 
-from typing_extensions import TypeAlias, TypeGuard
+from sqlglot import exp
+from typing_extensions import TypeAlias, TypeGuard, TypeVar
 
 from sqlspec._typing import (
+    AIOSQL_INSTALLED,
+    FSSPEC_INSTALLED,
     LITESTAR_INSTALLED,
     MSGSPEC_INSTALLED,
+    OBSTORE_INSTALLED,
+    OPENTELEMETRY_INSTALLED,
+    PGVECTOR_INSTALLED,
+    PROMETHEUS_INSTALLED,
     PYARROW_INSTALLED,
     PYDANTIC_INSTALLED,
     UNSET,
+    AiosqlAsyncProtocol,  # pyright: ignore[reportAttributeAccessIssue]
+    AiosqlParamType,  # pyright: ignore[reportAttributeAccessIssue]
+    AiosqlProtocol,  # pyright: ignore[reportAttributeAccessIssue]
+    AiosqlSQLOperationType,  # pyright: ignore[reportAttributeAccessIssue]
+    AiosqlSyncProtocol,  # pyright: ignore[reportAttributeAccessIssue]
+    ArrowRecordBatch,
     ArrowTable,
     BaseModel,
+    Counter,  # pyright: ignore[reportAttributeAccessIssue]
     DataclassProtocol,
     DTOData,
     Empty,
     EmptyType,
+    Gauge,  # pyright: ignore[reportAttributeAccessIssue]
+    Histogram,  # pyright: ignore[reportAttributeAccessIssue]
+    Span,  # pyright: ignore[reportAttributeAccessIssue]
+    Status,  # pyright: ignore[reportAttributeAccessIssue]
+    StatusCode,  # pyright: ignore[reportAttributeAccessIssue]
     Struct,
+    Tracer,  # pyright: ignore[reportAttributeAccessIssue]
     TypeAdapter,
     UnsetType,
-    convert,
+    aiosql,
+    convert,  # pyright: ignore[reportAttributeAccessIssue]
+    trace,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
-    from collections.abc import Set as AbstractSet
-
-    from sqlspec.filters import StatementFilter
 
 
 PYDANTIC_USE_FAILFAST = False  # leave permanently disabled for now
@@ -54,16 +75,29 @@ ModelT = TypeVar("ModelT", bound="Union[dict[str, Any], Struct, BaseModel, Datac
 :class:`dict[str, Any]` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol`
 """
 
-FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
-"""Type variable for filter types.
 
-:class:`~advanced_alchemy.filters.StatementFilter`
-"""
+DictRow: TypeAlias = "dict[str, Any]"
+"""Type variable for DictRow types."""
+TupleRow: TypeAlias = "tuple[Any, ...]"
+"""Type variable for TupleRow types."""
+RowT = TypeVar("RowT", default=dict[str, Any])
+
 SupportedSchemaModel: TypeAlias = "Union[Struct, BaseModel, DataclassProtocol]"
 """Type alias for pydantic or msgspec models.
 
 :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol`
 """
+StatementParameters: TypeAlias = "Union[Any, dict[str, Any], list[Any], tuple[Any, ...], None]"
+"""Type alias for statement parameters.
+
+Represents:
+- :type:`dict[str, Any]`
+- :type:`list[Any]`
+- :type:`tuple[Any, ...]`
+- :type:`None`
+"""
+# Backward compatibility alias
+SQLParameterType: TypeAlias = StatementParameters
 ModelDTOT = TypeVar("ModelDTOT", bound="SupportedSchemaModel")
 """Type variable for model DTOs.
 
@@ -97,18 +131,8 @@ Represents:
 - :class:`DTOData`[:type:`list[ModelT]`]
 """
 
-StatementParameterType: TypeAlias = "Union[Any, dict[str, Any], list[Any], tuple[Any, ...], None]"
-"""Type alias for parameter types.
 
-Represents:
-- :type:`dict[str, Any]`
-- :type:`list[Any]`
-- :type:`tuple[Any, ...]`
-- :type:`None`
-"""
-
-
-def is_dataclass_instance(obj: Any) -> "TypeGuard[DataclassProtocol]":
+def is_dataclass_instance(obj: Any) -> TypeGuard[DataclassProtocol]:
     """Check if an object is a dataclass instance.
 
     Args:
@@ -117,7 +141,9 @@ def is_dataclass_instance(obj: Any) -> "TypeGuard[DataclassProtocol]":
     Returns:
         True if the object is a dataclass instance.
     """
-    return hasattr(type(obj), "__dataclass_fields__")  # pyright: ignore[reportUnknownArgumentType]
+    # Ensure obj is an instance and not the class itself,
+    # and that its type is a dataclass.
+    return not isinstance(obj, type) and hasattr(type(obj), "__dataclass_fields__")
 
 
 @lru_cache(typed=True)
@@ -131,9 +157,7 @@ def get_type_adapter(f: "type[T]") -> "TypeAdapter[T]":
         :class:`pydantic.TypeAdapter`[:class:`typing.TypeVar`[T]]
     """
     if PYDANTIC_USE_FAILFAST:
-        return TypeAdapter(
-            Annotated[f, FailFast()],
-        )
+        return TypeAdapter(Annotated[f, FailFast()])
     return TypeAdapter(f)
 
 
@@ -302,8 +326,7 @@ def is_schema_without_field(obj: "Any", field_name: str) -> "TypeGuard[Supported
 
 
 def is_schema_or_dict_with_field(
-    obj: "Any",
-    field_name: str,
+    obj: "Any", field_name: str
 ) -> "TypeGuard[Union[SupportedSchemaModel, dict[str, Any]]]":
     """Check if a value is a msgspec Struct, Pydantic model, or dict with a specific field.
 
@@ -318,8 +341,7 @@ def is_schema_or_dict_with_field(
 
 
 def is_schema_or_dict_without_field(
-    obj: "Any",
-    field_name: str,
+    obj: "Any", field_name: str
 ) -> "TypeGuard[Union[SupportedSchemaModel, dict[str, Any]]]":
     """Check if a value is a msgspec Struct, Pydantic model, or dict without a specific field.
 
@@ -342,12 +364,13 @@ def is_dataclass(obj: "Any") -> "TypeGuard[DataclassProtocol]":
     Returns:
         bool
     """
+    if isinstance(obj, type) and hasattr(obj, "__dataclass_fields__"):
+        return True
     return is_dataclass_instance(obj)
 
 
 def is_dataclass_with_field(
-    obj: "Any",
-    field_name: str,
+    obj: "Any", field_name: str
 ) -> "TypeGuard[object]":  # Can't specify dataclass type directly
     """Check if an object is a dataclass and has a specific field.
 
@@ -475,8 +498,7 @@ def dataclass_to_dict(
 
 
 def schema_dump(
-    data: "Union[dict[str, Any],   DataclassProtocol, Struct, BaseModel]",
-    exclude_unset: bool = True,
+    data: "Union[dict[str, Any],   DataclassProtocol, Struct, BaseModel]", exclude_unset: bool = True
 ) -> "dict[str, Any]":
     """Dump a data object to a dictionary.
 
@@ -515,27 +537,85 @@ def is_dto_data(v: Any) -> TypeGuard[DTOData[Any]]:
     return LITESTAR_INSTALLED and isinstance(v, DTOData)
 
 
+def is_expression(obj: "Any") -> "TypeGuard[exp.Expression]":
+    """Check if a value is a sqlglot Expression.
+
+    Args:
+        obj: Value to check.
+
+    Returns:
+        bool
+    """
+    return isinstance(obj, exp.Expression)
+
+
+def MixinOf(base: type[T]) -> type[T]:  # noqa: N802
+    """Useful function to make mixins with baseclass type hint
+
+    ```
+    class StorageMixin(MixinOf(DriverProtocol)): ...
+    ```
+    """
+    if TYPE_CHECKING:
+        return base
+    return type("<MixinOf>", (base,), {})
+
+
 __all__ = (
+    "AIOSQL_INSTALLED",
+    "FSSPEC_INSTALLED",
     "LITESTAR_INSTALLED",
     "MSGSPEC_INSTALLED",
+    "OBSTORE_INSTALLED",
+    "OPENTELEMETRY_INSTALLED",
+    "PGVECTOR_INSTALLED",
+    "PROMETHEUS_INSTALLED",
     "PYARROW_INSTALLED",
     "PYDANTIC_INSTALLED",
     "PYDANTIC_USE_FAILFAST",
     "UNSET",
+    "AiosqlAsyncProtocol",
+    "AiosqlParamType",
+    "AiosqlProtocol",
+    "AiosqlSQLOperationType",
+    "AiosqlSyncProtocol",
+    "ArrowRecordBatch",
     "ArrowTable",
     "BaseModel",
+    "BulkModelDict",
+    "ConnectionT",
+    "Counter",
     "DataclassProtocol",
+    "DictRow",
     "Empty",
     "EmptyType",
     "FailFast",
-    "FilterTypeT",
+    "Gauge",
+    "Histogram",
+    "Mapping",
+    "MixinOf",
+    "ModelDTOT",
+    "ModelDict",
     "ModelDict",
     "ModelDictList",
-    "StatementParameterType",
+    "ModelDictList",
+    "ModelT",
+    "PoolT",
+    "PoolT_co",
+    "PydanticOrMsgspecT",
+    "RowT",
+    "SQLParameterType",
+    "Span",
+    "StatementParameters",
+    "Status",
+    "StatusCode",
     "Struct",
     "SupportedSchemaModel",
+    "Tracer",
+    "TupleRow",
     "TypeAdapter",
     "UnsetType",
+    "aiosql",
     "convert",
     "dataclass_to_dict",
     "extract_dataclass_fields",
@@ -549,6 +629,7 @@ __all__ = (
     "is_dict_with_field",
     "is_dict_without_field",
     "is_dto_data",
+    "is_expression",
     "is_msgspec_struct",
     "is_msgspec_struct_with_field",
     "is_msgspec_struct_without_field",
@@ -562,6 +643,7 @@ __all__ = (
     "is_schema_with_field",
     "is_schema_without_field",
     "schema_dump",
+    "trace",
 )
 
 if TYPE_CHECKING:
@@ -576,10 +658,49 @@ if TYPE_CHECKING:
         from msgspec import UNSET, Struct, UnsetType, convert  # noqa: TC004
 
     if not PYARROW_INSTALLED:
-        from sqlspec._typing import ArrowTable
+        from sqlspec._typing import ArrowRecordBatch, ArrowTable
     else:
+        from pyarrow import RecordBatch as ArrowRecordBatch  # noqa: TC004
         from pyarrow import Table as ArrowTable  # noqa: TC004
     if not LITESTAR_INSTALLED:
         from sqlspec._typing import DTOData
     else:
         from litestar.dto import DTOData  # noqa: TC004
+    if not OPENTELEMETRY_INSTALLED:
+        from sqlspec._typing import Span, Status, StatusCode, Tracer, trace  # noqa: TC004  # pyright: ignore
+    else:
+        from opentelemetry.trace import (  # pyright: ignore[reportMissingImports] # noqa: TC004
+            Span,
+            Status,
+            StatusCode,
+            Tracer,
+        )
+    if not PROMETHEUS_INSTALLED:
+        from sqlspec._typing import Counter, Gauge, Histogram  # pyright: ignore
+    else:
+        from prometheus_client import Counter, Gauge, Histogram  # noqa: TC004 # pyright: ignore # noqa: TC004
+
+    if not AIOSQL_INSTALLED:
+        from sqlspec._typing import (
+            AiosqlAsyncProtocol,  # pyright: ignore[reportAttributeAccessIssue]
+            AiosqlParamType,  # pyright: ignore[reportAttributeAccessIssue]
+            AiosqlProtocol,  # pyright: ignore[reportAttributeAccessIssue]
+            AiosqlSQLOperationType,  # pyright: ignore[reportAttributeAccessIssue]
+            AiosqlSyncProtocol,  # pyright: ignore[reportAttributeAccessIssue]
+            aiosql,
+        )
+    else:
+        import aiosql  # noqa: TC004 # pyright: ignore
+        from aiosql.types import (  # noqa: TC004 # pyright: ignore[reportMissingImports]
+            AsyncDriverAdapterProtocol as AiosqlAsyncProtocol,
+        )
+        from aiosql.types import (  # noqa: TC004 # pyright: ignore[reportMissingImports]
+            DriverAdapterProtocol as AiosqlProtocol,
+        )
+        from aiosql.types import ParamType as AiosqlParamType  # noqa: TC004 # pyright: ignore[reportMissingImports]
+        from aiosql.types import (
+            SQLOperationType as AiosqlSQLOperationType,  # noqa: TC004 # pyright: ignore[reportMissingImports]
+        )
+        from aiosql.types import (  # noqa: TC004 # pyright: ignore[reportMissingImports]
+            SyncDriverAdapterProtocol as AiosqlSyncProtocol,
+        )

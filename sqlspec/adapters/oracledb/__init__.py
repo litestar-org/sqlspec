@@ -1,9 +1,4 @@
-from sqlspec.adapters.oracledb.config import (
-    OracleAsyncConfig,
-    OracleAsyncPoolConfig,
-    OracleSyncConfig,
-    OracleSyncPoolConfig,
-)
+from sqlspec.adapters.oracledb.config import CONNECTION_FIELDS, POOL_FIELDS, OracleAsyncConfig, OracleSyncConfig
 from sqlspec.adapters.oracledb.driver import (
     OracleAsyncConnection,
     OracleAsyncDriver,
@@ -12,12 +7,12 @@ from sqlspec.adapters.oracledb.driver import (
 )
 
 __all__ = (
+    "CONNECTION_FIELDS",
+    "POOL_FIELDS",
     "OracleAsyncConfig",
     "OracleAsyncConnection",
     "OracleAsyncDriver",
-    "OracleAsyncPoolConfig",
     "OracleSyncConfig",
     "OracleSyncConnection",
     "OracleSyncDriver",
-    "OracleSyncPoolConfig",
 )

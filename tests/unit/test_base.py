@@ -1,300 +1,538 @@
-from collections.abc import AsyncGenerator, Generator
-from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
-from dataclasses import dataclass
-from typing import Annotated, Any
+"""Unit tests for sqlspec.base module."""
+
+import asyncio
+import atexit
+import threading
+from typing import Any, Optional
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from sqlspec.base import NoPoolAsyncConfig, NoPoolSyncConfig, SQLSpec, SyncDatabaseConfig
+from sqlspec.base import SQLSpec
+from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
 
 
+# Mock implementation classes for testing
 class MockConnection:
-    """Mock database connection for testing."""
+    """Mock connection for testing."""
 
-    def close(self) -> None:
-        pass
+    def __init__(self, name: "str" = "mock_connection") -> None:
+        self.name = name
+        self.closed = False
 
 
-class MockAsyncConnection:
-    """Mock async database connection for testing."""
+class MockDriver:
+    """Mock driver for testing."""
 
-    async def close(self) -> None:
-        pass
+    def __init__(
+        self,
+        connection: "MockConnection",
+        config: "Optional[Any]" = None,
+        default_row_type: "Optional[type[Any]]" = None,
+    ) -> None:
+        self.connection = connection
+        self.config = config
+        self.default_row_type = default_row_type or dict
+
+
+class MockAsyncDriver:
+    """Mock async driver for testing."""
+
+    def __init__(
+        self,
+        connection: "MockConnection",
+        config: "Optional[Any]" = None,
+        default_row_type: "Optional[type[Any]]" = None,
+    ) -> None:
+        self.connection = connection
+        self.config = config
+        self.default_row_type = default_row_type or dict
+
+
+class MockSyncConfig(NoPoolSyncConfig["MockConnection", "MockDriver"]):  # type: ignore[type-var]
+    """Mock sync config without pooling."""
+
+    driver_type = MockDriver
+    is_async = False
+    supports_connection_pooling = False
+
+    def __init__(self, name: "str" = "mock_sync") -> None:
+        super().__init__()
+        self.name = name
+        self._connection = MockConnection(name)
+        self.default_row_type = dict
+
+    @property
+    def connection_config_dict(self) -> "dict[str, Any]":
+        return {"name": self.name, "type": "sync"}
+
+    def create_connection(self) -> "MockConnection":
+        return self._connection
+
+    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Any":
+        mock = Mock()
+        mock.__enter__ = Mock(return_value=self._connection)
+        mock.__exit__ = Mock(return_value=None)
+        return mock
+
+    def provide_session(self, *args: "Any", **kwargs: "Any") -> "Any":
+        driver = self.driver_type(self._connection, None, self.default_row_type)
+        mock = Mock()
+        mock.__enter__ = Mock(return_value=driver)
+        mock.__exit__ = Mock(return_value=None)
+        return mock
+
+
+class MockAsyncConfig(NoPoolAsyncConfig["MockConnection", "MockAsyncDriver"]):  # type: ignore[type-var]
+    """Mock async config without pooling."""
+
+    driver_type = MockAsyncDriver
+    is_async = True
+    supports_connection_pooling = False
+
+    def __init__(self, name: "str" = "mock_async") -> None:
+        super().__init__()
+        self.name = name
+        self._connection = MockConnection(name)
+        self.default_row_type = dict
+
+    @property
+    def connection_config_dict(self) -> "dict[str, Any]":
+        return {"name": self.name, "type": "async"}
+
+    async def create_connection(self) -> "MockConnection":
+        return self._connection
+
+    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Any":
+        mock = Mock()
+        mock.__aenter__ = AsyncMock(return_value=self._connection)
+        mock.__aexit__ = AsyncMock(return_value=None)
+        return mock
+
+    def provide_session(self, *args: "Any", **kwargs: "Any") -> "Any":
+        driver = self.driver_type(self._connection, default_row_type=self.default_row_type)
+        mock = Mock()
+        mock.__aenter__ = AsyncMock(return_value=driver)
+        mock.__aexit__ = AsyncMock(return_value=None)
+        return mock
 
 
 class MockPool:
-    """Mock connection pool for testing."""
+    """Mock connection pool."""
+
+    def __init__(self, name: "str" = "mock_pool") -> None:
+        self.name = name
+        self.closed = False
 
     def close(self) -> None:
-        pass
+        self.closed = True
 
 
-class MockAsyncPool:
-    """Mock async connection pool for testing."""
+class MockSyncPoolConfig(SyncDatabaseConfig["MockConnection", "MockPool", "MockDriver"]):  # type: ignore[type-var]
+    """Mock sync config with pooling."""
 
-    async def close(self) -> None:
-        pass
+    driver_type = MockDriver  # pyright: ignore
+    is_async = False
+    supports_connection_pooling = True
 
-
-@dataclass
-class MockDatabaseConfig(SyncDatabaseConfig[MockConnection, MockPool, Any]):
-    """Mock database configuration that supports pooling."""
-
-    def create_connection(self) -> MockConnection:
-        return MockConnection()
-
-    @contextmanager
-    def provide_connection(self, *args: Any, **kwargs: Any) -> Generator[MockConnection, None, None]:
-        connection = self.create_connection()
-        try:
-            yield connection
-        finally:
-            connection.close()
+    def __init__(self, name: "str" = "mock_sync_pool") -> None:
+        super().__init__()
+        self.name = name
+        self._connection = MockConnection(name)
+        self._pool: Optional[MockPool] = None
+        self.default_row_type = dict
 
     @property
-    def connection_config_dict(self) -> dict[str, Any]:
-        return {"host": "localhost", "port": 5432}
+    def connection_config_dict(self) -> "dict[str, Any]":
+        return {"name": self.name, "type": "sync_pool"}
 
-    def create_pool(self) -> MockPool:
-        return MockPool()
+    def create_connection(self) -> "MockConnection":
+        return self._connection
 
-    def close_pool(self) -> None:
-        pass
+    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Any":
+        mock = Mock()
+        mock.__enter__ = Mock(return_value=self._connection)
+        mock.__exit__ = Mock(return_value=None)
+        return mock
 
-    def provide_pool(self, *args: Any, **kwargs: Any) -> AbstractContextManager[MockPool]:
-        @contextmanager
-        def _provide_pool() -> Generator[MockPool, None, None]:
-            pool = self.create_pool()
-            try:
-                yield pool
-            finally:
-                pool.close()
+    def provide_session(self, *args: "Any", **kwargs: "Any") -> "Any":
+        driver = self.driver_type(self._connection, None, self.default_row_type)
+        mock = Mock()
+        mock.__enter__ = Mock(return_value=driver)
+        mock.__exit__ = Mock(return_value=None)
+        return mock
 
-        return _provide_pool()
+    def _create_pool(self) -> "MockPool":
+        self._pool = MockPool(self.name)
+        return self._pool
 
-    @contextmanager
-    def provide_session(self, *args: Any, **kwargs: Any) -> Generator[MockConnection, None, None]:
-        connection = self.create_connection()
-        try:
-            yield connection
-        finally:
-            connection.close()
+    def _close_pool(self) -> None:
+        if self._pool:
+            self._pool.close()
 
 
-class MockNonPoolConfig(NoPoolSyncConfig[MockConnection, Any]):
-    """Mock database configuration that doesn't support pooling."""
+class MockAsyncPoolConfig(AsyncDatabaseConfig["MockConnection", "MockPool", "MockAsyncDriver"]):  # type: ignore[type-var]
+    """Mock async config with pooling."""
 
-    def create_connection(self) -> MockConnection:
-        return MockConnection()
+    driver_type = MockAsyncDriver
+    is_async = True
+    supports_connection_pooling = True
 
-    @contextmanager
-    def provide_connection(self, *args: Any, **kwargs: Any) -> Generator[MockConnection, None, None]:
-        connection = self.create_connection()
-        try:
-            yield connection
-        finally:
-            connection.close()
-
-    def close_pool(self) -> None:
-        pass
-
-    @contextmanager
-    def provide_session(self, *args: Any, **kwargs: Any) -> Generator[MockConnection, None, None]:
-        connection = self.create_connection()
-        try:
-            yield connection
-        finally:
-            connection.close()
+    def __init__(self, name: "str" = "mock_async_pool") -> None:
+        super().__init__()
+        self.name = name
+        self._connection = MockConnection(name)
+        self._pool: Optional[MockPool] = None
+        self.default_row_type = dict
 
     @property
-    def connection_config_dict(self) -> dict[str, Any]:
-        return {"host": "localhost", "port": 5432}
+    def connection_config_dict(self) -> "dict[str, Any]":
+        return {"name": self.name, "type": "async_pool"}
+
+    async def create_connection(self) -> "MockConnection":
+        return self._connection
+
+    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Any":
+        mock = Mock()
+        mock.__aenter__ = AsyncMock(return_value=self._connection)
+        mock.__aexit__ = AsyncMock(return_value=None)
+        return mock
+
+    def provide_session(self, *args: "Any", **kwargs: "Any") -> "Any":
+        driver = self.driver_type(self._connection, default_row_type=self.default_row_type)
+        mock = Mock()
+        mock.__aenter__ = AsyncMock(return_value=driver)
+        mock.__aexit__ = AsyncMock(return_value=None)
+        return mock
+
+    async def _create_pool(self) -> "MockPool":
+        self._pool = MockPool(self.name)
+        return self._pool
+
+    async def _close_pool(self) -> None:
+        if self._pool:
+            self._pool.close()
 
 
-class MockAsyncNonPoolConfig(NoPoolAsyncConfig[MockAsyncConnection, Any]):
-    """Mock database configuration that doesn't support pooling."""
+def test_sqlspec_initialization() -> None:
+    """Test SQLSpec initialization."""
+    with patch.object(atexit, "register") as mock_register:
+        sqlspec = SQLSpec()
+        assert isinstance(sqlspec._configs, dict)
+        assert len(sqlspec._configs) == 0
+        mock_register.assert_called_once_with(sqlspec._cleanup_pools)
 
-    def create_connection(self) -> MockAsyncConnection:
-        return MockAsyncConnection()
 
-    @asynccontextmanager
-    async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[MockAsyncConnection, None]:
-        connection = self.create_connection()
-        try:
-            yield connection
-        finally:
-            await connection.close()
+@pytest.mark.parametrize(
+    "config_class,config_name,expected_type",
+    [
+        (MockSyncConfig, "sync_test", MockSyncConfig),
+        (MockAsyncConfig, "async_test", MockAsyncConfig),
+        (MockSyncPoolConfig, "sync_pool_test", MockSyncPoolConfig),
+        (MockAsyncPoolConfig, "async_pool_test", MockAsyncPoolConfig),
+    ],
+)
+def test_add_config(config_class: "type", config_name: "str", expected_type: "type") -> None:
+    """Test adding various configuration types."""
+    sqlspec = SQLSpec()
+    config = config_class(config_name)
 
-    async def close_pool(self) -> None:
+    result = sqlspec.add_config(config)
+    assert result is expected_type
+    assert expected_type in sqlspec._configs
+    assert sqlspec._configs[expected_type] is config
+
+
+def test_add_config_overwrite() -> None:
+    """Test overwriting existing configuration logs warning."""
+    sqlspec = SQLSpec()
+    config1 = MockSyncConfig("first")
+    config2 = MockSyncConfig("second")
+
+    sqlspec.add_config(config1)
+
+    with patch("sqlspec.base.logger") as mock_logger:
+        sqlspec.add_config(config2)
+        mock_logger.warning.assert_called_once()
+        assert MockSyncConfig in sqlspec._configs
+        assert sqlspec._configs[MockSyncConfig] is config2
+
+
+@pytest.mark.parametrize(
+    "config_class,error_match",
+    [
+        (MockSyncConfig, r"No configuration found for.*MockSyncConfig"),
+        (MockAsyncConfig, r"No configuration found for.*MockAsyncConfig"),
+    ],
+)
+def test_get_config_not_found(config_class: "type", error_match: "str") -> None:
+    """Test configuration retrieval when not found."""
+    sqlspec = SQLSpec()
+
+    with patch("sqlspec.base.logger") as mock_logger:
+        with pytest.raises(KeyError, match=error_match):
+            sqlspec.get_config(config_class)
+        mock_logger.error.assert_called_once()
+
+
+def test_get_config_success() -> None:
+    """Test successful configuration retrieval."""
+    sqlspec = SQLSpec()
+    config = MockSyncConfig("test")
+    sqlspec.add_config(config)
+
+    with patch("sqlspec.base.logger") as mock_logger:
+        retrieved = sqlspec.get_config(MockSyncConfig)
+        assert retrieved is config
+        mock_logger.debug.assert_called_once()
+
+
+@pytest.mark.parametrize("use_instance", [True, False], ids=["with_instance", "with_type"])
+def test_get_connection_sync(use_instance: bool) -> None:
+    """Test getting sync connection."""
+    sqlspec = SQLSpec()
+    config = MockSyncConfig("test")
+
+    if not use_instance:
+        sqlspec.add_config(config)
+        config_or_type = MockSyncConfig
+    else:
+        config_or_type = config
+
+    with patch.object(config, "create_connection") as mock_create:
+        mock_create.return_value = MockConnection("test_conn")
+        connection = sqlspec.get_connection(config_or_type)  # type: ignore[type-var]
+        mock_create.assert_called_once()
+        assert isinstance(connection, MockConnection)
+
+
+@pytest.mark.asyncio
+async def test_get_connection_async() -> None:
+    """Test getting async connection."""
+    sqlspec = SQLSpec()
+    config = MockAsyncConfig("test")
+    sqlspec.add_config(config)
+
+    with patch.object(config, "create_connection") as mock_create:
+        mock_create.return_value = MockConnection("test_conn")
+        connection = await sqlspec.get_connection(MockAsyncConfig)  # type: ignore[arg-type]
+        mock_create.assert_called_once()
+        assert isinstance(connection, MockConnection)
+
+
+@pytest.mark.parametrize("use_instance", [True, False], ids=["with_instance", "with_type"])
+def test_get_session_sync(use_instance: bool) -> None:
+    """Test getting sync session."""
+    sqlspec = SQLSpec()
+    config = MockSyncConfig("test")
+
+    if not use_instance:
+        sqlspec.add_config(config)
+        config_or_type = MockSyncConfig
+    else:
+        config_or_type = config
+
+    session = sqlspec.get_session(config_or_type)  # type: ignore[type-var]
+    assert isinstance(session, MockDriver)
+    assert isinstance(session.connection, MockConnection)
+
+
+@pytest.mark.asyncio
+async def test_get_session_async() -> None:
+    """Test getting async session."""
+    sqlspec = SQLSpec()
+    config = MockAsyncConfig("test")
+    sqlspec.add_config(config)
+
+    session = await sqlspec.get_session(MockAsyncConfig)  # type: ignore[arg-type]
+    assert isinstance(session, MockAsyncDriver)
+    assert isinstance(session.connection, MockConnection)
+
+
+@pytest.mark.parametrize(
+    "config_class,has_pool",
+    [(MockSyncConfig, False), (MockAsyncConfig, False), (MockSyncPoolConfig, True), (MockAsyncPoolConfig, True)],
+)
+def test_get_pool_sync(config_class: "type", has_pool: bool) -> None:
+    """Test getting pool from various config types."""
+    sqlspec = SQLSpec()
+    config = config_class("test")
+    sqlspec.add_config(config)
+
+    if config_class == MockAsyncPoolConfig:
+        # Skip async test here, handled separately
+        return
+
+    result = sqlspec.get_pool(config_class)
+
+    if has_pool:
+        assert isinstance(result, MockPool)
+    else:
+        assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_pool_async() -> None:
+    """Test getting async pool."""
+    sqlspec = SQLSpec()
+    config = MockAsyncPoolConfig("test")
+    sqlspec.add_config(config)
+
+    result = await sqlspec.get_pool(MockAsyncPoolConfig)  # type: ignore[arg-type,misc]
+    assert isinstance(result, MockPool)
+
+
+def test_provide_connection() -> None:
+    """Test provide_connection context manager."""
+    sqlspec = SQLSpec()
+    config = MockSyncConfig("test")
+    sqlspec.add_config(config)
+
+    with patch.object(config, "provide_connection") as mock_provide:
+        mock_cm = Mock()
+        mock_provide.return_value = mock_cm
+
+        result = sqlspec.provide_connection(MockSyncConfig, "arg1", kwarg1="value1")  # type: ignore[arg-type,type-var]
+        assert result == mock_cm
+        mock_provide.assert_called_once_with("arg1", kwarg1="value1")
+
+
+def test_provide_session() -> None:
+    """Test provide_session context manager."""
+    sqlspec = SQLSpec()
+    config = MockSyncConfig("test")
+    sqlspec.add_config(config)
+
+    with patch.object(config, "provide_session") as mock_provide:
+        mock_cm = Mock()
+        mock_provide.return_value = mock_cm
+
+        result = sqlspec.provide_session(MockSyncConfig, "arg1", kwarg1="value1")  # type: ignore[arg-type,type-var]
+        assert result == mock_cm
+        mock_provide.assert_called_once_with("arg1", kwarg1="value1")
+
+
+@pytest.mark.parametrize(
+    "config_classes",
+    [
+        [],  # No configs
+        [MockSyncConfig],  # Single sync config
+        [MockSyncPoolConfig],  # Single sync pool config
+        [MockSyncConfig, MockSyncPoolConfig],  # Mixed sync configs
+    ],
+)
+def test_cleanup_pools_sync(config_classes: "list[type]") -> None:
+    """Test cleanup pools with various sync configurations."""
+    sqlspec = SQLSpec()
+    configs = []
+
+    for config_class in config_classes:
+        config = config_class(f"test_{config_class.__name__}")
+        sqlspec.add_config(config)
+        configs.append(config)
+
+    with patch("sqlspec.base.logger") as mock_logger:
+        # Patch close_pool for pooled configs
+        close_pool_mocks = []
+        for config in configs:
+            if hasattr(config, "close_pool") and config.supports_connection_pooling:
+                mock_close = Mock()
+                patch.object(config, "close_pool", mock_close).start()
+                close_pool_mocks.append(mock_close)
+
+        sqlspec._cleanup_pools()
+
+        # Verify close_pool was called for pooled configs
+        for mock_close in close_pool_mocks:
+            mock_close.assert_called_once()
+
+        # Verify cleanup completed log
+        info_calls = [call for call in mock_logger.info.call_args_list if "Pool cleanup completed" in str(call)]
+        assert len(info_calls) == 1
+
+        # Verify configs were cleared
+        assert len(sqlspec._configs) == 0
+
+
+def test_cleanup_pools_async() -> None:
+    """Test cleanup pools with async configurations."""
+    sqlspec = SQLSpec()
+    config = MockAsyncPoolConfig("test")
+    sqlspec.add_config(config)
+
+    async def mock_close_pool() -> None:
         pass
 
-    @asynccontextmanager
-    async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[MockAsyncConnection, None]:
-        connection = self.create_connection()
+    with patch.object(config, "close_pool", mock_close_pool):
+        with patch("asyncio.run") as mock_run:
+            with patch("asyncio.get_running_loop", side_effect=RuntimeError):
+                sqlspec._cleanup_pools()
+                mock_run.assert_called_once()
+
+
+def test_cleanup_pools_exception_handling() -> None:
+    """Test cleanup handles exceptions gracefully."""
+    sqlspec = SQLSpec()
+    config = MockSyncPoolConfig("test")
+    sqlspec.add_config(config)
+
+    with patch.object(config, "close_pool", side_effect=Exception("Pool error")):
+        with patch("sqlspec.base.logger") as mock_logger:
+            sqlspec._cleanup_pools()
+
+            warning_calls = [
+                call for call in mock_logger.warning.call_args_list if "Failed to clean up pool" in str(call)
+            ]
+            assert len(warning_calls) == 1
+
+
+def test_thread_safety() -> None:
+    """Test thread safety of configuration operations."""
+    sqlspec = SQLSpec()
+    results = []
+    errors = []
+
+    def worker(worker_id: int) -> None:
         try:
-            yield connection
-        finally:
-            await connection.close()
+            # Create unique config class per thread
+            config_class = type(f"ThreadConfig{worker_id}", (MockSyncConfig,), {})
+            config = config_class(f"thread_{worker_id}")
 
-    @property
-    def connection_config_dict(self) -> dict[str, Any]:
-        return {"host": "localhost", "port": 5432}
+            # Add config
+            sqlspec.add_config(config)
 
+            # Get config
+            retrieved: Any = sqlspec.get_config(config_class)
+            results.append((worker_id, retrieved))
+        except Exception as e:
+            errors.append((worker_id, e))
 
-@pytest.fixture(scope="session")
-def sql_spec() -> SQLSpec:
-    """Create a SQLSpec instance for testing.
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(10)]
 
-    Returns:
-        A SQLSpec instance.
-    """
-    return SQLSpec()
+    for thread in threads:
+        thread.start()
 
+    for thread in threads:
+        thread.join()
 
-@pytest.fixture(scope="session")
-def pool_config() -> MockDatabaseConfig:
-    """Create a mock database configuration that supports pooling.
-
-    Returns:
-        A MockDatabaseConfig instance.
-    """
-    return MockDatabaseConfig()
+    assert len(errors) == 0
+    assert len(results) == 10
+    assert len(sqlspec._configs) == 10
 
 
-@pytest.fixture(scope="session")
-def non_pool_config() -> MockNonPoolConfig:
-    """Create a mock database configuration that doesn't support pooling.
+@pytest.mark.asyncio
+async def test_concurrent_async_operations() -> None:
+    """Test concurrent async operations."""
+    sqlspec = SQLSpec()
+    config = MockAsyncConfig("test")
+    sqlspec.add_config(config)
 
-    Returns:
-        A MockNonPoolConfig instance.
-    """
-    return MockNonPoolConfig()
+    async def get_session_worker(worker_id: int) -> "tuple[int, Any]":
+        session = await sqlspec.get_session(MockAsyncConfig)  # type: ignore[arg-type]
+        return worker_id, session
 
+    results = await asyncio.gather(*[get_session_worker(i) for i in range(10)])
 
-@pytest.fixture(scope="session")
-def async_non_pool_config() -> MockAsyncNonPoolConfig:
-    """Create a mock async database configuration that doesn't support pooling.
-
-    Returns:
-        A MockAsyncNonPoolConfig instance.
-    """
-    return MockAsyncNonPoolConfig()
-
-
-def test_add_config(sql_spec: SQLSpec, pool_config: MockDatabaseConfig, non_pool_config: MockNonPoolConfig) -> None:
-    """Test adding configurations."""
-    main_db_with_a_pool = sql_spec.add_config(pool_config)
-    db_config = main_db_with_a_pool()
-    assert isinstance(db_config, MockDatabaseConfig)
-
-    non_pool_type = sql_spec.add_config(non_pool_config)
-    instance = non_pool_type()
-    assert isinstance(instance, MockNonPoolConfig)
-
-
-def test_get_config(sql_spec: SQLSpec, pool_config: MockDatabaseConfig, non_pool_config: MockNonPoolConfig) -> None:
-    """Test retrieving configurations."""
-    pool_type = sql_spec.add_config(pool_config)
-    retrieved_config = sql_spec.get_config(pool_type)
-    assert isinstance(retrieved_config, MockDatabaseConfig)
-
-    non_pool_type = sql_spec.add_config(non_pool_config)
-    retrieved_non_pool = sql_spec.get_config(non_pool_type)
-    assert isinstance(retrieved_non_pool, MockNonPoolConfig)
-
-
-def test_get_nonexistent_config(sql_spec: SQLSpec) -> None:
-    """Test retrieving non-existent configuration."""
-    fake_type = Annotated[MockDatabaseConfig, MockConnection, MockPool]
-    with pytest.raises(KeyError):
-        sql_spec.get_config(fake_type)  # pyright: ignore[reportCallIssue,reportArgumentType]
-
-
-def test_get_connection(sql_spec: SQLSpec, pool_config: MockDatabaseConfig, non_pool_config: MockNonPoolConfig) -> None:
-    """Test creating connections."""
-    pool_type = sql_spec.add_config(pool_config)
-    connection = sql_spec.get_connection(pool_type)
-    assert isinstance(connection, MockConnection)
-
-    non_pool_type = sql_spec.add_config(non_pool_config)
-    non_pool_connection = sql_spec.get_connection(non_pool_type)
-    assert isinstance(non_pool_connection, MockConnection)
-
-
-def test_get_pool(sql_spec: SQLSpec, pool_config: MockDatabaseConfig) -> None:
-    """Test creating pools."""
-    pool_type = sql_spec.add_config(pool_config)
-    pool = sql_spec.get_pool(pool_type)
-    assert isinstance(pool, MockPool)
-
-
-def test_config_properties(pool_config: MockDatabaseConfig, non_pool_config: MockNonPoolConfig) -> None:
-    """Test configuration properties."""
-    assert pool_config.is_async is False
-    assert pool_config.support_connection_pooling is True
-    assert non_pool_config.is_async is False
-    assert non_pool_config.support_connection_pooling is False
-
-
-def test_connection_context(pool_config: MockDatabaseConfig, non_pool_config: MockNonPoolConfig) -> None:
-    """Test connection context manager."""
-    with pool_config.provide_connection() as conn:
-        assert isinstance(conn, MockConnection)
-
-    with non_pool_config.provide_connection() as conn:
-        assert isinstance(conn, MockConnection)
-
-
-def test_pool_context(pool_config: MockDatabaseConfig) -> None:
-    """Test pool context manager."""
-    with pool_config.provide_pool() as pool:
-        assert isinstance(pool, MockPool)
-
-
-def test_connection_config_dict(pool_config: MockDatabaseConfig, non_pool_config: MockNonPoolConfig) -> None:
-    """Test connection configuration dictionary."""
-    assert pool_config.connection_config_dict == {"host": "localhost", "port": 5432}
-    assert non_pool_config.connection_config_dict == {"host": "localhost", "port": 5432}
-
-
-def test_multiple_configs(
-    sql_spec: SQLSpec, pool_config: MockDatabaseConfig, non_pool_config: MockNonPoolConfig
-) -> None:
-    """Test managing multiple configurations simultaneously."""
-    # Add multiple configurations
-    pool_type = sql_spec.add_config(pool_config)
-    non_pool_type = sql_spec.add_config(non_pool_config)
-    second_pool_config = MockDatabaseConfig()
-    second_pool_type = sql_spec.add_config(second_pool_config)
-
-    # Test retrieving each configuration
-    assert isinstance(sql_spec.get_config(pool_type), MockDatabaseConfig)
-    assert isinstance(sql_spec.get_config(second_pool_type), MockDatabaseConfig)
-    assert isinstance(sql_spec.get_config(non_pool_type), MockNonPoolConfig)
-
-    # Test that configurations are distinct
-    assert sql_spec.get_config(second_pool_type) is second_pool_config
-
-    # Test connections from different configs
-    pool_conn = sql_spec.get_connection(pool_type)
-    non_pool_conn = sql_spec.get_connection(non_pool_type)
-    second_pool_conn = sql_spec.get_connection(second_pool_type)
-
-    assert isinstance(pool_conn, MockConnection)
-    assert isinstance(non_pool_conn, MockConnection)
-    assert isinstance(second_pool_conn, MockConnection)
-
-    # Test pools from pooled configs
-    pool1 = sql_spec.get_pool(pool_type)
-    pool2 = sql_spec.get_pool(second_pool_type)
-
-    assert isinstance(pool1, MockPool)
-    assert isinstance(pool2, MockPool)  # type: ignore[unreachable]
-    assert pool1 is not pool2
-
-
-def test_pool_methods(non_pool_config: MockNonPoolConfig) -> None:
-    """Test that pool methods return None."""
-    assert non_pool_config.support_connection_pooling is False
-    assert non_pool_config.is_async is False
-    assert non_pool_config.create_pool() is None  # type: ignore[func-returns-value]
+    assert len(results) == 10
+    for worker_id, session in results:
+        assert isinstance(session, MockAsyncDriver)

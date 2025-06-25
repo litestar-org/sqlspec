@@ -1,288 +1,543 @@
+"""Integration tests for BigQuery driver implementation."""
+
 from __future__ import annotations
 
+import operator
+from collections.abc import Generator
+from typing import Any, Literal
+
 import pytest
-from google.cloud.bigquery import ScalarQueryParameter
+from pytest_databases.docker.bigquery import BigQueryService
 
-from sqlspec.adapters.bigquery.config import BigQueryConfig
-from sqlspec.exceptions import NotFoundError
+from sqlspec.adapters.bigquery import BigQueryConfig, BigQueryDriver
+from sqlspec.statement.result import SQLResult
 
-
-@pytest.mark.xdist_group("bigquery")
-def test_execute_script_multiple_statements(bigquery_session: BigQueryConfig, table_schema_prefix: str) -> None:
-    """Test execute_script with multiple statements."""
-    table_name = f"{table_schema_prefix}.test_table_exec_script"  # Unique name
-    with bigquery_session.provide_session() as driver:
-        script = f"""
-        CREATE TABLE {table_name} (id INT64, name STRING);
-        INSERT INTO {table_name} (id, name) VALUES (1, 'script_test');
-        INSERT INTO {table_name} (id, name) VALUES (2, 'script_test_2');
-        """
-        driver.execute_script(script)
-
-        # Verify execution
-        results = driver.select(f"SELECT COUNT(*) AS count FROM {table_name} WHERE name LIKE 'script_test%'")
-        assert results[0]["count"] == 2
-
-        value = driver.select_value(
-            f"SELECT name FROM {table_name} WHERE id = @id",
-            [ScalarQueryParameter("id", "INT64", 1)],
-        )
-        assert value == "script_test"
-        driver.execute_script(f"DROP TABLE IF EXISTS {table_name}")
+ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
 
-@pytest.mark.xdist_group("bigquery")
-def test_driver_insert(bigquery_session: BigQueryConfig, table_schema_prefix: str) -> None:
-    """Test insert functionality using named parameters."""
-    table_name = f"{table_schema_prefix}.test_table_insert"  # Unique name
-    with bigquery_session.provide_session() as driver:
-        # Create test table
-        sql = f"""
-        CREATE TABLE {table_name} (
-            id INT64,
-            name STRING
-        );
-        """
-        driver.execute_script(sql)
+@pytest.fixture
+def bigquery_session(bigquery_service: BigQueryService) -> Generator[BigQueryDriver, None, None]:
+    """Create a BigQuery session with test table."""
+    from google.api_core.client_options import ClientOptions
+    from google.auth.credentials import AnonymousCredentials
 
-        # Insert test record using named parameters (@)
-        insert_sql = f"INSERT INTO {table_name} (id, name) VALUES (@id, @name)"
-        params = [
-            ScalarQueryParameter("id", "INT64", 1),
-            ScalarQueryParameter("name", "STRING", "test_insert"),
-        ]
-        driver.insert_update_delete(insert_sql, params)
+    config = BigQueryConfig(
+        project=bigquery_service.project,
+        dataset_id=bigquery_service.dataset,
+        client_options=ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
+        credentials=AnonymousCredentials(),  # type: ignore[no-untyped-call]
+    )
 
-        # Verify insertion
-        results = driver.select(
-            f"SELECT name FROM {table_name} WHERE id = @id",
-            [ScalarQueryParameter("id", "INT64", 1)],
-        )
-        assert len(results) == 1
-        assert results[0]["name"] == "test_insert"
-        driver.execute_script(f"DROP TABLE IF EXISTS {table_name}")
-
-
-@pytest.mark.xdist_group("bigquery")
-def test_driver_select(bigquery_session: BigQueryConfig, table_schema_prefix: str) -> None:
-    """Test select functionality using named parameters."""
-    table_name = f"{table_schema_prefix}.test_table_select"  # Unique name
-    with bigquery_session.provide_session() as driver:
-        # Create test table
-        sql = f"""
-        CREATE TABLE {table_name} (
-            id INT64,
-            name STRING
-        );
-        """
-        driver.execute_script(sql)
-
-        # Insert test record
-        insert_sql = f"INSERT INTO {table_name} (id, name) VALUES (@id, @name)"
-        driver.insert_update_delete(
-            insert_sql,
-            [
-                ScalarQueryParameter("id", "INT64", 10),
-                ScalarQueryParameter("name", "STRING", "test_select"),
-            ],
+    with config.provide_session() as session:
+        # Create test table (BigQuery emulator doesn't support DEFAULT values)
+        session.execute_script(f"""
+            CREATE TABLE IF NOT EXISTS `{bigquery_service.project}.{bigquery_service.dataset}.test_table` (
+                id INT64,
+                name STRING NOT NULL,
+                value INT64,
+                created_at TIMESTAMP
+            )
+        """)
+        yield session
+        # Cleanup
+        session.execute_script(
+            f"DROP TABLE IF EXISTS `{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
         )
 
-        # Select and verify using named parameters (@)
-        select_sql = f"SELECT name, id FROM {table_name} WHERE id = @id"
-        results = driver.select(select_sql, [ScalarQueryParameter("id", "INT64", 10)])
-        assert len(results) == 1
-        assert results[0]["name"] == "test_select"
-        assert results[0]["id"] == 10
-        driver.execute_script(f"DROP TABLE IF EXISTS {table_name}")
+
+@pytest.mark.xdist_group("bigquery")
+@pytest.mark.xfail(reason="BigQuery emulator incorrectly reports INSERT statements as SELECT statements")
+def test_bigquery_basic_crud(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+    """Test basic CRUD operations."""
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+
+    # INSERT
+    insert_result = bigquery_session.execute(
+        f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", (1, "test_name", 42)
+    )
+    assert isinstance(insert_result, SQLResult)
+    assert insert_result.rows_affected == 1
+
+    # SELECT
+    select_result = bigquery_session.execute(f"SELECT name, value FROM {table_name} WHERE name = ?", ("test_name",))
+    assert isinstance(select_result, SQLResult)
+    assert select_result.data is not None
+    assert len(select_result.data) == 1
+    assert select_result.data[0]["name"] == "test_name"
+    assert select_result.data[0]["value"] == 42
+
+    # UPDATE
+    update_result = bigquery_session.execute(f"UPDATE {table_name} SET value = ? WHERE name = ?", (100, "test_name"))
+    assert isinstance(update_result, SQLResult)
+    assert update_result.rows_affected == 1
+
+    # Verify UPDATE
+    verify_result = bigquery_session.execute(f"SELECT value FROM {table_name} WHERE name = ?", ("test_name",))
+    assert isinstance(verify_result, SQLResult)
+    assert verify_result.data is not None
+    assert verify_result.data[0]["value"] == 100
+
+    # DELETE
+    delete_result = bigquery_session.execute(f"DELETE FROM {table_name} WHERE name = ?", ("test_name",))
+    assert isinstance(delete_result, SQLResult)
+    assert delete_result.rows_affected == 1
+
+    # Verify DELETE
+    empty_result = bigquery_session.execute(f"SELECT COUNT(*) as count FROM {table_name}")
+    assert isinstance(empty_result, SQLResult)
+    assert empty_result.data is not None
+    assert empty_result.data[0]["count"] == 0
+
+
+@pytest.mark.parametrize(
+    ("params", "style"),
+    [
+        pytest.param(("test_value",), "tuple_binds", id="tuple_binds"),
+        pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
+    ],
+)
+@pytest.mark.xdist_group("bigquery")
+def test_bigquery_parameter_styles(
+    bigquery_session: BigQueryDriver, bigquery_service: BigQueryService, params: Any, style: ParamStyle
+) -> None:
+    """Test different parameter binding styles."""
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+
+    # Insert test data
+    bigquery_session.execute(f"INSERT INTO {table_name} (id, name) VALUES (?, ?)", (1, "test_value"))
+
+    # Test parameter style
+    if style == "tuple_binds":
+        sql = f"SELECT name FROM {table_name} WHERE name = ?"
+    else:  # dict_binds
+        sql = f"SELECT name FROM {table_name} WHERE name = @name"
+
+    result = bigquery_session.execute(sql, params)
+    assert isinstance(result, SQLResult)
+    assert result.data is not None
+    assert len(result.data) == 1
+    assert result.data[0]["name"] == "test_value"
 
 
 @pytest.mark.xdist_group("bigquery")
-def test_driver_select_value(bigquery_session: BigQueryConfig, table_schema_prefix: str) -> None:
-    """Test select_value functionality using named parameters."""
-    table_name = f"{table_schema_prefix}.test_table_select_value"  # Unique name
-    with bigquery_session.provide_session() as driver:
-        # Create test table
-        sql = f"""
-        CREATE TABLE {table_name} (
-            id INT64,
-            name STRING
-        );
-        """
-        driver.execute_script(sql)
+@pytest.mark.xfail(reason="BigQuery emulator doesn't report correct affected row counts for multi-statement scripts")
+def test_bigquery_execute_many(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+    """Test execute_many functionality."""
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+    params_list = [(1, "name1", 1), (2, "name2", 2), (3, "name3", 3)]
 
-        # Insert test record
-        insert_sql = f"INSERT INTO {table_name} (id, name) VALUES (@id, @name)"
-        driver.insert_update_delete(
-            insert_sql,
-            [
-                ScalarQueryParameter("id", "INT64", 20),
-                ScalarQueryParameter("name", "STRING", "test_select_value"),
-            ],
+    result = bigquery_session.execute_many(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", params_list)
+    assert isinstance(result, SQLResult)
+    assert result.rows_affected == len(params_list)
+
+    # Verify all records were inserted
+    select_result = bigquery_session.execute(f"SELECT COUNT(*) as count FROM {table_name}")
+    assert isinstance(select_result, SQLResult)
+    assert select_result.data is not None
+    assert select_result.data[0]["count"] == len(params_list)
+
+    # Verify data integrity
+    ordered_result = bigquery_session.execute(f"SELECT name, value FROM {table_name} ORDER BY name")
+    assert isinstance(ordered_result, SQLResult)
+    assert ordered_result.data is not None
+    assert len(ordered_result.data) == 3
+    assert ordered_result.data[0]["name"] == "name1"
+    assert ordered_result.data[0]["value"] == 1
+
+
+@pytest.mark.xdist_group("bigquery")
+def test_bigquery_execute_script(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+    """Test execute_script functionality."""
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+    script = f"""
+        INSERT INTO {table_name} (id, name, value) VALUES (1, 'script_test1', 999);
+        INSERT INTO {table_name} (id, name, value) VALUES (2, 'script_test2', 888);
+        UPDATE {table_name} SET value = 1000 WHERE name = 'script_test1';
+    """
+
+    result = bigquery_session.execute_script(script)
+    # Script execution returns SQLResult object
+    assert isinstance(result, SQLResult)
+    assert result.operation_type == "SCRIPT"
+
+    # Verify script effects
+    select_result = bigquery_session.execute(
+        f"SELECT name, value FROM {table_name} WHERE name LIKE 'script_test%' ORDER BY name"
+    )
+    assert isinstance(select_result, SQLResult)
+    assert select_result.data is not None
+    assert len(select_result.data) == 2
+    assert select_result.data[0]["name"] == "script_test1"
+    assert select_result.data[0]["value"] == 1000
+    assert select_result.data[1]["name"] == "script_test2"
+    assert select_result.data[1]["value"] == 888
+
+
+@pytest.mark.xdist_group("bigquery")
+def test_bigquery_result_methods(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+    """Test SelectResult and ExecuteResult methods."""
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+
+    # Insert test data
+    bigquery_session.execute_many(
+        f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)",
+        [(1, "result1", 10), (2, "result2", 20), (3, "result3", 30)],
+    )
+
+    # Test SelectResult methods
+    result = bigquery_session.execute(f"SELECT * FROM {table_name} ORDER BY name")
+    assert isinstance(result, SQLResult)
+
+    # Test get_first()
+    first_row = result.get_first()
+    assert first_row is not None
+    assert first_row["name"] == "result1"
+
+    # Test get_count()
+    assert result.get_count() == 3
+
+    # Test is_empty()
+    assert not result.is_empty()
+
+    # Test empty result
+    empty_result = bigquery_session.execute(f"SELECT * FROM {table_name} WHERE name = ?", ("nonexistent",))
+    assert isinstance(empty_result, SQLResult)
+    assert empty_result.is_empty()
+    assert empty_result.get_first() is None
+
+
+@pytest.mark.xdist_group("bigquery")
+def test_bigquery_error_handling(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+    """Test error handling and exception propagation."""
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+
+    # Test invalid SQL
+    with pytest.raises(Exception):  # google.cloud.exceptions.BadRequest
+        bigquery_session.execute("INVALID SQL STATEMENT")
+
+    # Test constraint violation
+    bigquery_session.execute(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", (1, "unique_test", 1))
+
+    # Try to insert with invalid column reference
+    with pytest.raises(Exception):  # google.cloud.exceptions.BadRequest
+        bigquery_session.execute(f"SELECT nonexistent_column FROM {table_name}")
+
+
+@pytest.mark.xdist_group("bigquery")
+@pytest.mark.skip(reason="BigQuery emulator has issues with complex data types and parameter marshaling")
+def test_bigquery_data_types(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+    """Test BigQuery data type handling."""
+    # Create table with various BigQuery data types
+    bigquery_session.execute_script(f"""
+        CREATE TABLE `{bigquery_service.project}.{bigquery_service.dataset}.data_types_test` (
+            id INT64,
+            string_col STRING,
+            int_col INT64,
+            float_col FLOAT64,
+            bool_col BOOL,
+            date_col DATE,
+            datetime_col DATETIME,
+            timestamp_col TIMESTAMP,
+            array_col ARRAY<INT64>,
+            json_col JSON
         )
+    """)
 
-        # Select and verify using named parameters (@)
-        select_sql = f"SELECT name FROM {table_name} WHERE id = @id"
-        value = driver.select_value(select_sql, [ScalarQueryParameter("id", "INT64", 20)])
-        assert value == "test_select_value"
-        driver.execute_script(f"DROP TABLE IF EXISTS {table_name}")
-
-
-@pytest.mark.xdist_group("bigquery")
-def test_driver_select_one(bigquery_session: BigQueryConfig, table_schema_prefix: str) -> None:
-    """Test select_one functionality using named parameters."""
-    table_name = f"{table_schema_prefix}.test_table_select_one"  # Unique name
-    with bigquery_session.provide_session() as driver:
-        # Create test table
-        sql = f"""
-        CREATE TABLE {table_name} (
-            id INT64,
-            name STRING
-        );
-        """
-        driver.execute_script(sql)
-
-        # Insert test record
-        insert_sql = f"INSERT INTO {table_name} (id, name) VALUES (@id, @name)"
-        driver.insert_update_delete(
-            insert_sql,
-            [
-                ScalarQueryParameter("id", "INT64", 30),
-                ScalarQueryParameter("name", "STRING", "test_select_one"),
-            ],
+    # Insert data with various types
+    bigquery_session.execute(
+        f"""
+        INSERT INTO `{bigquery_service.project}.{bigquery_service.dataset}.data_types_test` (
+            id, string_col, int_col, float_col, bool_col,
+            date_col, datetime_col, timestamp_col, array_col, json_col
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         )
+    """,
+        (
+            1,
+            "string_value",
+            42,
+            123.45,
+            True,
+            "2024-01-15",
+            "2024-01-15 10:30:00",
+            "2024-01-15 10:30:00 UTC",
+            [1, 2, 3],
+            {"name": "test", "value": 42},
+        ),
+    )
 
-        # Select and verify using named parameters (@)
-        select_sql = f"SELECT name, id FROM {table_name} WHERE id = @id"
-        row = driver.select_one(select_sql, [ScalarQueryParameter("id", "INT64", 30)])
-        assert row["name"] == "test_select_one"
-        assert row["id"] == 30
+    # Retrieve and verify data
+    select_result = bigquery_session.execute(f"""
+        SELECT string_col, int_col, float_col, bool_col
+        FROM `{bigquery_service.project}.{bigquery_service.dataset}.data_types_test`
+    """)
+    assert isinstance(select_result, SQLResult)
+    assert select_result.data is not None
+    assert len(select_result.data) == 1
 
-        # Test not found
-        with pytest.raises(NotFoundError):
-            driver.select_one(select_sql, [ScalarQueryParameter("id", "INT64", 999)])
+    row = select_result.data[0]
+    assert row["string_col"] == "string_value"
+    assert row["int_col"] == 42
+    assert row["float_col"] == 123.45
+    assert row["bool_col"] is True
 
-        driver.execute_script(f"DROP TABLE IF EXISTS {table_name}")
+    # Clean up
+    bigquery_session.execute_script(
+        f"DROP TABLE `{bigquery_service.project}.{bigquery_service.dataset}.data_types_test`"
+    )
 
 
 @pytest.mark.xdist_group("bigquery")
-def test_driver_select_one_or_none(bigquery_session: BigQueryConfig, table_schema_prefix: str) -> None:
-    """Test select_one_or_none functionality using named parameters."""
-    table_name = f"{table_schema_prefix}.test_table_select_one_none"  # Unique name
-    with bigquery_session.provide_session() as driver:
-        # Create test table
-        sql = f"""
-        CREATE TABLE {table_name} (
-            id INT64,
-            name STRING
-        );
-        """
-        driver.execute_script(sql)
+def test_bigquery_complex_queries(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+    """Test complex SQL queries."""
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
 
-        # Insert test record
-        insert_sql = f"INSERT INTO {table_name} (id, name) VALUES (@id, @name)"
-        driver.insert_update_delete(
-            insert_sql,
-            [
-                ScalarQueryParameter("id", "INT64", 40),
-                ScalarQueryParameter("name", "STRING", "test_select_one_or_none"),
-            ],
+    # Insert test data
+    test_data = [(1, "Alice", 25), (2, "Bob", 30), (3, "Charlie", 35), (4, "Diana", 28)]
+
+    bigquery_session.execute_many(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", test_data)
+
+    # Test JOIN (self-join)
+    join_result = bigquery_session.execute(f"""
+        SELECT t1.name as name1, t2.name as name2, t1.value as value1, t2.value as value2
+        FROM {table_name} t1
+        CROSS JOIN {table_name} t2
+        WHERE t1.value < t2.value
+        ORDER BY t1.name, t2.name
+        LIMIT 3
+    """)
+    assert isinstance(join_result, SQLResult)
+    assert join_result.data is not None
+    assert len(join_result.data) == 3
+
+    # Test aggregation
+    agg_result = bigquery_session.execute(f"""
+        SELECT
+            COUNT(*) as total_count,
+            AVG(value) as avg_value,
+            MIN(value) as min_value,
+            MAX(value) as max_value
+        FROM {table_name}
+    """)
+    assert isinstance(agg_result, SQLResult)
+    assert agg_result.data is not None
+    assert agg_result.data[0]["total_count"] == 4
+    assert agg_result.data[0]["avg_value"] == 29.5
+    assert agg_result.data[0]["min_value"] == 25
+    assert agg_result.data[0]["max_value"] == 35
+
+    # Test subquery
+    subquery_result = bigquery_session.execute(f"""
+        SELECT name, value
+        FROM {table_name}
+        WHERE value > (SELECT AVG(value) FROM {table_name})
+        ORDER BY value
+    """)
+    assert isinstance(subquery_result, SQLResult)
+    assert subquery_result.data is not None
+    assert len(subquery_result.data) == 2  # Bob and Charlie
+    assert subquery_result.data[0]["name"] == "Bob"
+    assert subquery_result.data[1]["name"] == "Charlie"
+
+
+@pytest.mark.xdist_group("bigquery")
+@pytest.mark.xfail(reason="BigQuery emulator reports 0 rows affected for INSERT operations")
+def test_bigquery_schema_operations(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+    """Test schema operations (DDL)."""
+    # Create a new table
+    bigquery_session.execute_script(f"""
+        CREATE TABLE `{bigquery_service.project}.{bigquery_service.dataset}.schema_test` (
+            id INT64,
+            description STRING NOT NULL,
+            created_at TIMESTAMP
         )
+    """)
 
-        # Select and verify found
-        select_sql = f"SELECT name, id FROM {table_name} WHERE id = @id"
-        row = driver.select_one_or_none(select_sql, [ScalarQueryParameter("id", "INT64", 40)])
-        assert row is not None
-        assert row["name"] == "test_select_one_or_none"
-        assert row["id"] == 40
+    # Insert data into new table
+    insert_result = bigquery_session.execute(
+        f"INSERT INTO `{bigquery_service.project}.{bigquery_service.dataset}.schema_test` (id, description, created_at) VALUES (?, ?, ?)",
+        (1, "test description", "2024-01-15 10:30:00 UTC"),
+    )
+    assert isinstance(insert_result, SQLResult)
+    assert insert_result.rows_affected == 1
 
-        # Select and verify not found
-        row_none = driver.select_one_or_none(select_sql, [ScalarQueryParameter("id", "INT64", 999)])
-        assert row_none is None
+    # Skip INFORMATION_SCHEMA verification - not supported by BigQuery emulator
+    # In production BigQuery, you would use INFORMATION_SCHEMA.COLUMNS to verify table structure
 
-        driver.execute_script(f"DROP TABLE IF EXISTS {table_name}")
-
-
-@pytest.mark.xdist_group("bigquery")
-def test_driver_params_positional_list(bigquery_session: BigQueryConfig, table_schema_prefix: str) -> None:
-    """Test parameter binding using positional placeholders (?) and a list of primitives."""
-    with bigquery_session.provide_session() as driver:
-        # Create test table
-        create_sql = f"""
-        CREATE TABLE {table_schema_prefix}.test_params_pos (
-            id INT64,
-            value STRING
-        );
-        """
-        driver.execute_script(create_sql)
-
-        insert_sql = f"INSERT INTO {table_schema_prefix}.test_params_pos (id, value) VALUES (?, ?)"
-        params_list = [50, "positional_test"]
-        affected = driver.insert_update_delete(insert_sql, params_list)
-        assert affected >= 0  # BigQuery DML might not return exact rows
-
-        # Select and verify using positional parameters (?) and list
-        select_sql = f"SELECT value, id FROM {table_schema_prefix}.test_params_pos WHERE id = ?"
-        row = driver.select_one(select_sql, [50])  # Note: single param needs to be in a list
-        assert row["value"] == "positional_test"
-        assert row["id"] == 50
-
-        driver.execute_script(f"DROP TABLE IF EXISTS {table_schema_prefix}.test_params_pos")
+    # Drop table
+    bigquery_session.execute_script(f"DROP TABLE `{bigquery_service.project}.{bigquery_service.dataset}.schema_test`")
 
 
 @pytest.mark.xdist_group("bigquery")
-def test_driver_params_named_dict(bigquery_session: BigQueryConfig, table_schema_prefix: str) -> None:
-    """Test parameter binding using named placeholders (@) and a dictionary of primitives."""
-    with bigquery_session.provide_session() as driver:
-        # Create test table
-        create_sql = f"""
-        CREATE TABLE {table_schema_prefix}.test_params_dict (
-            id INT64,
-            name STRING,
-            amount NUMERIC
-        );
-        """
-        driver.execute_script(create_sql)
+def test_bigquery_column_names_and_metadata(
+    bigquery_session: BigQueryDriver, bigquery_service: BigQueryService
+) -> None:
+    """Test column names and result metadata."""
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
 
-        # Insert using named parameters (@) and dict
-        from decimal import Decimal
+    # Insert test data
+    bigquery_session.execute(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", (1, "metadata_test", 123))
 
-        insert_sql = f"INSERT INTO {table_schema_prefix}.test_params_dict (id, name, amount) VALUES (@id_val, @name_val, @amount_val)"
-        params_dict = {"id_val": 60, "name_val": "dict_test", "amount_val": Decimal("123.45")}
-        driver.insert_update_delete(insert_sql, params_dict)
+    # Test column names
+    result = bigquery_session.execute(
+        f"SELECT id, name, value, created_at FROM {table_name} WHERE name = ?", ("metadata_test",)
+    )
+    assert isinstance(result, SQLResult)
+    assert result.column_names == ["id", "name", "value", "created_at"]
+    assert result.data is not None
+    assert len(result.data) == 1
 
-        # Select and verify using named parameters (@) and dict
-        select_sql = f"SELECT name, id, amount FROM {table_schema_prefix}.test_params_dict WHERE id = @search_id"
-        row = driver.select_one(select_sql, {"search_id": 60})
-        assert row["name"] == "dict_test"
-        assert row["id"] == 60
-        assert row["amount"] == Decimal("123.45")
-
-        driver.execute_script(f"DROP TABLE IF EXISTS {table_schema_prefix}.test_params_dict")
+    # Test that we can access data by column name
+    row = result.data[0]
+    assert row["name"] == "metadata_test"
+    assert row["value"] == 123
+    assert row["id"] is not None
+    # created_at will be NULL since we didn't provide a value and BigQuery emulator doesn't support DEFAULT
+    assert "created_at" in row
 
 
 @pytest.mark.xdist_group("bigquery")
-def test_driver_params_named_kwargs(bigquery_session: BigQueryConfig, table_schema_prefix: str) -> None:
-    """Test parameter binding using named placeholders (@) and keyword arguments."""
-    with bigquery_session.provide_session() as driver:
-        # Create test table
-        create_sql = f"""
-        CREATE TABLE {table_schema_prefix}.test_params_kwargs (
-            id INT64,
-            label STRING,
-            active BOOL
-        );
-        """
-        driver.execute_script(create_sql)
+@pytest.mark.xfail(reason="BigQuery emulator may not properly return column schema information")
+def test_bigquery_with_schema_type(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+    """Test BigQuery driver with schema type conversion."""
+    from dataclasses import dataclass
 
-        # Insert using named parameters (@) and kwargs
-        insert_sql = f"INSERT INTO {table_schema_prefix}.test_params_kwargs (id, label, active) VALUES (@id_val, @label_val, @active_val)"
-        driver.insert_update_delete(insert_sql, id_val=70, label_val="kwargs_test", active_val=True)
+    @dataclass
+    class TestRecord:
+        id: int | None
+        name: str
+        value: int
 
-        # Select and verify using named parameters (@) and kwargs
-        select_sql = f"SELECT label, id, active FROM {table_schema_prefix}.test_params_kwargs WHERE id = @search_id"
-        row = driver.select_one(select_sql, search_id=70)
-        assert row["label"] == "kwargs_test"
-        assert row["id"] == 70
-        assert row["active"] is True
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
 
-        driver.execute_script(f"DROP TABLE IF EXISTS {table_schema_prefix}.test_params_kwargs")
+    # Insert test data
+    bigquery_session.execute(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", (1, "schema_test", 456))
+
+    # Query with schema type
+    result = bigquery_session.execute(
+        f"SELECT id, name, value FROM {table_name} WHERE name = ?", ("schema_test",), schema_type=TestRecord
+    )
+
+    assert isinstance(result, SQLResult)
+    assert result.data is not None
+    assert len(result.data) == 1
+
+    # The data should be converted to the schema type by the ResultConverter
+    assert result.column_names == ["id", "name", "value"]
+
+
+@pytest.mark.xdist_group("bigquery")
+@pytest.mark.xfail(reason="BigQuery emulator reports 0 rows affected for bulk operations")
+def test_bigquery_performance_bulk_operations(
+    bigquery_session: BigQueryDriver, bigquery_service: BigQueryService
+) -> None:
+    """Test performance with bulk operations."""
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+
+    # Generate bulk data
+    bulk_data = [(i, f"bulk_user_{i}", i * 10) for i in range(1, 101)]
+
+    # Bulk insert
+    result = bigquery_session.execute_many(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", bulk_data)
+    assert isinstance(result, SQLResult)
+    assert result.rows_affected == 100
+
+    # Bulk select
+    select_result = bigquery_session.execute(
+        f"SELECT COUNT(*) as count FROM {table_name} WHERE name LIKE 'bulk_user_%'"
+    )
+    assert isinstance(select_result, SQLResult)
+    assert select_result.data is not None
+    assert select_result.data[0]["count"] == 100
+
+    # Test pagination-like query
+    page_result = bigquery_session.execute(f"""
+        SELECT name, value FROM {table_name}
+        WHERE name LIKE 'bulk_user_%'
+        ORDER BY value
+        LIMIT 10 OFFSET 20
+    """)
+    assert isinstance(page_result, SQLResult)
+    assert page_result.data is not None
+    assert len(page_result.data) == 10
+    assert page_result.data[0]["name"] == "bulk_user_21"
+
+
+@pytest.mark.xdist_group("bigquery")
+@pytest.mark.skip(reason="BigQuery emulator has issues with array literals and functions")
+def test_bigquery_specific_features(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+    """Test BigQuery-specific features."""
+    # Test BigQuery built-in functions (skip CURRENT_TIMESTAMP due to emulator issue)
+    functions_result = bigquery_session.execute("""
+        SELECT
+            GENERATE_UUID() as uuid_val,
+            FARM_FINGERPRINT('test') as fingerprint
+    """)
+    assert isinstance(functions_result, SQLResult)
+    assert functions_result.data is not None
+    assert functions_result.data[0]["uuid_val"] is not None
+    assert functions_result.data[0]["fingerprint"] is not None
+
+    # Test array operations
+    array_result = bigquery_session.execute("""
+        SELECT
+            ARRAY[1, 2, 3, 4, 5] as numbers,
+            ARRAY_LENGTH(ARRAY[1, 2, 3, 4, 5]) as array_len
+    """)
+    assert isinstance(array_result, SQLResult)
+    assert array_result.data is not None
+    assert array_result.data[0]["numbers"] == [1, 2, 3, 4, 5]
+    assert array_result.data[0]["array_len"] == 5
+
+    # Test STRUCT operations
+    struct_result = bigquery_session.execute("""
+        SELECT
+            STRUCT('Alice' as name, 25 as age) as person,
+            STRUCT('Alice' as name, 25 as age).name as person_name
+    """)
+    assert isinstance(struct_result, SQLResult)
+    assert struct_result.data is not None
+    assert struct_result.data[0]["person"]["name"] == "Alice"
+    assert struct_result.data[0]["person"]["age"] == 25
+    assert struct_result.data[0]["person_name"] == "Alice"
+
+
+@pytest.mark.xdist_group("bigquery")
+def test_bigquery_analytical_functions(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+    """Test BigQuery analytical and window functions."""
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+
+    # Insert test data for analytics
+    analytics_data = [
+        (1, "Product A", 1000),
+        (2, "Product B", 1500),
+        (3, "Product A", 1200),
+        (4, "Product C", 800),
+        (5, "Product B", 1800),
+    ]
+
+    bigquery_session.execute_many(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", analytics_data)
+
+    # Test window functions
+    window_result = bigquery_session.execute(f"""
+        SELECT
+            name,
+            value,
+            ROW_NUMBER() OVER (PARTITION BY name ORDER BY value DESC) as row_num,
+            RANK() OVER (PARTITION BY name ORDER BY value DESC) as rank_val,
+            SUM(value) OVER (PARTITION BY name) as total_by_product,
+            LAG(value) OVER (ORDER BY id) as previous_value
+        FROM {table_name}
+        ORDER BY id
+    """)
+    assert isinstance(window_result, SQLResult)
+    assert window_result.data is not None
+    assert len(window_result.data) == 5
+
+    # Verify window function results
+    product_a_rows = [row for row in window_result.data if row["name"] == "Product A"]
+    assert len(product_a_rows) == 2
+    # Highest value should have row_num = 1
+    highest_a = max(product_a_rows, key=operator.itemgetter("value"))
+    assert highest_a["row_num"] == 1

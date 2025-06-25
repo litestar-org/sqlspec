@@ -1,93 +1,148 @@
+"""SQLite database configuration with direct field-based configuration."""
+
+import logging
 import sqlite3
 from contextlib import contextmanager
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
 from sqlspec.adapters.sqlite.driver import SqliteConnection, SqliteDriver
-from sqlspec.base import NoPoolSyncConfig
-from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.typing import Empty, EmptyType, dataclass_to_dict
+from sqlspec.config import NoPoolSyncConfig
+from sqlspec.statement.sql import SQLConfig
+from sqlspec.typing import DictRow
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
+    from sqlglot.dialects.dialect import DialectType
 
-__all__ = ("SqliteConfig",)
+logger = logging.getLogger(__name__)
+
+CONNECTION_FIELDS = frozenset(
+    {
+        "database",
+        "timeout",
+        "detect_types",
+        "isolation_level",
+        "check_same_thread",
+        "factory",
+        "cached_statements",
+        "uri",
+    }
+)
+
+__all__ = ("CONNECTION_FIELDS", "SqliteConfig", "sqlite3")
 
 
-@dataclass
-class SqliteConfig(NoPoolSyncConfig["SqliteConnection", "SqliteDriver"]):
-    """Configuration for SQLite database connections.
+class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
+    """Configuration for SQLite database connections with direct field-based configuration."""
 
-    This class provides configuration options for SQLite database connections, wrapping all parameters
-    available to sqlite3.connect().
+    __slots__ = (
+        "_dialect",
+        "cached_statements",
+        "check_same_thread",
+        "database",
+        "default_row_type",
+        "detect_types",
+        "extras",
+        "factory",
+        "isolation_level",
+        "pool_instance",
+        "statement_config",
+        "timeout",
+        "uri",
+    )
 
-    For details see: https://docs.python.org/3/library/sqlite3.html#sqlite3.connect
-    """
+    driver_type: type[SqliteDriver] = SqliteDriver
+    connection_type: type[SqliteConnection] = SqliteConnection
+    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark", "named_colon")
+    preferred_parameter_style: ClassVar[str] = "qmark"
 
-    database: str = ":memory:"
-    """The path to the database file to be opened. Pass ":memory:" to open a connection to a database that resides in RAM instead of on disk."""
+    def __init__(
+        self,
+        database: str = ":memory:",
+        statement_config: Optional[SQLConfig] = None,
+        default_row_type: type[DictRow] = DictRow,
+        # SQLite connection parameters
+        timeout: Optional[float] = None,
+        detect_types: Optional[int] = None,
+        isolation_level: Optional[Union[str, None]] = None,
+        check_same_thread: Optional[bool] = None,
+        factory: Optional[type[SqliteConnection]] = None,
+        cached_statements: Optional[int] = None,
+        uri: Optional[bool] = None,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize SQLite configuration.
 
-    timeout: "Union[float, EmptyType]" = Empty
-    """How many seconds the connection should wait before raising an OperationalError when a table is locked. If another thread or process has acquired a shared lock, a wait for the specified timeout occurs."""
+        Args:
+            database: Path to the SQLite database file. Use ':memory:' for in-memory database.
+            statement_config: Default SQL statement configuration
+            default_row_type: Default row type for results
+            timeout: Connection timeout in seconds
+            detect_types: Type detection flags (sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
+            isolation_level: Transaction isolation level
+            check_same_thread: Whether to check that connection is used on same thread
+            factory: Custom Connection class factory
+            cached_statements: Number of statements to cache
+            uri: Whether to interpret database as URI
+            **kwargs: Additional parameters (stored in extras)
+        """
+        # Validate required parameters
+        if database is None:
+            msg = "database parameter cannot be None"
+            raise TypeError(msg)
 
-    detect_types: "Union[int, EmptyType]" = Empty
-    """Control whether and how data types are detected. It can be 0 (default) or a combination of PARSE_DECLTYPES and PARSE_COLNAMES."""
+        # Store connection parameters as instance attributes
+        self.database = database
+        self.timeout = timeout
+        self.detect_types = detect_types
+        self.isolation_level = isolation_level
+        self.check_same_thread = check_same_thread
+        self.factory = factory
+        self.cached_statements = cached_statements
+        self.uri = uri
 
-    isolation_level: "Optional[Union[Literal['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE'], EmptyType]]" = Empty
-    """The isolation_level of the connection. This can be None for autocommit mode or one of "DEFERRED", "IMMEDIATE" or "EXCLUSIVE"."""
+        self.extras = kwargs or {}
 
-    check_same_thread: "Union[bool, EmptyType]" = Empty
-    """If True (default), ProgrammingError is raised if the database connection is used by a thread other than the one that created it. If False, the connection may be shared across multiple threads."""
-
-    factory: "Union[type[SqliteConnection], EmptyType]" = Empty
-    """A custom Connection class factory. If given, must be a callable that returns a Connection instance."""
-
-    cached_statements: "Union[int, EmptyType]" = Empty
-    """The number of statements that SQLite will cache for this connection. The default is 128."""
-
-    uri: "Union[bool, EmptyType]" = Empty
-    """If set to True, database is interpreted as a URI with supported options."""
-    driver_type: "type[SqliteDriver]" = field(init=False, default_factory=lambda: SqliteDriver)
-    """Type of the driver object"""
-    connection_type: "type[SqliteConnection]" = field(init=False, default_factory=lambda: SqliteConnection)
-    """Type of the connection object"""
+        # Store other config
+        self.statement_config = statement_config or SQLConfig()
+        self.default_row_type = default_row_type
+        self._dialect: DialectType = None
+        super().__init__()
 
     @property
-    def connection_config_dict(self) -> "dict[str, Any]":
-        """Return the connection configuration as a dict.
+    def connection_config_dict(self) -> dict[str, Any]:
+        """Return a dictionary of connection parameters for SQLite."""
+        config = {
+            "database": self.database,
+            "timeout": self.timeout,
+            "detect_types": self.detect_types,
+            "isolation_level": self.isolation_level,
+            "check_same_thread": self.check_same_thread,
+            "factory": self.factory,
+            "cached_statements": self.cached_statements,
+            "uri": self.uri,
+        }
+        # Filter out None values since sqlite3.connect doesn't accept them
+        return {k: v for k, v in config.items() if v is not None}
 
-        Returns:
-            A string keyed dict of config kwargs for the sqlite3.connect() function.
-        """
-        return dataclass_to_dict(
-            self,
-            exclude_empty=True,
-            convert_nested=False,
-            exclude={"pool_instance", "driver_type", "connection_type"},
-        )
-
-    def create_connection(self) -> "SqliteConnection":
-        """Create and return a new database connection.
-
-        Returns:
-            A new SQLite connection instance.
-
-        Raises:
-            ImproperConfigurationError: If the connection could not be established.
-        """
-        try:
-            return sqlite3.connect(**self.connection_config_dict)  # type: ignore[no-any-return,unused-ignore]
-        except Exception as e:
-            msg = f"Could not configure the SQLite connection. Error: {e!s}"
-            raise ImproperConfigurationError(msg) from e
+    def create_connection(self) -> SqliteConnection:
+        """Create and return a SQLite connection."""
+        connection = sqlite3.connect(**self.connection_config_dict)
+        connection.row_factory = sqlite3.Row
+        return connection  # type: ignore[no-any-return]
 
     @contextmanager
-    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Generator[SqliteConnection, None, None]":
-        """Create and provide a database connection.
+    def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[SqliteConnection, None, None]":
+        """Provide a SQLite connection context manager.
+
+        Args:
+            *args: Variable length argument list
+            **kwargs: Arbitrary keyword arguments
 
         Yields:
-            A SQLite connection instance.
+            SqliteConnection: A SQLite connection
 
         """
         connection = self.create_connection()
@@ -98,12 +153,22 @@ class SqliteConfig(NoPoolSyncConfig["SqliteConnection", "SqliteDriver"]):
 
     @contextmanager
     def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[SqliteDriver, None, None]":
-        """Create and provide a database connection.
+        """Provide a SQLite driver session context manager.
+
+        Args:
+            *args: Variable length argument list
+            **kwargs: Arbitrary keyword arguments
 
         Yields:
-            A SQLite driver instance.
-
-
+            SqliteDriver: A SQLite driver
         """
         with self.provide_connection(*args, **kwargs) as connection:
-            yield self.driver_type(connection)
+            statement_config = self.statement_config
+            if statement_config.allowed_parameter_styles is None:
+                statement_config = replace(
+                    statement_config,
+                    allowed_parameter_styles=self.supported_parameter_styles,
+                    target_parameter_style=self.preferred_parameter_style,
+                )
+
+            yield self.driver_type(connection=connection, config=statement_config)

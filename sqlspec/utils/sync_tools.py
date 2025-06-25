@@ -3,15 +3,7 @@ import functools
 import inspect
 import sys
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Generic,
-    Optional,
-    TypeVar,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Generic, Optional, TypeVar, Union, cast
 
 from typing_extensions import ParamSpec
 
@@ -44,7 +36,7 @@ class CapacityLimiter:
 
     @property
     def total_tokens(self) -> int:
-        return self._semaphore._value  # noqa: SLF001
+        return self._semaphore._value
 
     @total_tokens.setter
     def total_tokens(self, value: int) -> None:
@@ -55,9 +47,9 @@ class CapacityLimiter:
 
     async def __aexit__(
         self,
-        exc_type: "Optional[type[BaseException]]",  # noqa: PYI036
-        exc_val: "Optional[BaseException]",  # noqa: PYI036
-        exc_tb: "Optional[TracebackType]",  # noqa: PYI036
+        exc_type: "Optional[type[BaseException]]",
+        exc_val: "Optional[BaseException]",
+        exc_tb: "Optional[TracebackType]",
     ) -> None:
         self.release()
 
@@ -96,8 +88,7 @@ def run_(async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]") -
 
 
 def await_(
-    async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]",
-    raise_sync_error: bool = True,
+    async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]", raise_sync_error: bool = True
 ) -> "Callable[ParamSpecT, ReturnT]":
     """Convert an async function to a blocking one, running in the main async loop.
 
@@ -118,7 +109,7 @@ def await_(
         except RuntimeError:
             # No running event loop
             if raise_sync_error:
-                msg = "await_ called without a running event loop and raise_sync_error=True"
+                msg = "Cannot run async function"
                 raise RuntimeError(msg) from None
             return asyncio.run(partial_f())
         else:
@@ -145,7 +136,7 @@ def await_(
             # but the loop isn't running, but handle defensively.
             # loop is not running
             if raise_sync_error:
-                msg = "await_ found a non-running loop via get_running_loop()"
+                msg = "Cannot run async function"
                 raise RuntimeError(msg)
             # Fallback to running in a new loop
             return asyncio.run(partial_f())
@@ -154,9 +145,7 @@ def await_(
 
 
 def async_(
-    function: "Callable[ParamSpecT, ReturnT]",
-    *,
-    limiter: "Optional[CapacityLimiter]" = None,
+    function: "Callable[ParamSpecT, ReturnT]", *, limiter: "Optional[CapacityLimiter]" = None
 ) -> "Callable[ParamSpecT, Awaitable[ReturnT]]":
     """Convert a blocking function to an async one using asyncio.to_thread().
 
@@ -169,10 +158,8 @@ def async_(
         Callable: An async function that runs the original function in a thread.
     """
 
-    async def wrapper(
-        *args: "ParamSpecT.args",
-        **kwargs: "ParamSpecT.kwargs",
-    ) -> "ReturnT":
+    @functools.wraps(function)
+    async def wrapper(*args: "ParamSpecT.args", **kwargs: "ParamSpecT.kwargs") -> "ReturnT":
         partial_f = functools.partial(function, *args, **kwargs)
         used_limiter = limiter or _default_limiter
         async with used_limiter:
@@ -195,6 +182,7 @@ def ensure_async_(
     if inspect.iscoroutinefunction(function):
         return function
 
+    @functools.wraps(function)
     async def wrapper(*args: "ParamSpecT.args", **kwargs: "ParamSpecT.kwargs") -> "ReturnT":
         result = function(*args, **kwargs)
         if inspect.isawaitable(result):
@@ -213,9 +201,9 @@ class _ContextManagerWrapper(Generic[T]):
 
     async def __aexit__(
         self,
-        exc_type: "Optional[type[BaseException]]",  # noqa: PYI036
-        exc_val: "Optional[BaseException]",  # noqa: PYI036
-        exc_tb: "Optional[TracebackType]",  # noqa: PYI036
+        exc_type: "Optional[type[BaseException]]",
+        exc_val: "Optional[BaseException]",
+        exc_tb: "Optional[TracebackType]",
     ) -> "Optional[bool]":
         return self._cm.__exit__(exc_type, exc_val, exc_tb)
 

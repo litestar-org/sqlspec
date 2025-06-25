@@ -44,7 +44,7 @@ sqlspec = SQLSpec(
                 },
             }
         ],
-    ),
+    )
 )
 app = Litestar(route_handlers=[duckllm_chat], plugins=[sqlspec], debug=True)
 

@@ -1,550 +1,214 @@
 """Psqlpy Driver Implementation."""
 
+import io
 import logging
-import re
-from re import Match
-from typing import TYPE_CHECKING, Any, Optional, Union, overload
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
-from psqlpy import Connection, QueryResult
-from psqlpy.exceptions import RustPSQLDriverPyBaseError
-from sqlglot import exp
+from psqlpy import Connection
 
-from sqlspec.base import AsyncDriverAdapterProtocol
-from sqlspec.exceptions import SQLParsingError
-from sqlspec.filters import StatementFilter
-from sqlspec.mixins import ResultConverter, SQLTranslatorMixin
-from sqlspec.statement import SQLStatement
-from sqlspec.typing import is_dict
+from sqlspec.driver import AsyncDriverAdapterProtocol
+from sqlspec.driver.mixins import (
+    AsyncPipelinedExecutionMixin,
+    AsyncStorageMixin,
+    SQLTranslatorMixin,
+    ToSchemaMixin,
+    TypeCoercionMixin,
+)
+from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
+from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.typing import DictRow, ModelDTOT, RowT
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
-
-    from psqlpy import QueryResult
-
-    from sqlspec.typing import ModelDTOT, StatementParameterType, T
+    from sqlglot.dialects.dialect import DialectType
 
 __all__ = ("PsqlpyConnection", "PsqlpyDriver")
-
-# Improved regex to match question mark placeholders only when they are outside string literals and comments
-# This pattern handles:
-# 1. Single quoted strings with escaped quotes
-# 2. Double quoted strings with escaped quotes
-# 3. Single-line comments (-- to end of line)
-# 4. Multi-line comments (/* to */)
-# 5. Only question marks outside of these contexts are considered parameters
-QUESTION_MARK_PATTERN = re.compile(
-    r"""
-    (?:'[^']*(?:''[^']*)*') |           # Skip single-quoted strings (with '' escapes)
-    (?:"[^"]*(?:""[^"]*)*") |           # Skip double-quoted strings (with "" escapes)
-    (?:--.*?(?:\n|$)) |                 # Skip single-line comments
-    (?:/\*(?:[^*]|\*(?!/))*\*/) |       # Skip multi-line comments
-    (\?)                                # Capture only question marks outside of these contexts
-    """,
-    re.VERBOSE | re.DOTALL,
-)
 
 PsqlpyConnection = Connection
 logger = logging.getLogger("sqlspec")
 
 
 class PsqlpyDriver(
-    SQLTranslatorMixin["PsqlpyConnection"],
-    AsyncDriverAdapterProtocol["PsqlpyConnection"],
-    ResultConverter,
+    AsyncDriverAdapterProtocol[PsqlpyConnection, RowT],
+    SQLTranslatorMixin,
+    TypeCoercionMixin,
+    AsyncStorageMixin,
+    AsyncPipelinedExecutionMixin,
+    ToSchemaMixin,
 ):
-    """Psqlpy Postgres Driver Adapter."""
+    """Psqlpy Driver Adapter.
 
-    connection: "PsqlpyConnection"
-    dialect: str = "postgres"
+    Modern, high-performance driver for PostgreSQL.
+    """
 
-    def __init__(self, connection: "PsqlpyConnection") -> None:
-        self.connection = connection
+    dialect: "DialectType" = "postgres"
+    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.NUMERIC,)
+    default_parameter_style: ParameterStyle = ParameterStyle.NUMERIC
+    __slots__ = ()
 
-    def _process_sql_params(
+    def __init__(
         self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        **kwargs: Any,
-    ) -> "tuple[str, Optional[Union[tuple[Any, ...], dict[str, Any]]]]":
-        """Process SQL and parameters for psqlpy.
+        connection: PsqlpyConnection,
+        config: "Optional[SQLConfig]" = None,
+        default_row_type: "type[DictRow]" = DictRow,
+    ) -> None:
+        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
 
-        Args:
-            sql: SQL statement.
-            parameters: Query parameters.
-            *filters: Statement filters to apply.
-            **kwargs: Additional keyword arguments.
+    def _coerce_boolean(self, value: Any) -> Any:
+        """PostgreSQL has native boolean support, return as-is."""
+        return value
 
-        Returns:
-            The SQL statement and parameters.
+    def _coerce_decimal(self, value: Any) -> Any:
+        """PostgreSQL has native decimal support."""
+        if isinstance(value, str):
+            from decimal import Decimal
 
-        Raises:
-            SQLParsingError: If the SQL parsing fails.
-        """
-        data_params_for_statement: Optional[Union[Mapping[str, Any], Sequence[Any]]] = None
-        combined_filters_list: list[StatementFilter] = list(filters)
+            return Decimal(value)
+        return value
 
-        if parameters is not None:
-            if isinstance(parameters, StatementFilter):
-                combined_filters_list.insert(0, parameters)
-            else:
-                data_params_for_statement = parameters
-        if data_params_for_statement is not None and not isinstance(data_params_for_statement, (list, tuple, dict)):
-            data_params_for_statement = (data_params_for_statement,)
-        statement = SQLStatement(sql, data_params_for_statement, kwargs=kwargs, dialect=self.dialect)
+    def _coerce_json(self, value: Any) -> Any:
+        """PostgreSQL has native JSON/JSONB support, return as-is."""
+        return value
 
-        for filter_obj in combined_filters_list:
-            statement = statement.apply_filter(filter_obj)
+    def _coerce_array(self, value: Any) -> Any:
+        """PostgreSQL has native array support, return as-is."""
+        return value
 
-        # Process the statement
-        sql, validated_params, parsed_expr = statement.process()
+    async def _execute_statement(
+        self, statement: SQL, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
+    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
+        if statement.is_script:
+            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            return await self._execute_script(sql, connection=connection, **kwargs)
 
-        if validated_params is None:
-            return sql, None  # psqlpy can handle None
+        # Let the SQL object handle parameter style conversion based on dialect support
+        sql, params = statement.compile(placeholder_style=self.default_parameter_style)
+        params = self._process_parameters(params)
 
-        # Convert positional parameters from question mark style to PostgreSQL's $N style
-        if isinstance(validated_params, (list, tuple)):
-            # Use a counter to generate $1, $2, etc. for each ? in the SQL that's outside strings/comments
-            param_index = 0
+        if statement.is_many:
+            return await self._execute_many(sql, params, connection=connection, **kwargs)
 
-            def replace_question_mark(match: Match[str]) -> str:
-                # Only process the match if it's not in a skipped context (string/comment)
-                if match.group(1):  # This is a question mark outside string/comment
-                    nonlocal param_index
-                    param_index += 1
-                    return f"${param_index}"
-                # Return the entire matched text unchanged for strings/comments
-                return match.group(0)
+        return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
-            return QUESTION_MARK_PATTERN.sub(replace_question_mark, sql), tuple(validated_params)
+    async def _execute(
+        self, sql: str, parameters: Any, statement: SQL, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
+    ) -> Union[SelectResultDict, DMLResultDict]:
+        conn = self._connection(connection)
+        if self.returns_rows(statement.expression):
+            query_result = await conn.fetch(sql, parameters=parameters)
+            # Convert query_result to list of dicts
+            dict_rows: list[dict[str, Any]] = []
+            if query_result:
+                # psqlpy QueryResult has a result() method that returns list of dicts
+                dict_rows = query_result.result()
+            column_names = list(dict_rows[0].keys()) if dict_rows else []
+            return {"data": dict_rows, "column_names": column_names, "rows_affected": len(dict_rows)}
+        query_result = await conn.execute(sql, parameters=parameters)
+        # Note: psqlpy doesn't provide rows_affected for DML operations
+        # The QueryResult object only has result(), as_class(), and row_factory() methods
+        # For accurate row counts, use RETURNING clause
+        affected_count = -1  # Unknown, as psqlpy doesn't provide this info
+        return {"rows_affected": affected_count, "status_message": "OK"}
 
-        # If no parsed expression is available, we can't safely transform dictionary parameters
-        if is_dict(validated_params) and parsed_expr is None:
-            msg = f"psqlpy: SQL parsing failed and dictionary parameters were provided. Cannot determine parameter order without successful parse. SQL: {sql}"
-            raise SQLParsingError(msg)
+    async def _execute_many(
+        self, sql: str, param_list: Any, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
+    ) -> DMLResultDict:
+        conn = self._connection(connection)
+        await conn.execute_many(sql, param_list or [])
+        # execute_many doesn't return a value with rows_affected
+        affected_count = -1
+        return {"rows_affected": affected_count, "status_message": "OK"}
 
-        # Convert dictionary parameters to the format expected by psqlpy
-        if is_dict(validated_params) and parsed_expr is not None:
-            # Find all named parameters in the SQL expression
-            named_params = []
+    async def _execute_script(
+        self, script: str, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
+    ) -> ScriptResultDict:
+        conn = self._connection(connection)
+        # psqlpy can execute multi-statement scripts directly
+        await conn.execute(script)
+        return {
+            "statements_executed": -1,  # Not directly supported, but script is executed
+            "status_message": "SCRIPT EXECUTED",
+        }
 
-            for node in parsed_expr.find_all(exp.Parameter, exp.Placeholder):
-                if isinstance(node, exp.Parameter) and node.name and node.name in validated_params:
-                    named_params.append(node.name)
-                elif isinstance(node, exp.Placeholder) and isinstance(node.this, str) and node.this in validated_params:
-                    named_params.append(node.this)
+    async def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
+        self._ensure_pyarrow_installed()
+        import pyarrow.csv as pacsv
 
-            if named_params:
-                # Transform the SQL to use $1, $2, etc.
-                def convert_named_to_dollar(node: exp.Expression) -> exp.Expression:
-                    if isinstance(node, exp.Parameter) and node.name and node.name in validated_params:
-                        idx = named_params.index(node.name) + 1
-                        return exp.Parameter(this=str(idx))
-                    if (
-                        isinstance(node, exp.Placeholder)
-                        and isinstance(node.this, str)
-                        and node.this in validated_params
-                    ):
-                        idx = named_params.index(node.this) + 1
-                        return exp.Parameter(this=str(idx))
-                    return node
+        conn = self._connection(None)
+        if mode == "replace":
+            await conn.execute(f"TRUNCATE TABLE {table_name}")
+        elif mode == "create":
+            msg = "'create' mode is not supported for psqlpy ingestion."
+            raise NotImplementedError(msg)
 
-                return parsed_expr.transform(convert_named_to_dollar, copy=True).sql(dialect=self.dialect), tuple(
-                    validated_params[name] for name in named_params
-                )
+        buffer = io.BytesIO()
+        pacsv.write_csv(table, buffer)
+        buffer.seek(0)
 
-            # If no named parameters were found in the SQL but dictionary was provided
-            return sql, tuple(validated_params.values())
+        # Use copy_from_raw or copy_from depending on what's available
+        # The method name might have changed in newer versions
+        copy_method = getattr(conn, "copy_from_raw", getattr(conn, "copy_from_query", None))
+        if copy_method:
+            await copy_method(f"COPY {table_name} FROM STDIN WITH (FORMAT CSV, HEADER)", data=buffer.read())
+            return table.num_rows  # type: ignore[no-any-return]
+        msg = "Connection does not support COPY operations"
+        raise NotImplementedError(msg)
 
-        # For any other case, return validated params
-        return sql, (validated_params,) if not isinstance(validated_params, (list, tuple)) else tuple(validated_params)  # type: ignore[unreachable]
+    async def _wrap_select_result(
+        self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
+    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
+        dict_rows = result["data"]
+        column_names = result["column_names"]
+        rows_affected = result["rows_affected"]
 
-    # --- Public API Methods --- #
-    @overload
-    async def select(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsqlpyConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Sequence[dict[str, Any]]": ...
-    @overload
-    async def select(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsqlpyConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "Sequence[ModelDTOT]": ...
-    async def select(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsqlpyConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
-        """Fetch data from the database.
+        if schema_type:
+            converted_data = self.to_schema(data=dict_rows, schema_type=schema_type)
+            return SQLResult[ModelDTOT](
+                statement=statement,
+                data=list(converted_data),
+                column_names=column_names,
+                rows_affected=rows_affected,
+                operation_type="SELECT",
+            )
+        return SQLResult[RowT](
+            statement=statement,
+            data=cast("list[RowT]", dict_rows),
+            column_names=column_names,
+            rows_affected=rows_affected,
+            operation_type="SELECT",
+        )
 
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional schema class for the result.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+    async def _wrap_execute_result(
+        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
+    ) -> SQLResult[RowT]:
+        operation_type = "UNKNOWN"
+        if statement.expression:
+            operation_type = str(statement.expression.key).upper()
 
-        Returns:
-            List of row data as either model instances or dictionaries.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        parameters = parameters or []  # psqlpy expects a list/tuple
+        if "statements_executed" in result:
+            script_result = cast("ScriptResultDict", result)
+            return SQLResult[RowT](
+                statement=statement,
+                data=[],
+                rows_affected=0,
+                operation_type="SCRIPT",
+                metadata={
+                    "status_message": script_result.get("status_message", ""),
+                    "statements_executed": script_result.get("statements_executed", -1),
+                },
+            )
 
-        results: QueryResult = await connection.fetch(sql, parameters=parameters)
+        dml_result = cast("DMLResultDict", result)
+        rows_affected = dml_result.get("rows_affected", -1)
+        status_message = dml_result.get("status_message", "")
+        return SQLResult[RowT](
+            statement=statement,
+            data=[],
+            rows_affected=rows_affected,
+            operation_type=operation_type,
+            metadata={"status_message": status_message},
+        )
 
-        # Convert to dicts and use ResultConverter
-        dict_results = results.result()
-        return self.to_schema(dict_results, schema_type=schema_type)
-
-    @overload
-    async def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsqlpyConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "dict[str, Any]": ...
-    @overload
-    async def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsqlpyConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "ModelDTOT": ...
-    async def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsqlpyConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Union[ModelDTOT, dict[str, Any]]":
-        """Fetch one row from the database.
-
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional schema class for the result.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            The first row of the query results.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        parameters = parameters or []
-
-        result = await connection.fetch(sql, parameters=parameters)
-
-        # Convert to dict and use ResultConverter
-        dict_results = result.result()
-        if not dict_results:
-            self.check_not_found(None)
-
-        return self.to_schema(dict_results[0], schema_type=schema_type)
-
-    @overload
-    async def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsqlpyConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Optional[dict[str, Any]]": ...
-    @overload
-    async def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsqlpyConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "Optional[ModelDTOT]": ...
-    async def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsqlpyConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
-        """Fetch one row from the database or return None if no rows found.
-
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional schema class for the result.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            The first row of the query results, or None if no results found.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        parameters = parameters or []
-
-        result = await connection.fetch(sql, parameters=parameters)
-        dict_results = result.result()
-
-        if not dict_results:
-            return None
-
-        return self.to_schema(dict_results[0], schema_type=schema_type)
-
-    @overload
-    async def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsqlpyConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Any": ...
-    @overload
-    async def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsqlpyConnection]" = None,
-        schema_type: "type[T]",
-        **kwargs: Any,
-    ) -> "T": ...
-    async def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsqlpyConnection]" = None,
-        schema_type: "Optional[type[T]]" = None,
-        **kwargs: Any,
-    ) -> "Union[T, Any]":
-        """Fetch a single value from the database.
-
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional type to convert the result to.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            The first value of the first row of the query results.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        parameters = parameters or []
-
-        value = await connection.fetch_val(sql, parameters=parameters)
-        value = self.check_not_found(value)
-
-        if schema_type is None:
-            return value
-        return schema_type(value)  # type: ignore[call-arg]
-
-    @overload
-    async def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsqlpyConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Optional[Any]": ...
-    @overload
-    async def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsqlpyConnection]" = None,
-        schema_type: "type[T]",
-        **kwargs: Any,
-    ) -> "Optional[T]": ...
-    async def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsqlpyConnection]" = None,
-        schema_type: "Optional[type[T]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[T, Any]]":
-        """Fetch a single value or None if not found.
-
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional type to convert the result to.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            The first value of the first row of the query results, or None if no results found.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        parameters = parameters or []
-        try:
-            value = await connection.fetch_val(sql, parameters=parameters)
-        except RustPSQLDriverPyBaseError:
-            return None
-
-        if value is None:
-            return None
-        if schema_type is None:
-            return value
-        return schema_type(value)  # type: ignore[call-arg]
-
-    async def insert_update_delete(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsqlpyConnection]" = None,
-        **kwargs: Any,
-    ) -> int:
-        """Execute an insert, update, or delete statement.
-
-        Args:
-            sql: The SQL statement to execute.
-            parameters: The parameters for the statement (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            The number of rows affected by the statement.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        parameters = parameters or []
-
-        await connection.execute(sql, parameters=parameters)
-        # For INSERT/UPDATE/DELETE, psqlpy returns an empty list but the operation succeeded
-        # if no error was raised
-        return 1
-
-    @overload
-    async def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsqlpyConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "dict[str, Any]": ...
-    @overload
-    async def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsqlpyConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "ModelDTOT": ...
-    async def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[PsqlpyConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Union[ModelDTOT, dict[str, Any]]":
-        """Insert, update, or delete data with RETURNING clause.
-
-        Args:
-            sql: The SQL statement with RETURNING clause.
-            parameters: The parameters for the statement (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional schema class for the result.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            The returned row data, as either a model instance or dictionary.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        parameters = parameters or []
-
-        result = await connection.fetch(sql, parameters=parameters)
-
-        dict_results = result.result()
-        if not dict_results:
-            self.check_not_found(None)
-
-        return self.to_schema(dict_results[0], schema_type=schema_type)
-
-    async def execute_script(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        connection: "Optional[PsqlpyConnection]" = None,
-        **kwargs: Any,
-    ) -> str:
-        """Execute a SQL script.
-
-        Args:
-            sql: The SQL script to execute.
-            parameters: The parameters for the script (dict, tuple, list, or None).
-            connection: Optional connection override.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            A success message.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-        parameters = parameters or []
-
-        await connection.execute(sql, parameters=parameters)
-        return "Script executed successfully"
-
-    def _connection(self, connection: "Optional[PsqlpyConnection]" = None) -> "PsqlpyConnection":
-        """Get the connection to use.
-
-        Args:
-            connection: Optional connection to use. If not provided, use the default connection.
-
-        Returns:
-            The connection to use.
-        """
+    def _connection(self, connection: Optional[PsqlpyConnection] = None) -> PsqlpyConnection:
+        """Get the connection to use for the operation."""
         return connection or self.connection

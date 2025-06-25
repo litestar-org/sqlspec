@@ -1,954 +1,581 @@
-import logging
+from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
+from typing import Any, ClassVar, Optional, Union, cast
 
 from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
+from sqlglot.dialects.dialect import DialectType
 
-from sqlspec.base import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
-from sqlspec.filters import StatementFilter
-from sqlspec.mixins import (
-    AsyncArrowBulkOperationsMixin,
-    ResultConverter,
+from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
+from sqlspec.driver.mixins import (
+    AsyncPipelinedExecutionMixin,
+    AsyncStorageMixin,
     SQLTranslatorMixin,
-    SyncArrowBulkOperationsMixin,
+    SyncPipelinedExecutionMixin,
+    SyncStorageMixin,
+    ToSchemaMixin,
+    TypeCoercionMixin,
 )
-from sqlspec.statement import SQLStatement
-from sqlspec.typing import ArrowTable, StatementParameterType, T
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator, Mapping, Sequence
-
-    from sqlspec.typing import ModelDTOT
+from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.statement.result import ArrowResult, DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
+from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.typing import DictRow, ModelDTOT, RowT, SQLParameterType
+from sqlspec.utils.logging import get_logger
+from sqlspec.utils.sync_tools import ensure_async_
 
 __all__ = ("OracleAsyncConnection", "OracleAsyncDriver", "OracleSyncConnection", "OracleSyncDriver")
 
 OracleSyncConnection = Connection
 OracleAsyncConnection = AsyncConnection
 
-logger = logging.getLogger("sqlspec")
+logger = get_logger("adapters.oracledb")
 
 
-class OracleDriverBase:
-    """Base class for Oracle drivers with common functionality."""
+def _process_oracle_parameters(params: Any) -> Any:
+    """Process parameters to handle Oracle-specific requirements.
 
-    dialect: str = "oracle"
+    - Extract values from TypedParameter objects
+    - Convert tuples to lists (Oracle doesn't support tuples)
+    """
+    from sqlspec.statement.parameters import TypedParameter
 
-    def _process_sql_params(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        **kwargs: Any,
-    ) -> "tuple[str, Optional[Union[tuple[Any, ...], dict[str, Any]]]]":
-        """Process SQL and parameters using SQLStatement with dialect support.
+    if params is None:
+        return None
 
-        Args:
-            sql: The SQL statement to process.
-            parameters: The parameters to bind to the statement.
-            *filters: Statement filters to apply.
-            **kwargs: Additional keyword arguments.
+    # Handle TypedParameter objects
+    if isinstance(params, TypedParameter):
+        return _process_oracle_parameters(params.value)
 
-        Returns:
-            A tuple of (sql, parameters) ready for execution.
-        """
-        data_params_for_statement: Optional[Union[Mapping[str, Any], Sequence[Any]]] = None
-        combined_filters_list: list[StatementFilter] = list(filters)
-
-        if parameters is not None:
-            if isinstance(parameters, StatementFilter):
-                combined_filters_list.insert(0, parameters)
+    if isinstance(params, tuple):
+        # Convert single tuple to list and process each element
+        return [_process_oracle_parameters(item) for item in params]
+    if isinstance(params, list):
+        # Process list of parameter sets
+        processed = []
+        for param_set in params:
+            if isinstance(param_set, tuple):
+                # Convert tuple to list and process each element
+                processed.append([_process_oracle_parameters(item) for item in param_set])
+            elif isinstance(param_set, list):
+                # Process each element in the list
+                processed.append([_process_oracle_parameters(item) for item in param_set])
             else:
-                data_params_for_statement = parameters
-        if data_params_for_statement is not None and not isinstance(data_params_for_statement, (list, tuple, dict)):
-            data_params_for_statement = (data_params_for_statement,)
-
-        if isinstance(data_params_for_statement, dict) and not data_params_for_statement and not kwargs:
-            return sql, None
-
-        statement = SQLStatement(sql, data_params_for_statement, kwargs=kwargs, dialect=self.dialect)
-        for filter_obj in combined_filters_list:
-            statement = statement.apply_filter(filter_obj)
-
-        processed_sql, processed_params, _ = statement.process()
-        if processed_params is None:
-            return processed_sql, None
-        if isinstance(processed_params, dict):
-            return processed_sql, processed_params
-        if isinstance(processed_params, (list, tuple)):
-            return processed_sql, tuple(processed_params)
-        return processed_sql, (processed_params,)  # type: ignore[unreachable]
+                processed.append(_process_oracle_parameters(param_set))
+        return processed
+    if isinstance(params, dict):
+        # Process dict values
+        return {key: _process_oracle_parameters(value) for key, value in params.items()}
+    # Return as-is for other types
+    return params
 
 
 class OracleSyncDriver(
-    OracleDriverBase,
-    SyncArrowBulkOperationsMixin["OracleSyncConnection"],
-    SQLTranslatorMixin["OracleSyncConnection"],
-    SyncDriverAdapterProtocol["OracleSyncConnection"],
-    ResultConverter,
+    SyncDriverAdapterProtocol[OracleSyncConnection, RowT],
+    SQLTranslatorMixin,
+    TypeCoercionMixin,
+    SyncStorageMixin,
+    SyncPipelinedExecutionMixin,
+    ToSchemaMixin,
 ):
-    """Oracle Sync Driver Adapter."""
+    """Oracle Sync Driver Adapter. Refactored for new protocol."""
 
-    connection: "OracleSyncConnection"
+    dialect: "DialectType" = "oracle"
+    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (
+        ParameterStyle.NAMED_COLON,
+        ParameterStyle.POSITIONAL_COLON,
+    )
+    default_parameter_style: ParameterStyle = ParameterStyle.NAMED_COLON
+    support_native_arrow_export = True
+    __slots__ = ()
 
-    def __init__(self, connection: "OracleSyncConnection") -> None:
-        self.connection = connection
+    def __init__(
+        self,
+        connection: OracleSyncConnection,
+        config: Optional[SQLConfig] = None,
+        default_row_type: type[DictRow] = DictRow,
+    ) -> None:
+        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
 
-    @staticmethod
+    def _process_parameters(self, parameters: "SQLParameterType") -> "SQLParameterType":
+        """Process parameters to handle Oracle-specific requirements.
+
+        - Extract values from TypedParameter objects
+        - Convert tuples to lists (Oracle doesn't support tuples)
+        """
+        return _process_oracle_parameters(parameters)
+
     @contextmanager
-    def _with_cursor(connection: "OracleSyncConnection") -> "Generator[Cursor, None, None]":
-        cursor = connection.cursor()
+    def _get_cursor(self, connection: Optional[OracleSyncConnection] = None) -> Generator[Cursor, None, None]:
+        conn_to_use = connection or self.connection
+        cursor: Cursor = conn_to_use.cursor()
         try:
             yield cursor
         finally:
             cursor.close()
 
-    # --- Public API Methods --- #
-    @overload
-    def select(
+    def _execute_statement(
+        self, statement: SQL, connection: Optional[OracleSyncConnection] = None, **kwargs: Any
+    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
+        if statement.is_script:
+            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            return self._execute_script(sql, connection=connection, **kwargs)
+
+        # Determine if we need to convert parameter style
+        detected_styles = {p.style for p in statement.parameter_info}
+        target_style = self.default_parameter_style
+
+        # Check if any detected style is not supported
+        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
+        if unsupported_styles:
+            # Convert to default style if we have unsupported styles
+            target_style = self.default_parameter_style
+        elif detected_styles:
+            # Use the first detected style if all are supported
+            # Prefer the first supported style found
+            for style in detected_styles:
+                if style in self.supported_parameter_styles:
+                    target_style = style
+                    break
+
+        if statement.is_many:
+            sql, params = statement.compile(placeholder_style=target_style)
+            # Process parameters to convert tuples to lists for Oracle
+            params = self._process_parameters(params)
+            # Oracle doesn't like underscores in bind parameter names
+            if isinstance(params, list) and params and isinstance(params[0], dict):
+                # Fix the SQL and parameters
+                for key in list(params[0].keys()):
+                    if key.startswith("_arg_"):
+                        # Remove leading underscore: _arg_0 -> arg0
+                        new_key = key[1:].replace("_", "")
+                        sql = sql.replace(f":{key}", f":{new_key}")
+                        # Update all parameter sets
+                        for param_set in params:
+                            if isinstance(param_set, dict) and key in param_set:
+                                param_set[new_key] = param_set.pop(key)
+            return self._execute_many(sql, params, connection=connection, **kwargs)
+
+        sql, params = statement.compile(placeholder_style=target_style)
+        # Oracle doesn't like underscores in bind parameter names
+        if isinstance(params, dict):
+            # Fix the SQL and parameters
+            for key in list(params.keys()):
+                if key.startswith("_arg_"):
+                    # Remove leading underscore: _arg_0 -> arg0
+                    new_key = key[1:].replace("_", "")
+                    sql = sql.replace(f":{key}", f":{new_key}")
+                    params[new_key] = params.pop(key)
+        return self._execute(sql, params, statement, connection=connection, **kwargs)
+
+    def _execute(
         self,
         sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        schema_type: None = None,
+        parameters: Any,
+        statement: SQL,
+        connection: Optional[OracleSyncConnection] = None,
         **kwargs: Any,
-    ) -> "Sequence[dict[str, Any]]": ...
-    @overload
-    def select(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "Sequence[ModelDTOT]": ...
-    def select(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
-        """Fetch data from the database.
+    ) -> Union[SelectResultDict, DMLResultDict]:
+        conn = self._connection(connection)
+        with self._get_cursor(conn) as cursor:
+            # Process parameters to extract values from TypedParameter objects
+            processed_params = self._process_parameters(parameters) if parameters else []
+            cursor.execute(sql, processed_params)
 
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional schema class for the result.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+            if self.returns_rows(statement.expression):
+                fetched_data = cursor.fetchall()
+                column_names = [col[0] for col in cursor.description or []]
+                return {"data": fetched_data, "column_names": column_names, "rows_affected": cursor.rowcount}
 
-        Returns:
-            List of row data as either model instances or dictionaries.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            results = cursor.fetchall()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            if not results:
-                return []
-            # Get column names from description
-            column_names = [col[0] for col in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+            return {"rows_affected": cursor.rowcount, "status_message": "OK"}
 
-            return self.to_schema([dict(zip(column_names, row)) for row in results], schema_type=schema_type)
+    def _execute_many(
+        self, sql: str, param_list: Any, connection: Optional[OracleSyncConnection] = None, **kwargs: Any
+    ) -> DMLResultDict:
+        conn = self._connection(connection)
+        with self._get_cursor(conn) as cursor:
+            # Handle None or empty param_list
+            if param_list is None:
+                param_list = []
+            # Ensure param_list is a list of parameter sets
+            elif param_list and not isinstance(param_list, list):
+                # Single parameter set, wrap it
+                param_list = [param_list]
+            elif param_list and not isinstance(param_list[0], (list, tuple, dict)):
+                # Already a flat list, likely from incorrect usage
+                param_list = [param_list]
+            # Parameters have already been processed in _execute_statement
+            cursor.executemany(sql, param_list)
+            return {"rows_affected": cursor.rowcount, "status_message": "OK"}
 
-    @overload
-    def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "dict[str, Any]": ...
-    @overload
-    def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "ModelDTOT": ...
-    def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Union[ModelDTOT, dict[str, Any]]":
-        """Fetch one row from the database.
+    def _execute_script(
+        self, script: str, connection: Optional[OracleSyncConnection] = None, **kwargs: Any
+    ) -> ScriptResultDict:
+        conn = self._connection(connection)
+        statements = self._split_script_statements(script, strip_trailing_semicolon=True)
+        with self._get_cursor(conn) as cursor:
+            for statement in statements:
+                if statement and statement.strip():
+                    cursor.execute(statement.strip())
 
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional schema class for the result.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+        return {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
 
-        Returns:
-            The first row of the query results.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
+    def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
+        self._ensure_pyarrow_installed()
+        conn = self._connection(connection)
 
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            result = self.check_not_found(result)  # pyright: ignore[reportUnknownArgumentType]
+        # Get SQL and parameters using compile to ensure they match
+        # For fetch_arrow_table, we need to use POSITIONAL_COLON style since the SQL has :1 placeholders
+        sql_str, params = sql.compile(placeholder_style=ParameterStyle.POSITIONAL_COLON)
+        if params is None:
+            params = []
 
-            # Get column names
-            column_names = [col[0] for col in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+        # Process parameters to extract values from TypedParameter objects
+        processed_params = self._process_parameters(params) if params else []
 
-            return self.to_schema(dict(zip(column_names, result)), schema_type=schema_type)
+        oracle_df = conn.fetch_df_all(sql_str, processed_params)
+        from pyarrow.interchange.from_dataframe import from_dataframe
 
-    @overload
-    def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Optional[dict[str, Any]]": ...
-    @overload
-    def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "Optional[ModelDTOT]": ...
-    def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
-        """Fetch one row from the database or return None if no rows found.
+        arrow_table = from_dataframe(oracle_df)
 
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional schema class for the result.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+        return ArrowResult(statement=sql, data=arrow_table)
 
-        Returns:
-            The first row of the query results, or None if no results found.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
+    def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
+        self._ensure_pyarrow_installed()
+        conn = self._connection(None)
 
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            if result is None:
-                return None
+        with self._get_cursor(conn) as cursor:
+            if mode == "replace":
+                cursor.execute(f"TRUNCATE TABLE {table_name}")
+            elif mode == "create":
+                msg = "'create' mode is not supported for oracledb ingestion."
+                raise NotImplementedError(msg)
 
-            # Get column names
-            column_names = [col[0] for col in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+            data_for_ingest = table.to_pylist()
+            if not data_for_ingest:
+                return 0
 
-            return self.to_schema(dict(zip(column_names, result)), schema_type=schema_type)
+            # Generate column placeholders: :1, :2, etc.
+            num_columns = len(data_for_ingest[0])
+            placeholders = ", ".join(f":{i + 1}" for i in range(num_columns))
+            sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
+            cursor.executemany(sql, data_for_ingest)
+            return cursor.rowcount
 
-    @overload
-    def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Any": ...
-    @overload
-    def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        schema_type: "type[T]",
-        **kwargs: Any,
-    ) -> "T": ...
-    def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        schema_type: "Optional[type[T]]" = None,
-        **kwargs: Any,
-    ) -> "Union[T, Any]":
-        """Fetch a single value from the database.
+    def _wrap_select_result(
+        self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
+    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
+        fetched_tuples = result.get("data", [])
+        column_names = result.get("column_names", [])
 
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional type to convert the result to.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+        if not fetched_tuples:
+            return SQLResult[RowT](statement=statement, data=[], column_names=column_names, operation_type="SELECT")
 
-        Returns:
-            The first value of the first row of the query results.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
+        rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row_tuple)) for row_tuple in fetched_tuples]
 
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            result = self.check_not_found(result)  # pyright: ignore[reportUnknownArgumentType]
+        if schema_type:
+            converted_data = self.to_schema(rows_as_dicts, schema_type=schema_type)
+            return SQLResult[ModelDTOT](
+                statement=statement, data=list(converted_data), column_names=column_names, operation_type="SELECT"
+            )
 
-            if schema_type is None:
-                return result[0]  # pyright: ignore[reportUnknownArgumentType]
-            return schema_type(result[0])  # type: ignore[call-arg]
+        return SQLResult[RowT](
+            statement=statement, data=rows_as_dicts, column_names=column_names, operation_type="SELECT"
+        )
 
-    @overload
-    def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Optional[Any]": ...
-    @overload
-    def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        schema_type: "type[T]",
-        **kwargs: Any,
-    ) -> "Optional[T]": ...
-    def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        schema_type: "Optional[type[T]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[T, Any]]":
-        """Fetch a single value or None if not found.
+    def _wrap_execute_result(
+        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
+    ) -> SQLResult[RowT]:
+        operation_type = "UNKNOWN"
+        if statement.expression:
+            operation_type = str(statement.expression.key).upper()
 
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional type to convert the result to.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+        if "statements_executed" in result:
+            script_result = cast("ScriptResultDict", result)
+            return SQLResult[RowT](
+                statement=statement,
+                data=[],
+                rows_affected=0,
+                operation_type="SCRIPT",
+                metadata={
+                    "status_message": script_result.get("status_message", ""),
+                    "statements_executed": script_result.get("statements_executed", -1),
+                },
+            )
 
-        Returns:
-            The first value of the first row of the query results, or None if no results found.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            if result is None:
-                return None
-
-            if schema_type is None:
-                return result[0]  # pyright: ignore[reportUnknownArgumentType]
-            return schema_type(result[0])  # type: ignore[call-arg]
-
-    def insert_update_delete(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        **kwargs: Any,
-    ) -> int:
-        """Execute an insert, update, or delete statement.
-
-        Args:
-            sql: The SQL statement to execute.
-            parameters: The parameters for the statement (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            The number of rows affected by the statement.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            return cursor.rowcount  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-
-    @overload
-    def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "dict[str, Any]": ...
-    @overload
-    def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "ModelDTOT": ...
-    def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
-        """Insert, update, or delete data from the database and return result.
-
-        Returns:
-            The first row of results.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-
-            if result is None:
-                return None
-
-            # Get column names
-            column_names = [col[0] for col in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-
-            if schema_type is not None:
-                return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))  # pyright: ignore[reportUnknownArgumentType]
-            # Always return dictionaries
-            return dict(zip(column_names, result))  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
-
-    def execute_script(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        connection: "Optional[OracleSyncConnection]" = None,
-        **kwargs: Any,
-    ) -> str:
-        """Execute a SQL script.
-
-        Args:
-            sql: The SQL script to execute.
-            parameters: The parameters for the script (dict, tuple, list, or None).
-            connection: Optional connection override.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            A success message.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            return str(cursor.rowcount)  # pyright: ignore[reportUnknownMemberType]
-
-    def select_arrow(  # pyright: ignore[reportUnknownParameterType]
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleSyncConnection]" = None,
-        **kwargs: Any,
-    ) -> "ArrowTable":  # pyright: ignore[reportUnknownVariableType]
-        """Execute a SQL query and return results as an Apache Arrow Table.
-
-        Returns:
-            An Apache Arrow Table containing the query results.
-        """
-
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        results = connection.fetch_df_all(sql, parameters)
-        return cast("ArrowTable", ArrowTable.from_arrays(arrays=results.column_arrays(), names=results.column_names()))  # pyright: ignore
-
-    def _connection(self, connection: "Optional[OracleSyncConnection]" = None) -> "OracleSyncConnection":
-        """Get the connection to use for the operation.
-
-        Args:
-            connection: Optional connection to use.
-
-        Returns:
-            The connection to use.
-        """
-        return connection or self.connection
+        dml_result = cast("DMLResultDict", result)
+        rows_affected = dml_result.get("rows_affected", -1)
+        status_message = dml_result.get("status_message", "")
+        return SQLResult[RowT](
+            statement=statement,
+            data=[],
+            rows_affected=rows_affected,
+            operation_type=operation_type,
+            metadata={"status_message": status_message},
+        )
 
 
 class OracleAsyncDriver(
-    OracleDriverBase,
-    AsyncArrowBulkOperationsMixin["OracleAsyncConnection"],
-    SQLTranslatorMixin["OracleAsyncConnection"],
-    AsyncDriverAdapterProtocol["OracleAsyncConnection"],
-    ResultConverter,
+    AsyncDriverAdapterProtocol[OracleAsyncConnection, RowT],
+    SQLTranslatorMixin,
+    TypeCoercionMixin,
+    AsyncStorageMixin,
+    AsyncPipelinedExecutionMixin,
+    ToSchemaMixin,
 ):
-    """Oracle Async Driver Adapter."""
+    """Oracle Async Driver Adapter. Refactored for new protocol."""
 
-    connection: "OracleAsyncConnection"
+    dialect: DialectType = "oracle"
+    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (
+        ParameterStyle.NAMED_COLON,
+        ParameterStyle.POSITIONAL_COLON,
+    )
+    default_parameter_style: ParameterStyle = ParameterStyle.NAMED_COLON
+    __supports_arrow__: ClassVar[bool] = True
+    __supports_parquet__: ClassVar[bool] = False
+    __slots__ = ()
 
-    def __init__(self, connection: "OracleAsyncConnection") -> None:
-        self.connection = connection
+    def __init__(
+        self,
+        connection: OracleAsyncConnection,
+        config: "Optional[SQLConfig]" = None,
+        default_row_type: "type[DictRow]" = DictRow,
+    ) -> None:
+        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
 
-    @staticmethod
+    def _process_parameters(self, parameters: "SQLParameterType") -> "SQLParameterType":
+        """Process parameters to handle Oracle-specific requirements.
+
+        - Extract values from TypedParameter objects
+        - Convert tuples to lists (Oracle doesn't support tuples)
+        """
+        return _process_oracle_parameters(parameters)
+
     @asynccontextmanager
-    async def _with_cursor(connection: "OracleAsyncConnection") -> "AsyncGenerator[AsyncCursor, None]":
-        cursor = connection.cursor()
+    async def _get_cursor(
+        self, connection: Optional[OracleAsyncConnection] = None
+    ) -> AsyncGenerator[AsyncCursor, None]:
+        conn_to_use = connection or self.connection
+        cursor: AsyncCursor = conn_to_use.cursor()
         try:
             yield cursor
         finally:
-            cursor.close()
+            await ensure_async_(cursor.close)()
 
-    # --- Public API Methods --- #
-    @overload
-    async def select(
+    async def _execute_statement(
+        self, statement: SQL, connection: Optional[OracleAsyncConnection] = None, **kwargs: Any
+    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
+        if statement.is_script:
+            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            return await self._execute_script(sql, connection=connection, **kwargs)
+
+        # Determine if we need to convert parameter style
+        detected_styles = {p.style for p in statement.parameter_info}
+        target_style = self.default_parameter_style
+
+        # Check if any detected style is not supported
+        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
+        if unsupported_styles:
+            # Convert to default style if we have unsupported styles
+            target_style = self.default_parameter_style
+        elif detected_styles:
+            # Use the first detected style if all are supported
+            # Prefer the first supported style found
+            for style in detected_styles:
+                if style in self.supported_parameter_styles:
+                    target_style = style
+                    break
+
+        if statement.is_many:
+            sql, params = statement.compile(placeholder_style=target_style)
+            # Process parameters to convert tuples to lists for Oracle
+            params = self._process_parameters(params)
+            # Oracle doesn't like underscores in bind parameter names
+            if isinstance(params, list) and params and isinstance(params[0], dict):
+                # Fix the SQL and parameters
+                for key in list(params[0].keys()):
+                    if key.startswith("_arg_"):
+                        # Remove leading underscore: _arg_0 -> arg0
+                        new_key = key[1:].replace("_", "")
+                        sql = sql.replace(f":{key}", f":{new_key}")
+                        # Update all parameter sets
+                        for param_set in params:
+                            if isinstance(param_set, dict) and key in param_set:
+                                param_set[new_key] = param_set.pop(key)
+            return await self._execute_many(sql, params, connection=connection, **kwargs)
+
+        sql, params = statement.compile(placeholder_style=target_style)
+        # Oracle doesn't like underscores in bind parameter names
+        if isinstance(params, dict):
+            # Fix the SQL and parameters
+            for key in list(params.keys()):
+                if key.startswith("_arg_"):
+                    # Remove leading underscore: _arg_0 -> arg0
+                    new_key = key[1:].replace("_", "")
+                    sql = sql.replace(f":{key}", f":{new_key}")
+                    params[new_key] = params.pop(key)
+        return await self._execute(sql, params, statement, connection=connection, **kwargs)
+
+    async def _execute(
         self,
         sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        schema_type: None = None,
+        parameters: Any,
+        statement: SQL,
+        connection: Optional[OracleAsyncConnection] = None,
         **kwargs: Any,
-    ) -> "Sequence[dict[str, Any]]": ...
-    @overload
-    async def select(
+    ) -> Union[SelectResultDict, DMLResultDict]:
+        conn = self._connection(connection)
+        async with self._get_cursor(conn) as cursor:
+            if parameters is None:
+                await cursor.execute(sql)
+            else:
+                # Process parameters to extract values from TypedParameter objects
+                processed_params = self._process_parameters(parameters)
+                await cursor.execute(sql, processed_params)
+
+            # For SELECT statements, extract data while cursor is open
+            if self.returns_rows(statement.expression):
+                fetched_data = await cursor.fetchall()
+                column_names = [col[0] for col in cursor.description or []]
+                result: SelectResultDict = {
+                    "data": fetched_data,
+                    "column_names": column_names,
+                    "rows_affected": cursor.rowcount,
+                }
+                return result
+            dml_result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
+            return dml_result
+
+    async def _execute_many(
+        self, sql: str, param_list: Any, connection: Optional[OracleAsyncConnection] = None, **kwargs: Any
+    ) -> DMLResultDict:
+        conn = self._connection(connection)
+        async with self._get_cursor(conn) as cursor:
+            # Handle None or empty param_list
+            if param_list is None:
+                param_list = []
+            # Ensure param_list is a list of parameter sets
+            elif param_list and not isinstance(param_list, list):
+                # Single parameter set, wrap it
+                param_list = [param_list]
+            elif param_list and not isinstance(param_list[0], (list, tuple, dict)):
+                # Already a flat list, likely from incorrect usage
+                param_list = [param_list]
+            # Parameters have already been processed in _execute_statement
+            await cursor.executemany(sql, param_list)
+            result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
+            return result
+
+    async def _execute_script(
+        self, script: str, connection: Optional[OracleAsyncConnection] = None, **kwargs: Any
+    ) -> ScriptResultDict:
+        conn = self._connection(connection)
+        # Oracle doesn't support multi-statement scripts in a single execute
+        # The splitter now handles PL/SQL blocks correctly when strip_trailing_semicolon=True
+        statements = self._split_script_statements(script, strip_trailing_semicolon=True)
+
+        async with self._get_cursor(conn) as cursor:
+            for statement in statements:
+                if statement and statement.strip():
+                    await cursor.execute(statement.strip())
+
+        result: ScriptResultDict = {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
+        return result
+
+    async def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
+        self._ensure_pyarrow_installed()
+        conn = self._connection(connection)
+
+        # Get SQL and parameters using compile to ensure they match
+        # For fetch_arrow_table, we need to use POSITIONAL_COLON style since the SQL has :1 placeholders
+        sql_str, params = sql.compile(placeholder_style=ParameterStyle.POSITIONAL_COLON)
+        if params is None:
+            params = []
+
+        # Process parameters to extract values from TypedParameter objects
+        processed_params = self._process_parameters(params) if params else []
+
+        oracle_df = await conn.fetch_df_all(sql_str, processed_params)
+        from pyarrow.interchange.from_dataframe import from_dataframe
+
+        arrow_table = from_dataframe(oracle_df)
+
+        return ArrowResult(statement=sql, data=arrow_table)
+
+    async def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
+        self._ensure_pyarrow_installed()
+        conn = self._connection(None)
+
+        async with self._get_cursor(conn) as cursor:
+            if mode == "replace":
+                await cursor.execute(f"TRUNCATE TABLE {table_name}")
+            elif mode == "create":
+                msg = "'create' mode is not supported for oracledb ingestion."
+                raise NotImplementedError(msg)
+
+            data_for_ingest = table.to_pylist()
+            if not data_for_ingest:
+                return 0
+
+            # Generate column placeholders: :1, :2, etc.
+            num_columns = len(data_for_ingest[0])
+            placeholders = ", ".join(f":{i + 1}" for i in range(num_columns))
+            sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
+            await cursor.executemany(sql, data_for_ingest)
+            return cursor.rowcount
+
+    async def _wrap_select_result(
         self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "Sequence[ModelDTOT]": ...
-    async def select(
+        statement: SQL,
+        result: SelectResultDict,
+        schema_type: Optional[type[ModelDTOT]] = None,
+        **kwargs: Any,  # pyright: ignore[reportUnusedParameter]
+    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
+        fetched_tuples = result["data"]
+        column_names = result["column_names"]
+
+        if not fetched_tuples:
+            return SQLResult[RowT](statement=statement, data=[], column_names=column_names, operation_type="SELECT")
+
+        rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row_tuple)) for row_tuple in fetched_tuples]
+
+        if schema_type:
+            converted_data = self.to_schema(rows_as_dicts, schema_type=schema_type)
+            return SQLResult[ModelDTOT](
+                statement=statement, data=list(converted_data), column_names=column_names, operation_type="SELECT"
+            )
+        return SQLResult[RowT](
+            statement=statement, data=rows_as_dicts, column_names=column_names, operation_type="SELECT"
+        )
+
+    async def _wrap_execute_result(
         self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
-        """Fetch data from the database.
+        statement: SQL,
+        result: Union[DMLResultDict, ScriptResultDict],
+        **kwargs: Any,  # pyright: ignore[reportUnusedParameter]
+    ) -> SQLResult[RowT]:
+        operation_type = "UNKNOWN"
+        if statement.expression:
+            operation_type = str(statement.expression.key).upper()
 
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional schema class for the result.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+        if "statements_executed" in result:
+            script_result = cast("ScriptResultDict", result)
+            return SQLResult[RowT](
+                statement=statement,
+                data=[],
+                rows_affected=0,
+                operation_type="SCRIPT",
+                metadata={
+                    "status_message": script_result.get("status_message", ""),
+                    "statements_executed": script_result.get("statements_executed", -1),
+                },
+            )
 
-        Returns:
-            List of row data as either model instances or dictionaries.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            results = await cursor.fetchall()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            if not results:
-                return []
-            # Get column names from description
-            column_names = [col[0] for col in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-
-            return self.to_schema([dict(zip(column_names, row)) for row in results], schema_type=schema_type)
-
-    @overload
-    async def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "dict[str, Any]": ...
-    @overload
-    async def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "ModelDTOT": ...
-    async def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Union[ModelDTOT, dict[str, Any]]":
-        """Fetch one row from the database.
-
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional schema class for the result.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            The first row of the query results.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            result = self.check_not_found(result)  # pyright: ignore[reportUnknownArgumentType]
-            column_names = [col[0] for col in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-
-            return self.to_schema(dict(zip(column_names, result)), schema_type=schema_type)
-
-    @overload
-    async def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Optional[dict[str, Any]]": ...
-    @overload
-    async def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "Optional[ModelDTOT]": ...
-    async def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
-        """Fetch one row from the database or return None if no rows found.
-
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional schema class for the result.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            The first row of the query results, or None if no results found.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            if result is None:
-                return None
-            column_names = [col[0] for col in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-            return self.to_schema(dict(zip(column_names, result)), schema_type=schema_type)
-
-    @overload
-    async def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Any": ...
-    @overload
-    async def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        schema_type: "type[T]",
-        **kwargs: Any,
-    ) -> "T": ...
-    async def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        schema_type: "Optional[type[T]]" = None,
-        **kwargs: Any,
-    ) -> "Union[T, Any]":
-        """Fetch a single value from the database.
-
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional type to convert the result to.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            The first value of the first row of the query results.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            result = self.check_not_found(result)  # pyright: ignore[reportUnknownArgumentType]
-
-            if schema_type is None:
-                return result[0]  # pyright: ignore[reportUnknownArgumentType]
-            return schema_type(result[0])  # type: ignore[call-arg]
-
-    @overload
-    async def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Optional[Any]": ...
-    @overload
-    async def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        schema_type: "type[T]",
-        **kwargs: Any,
-    ) -> "Optional[T]": ...
-    async def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        schema_type: "Optional[type[T]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[T, Any]]":
-        """Fetch a single value or None if not found.
-
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional type to convert the result to.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            The first value of the first row of the query results, or None if no results found.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            if result is None:
-                return None
-
-            if schema_type is None:
-                return result[0]  # pyright: ignore[reportUnknownArgumentType]
-            return schema_type(result[0])  # type: ignore[call-arg]
-
-    async def insert_update_delete(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        **kwargs: Any,
-    ) -> int:
-        """Insert, update, or delete data from the database.
-
-        Args:
-            sql: The SQL statement to execute.
-            parameters: The parameters for the statement (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            Row count affected by the operation.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            return cursor.rowcount  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-
-    @overload
-    async def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "dict[str, Any]": ...
-    @overload
-    async def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "ModelDTOT": ...
-    async def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
-        """Insert, update, or delete data from the database and return result.
-
-        Args:
-            sql: The SQL statement with RETURNING clause.
-            parameters: The parameters for the statement (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional schema class for the result.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            The returned row data, as either a model instance or dictionary.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            result = await cursor.fetchone()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            if result is None:
-                return None
-
-            # Get column names
-            column_names = [col[0] for col in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-
-            if schema_type is not None:
-                return cast("ModelDTOT", schema_type(**dict(zip(column_names, result))))  # pyright: ignore[reportUnknownArgumentType]
-            return dict(zip(column_names, result))  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]
-
-    async def execute_script(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        connection: "Optional[OracleAsyncConnection]" = None,
-        **kwargs: Any,
-    ) -> str:
-        """Execute a SQL script.
-
-        Args:
-            sql: The SQL script to execute.
-            parameters: The parameters for the script (dict, tuple, list, or None).
-            connection: Optional connection override.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            A success message.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-
-        async with self._with_cursor(connection) as cursor:
-            await cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            return str(cursor.rowcount)  # pyright: ignore[reportUnknownMemberType]
-
-    async def select_arrow(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[OracleAsyncConnection]" = None,
-        **kwargs: Any,
-    ) -> "ArrowTable":  # pyright: ignore[reportUnknownVariableType]
-        """Execute a SQL query asynchronously and return results as an Apache Arrow Table.
-
-        Args:
-            sql: The SQL query string.
-            parameters: Parameters for the query.
-            filters: Statement filters to apply.
-            connection: Optional connection override.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            An Apache Arrow Table containing the query results.
-        """
-
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-        results = await connection.fetch_df_all(sql, parameters)
-        return ArrowTable.from_arrays(arrays=results.column_arrays(), names=results.column_names())  # pyright: ignore
-
-    def _connection(self, connection: "Optional[OracleAsyncConnection]" = None) -> "OracleAsyncConnection":
-        """Get the connection to use for the operation.
-
-        Args:
-            connection: Optional connection to use.
-
-        Returns:
-            The connection to use.
-        """
-        return connection or self.connection
+        dml_result = cast("DMLResultDict", result)
+        rows_affected = dml_result.get("rows_affected", -1)
+        status_message = dml_result.get("status_message", "")
+        return SQLResult[RowT](
+            statement=statement,
+            data=[],
+            rows_affected=rows_affected,
+            operation_type=operation_type,
+            metadata={"status_message": status_message},
+        )

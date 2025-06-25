@@ -1,22 +1,29 @@
 import contextlib
 import logging
-import re
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast, overload
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
 from adbc_driver_manager.dbapi import Connection, Cursor
-from sqlglot import exp as sqlglot_exp
 
-from sqlspec.base import SyncDriverAdapterProtocol
-from sqlspec.exceptions import SQLParsingError
-from sqlspec.filters import StatementFilter
-from sqlspec.mixins import ResultConverter, SQLTranslatorMixin, SyncArrowBulkOperationsMixin
-from sqlspec.statement import SQLStatement
-from sqlspec.typing import ArrowTable, StatementParameterType, is_dict
+from sqlspec.driver import SyncDriverAdapterProtocol
+from sqlspec.driver.mixins import (
+    SQLTranslatorMixin,
+    SyncPipelinedExecutionMixin,
+    SyncStorageMixin,
+    ToSchemaMixin,
+    TypeCoercionMixin,
+)
+from sqlspec.exceptions import wrap_exceptions
+from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.statement.result import ArrowResult, DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
+from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.typing import DictRow, ModelDTOT, RowT, is_dict_with_field
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    from sqlspec.typing import ArrowTable, ModelDTOT, StatementParameterType, T
+    from sqlglot.dialects.dialect import DialectType
 
 __all__ = ("AdbcConnection", "AdbcDriver")
 
@@ -24,30 +31,67 @@ logger = logging.getLogger("sqlspec")
 
 AdbcConnection = Connection
 
-# SQLite named parameter pattern - simple pattern to find parameter references
-SQLITE_PARAM_PATTERN = re.compile(r"(?::|\$|@)([a-zA-Z0-9_]+)")
-
-# Patterns to identify comments and string literals
-SQL_COMMENT_PATTERN = re.compile(r"--[^\n]*|/\*.*?\*/", re.DOTALL)
-SQL_STRING_PATTERN = re.compile(r"'[^']*'|\"[^\"]*\"")
-
 
 class AdbcDriver(
-    SyncArrowBulkOperationsMixin["AdbcConnection"],
-    SQLTranslatorMixin["AdbcConnection"],
-    SyncDriverAdapterProtocol["AdbcConnection"],
-    ResultConverter,
+    SyncDriverAdapterProtocol["AdbcConnection", RowT],
+    SQLTranslatorMixin,
+    TypeCoercionMixin,
+    SyncStorageMixin,
+    SyncPipelinedExecutionMixin,
+    ToSchemaMixin,
 ):
-    """ADBC Sync Driver Adapter."""
+    """ADBC Sync Driver Adapter with modern architecture.
 
-    connection: AdbcConnection
-    __supports_arrow__: ClassVar[bool] = True
-    dialect: str = "adbc"
+    ADBC (Arrow Database Connectivity) provides a universal interface for connecting
+    to multiple database systems with high-performance Arrow-native data transfer.
 
-    def __init__(self, connection: "AdbcConnection") -> None:
-        """Initialize the ADBC driver adapter."""
-        self.connection = connection
-        self.dialect = self._get_dialect(connection)  # Store detected dialect
+    This driver provides:
+    - Universal connectivity across database backends (PostgreSQL, SQLite, DuckDB, etc.)
+    - High-performance Arrow data streaming and bulk operations
+    - Intelligent dialect detection and parameter style handling
+    - Seamless integration with cloud databases (BigQuery, Snowflake)
+    - Driver manager abstraction for easy multi-database support
+    """
+
+    supports_native_arrow_import: ClassVar[bool] = True
+    supports_native_arrow_export: ClassVar[bool] = True
+    supports_native_parquet_export: ClassVar[bool] = False  # Not implemented yet
+    supports_native_parquet_import: ClassVar[bool] = True
+    __slots__ = ("default_parameter_style", "dialect", "supported_parameter_styles")
+
+    def __init__(
+        self,
+        connection: "AdbcConnection",
+        config: "Optional[SQLConfig]" = None,
+        default_row_type: "type[DictRow]" = DictRow,
+    ) -> None:
+        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
+        self.dialect: DialectType = self._get_dialect(connection)
+        self.default_parameter_style = self._get_parameter_style_for_dialect(self.dialect)
+        # Override supported parameter styles based on actual dialect capabilities
+        self.supported_parameter_styles = self._get_supported_parameter_styles_for_dialect(self.dialect)
+
+    def _coerce_boolean(self, value: Any) -> Any:
+        """ADBC boolean handling varies by underlying driver."""
+        return value
+
+    def _coerce_decimal(self, value: Any) -> Any:
+        """ADBC decimal handling varies by underlying driver."""
+        if isinstance(value, str):
+            return Decimal(value)
+        return value
+
+    def _coerce_json(self, value: Any) -> Any:
+        """ADBC JSON handling varies by underlying driver."""
+        if self.dialect == "sqlite" and isinstance(value, (dict, list)):
+            return to_json(value)
+        return value
+
+    def _coerce_array(self, value: Any) -> Any:
+        """ADBC array handling varies by underlying driver."""
+        if self.dialect == "sqlite" and isinstance(value, (list, tuple)):
+            return to_json(list(value))
+        return value
 
     @staticmethod
     def _get_dialect(connection: "AdbcConnection") -> str:
@@ -59,621 +103,286 @@ class AdbcDriver(
         Returns:
             The database dialect.
         """
-        driver_name = connection.adbc_get_info()["vendor_name"].lower()
-        if "postgres" in driver_name:
-            return "postgres"
-        if "bigquery" in driver_name:
-            return "bigquery"
-        if "sqlite" in driver_name:
-            return "sqlite"
-        if "duckdb" in driver_name:
-            return "duckdb"
-        if "mysql" in driver_name:
-            return "mysql"
-        if "snowflake" in driver_name:
-            return "snowflake"
-        return "postgres"  # default to postgresql dialect
+        try:
+            driver_info = connection.adbc_get_info()
+            vendor_name = driver_info.get("vendor_name", "").lower()
+            driver_name = driver_info.get("driver_name", "").lower()
+
+            if "postgres" in vendor_name or "postgresql" in driver_name:
+                return "postgres"
+            if "bigquery" in vendor_name or "bigquery" in driver_name:
+                return "bigquery"
+            if "sqlite" in vendor_name or "sqlite" in driver_name:
+                return "sqlite"
+            if "duckdb" in vendor_name or "duckdb" in driver_name:
+                return "duckdb"
+            if "mysql" in vendor_name or "mysql" in driver_name:
+                return "mysql"
+            if "snowflake" in vendor_name or "snowflake" in driver_name:
+                return "snowflake"
+            if "flight" in driver_name or "flightsql" in driver_name:
+                return "sqlite"
+        except Exception:
+            logger.warning("Could not reliably determine ADBC dialect from driver info. Defaulting to 'postgres'.")
+        return "postgres"
 
     @staticmethod
-    def _cursor(connection: "AdbcConnection", *args: Any, **kwargs: Any) -> "Cursor":
-        return connection.cursor(*args, **kwargs)
+    def _get_parameter_style_for_dialect(dialect: str) -> ParameterStyle:
+        """Get the parameter style for a given dialect."""
+        dialect_style_map = {
+            "postgres": ParameterStyle.NUMERIC,
+            "postgresql": ParameterStyle.NUMERIC,
+            "bigquery": ParameterStyle.NAMED_AT,
+            "sqlite": ParameterStyle.QMARK,
+            "duckdb": ParameterStyle.QMARK,
+            "mysql": ParameterStyle.POSITIONAL_PYFORMAT,
+            "snowflake": ParameterStyle.QMARK,
+        }
+        return dialect_style_map.get(dialect, ParameterStyle.QMARK)
 
+    @staticmethod
+    def _get_supported_parameter_styles_for_dialect(dialect: str) -> "tuple[ParameterStyle, ...]":
+        """Get the supported parameter styles for a given dialect.
+
+        Each ADBC driver supports different parameter styles based on the underlying database.
+        """
+        dialect_supported_styles_map = {
+            "postgres": (ParameterStyle.NUMERIC,),  # PostgreSQL only supports $1, $2, $3
+            "postgresql": (ParameterStyle.NUMERIC,),
+            "bigquery": (ParameterStyle.NAMED_AT,),  # BigQuery only supports @param
+            "sqlite": (ParameterStyle.QMARK,),  # ADBC SQLite only supports ? (not :param)
+            "duckdb": (ParameterStyle.QMARK, ParameterStyle.NUMERIC),  # DuckDB supports ? and $1
+            "mysql": (ParameterStyle.POSITIONAL_PYFORMAT,),  # MySQL only supports %s
+            "snowflake": (ParameterStyle.QMARK, ParameterStyle.NUMERIC),  # Snowflake supports ? and :1
+        }
+        return dialect_supported_styles_map.get(dialect, (ParameterStyle.QMARK,))
+
+    @staticmethod
     @contextmanager
-    def _with_cursor(self, connection: "AdbcConnection") -> Generator["Cursor", None, None]:
-        cursor = self._cursor(connection)
+    def _get_cursor(connection: "AdbcConnection") -> Iterator["Cursor"]:
+        cursor = connection.cursor()
         try:
             yield cursor
         finally:
             with contextlib.suppress(Exception):
                 cursor.close()  # type: ignore[no-untyped-call]
 
-    def _process_sql_params(  # noqa: C901, PLR0912, PLR0915
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        **kwargs: Any,
-    ) -> "tuple[str, Optional[tuple[Any, ...]]]":  # Always returns tuple or None for params
-        """Process SQL and parameters for ADBC.
+    def _execute_statement(
+        self, statement: SQL, connection: Optional["AdbcConnection"] = None, **kwargs: Any
+    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
+        if statement.is_script:
+            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            return self._execute_script(sql, connection=connection, **kwargs)
 
-        ADBC drivers generally use positional parameters with '?' placeholders.
-        This method processes the SQL statement and transforms parameters into the format
-        expected by ADBC drivers.
+        # Determine if we need to convert parameter style
+        detected_styles = {p.style for p in statement.parameter_info}
+        target_style = self.default_parameter_style
+        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
 
-        Args:
-            sql: The SQL statement to process.
-            parameters: The parameters to bind to the statement.
-            *filters: Statement filters to apply.
-            **kwargs: Additional keyword arguments.
+        if unsupported_styles:
+            target_style = self.default_parameter_style
+        elif detected_styles:
+            for style in detected_styles:
+                if style in self.supported_parameter_styles:
+                    target_style = style
+                    break
 
-        Raises:
-            SQLParsingError: If the SQL statement cannot be parsed.
+        sql, params = statement.compile(placeholder_style=target_style)
+        params = self._process_parameters(params)
+        if statement.is_many:
+            return self._execute_many(sql, params, connection=connection, **kwargs)
 
-        Returns:
-            A tuple of (sql, parameters) ready for execution.
-        """
-        passed_parameters: Optional[Union[Mapping[str, Any], Sequence[Any]]] = None
-        combined_filters_list: list[StatementFilter] = list(filters)
+        return self._execute(sql, params, statement, connection=connection, **kwargs)
 
-        if parameters is not None:
-            if isinstance(parameters, StatementFilter):
-                combined_filters_list.insert(0, parameters)
-                # passed_parameters remains None
+    def _execute(
+        self, sql: str, parameters: Any, statement: SQL, connection: Optional["AdbcConnection"] = None, **kwargs: Any
+    ) -> Union[SelectResultDict, DMLResultDict]:
+        conn = self._connection(connection)
+        with self._get_cursor(conn) as cursor:
+            # ADBC expects parameters as a list for most drivers
+            if parameters is not None and not isinstance(parameters, (list, tuple)):
+                cursor_params = [parameters]
             else:
-                # If parameters is not a StatementFilter, it's actual data parameters.
-                passed_parameters = parameters
+                cursor_params = parameters  # type: ignore[assignment]
 
-        # Special handling for SQLite with non-dict parameters and named placeholders
-        if self.dialect == "sqlite" and passed_parameters is not None and not is_dict(passed_parameters):
-            # First mask out comments and strings to avoid detecting parameters in those
-            comments = list(SQL_COMMENT_PATTERN.finditer(sql))
-            strings = list(SQL_STRING_PATTERN.finditer(sql))
+            try:
+                cursor.execute(sql, cursor_params or [])
+            except Exception as e:
+                # Rollback transaction on error for PostgreSQL to avoid "current transaction is aborted" errors
+                if self.dialect == "postgres":
+                    with contextlib.suppress(Exception):
+                        cursor.execute("ROLLBACK")
+                raise e from e
 
-            all_matches = [(m.start(), m.end(), "comment") for m in comments] + [
-                (m.start(), m.end(), "string") for m in strings
-            ]
-            all_matches.sort(reverse=True)
+            if self.returns_rows(statement.expression):
+                fetched_data = cursor.fetchall()
+                column_names = [col[0] for col in cursor.description or []]
+                result: SelectResultDict = {
+                    "data": fetched_data,
+                    "column_names": column_names,
+                    "rows_affected": len(fetched_data),
+                }
+                return result
 
-            for start, end, _ in all_matches:
-                sql = sql[:start] + " " * (end - start) + sql[end:]
+            dml_result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
+            return dml_result
 
-            # Find named parameters in clean SQL
-            named_params = list(SQLITE_PARAM_PATTERN.finditer(sql))
+    def _execute_many(
+        self, sql: str, param_list: Any, connection: Optional["AdbcConnection"] = None, **kwargs: Any
+    ) -> DMLResultDict:
+        conn = self._connection(connection)
+        with self._get_cursor(conn) as cursor:
+            try:
+                cursor.executemany(sql, param_list or [])
+            except Exception as e:
+                if self.dialect == "postgres":
+                    with contextlib.suppress(Exception):
+                        cursor.execute("ROLLBACK")
+                # Always re-raise the original exception
+                raise e from e
 
-            if named_params:
-                param_positions = [(m.start(), m.end()) for m in named_params]
-                param_positions.sort(reverse=True)
-                for start, end in param_positions:
-                    sql = sql[:start] + "?" + sql[end:]
-                if not isinstance(passed_parameters, (list, tuple)):
-                    passed_parameters = (passed_parameters,)
-                passed_parameters = tuple(passed_parameters)
+            result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
+            return result
 
-        # Standard processing for all other cases
-        statement = SQLStatement(sql, passed_parameters, kwargs=kwargs, dialect=self.dialect)
+    def _execute_script(
+        self, script: str, connection: Optional["AdbcConnection"] = None, **kwargs: Any
+    ) -> ScriptResultDict:
+        conn = self._connection(connection)
+        # ADBC drivers don't support multiple statements in a single execute
+        # Use the shared implementation to split the script
+        statements = self._split_script_statements(script)
 
-        # Apply any filters from combined_filters_list
-        for filter_obj in combined_filters_list:
-            statement = statement.apply_filter(filter_obj)
+        executed_count = 0
+        with self._get_cursor(conn) as cursor:
+            for statement in statements:
+                executed_count += self._execute_single_script_statement(cursor, statement)
 
-        processed_sql, processed_params, parsed_expr = statement.process()
+        result: ScriptResultDict = {"statements_executed": executed_count, "status_message": "SCRIPT EXECUTED"}
+        return result
 
-        # Special handling for SQLite dialect with dict parameters
-        if self.dialect == "sqlite" and is_dict(processed_params):
-            # First, mask out comments and string literals with placeholders
-            masked_sql = processed_sql
-
-            # Replace comments and strings with placeholders
-            comments = list(SQL_COMMENT_PATTERN.finditer(masked_sql))
-            strings = list(SQL_STRING_PATTERN.finditer(masked_sql))
-
-            # Sort all matches by their start position (descending)
-            all_matches = [(m.start(), m.end(), "comment") for m in comments] + [
-                (m.start(), m.end(), "string") for m in strings
-            ]
-            all_matches.sort(reverse=True)
-
-            # Replace each match with spaces to preserve positions
-            for start, end, _ in all_matches:
-                masked_sql = masked_sql[:start] + " " * (end - start) + masked_sql[end:]
-
-            # Now find parameters in the masked SQL
-            param_order = []
-            param_spans = []  # Store (start, end) of each parameter
-
-            for match in SQLITE_PARAM_PATTERN.finditer(masked_sql):
-                param_name = match.group(1)
-                if param_name in processed_params:
-                    param_order.append(param_name)
-                    param_spans.append((match.start(), match.end()))
-
-            if param_order:
-                # Replace parameters with ? placeholders in reverse order to preserve positions
-                result_sql = processed_sql
-                for i, (start, end) in enumerate(reversed(param_spans)):  # noqa: B007
-                    # Replace :param with ?
-                    result_sql = result_sql[:start] + "?" + result_sql[start + 1 + len(param_order[-(i + 1)]) :]
-
-                return result_sql, tuple(processed_params[name] for name in param_order)
-
-        if processed_params is None:
-            return processed_sql, ()
-        if (
-            isinstance(processed_params, (tuple, list))
-            or (processed_params is not None and not isinstance(processed_params, dict))
-        ) and parsed_expr is not None:
-            # Find all named placeholders
-            named_param_nodes = [
-                node
-                for node in parsed_expr.find_all(sqlglot_exp.Parameter, sqlglot_exp.Placeholder)
-                if (isinstance(node, sqlglot_exp.Parameter) and node.name and not node.name.isdigit())
-                or (
-                    isinstance(node, sqlglot_exp.Placeholder)
-                    and node.this
-                    and not isinstance(node.this, (sqlglot_exp.Identifier, sqlglot_exp.Literal))
-                    and not str(node.this).isdigit()
-                )
-            ]
-
-            # If we found named parameters, transform to question marks
-            if named_param_nodes:
-
-                def convert_to_qmark(node: sqlglot_exp.Expression) -> sqlglot_exp.Expression:
-                    if (isinstance(node, sqlglot_exp.Parameter) and node.name and not node.name.isdigit()) or (
-                        isinstance(node, sqlglot_exp.Placeholder)
-                        and node.this
-                        and not isinstance(node.this, (sqlglot_exp.Identifier, sqlglot_exp.Literal))
-                        and not str(node.this).isdigit()
-                    ):
-                        return sqlglot_exp.Placeholder()
-                    return node
-
-                # Transform the SQL
-                processed_sql = parsed_expr.transform(convert_to_qmark, copy=True).sql(dialect=self.dialect)
-
-                # If it's a scalar parameter, ensure it's wrapped in a tuple
-                if not isinstance(processed_params, (tuple, list)):
-                    processed_params = (processed_params,)  # type: ignore[unreachable]
-
-        # 6. Handle dictionary parameters
-        if is_dict(processed_params):
-            # Skip conversion if there's no parsed expression to work with
-            if parsed_expr is None:
-                msg = f"ADBC ({self.dialect}): Failed to parse SQL with dictionary parameters. Cannot determine parameter order."
-                raise SQLParsingError(msg)
-
-            # Collect named parameters in the order they appear in the SQL
-            named_params = []
-            for node in parsed_expr.find_all(sqlglot_exp.Parameter, sqlglot_exp.Placeholder):
-                if isinstance(node, sqlglot_exp.Parameter) and node.name and node.name in processed_params:
-                    named_params.append(node.name)  # type: ignore[arg-type]
-                elif (
-                    isinstance(node, sqlglot_exp.Placeholder)
-                    and isinstance(node.this, str)
-                    and node.this in processed_params
-                ):
-                    named_params.append(node.this)  # type: ignore[arg-type]
-
-            # If we found named parameters, convert them to ? placeholders
-            if named_params:
-                # Transform SQL to use ? placeholders
-                def convert_to_qmark(node: sqlglot_exp.Expression) -> sqlglot_exp.Expression:
-                    if isinstance(node, sqlglot_exp.Parameter) and node.name and node.name in processed_params:
-                        return sqlglot_exp.Placeholder()  # Anonymous ? placeholder
-                    if (
-                        isinstance(node, sqlglot_exp.Placeholder)
-                        and isinstance(node.this, str)
-                        and node.this in processed_params
-                    ):
-                        return sqlglot_exp.Placeholder()  # Anonymous ? placeholder
-                    return node
-
-                return parsed_expr.transform(convert_to_qmark, copy=True).sql(dialect=self.dialect), tuple(
-                    processed_params[name]  # type: ignore[index]
-                    for name in named_params
-                )
-            return processed_sql, tuple(processed_params.values())
-        if isinstance(processed_params, (list, tuple)):
-            return processed_sql, tuple(processed_params)
-        return processed_sql, (processed_params,)
-
-    @overload
-    def select(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[AdbcConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Sequence[dict[str, Any]]": ...
-    @overload
-    def select(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[AdbcConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "Sequence[ModelDTOT]": ...
-    def select(
-        self,
-        sql: str,
-        parameters: Optional["StatementParameterType"] = None,
-        *filters: "StatementFilter",
-        connection: Optional["AdbcConnection"] = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Sequence[Union[ModelDTOT, dict[str, Any]]]":
-        """Fetch data from the database.
+    def _execute_single_script_statement(self, cursor: "Cursor", statement: str) -> int:
+        """Execute a single statement from a script and handle errors.
 
         Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional schema class for the result.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+            cursor: The database cursor
+            statement: The SQL statement to execute
 
         Returns:
-            List of row data as either model instances or dictionaries.
+            1 if successful, 0 if failed
         """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
+        try:
+            cursor.execute(statement)
+        except Exception as e:
+            # Rollback transaction on error for PostgreSQL
+            if self.dialect == "postgres":
+                with contextlib.suppress(Exception):
+                    cursor.execute("ROLLBACK")
+            raise e from e
+        else:
+            return 1
 
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            results = cursor.fetchall()  # pyright: ignore
-            if not results:
-                return []
-            column_names = [column[0] for column in cursor.description or []]
+    def _wrap_select_result(
+        self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
+    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
+        # result must be a dict with keys: data, column_names, rows_affected
 
-            return self.to_schema([dict(zip(column_names, row)) for row in results], schema_type=schema_type)
+        rows_as_dicts = [dict(zip(result["column_names"], row)) for row in result["data"]]
 
-    @overload
-    def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[AdbcConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "dict[str, Any]": ...
-    @overload
-    def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[AdbcConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "ModelDTOT": ...
-    def select_one(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[AdbcConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Union[ModelDTOT, dict[str, Any]]":
-        """Fetch one row from the database.
+        if schema_type:
+            return SQLResult[ModelDTOT](
+                statement=statement,
+                data=list(self.to_schema(data=rows_as_dicts, schema_type=schema_type)),
+                column_names=result["column_names"],
+                rows_affected=result["rows_affected"],
+                operation_type="SELECT",
+            )
+        return SQLResult[RowT](
+            statement=statement,
+            data=rows_as_dicts,
+            column_names=result["column_names"],
+            rows_affected=result["rows_affected"],
+            operation_type="SELECT",
+        )
+
+    def _wrap_execute_result(
+        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
+    ) -> SQLResult[RowT]:
+        operation_type = (
+            str(statement.expression.key).upper()
+            if statement.expression and hasattr(statement.expression, "key")
+            else "UNKNOWN"
+        )
+
+        # Handle TypedDict results
+        if is_dict_with_field(result, "statements_executed"):
+            return SQLResult[RowT](
+                statement=statement,
+                data=[],
+                rows_affected=0,
+                total_statements=result["statements_executed"],
+                operation_type="SCRIPT",  # Scripts always have operation_type SCRIPT
+                metadata={"status_message": result["status_message"]},
+            )
+        if is_dict_with_field(result, "rows_affected"):
+            return SQLResult[RowT](
+                statement=statement,
+                data=[],
+                rows_affected=result["rows_affected"],
+                operation_type=operation_type,
+                metadata={"status_message": result["status_message"]},
+            )
+        msg = f"Unexpected result type: {type(result)}"
+        raise ValueError(msg)
+
+    def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
+        """ADBC native Arrow table fetching.
+
+        ADBC has excellent native Arrow support through cursor.fetch_arrow_table()
+        This provides zero-copy data transfer for optimal performance.
 
         Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional schema class for the result.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+            sql: Processed SQL object
+            connection: Optional connection override
+            **kwargs: Additional options (e.g., batch_size for streaming)
 
         Returns:
-            The first row of the query results.
+            ArrowResult with native Arrow table
         """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
+        self._ensure_pyarrow_installed()
+        conn = self._connection(connection)
 
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)
-            result = cursor.fetchone()
-            result = self.check_not_found(result)
-            column_names = [column[0] for column in cursor.description or []]
-            return self.to_schema(dict(zip(column_names, result)), schema_type=schema_type)
+        with wrap_exceptions(), self._get_cursor(conn) as cursor:
+            # Execute the query
+            params = sql.get_parameters(style=self.default_parameter_style)
+            # ADBC expects parameters as a list for most drivers
+            cursor_params = [params] if params is not None and not isinstance(params, (list, tuple)) else params
+            cursor.execute(sql.to_sql(placeholder_style=self.default_parameter_style), cursor_params or [])
+            arrow_table = cursor.fetch_arrow_table()
+            return ArrowResult(statement=sql, data=arrow_table)
 
-    @overload
-    def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[AdbcConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Optional[dict[str, Any]]": ...
-    @overload
-    def select_one_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[AdbcConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "Optional[ModelDTOT]": ...
-    def select_one_or_none(
-        self,
-        sql: str,
-        parameters: Optional["StatementParameterType"] = None,
-        *filters: "StatementFilter",
-        connection: Optional["AdbcConnection"] = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[ModelDTOT, dict[str, Any]]]":
-        """Fetch one row from the database or return None if no rows found.
+    def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
+        """ADBC-optimized Arrow table ingestion using native bulk insert.
+
+        ADBC drivers often support native Arrow table ingestion for high-performance
+        bulk loading operations.
 
         Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional schema class for the result.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
+            table: Arrow table to ingest
+            table_name: Target database table name
+            mode: Ingestion mode ('append', 'replace', 'create')
+            **options: Additional ADBC-specific options
 
         Returns:
-            The first row of the query results, or None if no results found.
+            Number of rows ingested
         """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
+        self._ensure_pyarrow_installed()
 
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-            if result is None:
-                return None
-            column_names = [column[0] for column in cursor.description or []]
-            return self.to_schema(dict(zip(column_names, result)), schema_type=schema_type)
-
-    @overload
-    def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[AdbcConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Any": ...
-    @overload
-    def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[AdbcConnection]" = None,
-        schema_type: "type[T]",
-        **kwargs: Any,
-    ) -> "T": ...
-    def select_value(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[AdbcConnection]" = None,
-        schema_type: "Optional[type[T]]" = None,
-        **kwargs: Any,
-    ) -> "Union[T, Any]":
-        """Fetch a single value from the database.
-
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional type to convert the result to.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            The first value of the first row of the query results.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-            result = self.check_not_found(result)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType,reportUnknownArgumentType]
-            if schema_type is None:
-                return result[0]  # pyright: ignore[reportUnknownVariableType]
-            return schema_type(result[0])  # type: ignore[call-arg]
-
-    @overload
-    def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[AdbcConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "Optional[Any]": ...
-    @overload
-    def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[AdbcConnection]" = None,
-        schema_type: "type[T]",
-        **kwargs: Any,
-    ) -> "Optional[T]": ...
-    def select_value_or_none(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[AdbcConnection]" = None,
-        schema_type: "Optional[type[T]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[T, Any]]":
-        """Fetch a single value or None if not found.
-
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional type to convert the result to.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            The first value of the first row of the query results, or None if no results found.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            result = cursor.fetchone()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-            if result is None:
-                return None
-            if schema_type is None:
-                return result[0]  # pyright: ignore[reportUnknownVariableType]
-            return schema_type(result[0])  # type: ignore[call-arg]
-
-    def insert_update_delete(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[AdbcConnection]" = None,
-        **kwargs: Any,
-    ) -> int:
-        """Execute an insert, update, or delete statement.
-
-        Args:
-            sql: The SQL statement string.
-            parameters: The parameters for the statement (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            Row count affected by the operation.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            return cursor.rowcount if hasattr(cursor, "rowcount") else -1
-
-    @overload
-    def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[AdbcConnection]" = None,
-        schema_type: None = None,
-        **kwargs: Any,
-    ) -> "dict[str, Any]": ...
-    @overload
-    def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[AdbcConnection]" = None,
-        schema_type: "type[ModelDTOT]",
-        **kwargs: Any,
-    ) -> "ModelDTOT": ...
-    def insert_update_delete_returning(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[AdbcConnection]" = None,
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
-        """Insert, update, or delete data with RETURNING clause.
-
-        Args:
-            sql: The SQL statement string.
-            parameters: The parameters for the statement (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            schema_type: Optional schema class for the result.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            The returned row data, or None if no row returned.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            result = cursor.fetchall()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-            if not result:
-                return None
-            column_names = [c[0] for c in cursor.description or []]  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-            return self.to_schema(dict(zip(column_names, result[0])), schema_type=schema_type)
-
-    def execute_script(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        connection: "Optional[AdbcConnection]" = None,
-        **kwargs: Any,
-    ) -> str:
-        """Execute a SQL script.
-
-        Args:
-            sql: The SQL script to execute.
-            parameters: The parameters for the script (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            A success message.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, **kwargs)
-
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            return cast("str", cursor.statusmessage) if hasattr(cursor, "statusmessage") else "DONE"  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
-
-    # --- Arrow Bulk Operations ---
-
-    def select_arrow(
-        self,
-        sql: str,
-        parameters: "Optional[StatementParameterType]" = None,
-        *filters: "StatementFilter",
-        connection: "Optional[AdbcConnection]" = None,
-        **kwargs: Any,
-    ) -> "ArrowTable":  # pyright: ignore[reportUnknownVariableType]
-        """Execute a SQL query and return results as an Apache Arrow Table.
-
-        Args:
-            sql: The SQL query string.
-            parameters: The parameters for the query (dict, tuple, list, or None).
-            *filters: Statement filters to apply.
-            connection: Optional connection override.
-            **kwargs: Additional keyword arguments to merge with parameters if parameters is a dict.
-
-        Returns:
-            An Arrow Table containing the query results.
-        """
-        connection = self._connection(connection)
-        sql, parameters = self._process_sql_params(sql, parameters, *filters, **kwargs)
-
-        with self._with_cursor(connection) as cursor:
-            cursor.execute(sql, parameters)  # pyright: ignore[reportUnknownMemberType]
-            return cast("ArrowTable", cursor.fetch_arrow_table())  # pyright: ignore[reportUnknownMemberType]
+        conn = self._connection(None)
+        with self._get_cursor(conn) as cursor:
+            # Handle different modes
+            if mode == "replace":
+                cursor.execute(SQL(f"TRUNCATE TABLE {table_name}").to_sql(placeholder_style=ParameterStyle.STATIC))
+            elif mode == "create":
+                msg = "'create' mode is not supported for ADBC ingestion"
+                raise NotImplementedError(msg)
+            return cursor.adbc_ingest(table_name, table, mode=mode, **options)  # type: ignore[arg-type]
