@@ -8,7 +8,7 @@ The Asyncpg database also demonstrates how to use the plugin loader and `secrets
 """
 # /// script
 # dependencies = [
-#   "sqlspec[psycopg,asyncpg,performance]",
+#   "sqlspec[psycopg,asyncpg,performance] @ git+https://github.com/litestar-org/sqlspec.git@main",
 #   "litestar[standard]",
 # ]
 # ///
@@ -28,7 +28,8 @@ from sqlspec.statement.filters import FilterTypes
 async def simple_asyncpg(
     db_session: AsyncpgDriver, filters: Annotated[list[FilterTypes], Dependency(skip_validation=True)]
 ) -> SQLResult[dict[str, Any]]:
-    return await db_session.execute("SELECT greeting FROM (select 'Hello, world!' as greeting) as t", *filters)
+    from sqlspec.statement.sql import SQL
+    return await db_session.execute(SQL("SELECT greeting FROM (select 'Hello, world!' as greeting) as t"), *filters)
 
 
 sqlspec = SQLSpec(
