@@ -385,3 +385,100 @@ def test_driver_concurrent_storage_operations(sqlite_driver_with_storage: Sqlite
     for file_path in exported_files:
         assert Path(file_path).exists()
         assert Path(file_path).stat().st_size > 0
+
+
+def test_driver_export_to_storage_pathlike_objects(sqlite_driver_with_storage: SqliteDriver, temp_directory: Path) -> None:
+    """Test export_to_storage with pathlike objects (Path instances)."""
+    # Test with Path object instead of string
+    output_path = temp_directory / "pathlike_export.parquet"
+
+    # Export data using Path object
+    sqlite_driver_with_storage.export_to_storage(
+        "SELECT * FROM storage_test WHERE active = 1 ORDER BY id",
+        destination_uri=output_path  # Pass Path object directly
+    )
+
+    assert output_path.exists()
+    assert output_path.stat().st_size > 0
+
+    # Verify we can read the exported data
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(output_path)
+    assert table.num_rows == 4  # Only active products
+
+    # Test with different formats using Path objects
+    formats = ["csv", "json"]
+    for fmt in formats:
+        path_obj = temp_directory / f"pathlike_export.{fmt}"
+
+        sqlite_driver_with_storage.export_to_storage(
+            "SELECT name, price FROM storage_test LIMIT 3",
+            destination_uri=path_obj,  # Pass Path object
+            format=fmt
+        )
+
+        assert path_obj.exists()
+        assert path_obj.stat().st_size > 0
+
+
+def test_driver_import_from_storage_pathlike_objects(sqlite_driver_with_storage: SqliteDriver, temp_directory: Path) -> None:
+    """Test import_from_storage with pathlike objects (Path instances)."""
+    # First export some data to import back
+    export_path = temp_directory / "pathlike_import.parquet"
+
+    sqlite_driver_with_storage.export_to_storage(
+        "SELECT * FROM storage_test",
+        destination_uri=export_path
+    )
+
+    # Create new table for import
+    sqlite_driver_with_storage.execute_script("""
+        CREATE TABLE import_test (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            category TEXT,
+            value INTEGER,
+            price REAL,
+            active BOOLEAN,
+            created_at DATETIME
+        )
+    """)
+
+    # Import using Path object
+    rows_imported = sqlite_driver_with_storage.import_from_storage(
+        export_path,  # Pass Path object directly
+        "import_test"
+    )
+
+    assert rows_imported == 5  # All 5 test rows
+
+    # Verify imported data
+    result = sqlite_driver_with_storage.execute("SELECT COUNT(*) as cnt FROM import_test")
+    count = result.data[0]["cnt"]
+    assert count == 5
+
+    # Test CSV import with Path object
+    csv_path = temp_directory / "import_test.csv"
+    sqlite_driver_with_storage.export_to_storage(
+        "SELECT name, category, value FROM storage_test",
+        destination_uri=csv_path,
+        format="csv"
+    )
+
+    # Create another table for CSV import
+    sqlite_driver_with_storage.execute_script("""
+        CREATE TABLE csv_import_test (
+            name TEXT,
+            category TEXT,
+            value INTEGER
+        )
+    """)
+
+    rows_imported = sqlite_driver_with_storage.import_from_storage(
+        csv_path,  # Pass Path object
+        "csv_import_test",
+        format="csv"
+    )
+
+    assert rows_imported > 0

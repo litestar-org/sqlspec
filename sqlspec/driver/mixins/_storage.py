@@ -85,25 +85,27 @@ class StorageMixinBase(ABC):
             raise MissingDependencyError(msg)
 
     @staticmethod
-    def _get_storage_backend(uri_or_key: str) -> "ObjectStoreProtocol":
+    def _get_storage_backend(uri_or_key: "Union[str, Path]") -> "ObjectStoreProtocol":
         """Get storage backend by URI or key with intelligent routing."""
-        return storage_registry.get(uri_or_key)
+        return storage_registry.get(str(uri_or_key))
 
     @staticmethod
-    def _is_uri(path_or_uri: str) -> bool:
+    def _is_uri(path_or_uri: "Union[str, Path]") -> bool:
         """Check if input is a URI rather than a relative path."""
+        path_str = str(path_or_uri)
         schemes = {"s3", "gs", "gcs", "az", "azure", "abfs", "abfss", "file", "http", "https"}
-        if "://" in path_or_uri:
-            scheme = path_or_uri.split("://", maxsplit=1)[0].lower()
+        if "://" in path_str:
+            scheme = path_str.split("://", maxsplit=1)[0].lower()
             return scheme in schemes
-        if len(path_or_uri) >= WINDOWS_PATH_MIN_LENGTH and path_or_uri[1:3] == ":\\":
+        if len(path_str) >= WINDOWS_PATH_MIN_LENGTH and path_str[1:3] == ":\\":
             return True
-        return bool(path_or_uri.startswith("/"))
+        return bool(path_str.startswith("/"))
 
     @staticmethod
-    def _detect_format(uri: str) -> str:
+    def _detect_format(uri: "Union[str, Path]") -> str:
         """Detect file format from URI extension."""
-        parsed = urlparse(uri)
+        uri_str = str(uri)
+        parsed = urlparse(uri_str)
         path = Path(parsed.path)
         extension = path.suffix.lower().lstrip(".")
 
@@ -120,28 +122,28 @@ class StorageMixinBase(ABC):
 
         return format_map.get(extension, "csv")
 
-    def _resolve_backend_and_path(self, uri: str) -> "tuple[ObjectStoreProtocol, str]":
+    def _resolve_backend_and_path(self, uri: "Union[str, Path]") -> "tuple[ObjectStoreProtocol, str]":
         """Resolve backend and path from URI with Phase 3 URI-first routing.
 
         Args:
-            uri: URI to resolve (e.g., "s3://bucket/path", "file:///local/path")
+            uri: URI to resolve (e.g., "s3://bucket/path", "file:///local/path", Path object)
 
         Returns:
             Tuple of (backend, path) where path is relative to the backend's base path
         """
         # Convert Path objects to string
-        uri = str(uri)
-        original_path = uri
+        uri_str = str(uri)
+        original_path = uri_str
 
         # Convert absolute paths to file:// URIs if needed
-        if self._is_uri(uri) and "://" not in uri:
+        if self._is_uri(uri_str) and "://" not in uri_str:
             # It's an absolute path without scheme
-            uri = f"file://{uri}"
+            uri_str = f"file://{uri_str}"
 
-        backend = self._get_storage_backend(uri)
+        backend = self._get_storage_backend(uri_str)
 
         # For file:// URIs, return just the path part for the backend
-        path = uri[7:] if uri.startswith("file://") else original_path
+        path = uri_str[7:] if uri_str.startswith("file://") else original_path
 
         return backend, path
 
@@ -293,7 +295,7 @@ class SyncStorageMixin(StorageMixinBase):
         statement: "Statement",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
-        destination_uri: str,
+        destination_uri: "Union[str, Path]",
         format: "Optional[str]" = None,
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
@@ -340,7 +342,7 @@ class SyncStorageMixin(StorageMixinBase):
         statement: "Statement",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
-        destination_uri: str,
+        destination_uri: "Union[str, Path]",
         format: "Optional[str]" = None,
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
@@ -412,7 +414,7 @@ class SyncStorageMixin(StorageMixinBase):
         return self._export_via_backend(sql_obj, backend, path, file_format, **kwargs)
 
     def import_from_storage(
-        self, source_uri: str, table_name: str, format: "Optional[str]" = None, mode: str = "create", **options: Any
+        self, source_uri: "Union[str, Path]", table_name: str, format: "Optional[str]" = None, mode: str = "create", **options: Any
     ) -> int:
         """Import data from storage with intelligent routing.
 
@@ -431,7 +433,7 @@ class SyncStorageMixin(StorageMixinBase):
         return self._import_from_storage(source_uri, table_name, format, mode, **options)
 
     def _import_from_storage(
-        self, source_uri: str, table_name: str, format: "Optional[str]" = None, mode: str = "create", **options: Any
+        self, source_uri: "Union[str, Path]", table_name: str, format: "Optional[str]" = None, mode: str = "create", **options: Any
     ) -> int:
         """Protected method for import operation implementation.
 
@@ -471,23 +473,23 @@ class SyncStorageMixin(StorageMixinBase):
     # ============================================================================
 
     def _read_parquet_native(
-        self, source_uri: str, columns: "Optional[list[str]]" = None, **options: Any
+        self, source_uri: "Union[str, Path]", columns: "Optional[list[str]]" = None, **options: Any
     ) -> "SQLResult":
         """Database-specific native Parquet reading. Override in drivers."""
         msg = "Driver should implement _read_parquet_native"
         raise NotImplementedError(msg)
 
-    def _write_parquet_native(self, data: Union[str, ArrowTable], destination_uri: str, **options: Any) -> None:
+    def _write_parquet_native(self, data: Union[str, ArrowTable], destination_uri: "Union[str, Path]", **options: Any) -> None:
         """Database-specific native Parquet writing. Override in drivers."""
         msg = "Driver should implement _write_parquet_native"
         raise NotImplementedError(msg)
 
-    def _export_native(self, query: str, destination_uri: str, format: str, **options: Any) -> int:
+    def _export_native(self, query: str, destination_uri: "Union[str, Path]", format: str, **options: Any) -> int:
         """Database-specific native export. Override in drivers."""
         msg = "Driver should implement _export_native"
         raise NotImplementedError(msg)
 
-    def _import_native(self, source_uri: str, table_name: str, format: str, mode: str, **options: Any) -> int:
+    def _import_native(self, source_uri: "Union[str, Path]", table_name: str, format: str, mode: str, **options: Any) -> int:
         """Database-specific native import. Override in drivers."""
         msg = "Driver should implement _import_native"
         raise NotImplementedError(msg)
@@ -743,7 +745,7 @@ class AsyncStorageMixin(StorageMixinBase):
         statement: "Statement",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
-        destination_uri: str,
+        destination_uri: "Union[str, Path]",
         format: "Optional[str]" = None,
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
@@ -770,7 +772,7 @@ class AsyncStorageMixin(StorageMixinBase):
     async def _export_to_storage(
         self,
         query: "SQL",
-        destination_uri: str,
+        destination_uri: "Union[str, Path]",
         format: "Optional[str]" = None,
         connection: "Optional[ConnectionT]" = None,
         **options: Any,
@@ -838,7 +840,7 @@ class AsyncStorageMixin(StorageMixinBase):
         return await self._export_via_backend(query, backend, path, file_format, **options)
 
     async def import_from_storage(
-        self, source_uri: str, table_name: str, format: "Optional[str]" = None, mode: str = "create", **options: Any
+        self, source_uri: "Union[str, Path]", table_name: str, format: "Optional[str]" = None, mode: str = "create", **options: Any
     ) -> int:
         """Async import data from storage with intelligent routing.
 
@@ -857,7 +859,7 @@ class AsyncStorageMixin(StorageMixinBase):
         return await self._import_from_storage(source_uri, table_name, format, mode, **options)
 
     async def _import_from_storage(
-        self, source_uri: str, table_name: str, format: "Optional[str]" = None, mode: str = "create", **options: Any
+        self, source_uri: "Union[str, Path]", table_name: str, format: "Optional[str]" = None, mode: str = "create", **options: Any
     ) -> int:
         """Protected async method for import operation implementation.
 
@@ -884,12 +886,12 @@ class AsyncStorageMixin(StorageMixinBase):
     # Async Database-Specific Implementation Hooks
     # ============================================================================
 
-    async def _export_native(self, query: str, destination_uri: str, format: str, **options: Any) -> int:
+    async def _export_native(self, query: str, destination_uri: "Union[str, Path]", format: str, **options: Any) -> int:
         """Async database-specific native export."""
         msg = "Driver should implement _export_native"
         raise NotImplementedError(msg)
 
-    async def _import_native(self, source_uri: str, table_name: str, format: str, mode: str, **options: Any) -> int:
+    async def _import_native(self, source_uri: "Union[str, Path]", table_name: str, format: str, mode: str, **options: Any) -> int:
         """Async database-specific native import."""
         msg = "Driver should implement _import_native"
         raise NotImplementedError(msg)

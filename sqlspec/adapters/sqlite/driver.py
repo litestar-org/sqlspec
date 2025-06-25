@@ -198,7 +198,7 @@ class SqliteDriver(
         return result
 
     def _bulk_load_file(self, file_path: Path, table_name: str, format: str, mode: str, **options: Any) -> int:
-        """Database-specific bulk load implementation."""
+        """Database-specific bulk load implementation using storage backend."""
         if format != "csv":
             msg = f"SQLite driver only supports CSV for bulk loading, not {format}."
             raise NotImplementedError(msg)
@@ -208,16 +208,23 @@ class SqliteDriver(
             if mode == "replace":
                 cursor.execute(f"DELETE FROM {table_name}")
 
-            with Path(file_path).open(encoding="utf-8") as f:
-                reader = csv.reader(f, **options)
-                header = next(reader)  # Skip header
-                placeholders = ", ".join("?" for _ in header)
-                sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
+            # Use storage backend to read the file
+            file_path_str = str(file_path)
+            backend = self._get_storage_backend(file_path_str)
+            content = backend.read_text(file_path_str, encoding="utf-8")
 
-                # executemany is efficient for bulk inserts
-                data_iter = list(reader)  # Read all data into memory
-                cursor.executemany(sql, data_iter)
-                return cursor.rowcount
+            # Parse CSV content
+            import io
+            csv_file = io.StringIO(content)
+            reader = csv.reader(csv_file, **options)
+            header = next(reader)  # Skip header
+            placeholders = ", ".join("?" for _ in header)
+            sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
+
+            # executemany is efficient for bulk inserts
+            data_iter = list(reader)  # Read all data into memory
+            cursor.executemany(sql, data_iter)
+            return cursor.rowcount
 
     def _wrap_select_result(
         self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any

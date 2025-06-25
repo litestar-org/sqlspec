@@ -113,7 +113,7 @@ class SQLFileLoader:
         self._query_to_file: dict[str, str] = {}  # Maps query name to file path
 
     def _read_file_content(self, path: Union[str, Path]) -> str:
-        """Read file content using appropriate backend.
+        """Read file content using storage backend.
 
         Args:
             path: File path (can be local path or URI).
@@ -126,37 +126,14 @@ class SQLFileLoader:
         """
         path_str = str(path)
 
-        # Use storage backend for URIs (anything with a scheme)
-        if "://" in path_str:
-            try:
-                backend = self.storage_registry.get(path_str)
-                return backend.read_text(path_str, encoding=self.encoding)
-            except KeyError as e:
-                raise SQLFileNotFoundError(path_str) from e
-            except Exception as e:
-                raise SQLFileParseError(path_str, path_str, e) from e
-
-        # Handle local file paths
-        local_path = Path(path_str)
-        self._check_file_path(local_path)
-        content_bytes = self._read_file_content_bytes(local_path)
-        return content_bytes.decode(self.encoding)
-
-    @staticmethod
-    def _read_file_content_bytes(path: Path) -> bytes:
         try:
-            return path.read_bytes()
+            # Always use storage backend for consistent behavior
+            backend = self.storage_registry.get(path_str)
+            return backend.read_text(path_str, encoding=self.encoding)
+        except KeyError as e:
+            raise SQLFileNotFoundError(path_str) from e
         except Exception as e:
-            raise SQLFileParseError(str(path), str(path), e) from e
-
-    @staticmethod
-    def _check_file_path(path: Union[str, Path]) -> None:
-        """Ensure the file exists and is a valid path."""
-        path_obj = Path(path).resolve()
-        if not path_obj.exists():
-            raise SQLFileNotFoundError(str(path_obj))
-        if not path_obj.is_file():
-            raise SQLFileParseError(str(path_obj), str(path_obj), ValueError("Path is not a file"))
+            raise SQLFileParseError(path_str, path_str, e) from e
 
     @staticmethod
     def _strip_leading_comments(sql_text: str) -> str:
