@@ -192,7 +192,9 @@ class QueryBuilder(ABC, Generic[RowT]):
                 self._raise_sql_builder_error(msg)
             cte_select_expression = query._expression.copy()
             for p_name, p_value in query._parameters.items():
-                self.add_parameter(p_value, f"cte_{alias}_{p_name}")
+                # Try to preserve original parameter name, only rename if collision
+                unique_name = self._generate_unique_parameter_name(p_name)
+                self.add_parameter(p_value, unique_name)
 
         elif isinstance(query, str):
             try:

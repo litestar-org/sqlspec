@@ -87,6 +87,9 @@ class StorageMixinBase(ABC):
     @staticmethod
     def _get_storage_backend(uri_or_key: "Union[str, Path]") -> "ObjectStoreProtocol":
         """Get storage backend by URI or key with intelligent routing."""
+        # Pass Path objects directly to storage registry for proper URI conversion
+        if isinstance(uri_or_key, Path):
+            return storage_registry.get(uri_or_key)
         return storage_registry.get(str(uri_or_key))
 
     @staticmethod
@@ -473,7 +476,22 @@ class SyncStorageMixin(StorageMixinBase):
                 arrow_table = backend.read_arrow(path, **options)
                 return self.ingest_arrow_table(arrow_table, table_name, mode=mode)
             except AttributeError:
-                pass
+                # Backend doesn't support read_arrow, try alternative approach
+                try:
+                    import pyarrow.parquet as pq
+                    # Read Parquet file directly
+                    with tempfile.NamedTemporaryFile(mode="wb", suffix=".parquet", delete=False) as tmp:
+                        tmp.write(backend.read_bytes(path))
+                        tmp_path = Path(tmp.name)
+                    try:
+                        arrow_table = pq.read_table(tmp_path)
+                        return self.ingest_arrow_table(arrow_table, table_name, mode=mode)
+                    finally:
+                        tmp_path.unlink(missing_ok=True)
+                except ImportError:
+                    # PyArrow not installed, cannot import Parquet
+                    msg = "PyArrow is required to import Parquet files. Install with: pip install pyarrow"
+                    raise ImportError(msg) from None
 
         # Use traditional import through temporary file
         return self._import_via_backend(backend, path, table_name, file_format, mode, **options)
