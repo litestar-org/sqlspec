@@ -15,7 +15,7 @@ This module tests the ObStoreBackend class including:
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -23,9 +23,6 @@ from pytest import LogCaptureFixture
 
 from sqlspec.exceptions import MissingDependencyError, StorageOperationFailedError
 from sqlspec.storage.backends.obstore import ObStoreBackend
-
-if TYPE_CHECKING:
-    pass
 
 
 # Test Fixtures
