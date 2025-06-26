@@ -95,13 +95,11 @@ def test_subquery_count_includes_in_clause_subqueries(analyzer: StatementAnalyze
 
 
 # SQLGlot Parser Limitation Tests
-@pytest.mark.xfail(reason="sqlglot parser limitation: subqueries in IN clauses not wrapped in Subquery nodes")
 def test_standard_subquery_detection_in_in_clause(analyzer: StatementAnalyzer) -> None:
     """Test that subqueries in IN clauses are properly wrapped in Subquery nodes.
 
-    This test is expected to fail with current sqlglot versions due to parser
-    limitations. It should pass when sqlglot fixes the parser to wrap subqueries
-    in IN clauses with proper Subquery expression nodes.
+    This test verifies that sqlglot correctly wraps subqueries in IN clauses
+    with proper Subquery expression nodes.
     """
     sql = """
         SELECT * FROM users
@@ -133,12 +131,11 @@ def test_standard_subquery_detection_in_exists_clause(analyzer: StatementAnalyze
 
 
 # Current Workaround Behavior Documentation
-def test_current_workaround_behavior_documentation(analyzer: StatementAnalyzer) -> None:
-    """Document current workaround behavior for future reference.
+def test_current_sqlglot_behavior_documentation(analyzer: StatementAnalyzer) -> None:
+    """Document current sqlglot behavior for future reference.
 
-    This test documents how our workaround currently detects subqueries
-    and serves as a regression test to ensure the workaround continues
-    to work until sqlglot fixes the parser.
+    This test documents that sqlglot now properly wraps IN clause subqueries
+    in Subquery nodes. The EXISTS clause workaround is still needed.
     """
     sql = """
         SELECT * FROM users
@@ -159,9 +156,9 @@ def test_current_workaround_behavior_documentation(analyzer: StatementAnalyzer) 
     query_node = in_clause.args.get("query")
     assert isinstance(query_node, exp.Subquery), "Query should be Subquery node"
 
-    # Our workaround successfully detects this
+    # Our analyzer correctly detects this subquery
     analysis = analyzer.analyze_statement(sql, "mysql")
-    assert analysis.uses_subqueries is True, "Workaround should detect subquery"
+    assert analysis.uses_subqueries is True, "Analyzer should detect subquery"
 
 
 # Complex Nested Subquery Tests

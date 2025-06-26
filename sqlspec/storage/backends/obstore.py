@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.exceptions import MissingDependencyError, StorageOperationFailedError
 from sqlspec.storage.backends.base import ObjectStoreBase
@@ -112,7 +112,16 @@ class ObStoreBackend(ObjectStoreBase):
         try:
             resolved_path = self._resolve_path(path)
             result = self.store.get(resolved_path)
-            return result.bytes()  # type: ignore[no-any-return] # pyright: ignore[reportReturnType]
+            bytes_data = result.bytes()
+            # Handle obstore's Bytes type - it might have a method to get raw bytes
+            if hasattr(bytes_data, "__bytes__"):
+                return bytes(bytes_data)
+            if hasattr(bytes_data, "tobytes"):
+                return bytes_data.tobytes()  # type: ignore[no-any-return]
+            if isinstance(bytes_data, bytes):
+                return bytes_data
+            # Try to convert to bytes
+            return bytes(bytes_data)
         except Exception as exc:
             msg = f"Failed to read bytes from {path}"
             raise StorageOperationFailedError(msg) from exc
@@ -357,7 +366,16 @@ class ObStoreBackend(ObjectStoreBase):
         """Private async read bytes using native obstore async if available."""
         resolved_path = self._resolve_path(path)
         result = await self.store.get_async(resolved_path)
-        return cast("bytes", result.bytes())  # pyright: ignore[reportReturnType]
+        bytes_data = result.bytes()
+        # Handle obstore's Bytes type - it might have a method to get raw bytes
+        if hasattr(bytes_data, "__bytes__"):
+            return bytes(bytes_data)
+        if hasattr(bytes_data, "tobytes"):
+            return bytes_data.tobytes()  # type: ignore[no-any-return]
+        if isinstance(bytes_data, bytes):
+            return bytes_data
+        # Try to convert to bytes
+        return bytes(bytes_data)
 
     async def write_bytes_async(self, path: str | Path, data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Private async write bytes using native obstore async."""

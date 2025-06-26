@@ -128,7 +128,8 @@ class SQLFileLoader:
 
         try:
             # Always use storage backend for consistent behavior
-            backend = self.storage_registry.get(path_str)
+            # Pass the original path object to allow storage registry to handle Path -> file:// conversion
+            backend = self.storage_registry.get(path)
             return backend.read_text(path_str, encoding=self.encoding)
         except KeyError as e:
             raise SQLFileNotFoundError(path_str) from e
