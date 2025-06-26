@@ -362,7 +362,7 @@ class SyncStorageMixin(StorageMixinBase):
         detected_format = self._detect_format(destination_uri)
         if format:
             file_format = format
-        elif detected_format == "csv" and not destination_uri.endswith((".csv", ".tsv", ".txt")):
+        elif detected_format == "csv" and not str(destination_uri).endswith((".csv", ".tsv", ".txt")):
             # Detection returned default "csv" but file doesn't actually have CSV extension
             # Default to parquet for better compatibility with tests and common usage
             file_format = "parquet"
@@ -372,7 +372,7 @@ class SyncStorageMixin(StorageMixinBase):
         # Special handling for parquet format - if we're exporting to parquet but the
         # destination doesn't have .parquet extension, add it to ensure compatibility
         # with pyarrow.parquet.read_table() which requires the extension
-        if file_format == "parquet" and not destination_uri.endswith(".parquet"):
+        if file_format == "parquet" and not str(destination_uri).endswith(".parquet"):
             destination_uri = f"{destination_uri}.parquet"
 
         # Use storage backend - resolve AFTER modifying destination_uri
@@ -809,7 +809,7 @@ class AsyncStorageMixin(StorageMixinBase):
         detected_format = self._detect_format(destination_uri)
         if format:
             file_format = format
-        elif detected_format == "csv" and not destination_uri.endswith((".csv", ".tsv", ".txt")):
+        elif detected_format == "csv" and not str(destination_uri).endswith((".csv", ".tsv", ".txt")):
             # Detection returned default "csv" but file doesn't actually have CSV extension
             # Default to parquet for better compatibility with tests and common usage
             file_format = "parquet"
@@ -819,7 +819,7 @@ class AsyncStorageMixin(StorageMixinBase):
         # Special handling for parquet format - if we're exporting to parquet but the
         # destination doesn't have .parquet extension, add it to ensure compatibility
         # with pyarrow.parquet.read_table() which requires the extension
-        if file_format == "parquet" and not destination_uri.endswith(".parquet"):
+        if file_format == "parquet" and not str(destination_uri).endswith(".parquet"):
             destination_uri = f"{destination_uri}.parquet"
 
         # Use storage backend - resolve AFTER modifying destination_uri

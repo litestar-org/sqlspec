@@ -752,8 +752,8 @@ async def test_async_operations_with_pathlike(backend_with_mock_fs: FSSpecBacken
     await backend.write_bytes_async(path_obj, b"async data")
 
     # Test exists_async
-    result = await backend.exists_async(path_obj)
-    assert result is True
+    exists_result = await backend.exists_async(path_obj)
+    assert exists_result is True
 
     # Test copy_async
     dest_path = Path("dest.txt")

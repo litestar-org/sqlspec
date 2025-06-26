@@ -613,7 +613,7 @@ class BigQueryDriver(
 
         try:
             # Configure extract job
-            extract_config = ExtractJobConfig(**options)
+            extract_config = ExtractJobConfig(**options)  # type: ignore[no-untyped-call]
 
             # Set format
             format_mapping = {
