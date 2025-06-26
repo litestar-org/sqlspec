@@ -304,7 +304,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             if conninfo:
                 # If conninfo is provided, use it directly
                 # Don't pass kwargs when using conninfo string
-                pool = ConnectionPool(conninfo, **pool_params)
+                pool = ConnectionPool(conninfo, open=True, **pool_params)
             else:
                 # Otherwise, pass connection parameters via kwargs
                 # Remove any non-connection parameters
@@ -312,7 +312,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 all_config.pop("row_factory", None)
                 # Remove pool-specific settings that may have been left
                 all_config.pop("kwargs", None)
-                pool = ConnectionPool("", kwargs=all_config, **pool_params)
+                pool = ConnectionPool("", kwargs=all_config, open=True, **pool_params)
 
             logger.info("Psycopg connection pool created successfully", extra={"adapter": "psycopg"})
         except Exception as e:
@@ -328,11 +328,19 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         logger.info("Closing Psycopg connection pool", extra={"adapter": "psycopg"})
 
         try:
+            # Set a flag to prevent __del__ from running cleanup
+            # This avoids the "cannot join current thread" error during garbage collection
+            if hasattr(self.pool_instance, "_closed"):
+                self.pool_instance._closed = True
+
             self.pool_instance.close()
             logger.info("Psycopg connection pool closed successfully", extra={"adapter": "psycopg"})
         except Exception as e:
             logger.exception("Failed to close Psycopg connection pool", extra={"adapter": "psycopg", "error": str(e)})
             raise
+        finally:
+            # Clear the reference to help garbage collection
+            self.pool_instance = None
 
     def create_connection(self) -> "PsycopgSyncConnection":
         """Create a single connection (not from pool).
@@ -657,7 +665,16 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if not self.pool_instance:
             return
 
-        await self.pool_instance.close()
+        try:
+            # Set a flag to prevent __del__ from running cleanup
+            # This avoids the "cannot join current thread" error during garbage collection
+            if hasattr(self.pool_instance, "_closed"):
+                self.pool_instance._closed = True
+
+            await self.pool_instance.close()
+        finally:
+            # Clear the reference to help garbage collection
+            self.pool_instance = None
 
     async def create_connection(self) -> "PsycopgAsyncConnection":  # pyright: ignore
         """Create a single async connection (not from pool).

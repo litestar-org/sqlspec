@@ -14,7 +14,7 @@ import sqlite3
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, Mock, PropertyMock, mock_open, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
@@ -366,7 +366,7 @@ def test_bulk_load_csv(driver: SqliteDriver, mock_connection: MagicMock) -> None
     # Mock the storage backend
     mock_backend = MagicMock()
     mock_backend.read_text.return_value = "id,name\n1,Alice\n2,Bob\n"
-    
+
     with patch.object(SqliteDriver, "_get_storage_backend", return_value=mock_backend):
         file_path = Path("/tmp/test.csv")
         rows = driver._bulk_load_file(file_path, "users", "csv", "append")
@@ -384,7 +384,7 @@ def test_bulk_load_csv_replace_mode(driver: SqliteDriver, mock_connection: Magic
     # Mock the storage backend
     mock_backend = MagicMock()
     mock_backend.read_text.return_value = "id,name\n1,Alice\n"
-    
+
     with patch.object(SqliteDriver, "_get_storage_backend", return_value=mock_backend):
         file_path = Path("/tmp/test.csv")
         rows = driver._bulk_load_file(file_path, "users", "csv", "replace")

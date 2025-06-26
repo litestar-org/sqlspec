@@ -479,6 +479,7 @@ class SyncStorageMixin(StorageMixinBase):
                 # Backend doesn't support read_arrow, try alternative approach
                 try:
                     import pyarrow.parquet as pq
+
                     # Read Parquet file directly
                     with tempfile.NamedTemporaryFile(mode="wb", suffix=".parquet", delete=False) as tmp:
                         tmp.write(backend.read_bytes(path))

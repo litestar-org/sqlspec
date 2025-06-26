@@ -375,7 +375,7 @@ def test_list_objects_fallback_str(backend_with_mock_store: ObStoreBackend) -> N
 
     # Create a custom object without path or key attributes
     class CustomItem:
-        def __str__(self):
+        def __str__(self) -> str:
             return "file.txt"
 
     item = CustomItem()
@@ -743,7 +743,7 @@ async def test_list_objects_async_recursive(backend_with_mock_store: ObStoreBack
     item2.path = "dir/subdir/file2.txt"
 
     # Create an async generator that returns the items
-    async def async_generator():
+    async def async_generator() -> Any:
         for item in [item1, item2]:
             yield item
 
@@ -767,7 +767,7 @@ async def test_list_objects_async_non_recursive(backend_with_mock_store: ObStore
     item2.path = "base/dir/subdir/file2.txt"
 
     # Create an async generator that returns the items
-    async def async_generator():
+    async def async_generator() -> Any:
         for item in [item1, item2]:
             yield item
 

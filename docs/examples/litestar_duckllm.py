@@ -1,3 +1,4 @@
+# type: ignore
 """Litestar DuckLLM
 
 This example demonstrates how to use the Litestar framework with the DuckLLM extension.

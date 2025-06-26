@@ -1,3 +1,4 @@
+import contextlib
 import datetime
 import io
 import logging
@@ -267,17 +268,13 @@ class BigQueryDriver(
 
         # Get the auto-generated job ID for callbacks
         if self.on_job_start and query_job.job_id:
-            try:
+            with contextlib.suppress(Exception):
+                # Callback errors should not interfere with job execution
                 self.on_job_start(query_job.job_id)
-            except Exception:
-                # Callback errors should not interfere with job execution
-                pass
         if self.on_job_complete and query_job.job_id:
-            try:
-                self.on_job_complete(query_job.job_id, query_job)
-            except Exception:
+            with contextlib.suppress(Exception):
                 # Callback errors should not interfere with job execution
-                pass
+                self.on_job_complete(query_job.job_id, query_job)
 
         return query_job
 

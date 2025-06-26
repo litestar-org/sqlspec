@@ -772,7 +772,7 @@ class CreateTableAsSelectBuilder(DDLBuilder):
             # Get the expression and parameters directly
             select_expr = getattr(self._select_query, "_expression", None)
             select_params = getattr(self._select_query, "_parameters", None)
-            
+
             # Apply CTEs if present
             with_ctes = getattr(self._select_query, "_with_ctes", {})
             if with_ctes and select_expr and isinstance(select_expr, exp.Select):
@@ -782,7 +782,7 @@ class CreateTableAsSelectBuilder(DDLBuilder):
                         select_expr = select_expr.with_(
                             cte.this,  # The CTE's SELECT expression
                             as_=alias,
-                            copy=False
+                            copy=False,
                         )
         elif isinstance(self._select_query, str):
             select_expr = exp.maybe_parse(self._select_query)

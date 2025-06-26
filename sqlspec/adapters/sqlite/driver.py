@@ -199,38 +199,37 @@ class SqliteDriver(
 
     def _ingest_arrow_table(self, table: Any, table_name: str, mode: str = "create", **options: Any) -> int:
         """SQLite-specific Arrow table ingestion using CSV conversion.
-        
+
         Since SQLite only supports CSV bulk loading, we convert the Arrow table
         to CSV format first using the storage backend for efficient operations.
         """
-        import tempfile
-        import pyarrow.csv as pa_csv
         import io
-        
+        import tempfile
+
+        import pyarrow.csv as pa_csv
+
         # Convert Arrow table to CSV in memory
         csv_buffer = io.BytesIO()
         pa_csv.write_csv(table, csv_buffer)
         csv_content = csv_buffer.getvalue()
-        
+
         # Create a temporary file path
         temp_filename = f"sqlspec_temp_{table_name}_{id(self)}.csv"
         temp_path = Path(tempfile.gettempdir()) / temp_filename
-        
+
         # Use storage backend to write the CSV content
         backend = self._get_storage_backend(temp_path)
         backend.write_bytes(str(temp_path), csv_content)
-        
+
         try:
             # Use SQLite's CSV bulk load
             return self._bulk_load_file(temp_path, table_name, "csv", mode, **options)
         finally:
             # Clean up using storage backend
-            try:
-                backend.delete(str(temp_path))
-            except Exception:
+            with contextlib.suppress(Exception):
                 # Best effort cleanup
-                pass
-    
+                backend.delete(str(temp_path))
+
     def _bulk_load_file(self, file_path: Path, table_name: str, format: str, mode: str, **options: Any) -> int:
         """Database-specific bulk load implementation using storage backend."""
         if format != "csv":

@@ -460,14 +460,30 @@ def test_cleanup_pools_async() -> None:
     config = MockAsyncPoolConfig("test")
     sqlspec.add_config(config)
 
-    async def mock_close_pool() -> None:
-        pass
+    # Track if close_pool was called
+    close_pool_called = False
+
+    def mock_close_pool() -> Any:
+        nonlocal close_pool_called
+        close_pool_called = True
+
+        # Return a coroutine that asyncio.run will properly handle
+        async def _close() -> None:
+            pass
+
+        return _close()
 
     with patch.object(config, "close_pool", mock_close_pool):
-        with patch("asyncio.run") as mock_run:
+        # Mock asyncio.run as a synchronous function that properly consumes the coroutine
+        def mock_run(coro: Any) -> None:
+            # Close the coroutine to prevent warnings
+            coro.close()
+
+        with patch("asyncio.run", mock_run):
             with patch("asyncio.get_running_loop", side_effect=RuntimeError):
                 sqlspec._cleanup_pools()
-                mock_run.assert_called_once()
+                # Verify close_pool was called
+                assert close_pool_called
 
 
 def test_cleanup_pools_exception_handling() -> None:
