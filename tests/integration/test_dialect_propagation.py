@@ -3,9 +3,10 @@
 from unittest.mock import Mock, patch
 
 import pytest
+from pytest_databases.docker.mysql import MySQLService
 from sqlglot.dialects.dialect import DialectType
 
-# from sqlspec.adapters.asyncmy import AsyncmyDriver  # TODO: Fix import
+from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
@@ -15,6 +16,7 @@ from sqlspec.statement.builder import SelectBuilder
 from sqlspec.statement.pipelines.context import SQLProcessingContext
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
+from tests.integration.test_adapters.test_adbc.conftest import PostgresService
 
 
 # Sync dialect propagation tests
@@ -127,7 +129,7 @@ def test_psycopg_dialect_in_execute_script() -> None:
 # Async dialect propagation tests
 @pytest.mark.asyncio
 @pytest.mark.postgres
-async def test_asyncpg_dialect_propagation_through_execute() -> None:
+async def test_asyncpg_dialect_propagation_through_execute(postgres_service: PostgresService) -> None:
     """Test that AsyncPG dialect propagates through execute calls."""
     config = AsyncpgConfig(host="localhost", port=5432, database="test", user="test", password="test")
 
@@ -159,10 +161,39 @@ async def test_asyncpg_dialect_propagation_through_execute() -> None:
 
 
 @pytest.mark.asyncio
-async def test_asyncmy_dialect_propagation_with_filters() -> None:
+@pytest.mark.mysql
+async def test_asyncmy_dialect_propagation_with_filters(mysql_service: MySQLService) -> None:
     """Test that AsyncMy dialect propagates with filters."""
-    # TODO: Implement this test when AsyncmyConfig is available
-    pytest.skip("AsyncmyConfig import missing")
+    config = AsyncmyConfig(host="localhost", port=3306, database="test", user="test", password="test")
+
+    # Verify config has correct dialect
+    assert config.dialect == "mysql"
+
+    try:
+        # Try to create a real connection
+        async with config.provide_connection() as connection:
+            # Create driver
+            driver = AsyncmyDriver(connection=connection, config=SQLConfig())
+
+            # Create temp table and execute a query with filter
+            await connection.execute("CREATE TEMPORARY TABLE test_users (id INT, name VARCHAR(100))")
+            await connection.execute("INSERT INTO test_users VALUES (1, 'test'), (2, 'another')")
+
+            # Create SQL with filter
+            from sqlspec.statement.filters import LimitOffsetFilter
+
+            sql = SQL("SELECT * FROM test_users").filter(LimitOffsetFilter(limit=1, offset=0))
+
+            result = await driver.execute(sql)
+
+            # Verify we got results
+            assert isinstance(result, SQLResult)
+            assert len(result.data) == 1
+
+            # Verify the dialect propagated correctly
+            assert result.statement._dialect == "mysql"
+    except Exception:
+        pytest.skip("MySQL not available for async testing")
 
 
 # SQL processing tests

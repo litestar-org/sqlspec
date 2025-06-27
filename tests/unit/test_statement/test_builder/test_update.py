@@ -209,17 +209,9 @@ def test_update_from_returns_self() -> None:
     assert result is builder
 
 
-# Test UPDATE with JOIN (non-standard but supported by some databases)
-@pytest.mark.parametrize(
-    "join_type,method_name",
-    [("INNER", "join"), ("LEFT", "left_join"), ("RIGHT", "right_join")],
-    ids=["inner_join", "left_join", "right_join"],
-)
-def test_update_with_joins(join_type: str, method_name: str) -> None:
-    """Test UPDATE with JOIN clauses."""
-    # UpdateBuilder doesn't support JOIN clauses directly
-    # Most databases use UPDATE ... FROM pattern instead
-    pytest.skip("UpdateBuilder doesn't support JOIN clauses - use FROM clause instead")
+# Note: UPDATE with JOIN is not supported by UpdateBuilder
+# This is intentional - use UPDATE ... FROM pattern instead which is more portable
+# The FROM clause method is shown in test_update_with_from_clause above
 
 
 # Test RETURNING clause

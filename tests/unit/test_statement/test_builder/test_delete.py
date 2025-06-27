@@ -114,23 +114,9 @@ def test_delete_multiple_where_conditions() -> None:
     # Multiple conditions should be AND-ed together
 
 
-# Test DELETE with JOIN (MySQL style)
-@pytest.mark.parametrize(
-    "join_type,method_name", [("INNER", "join"), ("LEFT", "left_join")], ids=["inner_join", "left_join"]
-)
-@pytest.mark.skip(reason="DeleteBuilder doesn't support JOIN operations")
-def test_delete_with_joins(join_type: str, method_name: str) -> None:
-    """Test DELETE with JOIN clauses (MySQL style)."""
-    builder = DeleteBuilder().from_("users")
-
-    join_method = getattr(builder, method_name)
-    builder = join_method("user_sessions", on="users.id = user_sessions.user_id")
-    builder = builder.where("user_sessions.expired = true")
-
-    query = builder.build()
-    assert "DELETE" in query.sql
-    assert f"{join_type} JOIN" in query.sql
-    assert "user_sessions" in query.sql
+# Note: DELETE with JOIN is not supported by DeleteBuilder
+# This is intentional for cross-dialect compatibility and safety
+# Use subqueries or WHERE EXISTS patterns instead
 
 
 # Test RETURNING clause
