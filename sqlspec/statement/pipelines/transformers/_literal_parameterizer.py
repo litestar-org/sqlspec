@@ -34,7 +34,9 @@ class ParameterizationContext:
     in_case_when: bool = False
     in_array: bool = False
     in_in_clause: bool = False
+    in_recursive_cte: bool = False
     function_depth: int = 0
+    cte_depth: int = 0
 
 
 class ParameterizeLiterals(ProcessorProtocol):
@@ -53,6 +55,7 @@ class ParameterizeLiterals(ProcessorProtocol):
         preserve_boolean: Whether to preserve boolean literals as-is.
         preserve_numbers_in_limit: Whether to preserve numbers in LIMIT/OFFSET clauses.
         preserve_in_functions: List of function names where literals should be preserved.
+        preserve_in_recursive_cte: Whether to preserve literals in recursive CTEs (default True to avoid type inference issues).
         parameterize_arrays: Whether to parameterize array literals.
         parameterize_in_lists: Whether to parameterize IN clause lists.
         max_string_length: Maximum string length to parameterize.
@@ -68,6 +71,7 @@ class ParameterizeLiterals(ProcessorProtocol):
         preserve_boolean: bool = True,
         preserve_numbers_in_limit: bool = True,
         preserve_in_functions: Optional[list[str]] = None,
+        preserve_in_recursive_cte: bool = True,
         parameterize_arrays: bool = True,
         parameterize_in_lists: bool = True,
         max_string_length: int = DEFAULT_MAX_STRING_LENGTH,
@@ -79,7 +83,18 @@ class ParameterizeLiterals(ProcessorProtocol):
         self.preserve_null = preserve_null
         self.preserve_boolean = preserve_boolean
         self.preserve_numbers_in_limit = preserve_numbers_in_limit
-        self.preserve_in_functions = preserve_in_functions or ["COALESCE", "IFNULL", "NVL", "ISNULL"]
+        self.preserve_in_recursive_cte = preserve_in_recursive_cte
+        self.preserve_in_functions = preserve_in_functions or [
+            "COALESCE",
+            "IFNULL",
+            "NVL",
+            "ISNULL",
+            # Array functions that take dimension arguments
+            "ARRAYSIZE",  # SQLglot converts array_length to ArraySize
+            "ARRAY_UPPER",
+            "ARRAY_LOWER",
+            "ARRAY_NDIMS",
+        ]
         self.parameterize_arrays = parameterize_arrays
         self.parameterize_in_lists = parameterize_in_lists
         self.max_string_length = max_string_length
@@ -162,6 +177,17 @@ class ParameterizeLiterals(ProcessorProtocol):
                 context.in_array = True
             elif isinstance(node, exp.In):
                 context.in_in_clause = True
+            elif isinstance(node, exp.CTE):
+                context.cte_depth += 1
+                # Check if this CTE is recursive:
+                # 1. Parent WITH must be RECURSIVE
+                # 2. CTE must contain UNION (characteristic of recursive CTEs)
+                is_in_recursive_with = any(
+                    isinstance(parent, exp.With) and parent.args.get("recursive", False)
+                    for parent in reversed(context.parent_stack)
+                )
+                if is_in_recursive_with and self._contains_union(node):
+                    context.in_recursive_cte = True
         else:
             if context.parent_stack:
                 context.parent_stack.pop()
@@ -176,6 +202,10 @@ class ParameterizeLiterals(ProcessorProtocol):
                 context.in_array = False
             elif isinstance(node, exp.In):
                 context.in_in_clause = False
+            elif isinstance(node, exp.CTE):
+                context.cte_depth -= 1
+                if context.cte_depth == 0:
+                    context.in_recursive_cte = False
 
     def _process_literal_with_context(
         self, literal: exp.Expression, context: ParameterizationContext
@@ -206,7 +236,6 @@ class ParameterizeLiterals(ProcessorProtocol):
                 "type": type_hint,
                 "semantic_name": semantic_name,
                 "context": self._get_context_description(context),
-                # Note: We avoid calling literal.sql() for performance
             }
         )
 
@@ -226,6 +255,21 @@ class ParameterizeLiterals(ProcessorProtocol):
         # Check if in preserved function arguments
         if context.in_function_args:
             return True
+
+        # Preserve literals in recursive CTEs to avoid type inference issues
+        if self.preserve_in_recursive_cte and context.in_recursive_cte:
+            return True
+
+        # Check if this literal is being used as an alias value in SELECT
+        # e.g., 'computed' as process_status should be preserved
+        if hasattr(literal, "parent") and literal.parent:
+            parent = literal.parent
+            # Check if it's an Alias node and the literal is the expression (not the alias name)
+            if isinstance(parent, exp.Alias) and parent.this == literal:
+                # Check if this alias is in a SELECT clause
+                for ancestor in context.parent_stack:
+                    if isinstance(ancestor, exp.Select):
+                        return True
 
         # Check parent context more intelligently
         for parent in context.parent_stack:
@@ -615,6 +659,16 @@ class ParameterizeLiterals(ProcessorProtocol):
             List of parameter metadata dictionaries.
         """
         return self._parameter_metadata.copy()
+
+    def _contains_union(self, cte_node: exp.CTE) -> bool:
+        """Check if a CTE contains a UNION (characteristic of recursive CTEs)."""
+
+        def has_union(node: exp.Expression) -> bool:
+            if isinstance(node, exp.Union):
+                return True
+            return any(has_union(child) for child in node.iter_expressions())
+
+        return cte_node.this and has_union(cte_node.this)
 
     def clear_parameters(self) -> None:
         """Clear the extracted parameters list."""

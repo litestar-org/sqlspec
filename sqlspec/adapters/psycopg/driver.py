@@ -20,6 +20,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
+from sqlspec.exceptions import PipelineExecutionError
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.splitter import split_sql_script
@@ -113,6 +114,12 @@ class PsycopgSyncDriver(
         **kwargs: Any,
     ) -> Union[SelectResultDict, DMLResultDict]:
         conn = self._connection(connection)
+
+        # Check if this is a COPY command
+        sql_upper = sql.strip().upper()
+        if sql_upper.startswith("COPY") and ("FROM STDIN" in sql_upper or "TO STDOUT" in sql_upper):
+            return self._handle_copy_command(sql, parameters, conn)
+
         with conn.cursor() as cursor:
             cursor.execute(cast("Query", sql), parameters)
             # Check if the statement returns rows by checking cursor.description
@@ -122,6 +129,38 @@ class PsycopgSyncDriver(
                 column_names = [col.name for col in cursor.description]
                 return {"data": fetched_data, "column_names": column_names, "rows_affected": len(fetched_data)}
             return {"rows_affected": cursor.rowcount, "status_message": cursor.statusmessage or "OK"}
+
+    def _handle_copy_command(
+        self, sql: str, data: Any, connection: PsycopgSyncConnection
+    ) -> Union[SelectResultDict, DMLResultDict]:
+        """Handle PostgreSQL COPY commands using cursor.copy() method."""
+        sql_upper = sql.strip().upper()
+
+        with connection.cursor() as cursor:
+            if "TO STDOUT" in sql_upper:
+                # COPY TO STDOUT - read data from the database
+                output_data: list[Any] = []
+                with cursor.copy(cast("Query", sql)) as copy:
+                    output_data.extend(row for row in copy)
+
+                # Return as SelectResultDict with the raw COPY data
+                return {"data": output_data, "column_names": ["copy_data"], "rows_affected": len(output_data)}
+            # COPY FROM STDIN - write data to the database
+            with cursor.copy(cast("Query", sql)) as copy:
+                if data:
+                    # If data is provided, write it to the copy stream
+                    if isinstance(data, (str, bytes)):
+                        copy.write(data)
+                    elif isinstance(data, (list, tuple)):
+                        # If data is a list/tuple of rows, write each row
+                        for row in data:
+                            copy.write_row(row)
+                    else:
+                        # Single row
+                        copy.write_row(data)
+
+            # For COPY operations, cursor.rowcount contains the number of rows affected
+            return {"rows_affected": cursor.rowcount or -1, "status_message": cursor.statusmessage or "COPY COMPLETE"}
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[PsycopgSyncConnection] = None, **kwargs: Any
@@ -242,7 +281,6 @@ class PsycopgSyncDriver(
         Returns:
             List of SQLResult objects from all operations
         """
-        from sqlspec.exceptions import PipelineExecutionError
 
         results = []
         connection = self._connection()
@@ -489,6 +527,12 @@ class PsycopgAsyncDriver(
         **kwargs: Any,
     ) -> Union[SelectResultDict, DMLResultDict]:
         conn = self._connection(connection)
+
+        # Check if this is a COPY command
+        sql_upper = sql.strip().upper()
+        if sql_upper.startswith("COPY") and ("FROM STDIN" in sql_upper or "TO STDOUT" in sql_upper):
+            return await self._handle_copy_command(sql, parameters, conn)
+
         async with conn.cursor() as cursor:
             await cursor.execute(cast("Query", sql), parameters)
 
@@ -509,6 +553,38 @@ class PsycopgAsyncDriver(
                 "status_message": cursor.statusmessage or "OK",
             }
             return dml_result
+
+    async def _handle_copy_command(
+        self, sql: str, data: Any, connection: PsycopgAsyncConnection
+    ) -> Union[SelectResultDict, DMLResultDict]:
+        """Handle PostgreSQL COPY commands using cursor.copy() method."""
+        sql_upper = sql.strip().upper()
+
+        async with connection.cursor() as cursor:
+            if "TO STDOUT" in sql_upper:
+                # COPY TO STDOUT - read data from the database
+                output_data = []
+                async with cursor.copy(cast("Query", sql)) as copy:
+                    output_data.extend([row async for row in copy])
+
+                # Return as SelectResultDict with the raw COPY data
+                return {"data": output_data, "column_names": ["copy_data"], "rows_affected": len(output_data)}
+            # COPY FROM STDIN - write data to the database
+            async with cursor.copy(cast("Query", sql)) as copy:
+                if data:
+                    # If data is provided, write it to the copy stream
+                    if isinstance(data, (str, bytes)):
+                        await copy.write(data)
+                    elif isinstance(data, (list, tuple)):
+                        # If data is a list/tuple of rows, write each row
+                        for row in data:
+                            await copy.write_row(row)
+                    else:
+                        # Single row
+                        await copy.write_row(data)
+
+            # For COPY operations, cursor.rowcount contains the number of rows affected
+            return {"rows_affected": cursor.rowcount or -1, "status_message": cursor.statusmessage or "COPY COMPLETE"}
 
     async def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[PsycopgAsyncConnection] = None, **kwargs: Any
@@ -594,6 +670,11 @@ class PsycopgAsyncDriver(
         operation_type = "UNKNOWN"
         if statement.expression:
             operation_type = str(statement.expression.key).upper()
+
+        # Handle case where we got a SelectResultDict but it was routed here due to parsing being disabled
+        if is_dict_with_field(result, "data") and is_dict_with_field(result, "column_names"):
+            # This is actually a SELECT result, wrap it properly
+            return await self._wrap_select_result(statement, cast("SelectResultDict", result), **kwargs)
 
         if is_dict_with_field(result, "statements_executed"):
             return SQLResult[RowT](

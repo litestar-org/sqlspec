@@ -40,11 +40,29 @@ def oracle_sync_session(oracle_23ai_service: OracleService) -> OracleSyncConfig:
     ],
 )
 @pytest.mark.skip(
-    reason="Oracle does not support RETURNING multiple columns directly in the required syntax for this method."
+    reason="Oracle RETURNING INTO clause requires PL/SQL blocks with output bind variables, "
+    "which is incompatible with the standard driver interface that expects result sets. "
+    "Oracle does not support the standard RETURNING syntax used by PostgreSQL/SQLite."
 )
 @pytest.mark.xdist_group("oracle")
 def test_sync_insert_returning(oracle_sync_session: OracleSyncConfig, params: Any, style: ParamStyle) -> None:
-    """Test synchronous insert returning functionality with Oracle parameter styles."""
+    """Test synchronous insert returning functionality with Oracle parameter styles.
+
+    Note: This test is skipped because Oracle's RETURNING INTO clause works differently
+    than other databases. It requires:
+    1. PL/SQL block execution
+    2. Output bind variables to capture returned values
+    3. Cannot return result sets directly like PostgreSQL/SQLite
+
+    Example of Oracle's syntax (requires PL/SQL):
+    DECLARE
+        v_id NUMBER;
+        v_name VARCHAR2(50);
+    BEGIN
+        INSERT INTO test_table (id, name) VALUES (1, 'test')
+        RETURNING id, name INTO v_id, v_name;
+    END;
+    """
     with oracle_sync_session.provide_session() as driver:
         sql = """
         CREATE TABLE test_table (
@@ -55,6 +73,7 @@ def test_sync_insert_returning(oracle_sync_session: OracleSyncConfig, params: An
         driver.execute_script(sql)
 
         if style == "positional_binds":
+            # This syntax is not valid in Oracle without PL/SQL block
             sql = "INSERT INTO test_table (id, name) VALUES (1, :1) RETURNING id, name"
             exec_params = params
         else:  # dict_binds
@@ -62,6 +81,7 @@ def test_sync_insert_returning(oracle_sync_session: OracleSyncConfig, params: An
             sql = "INSERT INTO test_table (id, name) VALUES (1, :1) RETURNING id, name"
             exec_params = (params["name"],)
 
+        # This would fail with Oracle error because RETURNING requires INTO clause
         result = driver.execute(sql, exec_params)
         assert isinstance(result, SQLResult)
         assert result.data is not None
@@ -249,6 +269,49 @@ def test_sync_to_parquet(oracle_sync_session: OracleSyncConfig) -> None:
         driver.execute_script(
             "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
         )
+
+
+@pytest.mark.xdist_group("oracle")
+def test_sync_insert_with_sequence(oracle_sync_session: OracleSyncConfig) -> None:
+    """Test Oracle's alternative to RETURNING - using sequences and separate SELECT."""
+    with oracle_sync_session.provide_session() as driver:
+        # Create sequence and table
+        driver.execute_script("""
+            CREATE SEQUENCE test_seq START WITH 1 INCREMENT BY 1;
+            CREATE TABLE test_table (
+                id NUMBER PRIMARY KEY,
+                name VARCHAR2(50)
+            )
+        """)
+
+        # Insert using sequence
+        driver.execute("INSERT INTO test_table (id, name) VALUES (test_seq.NEXTVAL, :1)", ("test_name",))
+
+        # Get the last inserted ID using CURRVAL
+        result = driver.execute("SELECT test_seq.CURRVAL as last_id FROM dual")
+        assert isinstance(result, SQLResult)
+        assert result.data is not None
+        assert len(result.data) == 1
+        last_id = result.data[0]["LAST_ID"]
+
+        # Verify the inserted record
+        verify_result = driver.execute("SELECT id, name FROM test_table WHERE id = :1", (last_id,))
+        assert isinstance(verify_result, SQLResult)
+        assert verify_result.data is not None
+        assert len(verify_result.data) == 1
+        assert verify_result.data[0]["NAME"] == "test_name"
+        assert verify_result.data[0]["ID"] == last_id
+
+        # Cleanup
+        driver.execute_script("""
+            BEGIN
+                EXECUTE IMMEDIATE 'DROP TABLE test_table';
+                EXECUTE IMMEDIATE 'DROP SEQUENCE test_seq';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE != -942 THEN RAISE; END IF;
+            END;
+        """)
 
 
 @pytest.mark.xdist_group("oracle")

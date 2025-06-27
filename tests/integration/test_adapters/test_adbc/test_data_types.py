@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import math
 from collections.abc import Generator
 
 import pytest
@@ -81,7 +82,7 @@ def test_postgresql_basic_types(adbc_postgresql_types_session: AdbcDriver) -> No
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id
         """,
-        ("Test text", "Test varchar", 42, 9876543210, 3.14159, 123.45, True),
+        ("Test text", "Test varchar", 42, 9876543210, math.pi, 123.45, True),
     )
 
     inserted_id = result.data[0]["id"]
@@ -96,7 +97,7 @@ def test_postgresql_basic_types(adbc_postgresql_types_session: AdbcDriver) -> No
     assert row["varchar_col"] == "Test varchar"
     assert row["int_col"] == 42
     assert row["bigint_col"] == 9876543210
-    assert abs(row["float_col"] - 3.14159) < 0.00001
+    assert abs(row["float_col"] - math.pi) < 0.00001
     assert float(row["decimal_col"]) == 123.45
     assert row["bool_col"] is True
 
@@ -112,7 +113,7 @@ def test_sqlite_basic_types(adbc_sqlite_types_session: AdbcDriver) -> None:
         (text_col, int_col, real_col, numeric_col)
         VALUES (?, ?, ?, ?)
         """,
-        ("Test text", 42, 3.14159, 123.45),
+        ("Test text", 42, math.pi, 123.45),
     )
 
     # Retrieve and verify
@@ -123,7 +124,7 @@ def test_sqlite_basic_types(adbc_sqlite_types_session: AdbcDriver) -> None:
 
     assert row["text_col"] == "Test text"
     assert row["int_col"] == 42
-    assert abs(row["real_col"] - 3.14159) < 0.00001
+    assert abs(row["real_col"] - math.pi) < 0.00001
     # SQLite may store numeric as float
     assert float(row["numeric_col"]) == 123.45
 
