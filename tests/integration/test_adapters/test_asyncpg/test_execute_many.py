@@ -192,7 +192,6 @@ async def test_asyncpg_execute_many_large_batch(asyncpg_batch_session: AsyncpgDr
     assert sample_result[2]["value"] == 9990  # Item 999
 
 
-@pytest.mark.skip(reason="SQL object as_many() parameter handling needs investigation")
 @pytest.mark.asyncio
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_many_with_sql_object(asyncpg_batch_session: AsyncpgDriver) -> None:

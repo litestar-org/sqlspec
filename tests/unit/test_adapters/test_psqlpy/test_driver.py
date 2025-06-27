@@ -96,28 +96,6 @@ async def test_psqlpy_driver_execute_statement_select(
     mock_psqlpy_connection.fetch.assert_called_once()
 
 
-@pytest.mark.skip(reason="Complex Arrow conversion mocking - better tested in integration tests")
-@pytest.mark.asyncio
-async def test_psqlpy_driver_fetch_arrow_table_with_parameters(
-    psqlpy_driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock
-) -> None:
-    """Test PSQLPy driver fetch_arrow_table method with parameters."""
-    # Setup mock connection and result data - PSQLPy calls conn.fetch() which returns a QueryResult
-    mock_data = [{"id": 42, "name": "Test User"}]
-    mock_query_result = Mock()  # Use regular Mock, not AsyncMock - .result() method is sync
-    mock_query_result.result.return_value = mock_data
-    mock_psqlpy_connection.fetch.return_value = mock_query_result
-
-    # Create SQL statement with parameters
-    result = await psqlpy_driver.fetch_arrow_table("SELECT id, name FROM users WHERE id = $1", [42])
-
-    # Verify result
-    assert isinstance(result, ArrowResult)
-
-    # Verify connection operations with parameters
-    mock_psqlpy_connection.fetch.assert_called_once()
-
-
 @pytest.mark.asyncio
 async def test_psqlpy_driver_fetch_arrow_table_non_query_error(psqlpy_driver: PsqlpyDriver) -> None:
     """Test PSQLPy driver fetch_arrow_table with non-query statement raises error."""
@@ -128,19 +106,3 @@ async def test_psqlpy_driver_fetch_arrow_table_non_query_error(psqlpy_driver: Ps
     assert isinstance(result, ArrowResult)
     # Should create empty Arrow table
     assert result.num_rows == 0
-
-
-@pytest.mark.asyncio
-async def test_psqlpy_driver_fetch_arrow_table_with_connection_override(psqlpy_driver: PsqlpyDriver) -> None:
-    """Test PSQLPy driver fetch_arrow_table with connection override."""
-    # Skip this complex async mock test - connection override tests better suited for integration testing
-    pytest.skip("Complex async connection override mocking - better tested in integration tests")
-
-
-@pytest.mark.asyncio
-async def test_psqlpy_driver_to_parquet(
-    psqlpy_driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock, monkeypatch: "pytest.MonkeyPatch"
-) -> None:
-    """Test export_to_storage using unified storage mixin."""
-    # Skip this complex test - the unified storage mixin integration tests better suited for integration testing
-    pytest.skip("Complex storage backend mocking - unified storage integration better tested in integration tests")

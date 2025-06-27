@@ -203,8 +203,7 @@ class AiosqliteDriver(
         return result
 
     async def _bulk_load_file(self, file_path: Path, table_name: str, format: str, mode: str, **options: Any) -> int:
-        """Database-specific bulk load implementation."""
-        # TODO: convert this to use the storage backend.  it has async support
+        """Database-specific bulk load implementation using storage backend."""
         if format != "csv":
             msg = f"aiosqlite driver only supports CSV for bulk loading, not {format}."
             raise NotImplementedError(msg)
@@ -215,15 +214,21 @@ class AiosqliteDriver(
                 if mode == "replace":
                     await cursor.execute(f"DELETE FROM {table_name}")
 
-                # Using sync file IO here as it's a fallback path and aiofiles is not a dependency
-                with Path(file_path).open(encoding="utf-8") as f:  # noqa: ASYNC230
-                    reader = csv.reader(f, **options)
-                    header = next(reader)  # Skip header
-                    placeholders = ", ".join("?" for _ in header)
-                    sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
-                    data_iter = list(reader)
-                    await cursor.executemany(sql, data_iter)
-                    rowcount = cursor.rowcount
+                # Use async storage backend to read the file
+                file_path_str = str(file_path)
+                backend = self._get_storage_backend(file_path_str)
+                content = await backend.read_text_async(file_path_str, encoding="utf-8")
+                # Parse CSV content
+                import io
+
+                csv_file = io.StringIO(content)
+                reader = csv.reader(csv_file, **options)
+                header = next(reader)  # Skip header
+                placeholders = ", ".join("?" for _ in header)
+                sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
+                data_iter = list(reader)
+                await cursor.executemany(sql, data_iter)
+                rowcount = cursor.rowcount
                 await conn.commit()
                 return rowcount
         finally:

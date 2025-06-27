@@ -769,14 +769,27 @@ class CreateTableAsSelectBuilder(DDLBuilder):
             select_expr = self._select_query.expression
             select_params = getattr(self._select_query, "parameters", None)
         elif isinstance(self._select_query, SelectBuilder):
+            # Get the expression and parameters directly
             select_expr = getattr(self._select_query, "_expression", None)
             select_params = getattr(self._select_query, "_parameters", None)
+
+            # Apply CTEs if present
+            with_ctes = getattr(self._select_query, "_with_ctes", {})
+            if with_ctes and select_expr and isinstance(select_expr, exp.Select):
+                # Apply CTEs directly to the SELECT expression using sqlglot's with_ method
+                for alias, cte in with_ctes.items():
+                    if hasattr(select_expr, "with_"):
+                        select_expr = select_expr.with_(
+                            cte.this,  # The CTE's SELECT expression
+                            as_=alias,
+                            copy=False,
+                        )
         elif isinstance(self._select_query, str):
             select_expr = exp.maybe_parse(self._select_query)
             select_params = None
         else:
             self._raise_sql_builder_error("Unsupported type for SELECT query in CTAS.")
-        if select_expr is None or not isinstance(select_expr, exp.Select):
+        if select_expr is None:
             self._raise_sql_builder_error("SELECT query must be a valid SELECT expression.")
 
         # Merge parameters from SELECT if present

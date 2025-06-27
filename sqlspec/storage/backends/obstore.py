@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.exceptions import MissingDependencyError, StorageOperationFailedError
 from sqlspec.storage.backends.base import ObjectStoreBase
@@ -17,6 +17,7 @@ from sqlspec.typing import OBSTORE_INSTALLED
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
+    from pathlib import Path
 
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
@@ -83,19 +84,21 @@ class ObStoreBackend(ObjectStoreBase):
             msg = f"Failed to initialize obstore backend for {store_uri}"
             raise StorageOperationFailedError(msg) from exc
 
-    def _resolve_path(self, path: str) -> str:
+    def _resolve_path(self, path: str | Path) -> str:
         """Resolve path relative to base_path."""
+        # Convert Path to string
+        path_str = str(path)
         # For file:// URIs, the path passed in is already absolute
-        if self.store_uri.startswith("file://") and path.startswith("/"):
+        if self.store_uri.startswith("file://") and path_str.startswith("/"):
             # Remove leading slash for LocalStore (it's relative to its root)
-            return path.lstrip("/")
+            return path_str.lstrip("/")
 
         if self.base_path:
             # Ensure no double slashes by stripping trailing slash from base_path
             clean_base = self.base_path.rstrip("/")
-            clean_path = path.lstrip("/")
+            clean_path = path_str.lstrip("/")
             return f"{clean_base}/{clean_path}"
-        return path
+        return path_str
 
     @property
     def backend_type(self) -> str:
@@ -104,17 +107,26 @@ class ObStoreBackend(ObjectStoreBase):
 
     # Implementation of abstract methods from ObjectStoreBase
 
-    def read_bytes(self, path: str, **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
+    def read_bytes(self, path: str | Path, **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
         """Read bytes using obstore."""
         try:
             resolved_path = self._resolve_path(path)
             result = self.store.get(resolved_path)
-            return result.bytes()  # type: ignore[no-any-return] # pyright: ignore[reportReturnType]
+            bytes_data = result.bytes()
+            # Handle obstore's Bytes type - it might have a method to get raw bytes
+            if hasattr(bytes_data, "__bytes__"):
+                return bytes(bytes_data)
+            if hasattr(bytes_data, "tobytes"):
+                return bytes_data.tobytes()  # type: ignore[no-any-return]
+            if isinstance(bytes_data, bytes):
+                return bytes_data
+            # Try to convert to bytes
+            return bytes(bytes_data)
         except Exception as exc:
             msg = f"Failed to read bytes from {path}"
             raise StorageOperationFailedError(msg) from exc
 
-    def write_bytes(self, path: str, data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+    def write_bytes(self, path: str | Path, data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Write bytes using obstore."""
         try:
             resolved_path = self._resolve_path(path)
@@ -123,12 +135,12 @@ class ObStoreBackend(ObjectStoreBase):
             msg = f"Failed to write bytes to {path}"
             raise StorageOperationFailedError(msg) from exc
 
-    def read_text(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
+    def read_text(self, path: str | Path, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text using obstore."""
         data = self.read_bytes(path, **kwargs)
         return data.decode(encoding)
 
-    def write_text(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    def write_text(self, path: str | Path, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Write text using obstore."""
         encoded_data = data.encode(encoding)
         self.write_bytes(path, encoded_data, **kwargs)
@@ -153,7 +165,7 @@ class ObStoreBackend(ObjectStoreBase):
 
         return sorted(objects)
 
-    def exists(self, path: str, **kwargs: Any) -> bool:  # pyright: ignore[reportUnusedParameter]
+    def exists(self, path: str | Path, **kwargs: Any) -> bool:  # pyright: ignore[reportUnusedParameter]
         """Check if object exists using obstore."""
         try:
             self.store.head(self._resolve_path(path))
@@ -161,7 +173,7 @@ class ObStoreBackend(ObjectStoreBase):
             return False
         return True
 
-    def delete(self, path: str, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+    def delete(self, path: str | Path, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Delete object using obstore."""
         try:
             self.store.delete(self._resolve_path(path))
@@ -169,7 +181,7 @@ class ObStoreBackend(ObjectStoreBase):
             msg = f"Failed to delete {path}"
             raise StorageOperationFailedError(msg) from exc
 
-    def copy(self, source: str, destination: str, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+    def copy(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Copy object using obstore."""
         try:
             self.store.copy(self._resolve_path(source), self._resolve_path(destination))
@@ -177,7 +189,7 @@ class ObStoreBackend(ObjectStoreBase):
             msg = f"Failed to copy {source} to {destination}"
             raise StorageOperationFailedError(msg) from exc
 
-    def move(self, source: str, destination: str, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+    def move(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Move object using obstore."""
         try:
             self.store.rename(self._resolve_path(source), self._resolve_path(destination))
@@ -224,7 +236,7 @@ class ObStoreBackend(ObjectStoreBase):
         # Use standard fnmatch for simple patterns
         return [obj for obj in all_objects if fnmatch.fnmatch(obj, resolved_pattern)]
 
-    def get_metadata(self, path: str, **kwargs: Any) -> dict[str, Any]:  # pyright: ignore[reportUnusedParameter]
+    def get_metadata(self, path: str | Path, **kwargs: Any) -> dict[str, Any]:  # pyright: ignore[reportUnusedParameter]
         """Get object metadata using obstore."""
         resolved_path = self._resolve_path(path)
         try:
@@ -245,13 +257,13 @@ class ObStoreBackend(ObjectStoreBase):
         else:
             return result
 
-    def is_object(self, path: str) -> bool:
+    def is_object(self, path: str | Path) -> bool:
         """Check if path is an object using obstore."""
         resolved_path = self._resolve_path(path)
         # An object exists and doesn't end with /
         return self.exists(path) and not resolved_path.endswith("/")
 
-    def is_path(self, path: str) -> bool:
+    def is_path(self, path: str | Path) -> bool:
         """Check if path is a prefix/directory using obstore."""
         resolved_path = self._resolve_path(path)
 
@@ -261,12 +273,12 @@ class ObStoreBackend(ObjectStoreBase):
 
         # Check if there are any objects with this prefix
         try:
-            objects = self.list_objects(prefix=path, recursive=False)
+            objects = self.list_objects(prefix=str(path), recursive=False)
             return len(objects) > 0
         except Exception:
             return False
 
-    def read_arrow(self, path: str, **kwargs: Any) -> ArrowTable:
+    def read_arrow(self, path: str | Path, **kwargs: Any) -> ArrowTable:
         """Read Arrow table using obstore."""
         try:
             resolved_path = self._resolve_path(path)
@@ -285,7 +297,7 @@ class ObStoreBackend(ObjectStoreBase):
             msg = f"Failed to read Arrow table from {path}"
             raise StorageOperationFailedError(msg) from exc
 
-    def write_arrow(self, path: str, table: ArrowTable, **kwargs: Any) -> None:
+    def write_arrow(self, path: str | Path, table: ArrowTable, **kwargs: Any) -> None:
         """Write Arrow table using obstore."""
         try:
             resolved_path = self._resolve_path(path)
@@ -350,13 +362,22 @@ class ObStoreBackend(ObjectStoreBase):
     # Private async implementations for instrumentation support
     # These are called by the base class async methods after instrumentation
 
-    async def read_bytes_async(self, path: str, **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
+    async def read_bytes_async(self, path: str | Path, **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
         """Private async read bytes using native obstore async if available."""
         resolved_path = self._resolve_path(path)
         result = await self.store.get_async(resolved_path)
-        return cast("bytes", result.bytes())  # pyright: ignore[reportReturnType]
+        bytes_data = result.bytes()
+        # Handle obstore's Bytes type - it might have a method to get raw bytes
+        if hasattr(bytes_data, "__bytes__"):
+            return bytes(bytes_data)
+        if hasattr(bytes_data, "tobytes"):
+            return bytes_data.tobytes()  # type: ignore[no-any-return]
+        if isinstance(bytes_data, bytes):
+            return bytes_data
+        # Try to convert to bytes
+        return bytes(bytes_data)
 
-    async def write_bytes_async(self, path: str, data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+    async def write_bytes_async(self, path: str | Path, data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Private async write bytes using native obstore async."""
         resolved_path = self._resolve_path(path)
         await self.store.put_async(resolved_path, data)
@@ -379,17 +400,17 @@ class ObStoreBackend(ObjectStoreBase):
     # Implement all other required abstract async methods
     # ObStore provides native async for most operations
 
-    async def read_text_async(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
+    async def read_text_async(self, path: str | Path, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Async read text using native obstore async."""
         data = await self.read_bytes_async(path, **kwargs)
         return data.decode(encoding)
 
-    async def write_text_async(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+    async def write_text_async(self, path: str | Path, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Async write text using native obstore async."""
         encoded_data = data.encode(encoding)
         await self.write_bytes_async(path, encoded_data, **kwargs)
 
-    async def exists_async(self, path: str, **kwargs: Any) -> bool:  # pyright: ignore[reportUnusedParameter]
+    async def exists_async(self, path: str | Path, **kwargs: Any) -> bool:  # pyright: ignore[reportUnusedParameter]
         """Async check if object exists using native obstore async."""
         resolved_path = self._resolve_path(path)
         try:
@@ -398,24 +419,24 @@ class ObStoreBackend(ObjectStoreBase):
             return False
         return True
 
-    async def delete_async(self, path: str, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+    async def delete_async(self, path: str | Path, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Async delete object using native obstore async."""
         resolved_path = self._resolve_path(path)
         await self.store.delete_async(resolved_path)
 
-    async def copy_async(self, source: str, destination: str, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+    async def copy_async(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Async copy object using native obstore async."""
         source_path = self._resolve_path(source)
         dest_path = self._resolve_path(destination)
         await self.store.copy_async(source_path, dest_path)
 
-    async def move_async(self, source: str, destination: str, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
+    async def move_async(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Async move object using native obstore async."""
         source_path = self._resolve_path(source)
         dest_path = self._resolve_path(destination)
         await self.store.rename_async(source_path, dest_path)
 
-    async def get_metadata_async(self, path: str, **kwargs: Any) -> dict[str, Any]:  # pyright: ignore[reportUnusedParameter]
+    async def get_metadata_async(self, path: str | Path, **kwargs: Any) -> dict[str, Any]:  # pyright: ignore[reportUnusedParameter]
         """Async get object metadata using native obstore async."""
         resolved_path = self._resolve_path(path)
         metadata = await self.store.head_async(resolved_path)
@@ -436,12 +457,12 @@ class ObStoreBackend(ObjectStoreBase):
 
         return result
 
-    async def read_arrow_async(self, path: str, **kwargs: Any) -> ArrowTable:
+    async def read_arrow_async(self, path: str | Path, **kwargs: Any) -> ArrowTable:
         """Async read Arrow table using native obstore async."""
         resolved_path = self._resolve_path(path)
         return await self.store.read_arrow_async(resolved_path, **kwargs)  # type: ignore[no-any-return]  # pyright: ignore[reportAttributeAccessIssue]
 
-    async def write_arrow_async(self, path: str, table: ArrowTable, **kwargs: Any) -> None:
+    async def write_arrow_async(self, path: str | Path, table: ArrowTable, **kwargs: Any) -> None:
         """Async write Arrow table using native obstore async."""
         resolved_path = self._resolve_path(path)
         # Check if the store has native async Arrow support

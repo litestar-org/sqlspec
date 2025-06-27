@@ -81,18 +81,17 @@ def test_mixed_parameter_style_normalization() -> None:
     assert params["active"] == "enabled"
 
 
-@pytest.mark.xfail(reason="SQLglot modifies parameter names in complex queries - see SQLGLOT_PARAMETER_BUG.md")
 def test_complex_ctas_with_ctes() -> None:
     """Test CTAS with CTEs preserves all parameter names."""
     # Create CTE with parameters
     cte_builder = SelectBuilder()
-    cte_builder.from_("orders").where("created_at > :start_date")
+    cte_builder.select("*").from_("orders").where("created_at > :start_date")
     cte_builder.add_parameter("2024-01-01", name="start_date")
 
     # Create main query with different parameters
     main_builder = SelectBuilder()
     main_builder.with_cte("recent_orders", cte_builder)
-    main_builder.from_("recent_orders").where("amount > :min_amount")
+    main_builder.select("*").from_("recent_orders").where("amount > :min_amount")
     main_builder.add_parameter(100, name="min_amount")
 
     # Create CTAS

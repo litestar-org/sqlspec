@@ -4,7 +4,7 @@ from collections.abc import Generator
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -92,6 +92,15 @@ INSERT INTO users (username, email) VALUES (:username, :email);
             mock_is_file.return_value = True
             yield mock_is_file
 
+    @pytest.fixture
+    def mock_storage_backend(self, sample_sql_content: str) -> Generator[Mock, None, None]:
+        """Mock storage backend for SQLFileLoader."""
+        mock_backend = MagicMock()
+        mock_backend.read_text.return_value = sample_sql_content
+
+        with patch("sqlspec.loader.StorageRegistry.get", return_value=mock_backend):
+            yield mock_backend
+
     def test_loader_initialization(self) -> None:
         """Test SQLFileLoader initialization."""
         loader = SQLFileLoader()
@@ -101,7 +110,12 @@ INSERT INTO users (username, email) VALUES (:username, :email);
         assert loader.encoding == "latin-1"
 
     def test_load_sql_local_file(
-        self, sample_sql_content: str, mock_path_read: Mock, mock_path_exists: Mock, mock_path_is_file: Mock
+        self,
+        sample_sql_content: str,
+        mock_path_read: Mock,
+        mock_path_exists: Mock,
+        mock_path_is_file: Mock,
+        mock_storage_backend: Mock,
     ) -> None:
         """Test loading a local SQL file."""
         loader = SQLFileLoader()
@@ -116,7 +130,12 @@ INSERT INTO users (username, email) VALUES (:username, :email);
         assert "queries/users.sql" in loader.list_files()
 
     def test_get_sql(
-        self, sample_sql_content: str, mock_path_read: Mock, mock_path_exists: Mock, mock_path_is_file: Mock
+        self,
+        sample_sql_content: str,
+        mock_path_read: Mock,
+        mock_path_exists: Mock,
+        mock_path_is_file: Mock,
+        mock_storage_backend: Mock,
     ) -> None:
         """Test getting SQL by query name."""
         loader = SQLFileLoader()
@@ -134,11 +153,16 @@ INSERT INTO users (username, email) VALUES (:username, :email);
     def test_load_multiple_files(self, mock_path_read: Mock, mock_path_exists: Mock, mock_path_is_file: Mock) -> None:
         """Test loading multiple SQL files."""
         # Set up different content for different files
-        contents = [b"-- name: query1\nSELECT 1;", b"-- name: query2\nSELECT 2;", b"-- name: query3\nSELECT 3;"]
-        mock_path_read.side_effect = contents
+        contents = ["-- name: query1\nSELECT 1;", "-- name: query2\nSELECT 2;", "-- name: query3\nSELECT 3;"]
 
         loader = SQLFileLoader()
-        loader.load_sql("file1.sql", "file2.sql", "file3.sql")
+
+        # Mock the storage backend with different content for each file
+        mock_backend = MagicMock()
+        mock_backend.read_text.side_effect = contents
+
+        with patch("sqlspec.loader.StorageRegistry.get", return_value=mock_backend):
+            loader.load_sql("file1.sql", "file2.sql", "file3.sql")
 
         assert loader.has_query("query1")
         assert loader.has_query("query2")
@@ -160,26 +184,38 @@ INSERT INTO users (username, email) VALUES (:username, :email);
         mock_path_exists.return_value = False
 
         loader = SQLFileLoader()
-        with pytest.raises(SQLFileNotFoundError) as exc_info:
-            loader.load_sql("missing.sql")
 
-        assert "missing.sql" in str(exc_info.value)
+        # Mock the storage backend to raise an error
+        mock_backend = MagicMock()
+        mock_backend.read_text.side_effect = FileNotFoundError("File not found")
+
+        with patch("sqlspec.loader.StorageRegistry.get", return_value=mock_backend):
+            with pytest.raises(SQLFileParseError) as exc_info:
+                loader.load_sql("missing.sql")
+
+            assert "missing.sql" in str(exc_info.value)
 
     def test_no_named_queries(self, mock_path_read: Mock, mock_path_exists: Mock, mock_path_is_file: Mock) -> None:
         """Test error when file has no named queries."""
-        mock_path_read.return_value = b"SELECT * FROM users;"  # No -- name: comment
+        content = "SELECT * FROM users;"  # No -- name: comment
 
         loader = SQLFileLoader()
-        with pytest.raises(SQLFileParseError) as exc_info:
-            loader.load_sql("no_names.sql")
 
-        assert "No named SQL statements found" in str(exc_info.value)
+        # Mock the storage backend
+        mock_backend = MagicMock()
+        mock_backend.read_text.return_value = content
+
+        with patch("sqlspec.loader.StorageRegistry.get", return_value=mock_backend):
+            with pytest.raises(SQLFileParseError) as exc_info:
+                loader.load_sql("no_names.sql")
+
+            assert "No named SQL statements found" in str(exc_info.value)
 
     def test_duplicate_query_names_in_file(
         self, mock_path_read: Mock, mock_path_exists: Mock, mock_path_is_file: Mock
     ) -> None:
         """Test error when file has duplicate query names."""
-        mock_path_read.return_value = b"""
+        content = """
 -- name: get_user
 SELECT * FROM users WHERE id = 1;
 
@@ -188,31 +224,47 @@ SELECT * FROM users WHERE id = 2;
 """
 
         loader = SQLFileLoader()
-        with pytest.raises(SQLFileParseError) as exc_info:
-            loader.load_sql("duplicates.sql")
 
-        assert "Duplicate query name: get_user" in str(exc_info.value)
+        # Mock the storage backend
+        mock_backend = MagicMock()
+        mock_backend.read_text.return_value = content
+
+        with patch("sqlspec.loader.StorageRegistry.get", return_value=mock_backend):
+            with pytest.raises(SQLFileParseError) as exc_info:
+                loader.load_sql("duplicates.sql")
+
+            assert "Duplicate query name: get_user" in str(exc_info.value)
 
     def test_duplicate_query_names_across_files(
         self, mock_path_read: Mock, mock_path_exists: Mock, mock_path_is_file: Mock
     ) -> None:
         """Test error when query name exists in different file."""
         contents = [
-            b"-- name: get_user\nSELECT 1;",
-            b"-- name: get_user\nSELECT 2;",  # Same name
+            "-- name: get_user\nSELECT 1;",
+            "-- name: get_user\nSELECT 2;",  # Same name
         ]
-        mock_path_read.side_effect = contents
 
         loader = SQLFileLoader()
-        loader.load_sql("file1.sql")
 
-        with pytest.raises(SQLFileParseError) as exc_info:
-            loader.load_sql("file2.sql")
+        # Mock the storage backend with different content for each file
+        mock_backend = MagicMock()
+        mock_backend.read_text.side_effect = contents
 
-        assert "Query name 'get_user' already exists" in str(exc_info.value)
+        with patch("sqlspec.loader.StorageRegistry.get", return_value=mock_backend):
+            loader.load_sql("file1.sql")
+
+            with pytest.raises(SQLFileParseError) as exc_info:
+                loader.load_sql("file2.sql")
+
+            assert "Query name 'get_user' already exists" in str(exc_info.value)
 
     def test_get_file_info(
-        self, sample_sql_content: str, mock_path_read: Mock, mock_path_exists: Mock, mock_path_is_file: Mock
+        self,
+        sample_sql_content: str,
+        mock_path_read: Mock,
+        mock_path_exists: Mock,
+        mock_path_is_file: Mock,
+        mock_storage_backend: Mock,
     ) -> None:
         """Test getting file information."""
         loader = SQLFileLoader()
@@ -231,7 +283,12 @@ SELECT * FROM users WHERE id = 2;
         assert query_file is sql_file
 
     def test_clear_cache(
-        self, sample_sql_content: str, mock_path_read: Mock, mock_path_exists: Mock, mock_path_is_file: Mock
+        self,
+        sample_sql_content: str,
+        mock_path_read: Mock,
+        mock_path_exists: Mock,
+        mock_path_is_file: Mock,
+        mock_storage_backend: Mock,
     ) -> None:
         """Test clearing cache."""
         loader = SQLFileLoader()
@@ -292,7 +349,12 @@ SELECT * FROM users WHERE id = 2;
         assert "<directly added>" in str(exc_info.value)
 
     def test_add_named_sql_with_loaded_files(
-        self, sample_sql_content: str, mock_path_read: Mock, mock_path_exists: Mock, mock_path_is_file: Mock
+        self,
+        sample_sql_content: str,
+        mock_path_read: Mock,
+        mock_path_exists: Mock,
+        mock_path_is_file: Mock,
+        mock_storage_backend: Mock,
     ) -> None:
         """Test adding named SQL alongside loaded files."""
         loader = SQLFileLoader()
@@ -406,7 +468,7 @@ class TestSQLFileLoaderWithFixtures:
         fixture_path = Path(__file__).parent.parent / "fixtures" / "oracle.ddl.sql"
 
         # Method 1: Direct file reading for scripts without named queries
-        content = loader._read_file_content(str(fixture_path))
+        content = loader._read_file_content(fixture_path)
         assert "CREATE TABLE" in content
         assert "VECTOR(768, FLOAT32)" in content
 

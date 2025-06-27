@@ -219,12 +219,12 @@ async def test_psqlpy_parquet_export_options(psqlpy_arrow_session: PsqlpyDriver)
 
 @pytest.mark.asyncio
 @pytest.mark.xdist_group("postgres")
-@pytest.mark.skip(reason="SQLglot issue with array_length function parameters")
 async def test_psqlpy_arrow_with_postgresql_arrays(psqlpy_arrow_session: PsqlpyDriver) -> None:
     """Test Arrow functionality with PostgreSQL array types."""
-    # Create table with array columns
+    # Drop table if exists and create fresh to ensure clean state
+    await psqlpy_arrow_session.execute_script("DROP TABLE IF EXISTS test_arrays")
     await psqlpy_arrow_session.execute_script("""
-        CREATE TABLE IF NOT EXISTS test_arrays (
+        CREATE TABLE test_arrays (
             id SERIAL PRIMARY KEY,
             tags TEXT[],
             scores INTEGER[],
@@ -259,6 +259,9 @@ async def test_psqlpy_arrow_with_postgresql_arrays(psqlpy_arrow_session: PsqlpyD
     # Verify array handling
     tag_counts = result.data["tag_count"].to_pylist()
     assert tag_counts == [2, 2, 1]
+
+    # Cleanup
+    await psqlpy_arrow_session.execute_script("DROP TABLE IF EXISTS test_arrays")
 
 
 @pytest.mark.asyncio
@@ -322,6 +325,9 @@ async def test_psqlpy_arrow_with_json_operations(psqlpy_arrow_session: PsqlpyDri
     themes = result.data["theme"].to_pylist()
     assert "dark" in themes or "auto" in themes
 
+    # Cleanup
+    await psqlpy_arrow_session.execute_script("DROP TABLE IF EXISTS test_json")
+
 
 @pytest.mark.asyncio
 @pytest.mark.xdist_group("postgres")
@@ -360,9 +366,6 @@ async def test_psqlpy_arrow_with_window_functions(psqlpy_arrow_session: PsqlpyDr
 
 @pytest.mark.asyncio
 @pytest.mark.xdist_group("postgres")
-@pytest.mark.skip(
-    reason="Literal parameterization causes type inference issues in recursive CTEs - see .bugs/literal-parameterizer-type-inference.md"
-)
 async def test_psqlpy_arrow_with_cte_and_recursive(psqlpy_arrow_session: PsqlpyDriver) -> None:
     """Test Arrow functionality with PostgreSQL CTEs and recursive queries."""
     result = await psqlpy_arrow_session.fetch_arrow_table("""

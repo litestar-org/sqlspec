@@ -1,3 +1,4 @@
+# type: ignore
 """Example demonstrating the high-level service layer.
 
 This example shows how to use the DatabaseService and AsyncDatabaseService

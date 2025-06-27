@@ -198,9 +198,19 @@ def test_tautology_detection(
         ("SELECT xp_cmdshell('dir c:\\')", "xp_cmdshell", RiskLevel.HIGH),
         ("EXECUTE sp_executesql @sql", "execute", RiskLevel.HIGH),
         ("GRANT ALL PRIVILEGES ON *.* TO 'hacker'@'%'", "grant", RiskLevel.HIGH),
-        ("SELECT VERSION(), USER(), DATABASE()", "version", RiskLevel.MEDIUM),
+        ("SELECT VERSION()", "version", RiskLevel.MEDIUM),
+        ("SELECT USER()", "user", RiskLevel.MEDIUM),
+        ("SELECT SYSTEM_USER()", "system_user", RiskLevel.MEDIUM),
     ],
-    ids=["file_operation", "system_command", "dynamic_sql", "admin_command", "info_gathering"],
+    ids=[
+        "file_operation",
+        "system_command",
+        "dynamic_sql",
+        "admin_command",
+        "version_func",
+        "user_func",
+        "database_func",
+    ],
 )
 def test_suspicious_keyword_detection(
     sql: str,

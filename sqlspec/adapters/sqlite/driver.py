@@ -197,8 +197,41 @@ class SqliteDriver(
         result: ScriptResultDict = {"statements_executed": -1, "status_message": "SCRIPT EXECUTED"}
         return result
 
+    def _ingest_arrow_table(self, table: Any, table_name: str, mode: str = "create", **options: Any) -> int:
+        """SQLite-specific Arrow table ingestion using CSV conversion.
+
+        Since SQLite only supports CSV bulk loading, we convert the Arrow table
+        to CSV format first using the storage backend for efficient operations.
+        """
+        import io
+        import tempfile
+
+        import pyarrow.csv as pa_csv
+
+        # Convert Arrow table to CSV in memory
+        csv_buffer = io.BytesIO()
+        pa_csv.write_csv(table, csv_buffer)
+        csv_content = csv_buffer.getvalue()
+
+        # Create a temporary file path
+        temp_filename = f"sqlspec_temp_{table_name}_{id(self)}.csv"
+        temp_path = Path(tempfile.gettempdir()) / temp_filename
+
+        # Use storage backend to write the CSV content
+        backend = self._get_storage_backend(temp_path)
+        backend.write_bytes(str(temp_path), csv_content)
+
+        try:
+            # Use SQLite's CSV bulk load
+            return self._bulk_load_file(temp_path, table_name, "csv", mode, **options)
+        finally:
+            # Clean up using storage backend
+            with contextlib.suppress(Exception):
+                # Best effort cleanup
+                backend.delete(str(temp_path))
+
     def _bulk_load_file(self, file_path: Path, table_name: str, format: str, mode: str, **options: Any) -> int:
-        """Database-specific bulk load implementation."""
+        """Database-specific bulk load implementation using storage backend."""
         if format != "csv":
             msg = f"SQLite driver only supports CSV for bulk loading, not {format}."
             raise NotImplementedError(msg)
@@ -208,16 +241,23 @@ class SqliteDriver(
             if mode == "replace":
                 cursor.execute(f"DELETE FROM {table_name}")
 
-            with Path(file_path).open(encoding="utf-8") as f:
-                reader = csv.reader(f, **options)
-                header = next(reader)  # Skip header
-                placeholders = ", ".join("?" for _ in header)
-                sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
+            # Use storage backend to read the file
+            backend = self._get_storage_backend(file_path)
+            content = backend.read_text(str(file_path), encoding="utf-8")
 
-                # executemany is efficient for bulk inserts
-                data_iter = list(reader)  # Read all data into memory
-                cursor.executemany(sql, data_iter)
-                return cursor.rowcount
+            # Parse CSV content
+            import io
+
+            csv_file = io.StringIO(content)
+            reader = csv.reader(csv_file, **options)
+            header = next(reader)  # Skip header
+            placeholders = ", ".join("?" for _ in header)
+            sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
+
+            # executemany is efficient for bulk inserts
+            data_iter = list(reader)  # Read all data into memory
+            cursor.executemany(sql, data_iter)
+            return cursor.rowcount
 
     def _wrap_select_result(
         self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any

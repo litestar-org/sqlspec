@@ -1,6 +1,8 @@
+import contextlib
 import datetime
 import io
 import logging
+import uuid
 from collections.abc import Iterator
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, Union, cast
@@ -8,10 +10,12 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, Union, cast
 from google.cloud.bigquery import (
     ArrayQueryParameter,
     Client,
+    ExtractJobConfig,
     LoadJobConfig,
     QueryJob,
     QueryJobConfig,
     ScalarQueryParameter,
+    SourceFormat,
     WriteDisposition,
 )
 from google.cloud.bigquery.table import Row as BigQueryRow
@@ -32,6 +36,8 @@ from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from sqlglot.dialects.dialect import DialectType
 
 
@@ -258,23 +264,17 @@ class BigQueryDriver(
                     param_value,
                     type(param_value),
                 )
-        # Let BigQuery generate the job ID to avoid collisions
-        # This is the recommended approach for production code and works better with emulators
-        logger.warning("About to send to BigQuery - SQL: %r", sql_str)
-        logger.warning("Query parameters in job config: %r", final_job_config.query_parameters)
         query_job = conn.query(sql_str, job_config=final_job_config)
 
         # Get the auto-generated job ID for callbacks
         if self.on_job_start and query_job.job_id:
-            try:
+            with contextlib.suppress(Exception):
+                # Callback errors should not interfere with job execution
                 self.on_job_start(query_job.job_id)
-            except Exception as e:
-                logger.warning("Job start callback failed: %s", str(e), extra={"adapter": "bigquery"})
         if self.on_job_complete and query_job.job_id:
-            try:
+            with contextlib.suppress(Exception):
+                # Callback errors should not interfere with job execution
                 self.on_job_complete(query_job.job_id, query_job)
-            except Exception as e:
-                logger.warning("Job complete callback failed: %s", str(e), extra={"adapter": "bigquery"})
 
         return query_job
 
@@ -529,28 +529,120 @@ class BigQueryDriver(
     # BigQuery Native Export Support
     # ============================================================================
 
-    def _export_native(self, query: str, destination_uri: str, format: str, **options: Any) -> int:
-        """BigQuery native export implementation.
+    def _export_native(self, query: str, destination_uri: "Union[str, Path]", format: str, **options: Any) -> int:
+        """BigQuery native export implementation with automatic GCS staging.
 
-        For local files, BigQuery doesn't support direct export, so we raise NotImplementedError
-        to trigger the fallback mechanism that uses fetch + write.
+        For GCS URIs, uses direct export. For other locations, automatically stages
+        through a temporary GCS location and transfers to the final destination.
 
         Args:
             query: SQL query to execute
-            destination_uri: Destination URI (local file path or gs:// URI)
+            destination_uri: Destination URI (local file path, gs:// URI, or Path object)
             format: Export format (parquet, csv, json, avro)
-            **options: Additional export options
+            **options: Additional export options including 'gcs_staging_bucket'
 
         Returns:
             Number of rows exported
 
         Raises:
-            NotImplementedError: Always, to trigger fallback to fetch + write
+            NotImplementedError: If no staging bucket is configured for non-GCS destinations
         """
-        # BigQuery only supports native export to GCS, not local files
-        # By raising NotImplementedError, the mixin will fall back to fetch + write
-        msg = "BigQuery native export only supports GCS URIs, using fallback for local files"
-        raise NotImplementedError(msg)
+        destination_str = str(destination_uri)
+
+        # If it's already a GCS URI, use direct export
+        if destination_str.startswith("gs://"):
+            return self._export_to_gcs_native(query, destination_str, format, **options)
+
+        # For non-GCS destinations, check if staging is configured
+        staging_bucket = options.get("gcs_staging_bucket") or getattr(self.config, "gcs_staging_bucket", None)
+        if not staging_bucket:
+            # Fall back to fetch + write for non-GCS destinations without staging
+            msg = "BigQuery native export requires GCS staging bucket for non-GCS destinations"
+            raise NotImplementedError(msg)
+
+        # Generate temporary GCS path
+        from datetime import timezone
+
+        timestamp = datetime.datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        temp_filename = f"bigquery_export_{timestamp}_{uuid.uuid4().hex[:8]}.{format}"
+        temp_gcs_uri = f"gs://{staging_bucket}/temp_exports/{temp_filename}"
+
+        try:
+            # Export to temporary GCS location
+            rows_exported = self._export_to_gcs_native(query, temp_gcs_uri, format, **options)
+
+            # Transfer from GCS to final destination using storage backend
+            backend, path = self._resolve_backend_and_path(destination_str)
+            gcs_backend = self._get_storage_backend(temp_gcs_uri)
+
+            # Download from GCS and upload to final destination
+            data = gcs_backend.read_bytes(temp_gcs_uri)
+            backend.write_bytes(path, data)
+
+            return rows_exported
+        finally:
+            # Clean up temporary file
+            try:
+                gcs_backend = self._get_storage_backend(temp_gcs_uri)
+                gcs_backend.delete(temp_gcs_uri)
+            except Exception as e:
+                logger.warning("Failed to clean up temporary GCS file %s: %s", temp_gcs_uri, e)
+
+    def _export_to_gcs_native(self, query: str, gcs_uri: str, format: str, **options: Any) -> int:
+        """Direct BigQuery export to GCS.
+
+        Args:
+            query: SQL query to execute
+            gcs_uri: GCS destination URI (must start with gs://)
+            format: Export format (parquet, csv, json, avro)
+            **options: Additional export options
+
+        Returns:
+            Number of rows exported
+        """
+        # First, run the query and store results in a temporary table
+
+        temp_table_id = f"temp_export_{uuid.uuid4().hex[:8]}"
+        dataset_id = getattr(self.connection, "default_dataset", None) or options.get("dataset", "temp")
+
+        # Create a temporary table with query results
+        query_with_table = f"CREATE OR REPLACE TABLE `{dataset_id}.{temp_table_id}` AS {query}"
+        create_job = self._run_query_job(query_with_table, [])
+        create_job.result()
+
+        # Get row count
+        count_query = f"SELECT COUNT(*) as cnt FROM `{dataset_id}.{temp_table_id}`"
+        count_job = self._run_query_job(count_query, [])
+        count_result = list(count_job.result())
+        row_count = count_result[0]["cnt"] if count_result else 0
+
+        try:
+            # Configure extract job
+            extract_config = ExtractJobConfig(**options)  # type: ignore[no-untyped-call]
+
+            # Set format
+            format_mapping = {
+                "parquet": SourceFormat.PARQUET,
+                "csv": SourceFormat.CSV,
+                "json": SourceFormat.NEWLINE_DELIMITED_JSON,
+                "avro": SourceFormat.AVRO,
+            }
+            extract_config.destination_format = format_mapping.get(format, SourceFormat.PARQUET)
+
+            # Extract table to GCS
+            table_ref = self.connection.dataset(dataset_id).table(temp_table_id)
+            extract_job = self.connection.extract_table(table_ref, gcs_uri, job_config=extract_config)
+            extract_job.result()
+
+            return row_count
+        finally:
+            # Clean up temporary table
+            try:
+                delete_query = f"DROP TABLE IF EXISTS `{dataset_id}.{temp_table_id}`"
+                delete_job = self._run_query_job(delete_query, [])
+                delete_job.result()
+            except Exception as e:
+                logger.warning("Failed to clean up temporary table %s: %s", temp_table_id, e)
 
     # ============================================================================
     # BigQuery Native Arrow Support

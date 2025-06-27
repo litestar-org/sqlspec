@@ -55,7 +55,7 @@ def on_warn_missing_reference(app: "Sphinx", domain: str, node: Node) -> "Option
     if not hasattr(node, "attributes"):
         return None
 
-    attributes = node.attributes  # type: ignore[attr-defined]
+    attributes = node.attributes
     target = cast("str", attributes["reftarget"])
 
     if reference_target_source_obj := cast(
@@ -98,7 +98,7 @@ def on_missing_reference(
     if not hasattr(node, "attributes"):
         return None
 
-    attributes = node.attributes  # type: ignore[attr-defined]
+    attributes = node.attributes
     target = attributes["reftarget"]
     py_domain = env.domains["py"]
 

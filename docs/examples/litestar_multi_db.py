@@ -1,3 +1,4 @@
+# type: ignore
 """Litestar Multi DB
 
 This example demonstrates how to use multiple databases in a Litestar application.

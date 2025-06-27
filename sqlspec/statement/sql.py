@@ -191,7 +191,7 @@ class SQL:
         if _existing_state:
             self._load_from_existing_state(_existing_state)
 
-        if not isinstance(statement, SQL):
+        if not isinstance(statement, SQL) and not _existing_state:
             self._set_original_parameters(*parameters)
 
         self._process_parameters(*parameters, **kwargs)
@@ -235,6 +235,7 @@ class SQL:
         self._is_many = existing_state.get("is_many", self._is_many)
         self._is_script = existing_state.get("is_script", self._is_script)
         self._raw_sql = existing_state.get("raw_sql", self._raw_sql)
+        self._original_parameters = existing_state.get("original_parameters", self._original_parameters)
 
     def _set_original_parameters(self, *parameters: Any) -> None:
         """Store the original parameters for compatibility."""
@@ -493,6 +494,8 @@ class SQL:
             "is_script": self._is_script,
             "raw_sql": self._raw_sql,
         }
+        # Always include original_parameters in existing_state
+        existing_state["original_parameters"] = self._original_parameters
 
         # Create new instance
         new_statement = statement if statement is not None else self._statement
@@ -595,10 +598,9 @@ class SQL:
         new_obj = self.copy()
         new_obj._is_many = True
         if parameters is not None:
-            # Replace parameters for executemany
             new_obj._positional_params = []
             new_obj._named_params = {}
-            new_obj._positional_params = parameters
+            new_obj._original_parameters = parameters
         return new_obj
 
     def as_script(self) -> "SQL":
@@ -677,6 +679,10 @@ class SQL:
     @property
     def parameters(self) -> Any:
         """Get merged parameters."""
+        # For executemany operations, return the original parameters list
+        if self._is_many and self._original_parameters is not None:
+            return self._original_parameters
+
         self._ensure_processed()
         assert self._processed_state is not None
         return self._processed_state.merged_parameters
@@ -710,6 +716,18 @@ class SQL:
         if self._is_script:
             return self.sql, None
 
+        # For executemany operations with original parameters, handle specially
+        if self._is_many and self._original_parameters is not None:
+            # Get the SQL, but use the original parameters list
+            sql = self.sql  # This will ensure processing if needed
+            params = self._original_parameters
+
+            # Convert placeholder style if requested
+            if placeholder_style:
+                sql, params = self._convert_placeholder_style(sql, params, placeholder_style)
+
+            return sql, params
+
         # If parsing is disabled, return raw SQL without transformation
         if not self._config.enable_parsing and self._raw_sql:
             return self._raw_sql, self._raw_parameters
@@ -737,8 +755,6 @@ class SQL:
         if placeholder_style:
             sql, params = self._convert_placeholder_style(sql, params, placeholder_style)
 
-        # Debug log the final SQL
-        logger.debug("Final compiled SQL: '%s'", sql)
         return sql, params
 
     @staticmethod
@@ -803,6 +819,24 @@ class SQL:
         Returns:
             Tuple of (converted_sql, converted_params)
         """
+        # Handle execute_many case where params is a list of parameter sets
+        if self._is_many and isinstance(params, list) and params and isinstance(params[0], (list, tuple)):
+            # For execute_many, we only need to convert the SQL once
+            # The parameters remain as a list of tuples
+            converter = self._config.parameter_converter
+            param_info = converter.validator.extract_parameters(sql)
+
+            if param_info:
+                from sqlspec.statement.parameters import ParameterStyle
+
+                target_style = (
+                    ParameterStyle(placeholder_style) if isinstance(placeholder_style, str) else placeholder_style
+                )
+                sql = self._replace_placeholders_in_sql(sql, param_info, target_style)
+
+            # Parameters remain as list of tuples for execute_many
+            return sql, params
+
         # Extract parameter info from current SQL
         converter = self._config.parameter_converter
         param_info = converter.validator.extract_parameters(sql)
@@ -969,7 +1003,7 @@ class SQL:
                 result_dict["1"] = params
             return result_dict
 
-        if isinstance(params, dict):
+        if is_dict(params):
             # Check if already in correct format (keys are "1", "2", etc.)
             if all(key.isdigit() for key in params):
                 return params

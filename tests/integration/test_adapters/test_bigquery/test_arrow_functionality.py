@@ -284,7 +284,6 @@ def test_bigquery_arrow_with_window_functions(
 
 
 @pytest.mark.xdist_group("bigquery")
-@pytest.mark.skip("BigQuery emulator has issues with parameter binding for computed columns")
 def test_bigquery_arrow_with_ml_functions(
     bigquery_arrow_session: BigQueryDriver, bigquery_service: BigQueryService
 ) -> None:

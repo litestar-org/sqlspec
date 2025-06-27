@@ -163,33 +163,6 @@ async def test_asyncmy_driver_fetch_arrow_table_non_query_error(asyncmy_driver: 
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(
-    reason="Complex async mock setup issue - async connection override tests better suited for integration testing"
-)
-async def test_asyncmy_driver_fetch_arrow_table_with_connection_override(asyncmy_driver: AsyncmyDriver) -> None:
-    """Test Asyncmy driver fetch_arrow_table with connection override."""
-    # Create override connection
-    override_connection = AsyncMock()
-    mock_cursor = AsyncMock()
-    mock_cursor.description = [(col,) for col in ["id", "name"]]
-    mock_cursor.fetchall.return_value = [(1, "Alice"), (2, "Bob")]
-
-    # Make cursor() return an async function that returns the cursor
-    async def _cursor() -> AsyncMock:
-        return mock_cursor
-
-    override_connection.cursor.side_effect = _cursor
-
-    # Create SQL statement with connection override
-    result = await asyncmy_driver.fetch_arrow_table("SELECT id, name FROM users", connection=override_connection)
-    assert isinstance(result, ArrowResult)
-    assert isinstance(result.data, pa.Table)
-    assert result.num_rows == 2
-    assert set(result.column_names) == {"id", "name"}
-    mock_cursor.close.assert_called_once()
-
-
-@pytest.mark.asyncio
 async def test_asyncmy_driver_to_parquet(
     asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock, monkeypatch: "pytest.MonkeyPatch"
 ) -> None:
@@ -239,7 +212,6 @@ async def test_asyncmy_driver_to_parquet(
     monkeypatch.setattr(AsyncmyDriver, "execute", lambda self, sql_obj, **kwargs: mock_execute(sql_obj))
 
     # Mock fetch_arrow_table for the async export path
-    import pyarrow as pa
 
     from sqlspec.statement.result import ArrowResult
 

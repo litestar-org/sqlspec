@@ -2,6 +2,7 @@ import contextlib
 import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
 from duckdb import DuckDBPyConnection
@@ -251,7 +252,7 @@ class DuckDBDriver(
                 return True
         return False
 
-    def _export_native(self, query: str, destination_uri: str, format: str, **options: Any) -> int:
+    def _export_native(self, query: str, destination_uri: Union[str, Path], format: str, **options: Any) -> int:
         conn = self._connection(None)
         copy_options: list[str] = []
 
@@ -283,19 +284,21 @@ class DuckDBDriver(
             raise ValueError(msg)
 
         options_str = f"({', '.join(copy_options)})" if copy_options else ""
-        copy_sql = f"COPY ({query}) TO '{destination_uri}' {options_str}"
+        copy_sql = f"COPY ({query}) TO '{destination_uri!s}' {options_str}"
         result_rel = conn.execute(copy_sql)
         result = result_rel.fetchone() if result_rel else None
         return result[0] if result else 0
 
-    def _import_native(self, source_uri: str, table_name: str, format: str, mode: str, **options: Any) -> int:
+    def _import_native(
+        self, source_uri: Union[str, Path], table_name: str, format: str, mode: str, **options: Any
+    ) -> int:
         conn = self._connection(None)
         if format == "parquet":
-            read_func = f"read_parquet('{source_uri}')"
+            read_func = f"read_parquet('{source_uri!s}')"
         elif format == "csv":
-            read_func = f"read_csv_auto('{source_uri}')"
+            read_func = f"read_csv_auto('{source_uri!s}')"
         elif format == "json":
-            read_func = f"read_json_auto('{source_uri}')"
+            read_func = f"read_json_auto('{source_uri!s}')"
         else:
             msg = f"Unsupported format for DuckDB native import: {format}"
             raise ValueError(msg)
@@ -320,16 +323,16 @@ class DuckDBDriver(
         return int(count_result[0]) if count_result else 0
 
     def _read_parquet_native(
-        self, source_uri: str, columns: Optional[list[str]] = None, **options: Any
+        self, source_uri: Union[str, Path], columns: Optional[list[str]] = None, **options: Any
     ) -> "SQLResult[dict[str, Any]]":
         conn = self._connection(None)
         if isinstance(source_uri, list):
             file_list = "[" + ", ".join(f"'{f}'" for f in source_uri) + "]"
             read_func = f"read_parquet({file_list})"
-        elif "*" in source_uri or "?" in source_uri:
-            read_func = f"read_parquet('{source_uri}')"
+        elif "*" in str(source_uri) or "?" in str(source_uri):
+            read_func = f"read_parquet('{source_uri!s}')"
         else:
-            read_func = f"read_parquet('{source_uri}')"
+            read_func = f"read_parquet('{source_uri!s}')"
 
         column_list = ", ".join(columns) if columns else "*"
         query = f"SELECT {column_list} FROM {read_func}"
@@ -353,7 +356,9 @@ class DuckDBDriver(
             statement=SQL(query), data=rows, column_names=column_names, rows_affected=num_rows, operation_type="SELECT"
         )
 
-    def _write_parquet_native(self, data: Union[str, "ArrowTable"], destination_uri: str, **options: Any) -> None:
+    def _write_parquet_native(
+        self, data: Union[str, "ArrowTable"], destination_uri: Union[str, Path], **options: Any
+    ) -> None:
         conn = self._connection(None)
         copy_options: list[str] = ["FORMAT PARQUET"]
         if "compression" in options:
@@ -364,13 +369,13 @@ class DuckDBDriver(
         options_str = f"({', '.join(copy_options)})"
 
         if isinstance(data, str):
-            copy_sql = f"COPY ({data}) TO '{destination_uri}' {options_str}"
+            copy_sql = f"COPY ({data}) TO '{destination_uri!s}' {options_str}"
             conn.execute(copy_sql)
         else:
             temp_name = f"_arrow_data_{uuid.uuid4().hex[:8]}"
             conn.register(temp_name, data)
             try:
-                copy_sql = f"COPY {temp_name} TO '{destination_uri}' {options_str}"
+                copy_sql = f"COPY {temp_name} TO '{destination_uri!s}' {options_str}"
                 conn.execute(copy_sql)
             finally:
                 with contextlib.suppress(Exception):

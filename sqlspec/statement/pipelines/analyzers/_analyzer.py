@@ -324,11 +324,7 @@ class StatementAnalyzer(ProcessorProtocol):
     def _analyze_subqueries(self, expression: exp.Expression, analysis: StatementAnalysis) -> None:
         """Analyze subquery complexity and nesting depth."""
         subqueries: list[exp.Expression] = list(expression.find_all(exp.Subquery))
-        subqueries.extend(
-            query
-            for in_clause in expression.find_all(exp.In)
-            if (query := in_clause.args.get("query")) and isinstance(query, exp.Select)
-        )
+        # Workaround for EXISTS clauses: sqlglot doesn't wrap EXISTS subqueries in Subquery nodes
         subqueries.extend(
             [
                 exists_clause.this

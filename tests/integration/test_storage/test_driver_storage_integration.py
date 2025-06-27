@@ -1,7 +1,9 @@
 """Integration tests for storage functionality within database drivers."""
 
+import json
 import tempfile
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -9,7 +11,7 @@ import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.statement.result import ArrowResult
-from sqlspec.statement.sql import SQLConfig
+from sqlspec.statement.sql import SQL, SQLConfig
 
 
 @pytest.fixture
@@ -148,8 +150,6 @@ def test_export_to_storage_json_format(sqlite_with_test_data: SqliteDriver, temp
     assert output_file.exists()
 
     # Read and verify JSON content
-    import json
-
     with open(output_file) as f:
         data = json.load(f)
 
@@ -197,8 +197,6 @@ def test_fetch_arrow_table_functionality(sqlite_with_test_data: SqliteDriver) ->
 
 def test_fetch_arrow_table_with_parameters(sqlite_with_test_data: SqliteDriver) -> None:
     """Test fetch_arrow_table with parameterized queries."""
-    from sqlspec.statement.sql import SQL
-
     sql_query = SQL("SELECT * FROM products WHERE price BETWEEN ? AND ? ORDER BY price", parameters=[50.0, 500.0])
 
     result = sqlite_with_test_data.fetch_arrow_table(sql_query)
@@ -358,30 +356,76 @@ def test_export_with_complex_sql(sqlite_with_test_data: SqliteDriver, temp_direc
         assert max_price >= avg  # type: ignore[operator]
 
 
-@pytest.mark.skip(reason="SQLite connections cannot be shared across threads")
-def test_concurrent_storage_operations(sqlite_with_test_data: SqliteDriver, temp_directory: Path) -> None:
-    """Test concurrent storage operations."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+def test_concurrent_storage_operations(temp_directory: Path) -> None:
+    """Test concurrent storage operations with thread-safe SQLite connections."""
+    # Create a shared database file instead of using :memory:
+    db_path = temp_directory / "test_concurrent.db"
+
+    # Initialize the database with test data
+    config = SqliteConfig(database=str(db_path))
+    with config.provide_connection() as connection:
+        driver = SqliteDriver(connection=connection)
+        # Create test table
+        driver.execute_script("""
+            CREATE TABLE products (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                category TEXT,
+                price REAL,
+                in_stock BOOLEAN DEFAULT 1,
+                created_date DATE DEFAULT CURRENT_DATE
+            )
+        """)
+
+        # Insert test data
+        test_products = [
+            ("Laptop", "Electronics", 999.99, True),
+            ("Book", "Education", 19.99, True),
+            ("Chair", "Furniture", 89.99, False),
+            ("Phone", "Electronics", 599.99, True),
+            ("Desk", "Furniture", 199.99, True),
+            ("Monitor", "Electronics", 299.99, True),
+            ("Notebook", "Education", 4.99, True),
+            ("Table", "Furniture", 149.99, False),
+            ("Headphones", "Electronics", 79.99, True),
+            ("Lamp", "Furniture", 29.99, True),
+        ]
+        driver.execute_many("INSERT INTO products (name, category, price, in_stock) VALUES (?, ?, ?, ?)", test_products)
+
+        # Explicitly commit the data for SQLite
+        connection.commit()
 
     def export_worker(worker_id: int) -> str:
-        output_file = temp_directory / f"concurrent_{worker_id}.parquet"
-        sqlite_with_test_data.export_to_storage(
-            f"SELECT * FROM products WHERE id % 5 = {worker_id % 5}", destination_uri=str(output_file)
-        )
-        return str(output_file)
+        # Create a new connection for each thread
+        thread_config = SqliteConfig(database=str(db_path))
+        with thread_config.provide_session() as thread_driver:
+            output_file = temp_directory / f"concurrent_{worker_id}.parquet"
+            # Use simpler query that ensures we get results
+            if worker_id == 0:
+                query = "SELECT * FROM products WHERE category = 'Electronics'"
+            elif worker_id == 1:
+                query = "SELECT * FROM products WHERE category = 'Education'"
+            else:
+                query = "SELECT * FROM products WHERE category = 'Furniture'"
+            thread_driver.export_to_storage(query, destination_uri=str(output_file))
+            return str(output_file)
 
     # Run multiple concurrent exports
     with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = [executor.submit(export_worker, i) for i in range(5)]
+        futures = [executor.submit(export_worker, i) for i in range(3)]
 
         exported_files = [future.result() for future in as_completed(futures)]
 
     # Verify all exports succeeded
-    assert len(exported_files) == 5
+    assert len(exported_files) == 3
+
+    # Check each export
     for file_path in exported_files:
         assert Path(file_path).exists()
         assert Path(file_path).stat().st_size > 0
 
         # Verify content
         table = pq.read_table(file_path)
-        assert table.num_rows >= 0  # Could be 0 or more depending on filter
+        # Each category has multiple products
+        assert table.num_rows >= 2  # At least 2 products per category
+        assert table.num_rows <= 5  # At most 5 products per category

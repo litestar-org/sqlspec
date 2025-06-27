@@ -14,7 +14,7 @@ import sqlite3
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, Mock, PropertyMock, mock_open, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
@@ -358,28 +358,36 @@ def test_execute_script(driver: SqliteDriver, mock_connection: MagicMock) -> Non
 
 
 # Bulk Load Tests
-@patch("pathlib.Path.open", new_callable=mock_open, read_data="id,name\n1,Alice\n2,Bob\n")
-def test_bulk_load_csv(mock_file: Mock, driver: SqliteDriver, mock_connection: MagicMock) -> None:
+def test_bulk_load_csv(driver: SqliteDriver, mock_connection: MagicMock) -> None:
     """Test bulk loading from CSV file."""
     mock_cursor = mock_connection.cursor.return_value
     mock_cursor.rowcount = 2
 
-    file_path = Path("/tmp/test.csv")
-    rows = driver._bulk_load_file(file_path, "users", "csv", "append")
+    # Mock the storage backend
+    mock_backend = MagicMock()
+    mock_backend.read_text.return_value = "id,name\n1,Alice\n2,Bob\n"
+
+    with patch.object(SqliteDriver, "_get_storage_backend", return_value=mock_backend):
+        file_path = Path("/tmp/test.csv")
+        rows = driver._bulk_load_file(file_path, "users", "csv", "append")
 
     assert rows == 2
 
     mock_cursor.executemany.assert_called_once_with("INSERT INTO users VALUES (?, ?)", [["1", "Alice"], ["2", "Bob"]])
 
 
-@patch("pathlib.Path.open", new_callable=mock_open, read_data="id,name\n1,Alice\n")
-def test_bulk_load_csv_replace_mode(mock_file: Mock, driver: SqliteDriver, mock_connection: MagicMock) -> None:
+def test_bulk_load_csv_replace_mode(driver: SqliteDriver, mock_connection: MagicMock) -> None:
     """Test bulk loading with replace mode."""
     mock_cursor = mock_connection.cursor.return_value
     mock_cursor.rowcount = 1
 
-    file_path = Path("/tmp/test.csv")
-    rows = driver._bulk_load_file(file_path, "users", "csv", "replace")
+    # Mock the storage backend
+    mock_backend = MagicMock()
+    mock_backend.read_text.return_value = "id,name\n1,Alice\n"
+
+    with patch.object(SqliteDriver, "_get_storage_backend", return_value=mock_backend):
+        file_path = Path("/tmp/test.csv")
+        rows = driver._bulk_load_file(file_path, "users", "csv", "replace")
 
     assert rows == 1
 

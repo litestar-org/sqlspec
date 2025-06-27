@@ -697,7 +697,13 @@ def test_rename_table_builder() -> None:
     """Test RENAME TABLE functionality."""
 
     sql = RenameTableBuilder().table("users").to("customers").build().sql
-    assert 'ALTER TABLE "users" RENAME TO "customers"' in sql or "ALTER TABLE users RENAME TO customers" in sql
+    # Handle both single-line and multi-line formatted output
+    assert (
+        'ALTER TABLE "users" RENAME TO "customers"' in sql
+        or "ALTER TABLE users RENAME TO customers" in sql
+        or ('ALTER TABLE "users"' in sql and 'RENAME TO "customers"' in sql)
+        or ("ALTER TABLE users" in sql and "RENAME TO customers" in sql)
+    )
 
 
 def test_rename_table_builder_error() -> None:

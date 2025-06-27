@@ -577,8 +577,43 @@ def test_comprehensive_parameterization_scenarios(sql: str, expected_min_params:
     assert len(metadata) == len(parameters)
 
 
+def test_select_alias_literals_not_parameterized() -> None:
+    """Test that literals used as SELECT alias values are not parameterized."""
+    sql = """
+    SELECT
+        name,
+        value * price as total,
+        'computed' as status,
+        'active' as type
+    FROM products
+    """
+
+    transformer = ParameterizeLiterals()
+    context = create_context_with_sql(sql)
+    assert context.current_expression is not None
+    result = transformer.process(context.current_expression, context)
+
+    # Check that alias literals were NOT parameterized
+    parameters = context.extracted_parameters_from_pipeline or []
+    actual_values = [getattr(p, "value", p) for p in parameters]
+
+    # 'computed' and 'active' should NOT be parameterized
+    assert "computed" not in actual_values
+    assert "active" not in actual_values
+
+    # The SQL should still contain the literal strings
+    if result:
+        sql_str = result.sql()
+        assert "'computed'" in sql_str or '"computed"' in sql_str
+        assert "'active'" in sql_str or '"active"' in sql_str
+
+
 def test_transformer_handles_complex_ast() -> None:
-    """Test that transformer handles complex AST structures without crashing."""
+    """Test that transformer handles complex AST structures without crashing.
+
+    This test also verifies that literals inside recursive CTEs are preserved
+    to avoid PostgreSQL type inference issues.
+    """
     sql = """
     WITH RECURSIVE category_tree AS (
         SELECT id, name, parent_id, 1 as level
@@ -605,7 +640,11 @@ def test_transformer_handles_complex_ast() -> None:
     parameters = context.extracted_parameters_from_pipeline or []
     actual_values = [getattr(p, "value", p) for p in parameters]
 
-    # Should find literals like 1, 5, 'processed', 3
-    assert len(parameters) >= 2
-    assert any(val in [1, 5, 3] for val in actual_values)
-    assert "processed" in actual_values
+    # With recursive CTE literal preservation:
+    # - Literals inside the recursive CTE (1, 5) are preserved
+    # - Only the literal outside the CTE (3) is parameterized
+    # - 'processed' is not parameterized because it's used as an alias value in SELECT
+    assert len(parameters) == 1
+    assert 3 in actual_values  # Only the literal outside the CTE
+    # 'processed' should NOT be parameterized since it's a SELECT alias value
+    assert "processed" not in actual_values

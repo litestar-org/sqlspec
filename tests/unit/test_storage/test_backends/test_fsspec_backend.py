@@ -11,9 +11,11 @@ This module tests the FSSpecBackend class including:
 - Async operation wrappers
 - Error handling and dependency checks
 - Instrumentation and logging
+- Pathlike object support
 """
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
@@ -622,3 +624,140 @@ def test_protocol_specific_initialization() -> None:
 
                 mock_filesystem.assert_called_once_with(protocol)
                 assert backend.protocol == protocol
+
+
+# Pathlike Object Support Tests
+def test_read_bytes_with_pathlike(backend_with_mock_fs: FSSpecBackend, mock_fs: MagicMock) -> None:
+    """Test read_bytes with Path object."""
+    backend = backend_with_mock_fs
+
+    path_obj = Path("test.txt")
+    result = backend.read_bytes(path_obj)
+
+    assert result == b"test data"
+    mock_fs.cat.assert_called_once_with("/base/test.txt")
+
+
+def test_write_bytes_with_pathlike(backend_with_mock_fs: FSSpecBackend, mock_fs: MagicMock) -> None:
+    """Test write_bytes with Path object."""
+    backend = backend_with_mock_fs
+    mock_file = MagicMock()
+    mock_fs.open.return_value.__enter__.return_value = mock_file
+
+    path_obj = Path("test.txt")
+    backend.write_bytes(path_obj, b"test data")
+
+    mock_fs.open.assert_called_once_with("/base/test.txt", mode="wb")
+    mock_file.write.assert_called_once_with(b"test data")
+
+
+def test_exists_with_pathlike(backend_with_mock_fs: FSSpecBackend, mock_fs: MagicMock) -> None:
+    """Test exists with Path object."""
+    backend = backend_with_mock_fs
+
+    path_obj = Path("test.txt")
+    result = backend.exists(path_obj)
+
+    assert result is True
+    mock_fs.exists.assert_called_once_with("/base/test.txt")
+
+
+def test_copy_with_pathlike(backend_with_mock_fs: FSSpecBackend, mock_fs: MagicMock) -> None:
+    """Test copy with Path objects."""
+    backend = backend_with_mock_fs
+
+    source_path = Path("source.txt")
+    dest_path = Path("dest.txt")
+    backend.copy(source_path, dest_path)
+
+    mock_fs.copy.assert_called_once_with("/base/source.txt", "/base/dest.txt")
+
+
+def test_move_with_pathlike(backend_with_mock_fs: FSSpecBackend, mock_fs: MagicMock) -> None:
+    """Test move with Path objects."""
+    backend = backend_with_mock_fs
+
+    source_path = Path("source.txt")
+    dest_path = Path("dest.txt")
+    backend.move(source_path, dest_path)
+
+    mock_fs.mv.assert_called_once_with("/base/source.txt", "/base/dest.txt")
+
+
+def test_delete_with_pathlike(backend_with_mock_fs: FSSpecBackend, mock_fs: MagicMock) -> None:
+    """Test delete with Path object."""
+    backend = backend_with_mock_fs
+
+    path_obj = Path("test.txt")
+    backend.delete(path_obj)
+
+    mock_fs.rm.assert_called_once_with("/base/test.txt")
+
+
+def test_get_metadata_with_pathlike(backend_with_mock_fs: FSSpecBackend, mock_fs: MagicMock) -> None:
+    """Test get_metadata with Path object."""
+    backend = backend_with_mock_fs
+
+    path_obj = Path("test.txt")
+    result = backend.get_metadata(path_obj)
+
+    assert result == {"size": 1024, "type": "file"}
+    mock_fs.info.assert_called_once_with("/base/test.txt")
+
+
+def test_read_arrow_with_pathlike(backend_with_mock_fs: FSSpecBackend, mock_fs: MagicMock) -> None:
+    """Test read_arrow with Path object."""
+    backend = backend_with_mock_fs
+
+    with patch("sqlspec.typing.PYARROW_INSTALLED", True):
+        with patch("pyarrow.parquet.read_table") as mock_read_table:
+            mock_table = MagicMock()
+            mock_read_table.return_value = mock_table
+
+            path_obj = Path("test.parquet")
+            result = backend.read_arrow(path_obj)
+
+            assert result == mock_table
+            mock_fs.open.assert_called_once_with("/base/test.parquet", mode="rb")
+
+
+def test_write_arrow_with_pathlike(backend_with_mock_fs: FSSpecBackend, mock_fs: MagicMock) -> None:
+    """Test write_arrow with Path object."""
+    backend = backend_with_mock_fs
+
+    with patch("sqlspec.typing.PYARROW_INSTALLED", True):
+        with patch("pyarrow.parquet.write_table") as mock_write_table:
+            mock_table = MagicMock()
+
+            path_obj = Path("test.parquet")
+            backend.write_arrow(path_obj, mock_table)
+
+            mock_fs.open.assert_called_once_with("/base/test.parquet", mode="wb")
+            mock_write_table.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_async_operations_with_pathlike(backend_with_mock_fs: FSSpecBackend, mock_fs: MagicMock) -> None:
+    """Test async operations with Path objects."""
+    backend = backend_with_mock_fs
+
+    # Test read_bytes_async
+    path_obj = Path("test.txt")
+    result = await backend.read_bytes_async(path_obj)
+    assert result == b"test data"
+
+    # Test write_bytes_async
+    mock_file = MagicMock()
+    mock_fs.open.return_value.__enter__.return_value = mock_file
+    await backend.write_bytes_async(path_obj, b"async data")
+
+    # Test exists_async
+    exists_result = await backend.exists_async(path_obj)
+    assert exists_result is True
+
+    # Test copy_async
+    dest_path = Path("dest.txt")
+    await backend.copy_async(path_obj, dest_path)
+
+    # Test move_async
+    await backend.move_async(path_obj, dest_path)
