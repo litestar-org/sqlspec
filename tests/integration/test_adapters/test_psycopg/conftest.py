@@ -30,17 +30,9 @@ def suppress_psycopg_pool_warnings() -> "Generator[None, None, None]":
             category=pytest.PytestUnraisableExceptionWarning,
         )
         # Suppress thread join warnings
-        warnings.filterwarnings(
-            "ignore",
-            message="cannot join current thread",
-            category=RuntimeWarning,
-        )
+        warnings.filterwarnings("ignore", message="cannot join current thread", category=RuntimeWarning)
         # Suppress event loop closed warnings from async pool cleanup
-        warnings.filterwarnings(
-            "ignore",
-            message="Event loop is closed",
-            category=RuntimeWarning,
-        )
+        warnings.filterwarnings("ignore", message="Event loop is closed", category=RuntimeWarning)
         yield
 
 
