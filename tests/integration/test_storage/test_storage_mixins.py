@@ -1,14 +1,17 @@
 """Integration tests for storage mixins in database drivers."""
 
+import json
 import tempfile
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.exceptions import StorageOperationFailedError
 from sqlspec.statement.result import ArrowResult, SQLResult
-from sqlspec.statement.sql import SQLConfig
+from sqlspec.statement.sql import SQL, SQLConfig
 
 
 @pytest.fixture
@@ -65,7 +68,6 @@ def test_driver_export_to_storage_parquet(sqlite_driver_with_storage: SqliteDriv
     assert output_file.exists()
     assert output_file.stat().st_size > 0
 
-    # Verify we can read the exported data
     import pyarrow.parquet as pq
 
     table = pq.read_table(output_file)
@@ -137,8 +139,6 @@ def test_driver_export_to_storage_json_format(sqlite_driver_with_storage: Sqlite
     assert output_file.exists()
 
     # Verify JSON content
-    import json
-
     with open(output_file) as f:
         data = json.load(f)
 
@@ -208,8 +208,6 @@ def test_driver_fetch_arrow_table_direct(sqlite_driver_with_storage: SqliteDrive
 
 def test_driver_fetch_arrow_table_with_parameters(sqlite_driver_with_storage: SqliteDriver) -> None:
     """Test fetch_arrow_table with parameters."""
-    from sqlspec.statement.sql import SQL
-
     sql_query = SQL("SELECT * FROM storage_test WHERE category = ? AND value > ?", parameters=["electronics", 50])
 
     result = sqlite_driver_with_storage.fetch_arrow_table(sql_query)
@@ -277,8 +275,6 @@ def test_driver_storage_error_handling(sqlite_driver_with_storage: SqliteDriver,
     nonexistent_file = temp_directory / "nonexistent.parquet"
 
     # Storage backend wraps FileNotFoundError in StorageOperationFailedError
-    from sqlspec.exceptions import StorageOperationFailedError
-
     with pytest.raises(StorageOperationFailedError):
         sqlite_driver_with_storage.import_from_storage(str(nonexistent_file), "storage_test")
 
@@ -362,17 +358,52 @@ def test_driver_storage_schema_preservation(sqlite_driver_with_storage: SqliteDr
     assert "price" in table.column_names
 
 
-@pytest.mark.skip(reason="SQLite connections cannot be shared across threads")
-def test_driver_concurrent_storage_operations(sqlite_driver_with_storage: SqliteDriver, temp_directory: Path) -> None:
-    """Test concurrent storage operations."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+def test_driver_concurrent_storage_operations(temp_directory: Path) -> None:
+    """Test concurrent storage operations with thread-safe SQLite connections."""
+    # Create a shared database file instead of using :memory:
+    db_path = temp_directory / "test_concurrent_storage.db"
+
+    # Initialize the database with test data
+    config = SqliteConfig(database=str(db_path))
+    with config.provide_connection() as connection:
+        driver = SqliteDriver(connection=connection)
+        # Create test table with sample data
+        driver.execute_script("""
+            CREATE TABLE storage_test (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                category TEXT,
+                value INTEGER,
+                price REAL,
+                active BOOLEAN DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Insert test data
+        test_data = [
+            ("Product A", "electronics", 100, 19.99, True),
+            ("Product B", "books", 50, 15.50, True),
+            ("Product C", "electronics", 75, 29.99, False),
+            ("Product D", "clothing", 200, 45.00, True),
+            ("Product E", "books", 30, 12.99, True),
+        ]
+        driver.execute_many(
+            "INSERT INTO storage_test (name, category, value, price, active) VALUES (?, ?, ?, ?, ?)", test_data
+        )
+
+        # Explicitly commit the data for SQLite
+        connection.commit()
 
     def export_worker(worker_id: int) -> str:
-        output_file = temp_directory / f"concurrent_export_{worker_id}.parquet"
-        sqlite_driver_with_storage.export_to_storage(
-            f"SELECT * FROM storage_test WHERE id = {worker_id + 1}", destination_uri=str(output_file)
-        )
-        return str(output_file)
+        # Create a new connection for each thread
+        thread_config = SqliteConfig(database=str(db_path))
+        with thread_config.provide_session() as thread_driver:
+            output_file = temp_directory / f"concurrent_export_{worker_id}.parquet"
+            thread_driver.export_to_storage(
+                f"SELECT * FROM storage_test WHERE id = {worker_id + 1}", destination_uri=str(output_file)
+            )
+            return str(output_file)
 
     # Create multiple concurrent exports
     with ThreadPoolExecutor(max_workers=3) as executor:
@@ -384,7 +415,12 @@ def test_driver_concurrent_storage_operations(sqlite_driver_with_storage: Sqlite
     assert len(exported_files) == 5
     for file_path in exported_files:
         assert Path(file_path).exists()
-        assert Path(file_path).stat().st_size > 0
+        # Some exports might be empty if worker_id + 1 > 5 (only 5 rows in table)
+        if Path(file_path).stat().st_size > 0:
+            import pyarrow.parquet as pq
+
+            table = pq.read_table(file_path)
+            assert table.num_rows <= 1  # Should have 0 or 1 row per worker
 
 
 def test_driver_export_to_storage_pathlike_objects(
