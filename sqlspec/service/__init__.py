@@ -1,3 +1,5 @@
-from sqlspec.service.base import SqlspecService
+from sqlspec.service.base import SQLSpecAsyncService, SQLSpecSyncService
 
-__all__ = ("SqlspecService",)
+__all__ = ("SQLSpecAsyncService", "SQLSpecSyncService")
+
+ 
