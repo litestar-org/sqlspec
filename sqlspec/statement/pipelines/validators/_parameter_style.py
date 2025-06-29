@@ -6,9 +6,9 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 from sqlglot import exp
 
 from sqlspec.exceptions import MissingParameterError, RiskLevel, SQLValidationError
-from sqlspec.statement.pipelines.base import ProcessorProtocol
-from sqlspec.statement.pipelines.result_types import ValidationError
-from sqlspec.typing import is_dict
+from sqlspec.protocols import ProcessorProtocol
+from sqlspec.statement.pipelines.context import ValidationError
+from sqlspec.utils.type_guards import is_dict
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext

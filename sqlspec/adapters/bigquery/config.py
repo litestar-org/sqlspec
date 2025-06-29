@@ -2,7 +2,6 @@
 
 import contextlib
 import logging
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional
 
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
@@ -385,15 +384,15 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         @contextlib.contextmanager
         def session_manager() -> "Generator[BigQueryDriver, None, None]":
             with self.provide_connection(*args, **kwargs) as connection:
-                # Create statement config with parameter style info if not already set
                 statement_config = self.statement_config
+                # Inject parameter style info if not already set
                 if statement_config.allowed_parameter_styles is None:
+                    from dataclasses import replace
                     statement_config = replace(
                         statement_config,
                         allowed_parameter_styles=self.supported_parameter_styles,
                         target_parameter_style=self.preferred_parameter_style,
                     )
-
                 driver = self.driver_type(
                     connection=connection,
                     config=statement_config,

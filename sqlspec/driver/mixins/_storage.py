@@ -237,6 +237,8 @@ class SyncStorageMixin(StorageMixinBase):
         # Use a custom config if transformations will add parameters
         if _config is None:
             _config = self.config
+            if _config and not _config.dialect:
+                _config = replace(_config, dialect=self.dialect)
 
         # If no parameters provided but we have transformations enabled,
         # disable parameter validation entirely to allow transformer-added parameters
@@ -245,10 +247,15 @@ class SyncStorageMixin(StorageMixinBase):
             _config = replace(_config, strict_mode=False, enable_validation=False)
 
         # Only pass params if it's not None to avoid adding None as a parameter
-        if params is not None:
-            sql = SQL(statement, params, *filters, _config=_config, _dialect=self.dialect, **kwargs)
-        else:
-            sql = SQL(statement, *filters, _config=_config, _dialect=self.dialect, **kwargs)
+        sql = (
+            SQL(statement, parameters=params, kwargs=kwargs, config=_config)
+            if params is not None
+            else SQL(statement, config=_config)
+        )
+
+        # Apply filters after creation
+        for filter_ in filters:
+            sql = sql.filter(filter_)
 
         return self._fetch_arrow_table(sql, connection=_connection, **kwargs)
 
@@ -326,15 +333,17 @@ class SyncStorageMixin(StorageMixinBase):
         # For storage operations, disable transformations that might add unwanted parameters
         if _config is None:
             _config = self.config
+            # Ensure the config has the dialect
+            if _config and not _config.dialect:
+                _config = replace(_config, dialect=self.dialect)
         if _config and _config.enable_transformations:
-            from dataclasses import replace
-
             _config = replace(_config, enable_transformations=False)
 
-        if params is not None:
-            sql = SQL(statement, params, *filters, _config=_config, _dialect=self.dialect)
-        else:
-            sql = SQL(statement, *filters, _config=_config, _dialect=self.dialect)
+        sql = (
+            SQL(statement, parameters=params, config=_config) if params is not None else SQL(statement, config=_config)
+        )
+        for filter_ in filters:
+            sql = sql.filter(filter_)
 
         return self._export_to_storage(
             sql, destination_uri=destination_uri, format=format, _connection=_connection, **options
@@ -410,10 +419,7 @@ class SyncStorageMixin(StorageMixinBase):
             backend.write_arrow(path, arrow_table, **kwargs)
             return num_rows
         # Pass the SQL object if available, otherwise create one
-        if isinstance(statement, str):
-            sql_obj = SQL(statement, _config=_config, _dialect=self.dialect)
-        else:
-            sql_obj = cast("SQL", statement)
+        sql_obj = SQL(statement, config=_config) if isinstance(statement, str) else cast("SQL", statement)
         return self._export_via_backend(sql_obj, backend, path, file_format, **kwargs)
 
     def import_from_storage(
@@ -729,20 +735,26 @@ class AsyncStorageMixin(StorageMixinBase):
         # Use a custom config if transformations will add parameters
         if _config is None:
             _config = self.config
+            # Ensure the config has the dialect
+            if _config and not _config.dialect:
+                _config = replace(_config, dialect=self.dialect)
 
         # If no parameters provided but we have transformations enabled,
         # disable parameter validation entirely to allow transformer-added parameters
         if params is None and _config and _config.enable_transformations:
-            from dataclasses import replace
-
             # Disable validation entirely for transformer-generated parameters
             _config = replace(_config, strict_mode=False, enable_validation=False)
 
         # Only pass params if it's not None to avoid adding None as a parameter
-        if params is not None:
-            sql = SQL(statement, params, *filters, _config=_config, _dialect=self.dialect, **kwargs)
-        else:
-            sql = SQL(statement, *filters, _config=_config, _dialect=self.dialect, **kwargs)
+        sql = (
+            SQL(statement, parameters=params, kwargs=kwargs, config=_config)
+            if params is not None
+            else SQL(statement, config=_config)
+        )
+
+        # Apply filters after creation
+        for filter_ in filters:
+            sql = sql.filter(filter_)
 
         # Delegate to protected method that drivers can override
         return await self._fetch_arrow_table(sql, connection=_connection, **kwargs)
@@ -790,15 +802,20 @@ class AsyncStorageMixin(StorageMixinBase):
         # For storage operations, disable transformations that might add unwanted parameters
         if _config is None:
             _config = self.config
+            # Ensure the config has the dialect
+            if _config and not _config.dialect:
+                _config = replace(_config, dialect=self.dialect)
         if _config and _config.enable_transformations:
-            from dataclasses import replace
-
             _config = replace(_config, enable_transformations=False)
 
         if params is not None:
-            sql = SQL(statement, params, *filters, _config=_config, _dialect=self.dialect, **options)
+            sql = SQL(statement, parameters=params, kwargs=options, config=_config)
         else:
-            sql = SQL(statement, *filters, _config=_config, _dialect=self.dialect, **options)
+            sql = SQL(statement, kwargs=options, config=_config)
+
+        # Apply filters after creation
+        for filter_ in filters:
+            sql = sql.filter(filter_)
 
         return await self._export_to_storage(sql, destination_uri, format, connection=_connection, **options)
 
@@ -855,10 +872,9 @@ class AsyncStorageMixin(StorageMixinBase):
                 # Create fresh SQL object from raw SQL without transformations
                 fresh_sql = SQL(
                     query._raw_sql,
-                    _config=replace(self.config, enable_transformations=False)
+                    config=replace(self.config, enable_transformations=False)
                     if self.config
                     else SQLConfig(enable_transformations=False),
-                    _dialect=self.dialect,
                 )
                 arrow_result = await self._fetch_arrow_table(fresh_sql, connection=connection, **options)
             else:

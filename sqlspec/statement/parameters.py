@@ -71,7 +71,7 @@ class ParameterStyle(str, Enum):
     QMARK = "qmark"
     NUMERIC = "numeric"
     NAMED_COLON = "named_colon"
-    POSITIONAL_COLON = "positional_colon"  # For :1, :2, :3 style
+    POSITIONAL_COLON = "positional_colon"
     NAMED_AT = "named_at"
     NAMED_DOLLAR = "named_dollar"
     NAMED_PYFORMAT = "pyformat_named"
@@ -88,9 +88,9 @@ class ParameterStyle(str, Enum):
 
 # Define SQLGlot incompatible styles after ParameterStyle enum
 SQLGLOT_INCOMPATIBLE_STYLES: Final = {
-    ParameterStyle.POSITIONAL_PYFORMAT,  # %s
-    ParameterStyle.NAMED_PYFORMAT,  # %(name)s
-    ParameterStyle.POSITIONAL_COLON,  # :1, :2 (SQLGlot can't parse these)
+    ParameterStyle.POSITIONAL_PYFORMAT,
+    ParameterStyle.NAMED_PYFORMAT,
+    ParameterStyle.POSITIONAL_COLON,
 }
 
 
@@ -178,7 +178,7 @@ class ParameterValidator:
         elif match.group("pyformat_pos"):
             style = ParameterStyle.POSITIONAL_PYFORMAT
         elif match.group("positional_colon"):
-            name = match.group("colon_num")  # Store the number as the name
+            name = match.group("colon_num")
             style = ParameterStyle.POSITIONAL_COLON
         elif match.group("named_colon"):
             name = match.group("colon_name")
@@ -276,12 +276,12 @@ class ParameterValidator:
             for p_style in (
                 ParameterStyle.NAMED_COLON,
                 ParameterStyle.POSITIONAL_COLON,
-                ParameterStyle.NAMED_AT,
                 ParameterStyle.NAMED_DOLLAR,
+                ParameterStyle.NAMED_AT,
             ):
                 if any(p.style == p_style for p in parameters_info):
                     return p_style
-            return ParameterStyle.NAMED_COLON  # Fallback, though should be covered by 'any'
+            return ParameterStyle.NAMED_COLON
 
         if has_positional:
             # Similarly, could choose QMARK or NUMERIC based on presence.
@@ -308,7 +308,6 @@ class ParameterValidator:
         if not parameters_info:
             return None
 
-        # Oracle numeric parameters (:1, :2) are positional despite having a "name"
         if all(p.style == ParameterStyle.POSITIONAL_COLON for p in parameters_info):
             return list
 

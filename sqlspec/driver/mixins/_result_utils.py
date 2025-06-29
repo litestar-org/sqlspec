@@ -13,15 +13,8 @@ from typing import Any, Callable, Optional, Union, cast, overload
 from uuid import UUID
 
 from sqlspec.exceptions import SQLSpecError, wrap_exceptions
-from sqlspec.typing import (
-    ModelDTOT,
-    ModelT,
-    convert,
-    get_type_adapter,
-    is_dataclass,
-    is_msgspec_struct,
-    is_pydantic_model,
-)
+from sqlspec.typing import ModelDTOT, ModelT, convert, get_type_adapter
+from sqlspec.utils.type_guards import is_dataclass, is_msgspec_struct, is_pydantic_model
 
 __all__ = ("_DEFAULT_TYPE_DECODERS", "ToSchemaMixin", "_default_msgspec_deserializer")
 

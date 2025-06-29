@@ -1,6 +1,7 @@
 """Asynchronous driver protocol implementation."""
 
 from abc import ABC, abstractmethod
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from sqlspec.driver._common import CommonDriverAttributesMixin
@@ -51,8 +52,18 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
             return statement.to_statement(config=_config)
         # If statement is already a SQL object, return it as-is
         if isinstance(statement, SQL):
+            if parameters or kwargs:
+                # Create a new SQL object with additional parameters
+                new_config = _config
+                if self.dialect and not new_config.dialect:
+                    new_config = replace(new_config, dialect=self.dialect)
+                return SQL(statement, parameters=parameters or None, kwargs=kwargs, config=new_config)
             return statement
-        return SQL(statement, *parameters, _dialect=self.dialect, _config=_config, **kwargs)
+        # Create new SQL object
+        new_config = _config
+        if self.dialect and not new_config.dialect:
+            new_config = replace(new_config, dialect=self.dialect)
+        return SQL(statement, parameters=parameters or None, kwargs=kwargs, config=new_config)
 
     @abstractmethod
     async def _execute_statement(
@@ -238,7 +249,14 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
                 target_parameter_style=script_config.target_parameter_style,
                 allow_mixed_parameter_styles=script_config.allow_mixed_parameter_styles,
             )
-        sql_statement = SQL(statement, primary_params, *filters, _dialect=self.dialect, _config=script_config, **kwargs)
+        # Build proper parameters from filters and primary params
+        if filters:
+            # If we have filters, we need to pass them differently since SQL expects parameters as second arg
+            sql_statement = SQL(statement, parameters=primary_params, config=script_config, **kwargs)
+            for filter_ in filters:
+                sql_statement = sql_statement.filter(filter_)
+        else:
+            sql_statement = SQL(statement, parameters=primary_params, config=script_config, **kwargs)
         sql_statement = sql_statement.as_script()
         script_output = await self._execute_statement(
             statement=sql_statement, connection=self._connection(_connection), is_script=True, **kwargs

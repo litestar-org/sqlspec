@@ -11,8 +11,8 @@ from sqlglot import exp
 from sqlglot.expressions import EQ, Binary, Func, Literal, Or, Subquery, Union
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.base import ProcessorProtocol
-from sqlspec.statement.pipelines.result_types import ValidationError
+from sqlspec.protocols import ProcessorProtocol
+from sqlspec.statement.pipelines.context import ValidationError
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
@@ -178,10 +178,26 @@ class SecurityValidator(ProcessorProtocol):
             with contextlib.suppress(re.error):
                 self._compiled_patterns[f"custom_suspicious_{i}"] = re.compile(pattern, re.IGNORECASE)
 
-    def process(self, expression: Optional[exp.Expression], context: "SQLProcessingContext") -> None:
+    def add_error(
+        self,
+        context: "SQLProcessingContext",
+        message: str,
+        code: str,
+        risk_level: RiskLevel,
+        expression: "Optional[exp.Expression]" = None,
+    ) -> None:
+        """Add a validation error to the context."""
+        error = ValidationError(
+            message=message, code=code, risk_level=risk_level, processor=self.__class__.__name__, expression=expression
+        )
+        context.validation_errors.append(error)
+
+    def process(
+        self, expression: Optional[exp.Expression], context: "SQLProcessingContext"
+    ) -> Optional[exp.Expression]:
         """Process the SQL expression and detect security issues in a single pass."""
         if not context.current_expression:
-            return
+            return None
 
         security_issues: list[SecurityIssue] = []
         visited_nodes: set[int] = set()
@@ -311,6 +327,8 @@ class SecurityValidator(ProcessorProtocol):
                     for issue_type in SecurityIssueType
                 },
             }
+
+        return expression
 
     def _check_injection_patterns(
         self, node: "exp.Expression", context: "SQLProcessingContext"

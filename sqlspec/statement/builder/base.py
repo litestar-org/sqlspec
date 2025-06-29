@@ -7,7 +7,7 @@ advanced builder patterns and optimization capabilities.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Generic, NoReturn, Optional, Union
+from typing import TYPE_CHECKING, Any, Generic, NoReturn, Optional, Union, cast
 
 import sqlglot
 from sqlglot import Dialect, exp
@@ -20,6 +20,7 @@ from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import RowT
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.type_guards import has_with_method
 
 if TYPE_CHECKING:
     from sqlspec.statement.result import SQLResult
@@ -231,15 +232,11 @@ class QueryBuilder(ABC, Generic[RowT]):
         final_expression = self._expression.copy()
 
         if self._with_ctes:
-            if hasattr(final_expression, "with_") and callable(getattr(final_expression, "with_", None)):
+            if has_with_method(final_expression):
+                # Type checker now knows final_expression has with_ method
                 for alias, cte_node in self._with_ctes.items():
-                    final_expression = final_expression.with_(  # pyright: ignore
-                        cte_node.args["this"], as_=alias, copy=False
-                    )
-            elif (
-                isinstance(final_expression, (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union))
-                and self._with_ctes
-            ):
+                    final_expression = cast("Any", final_expression).with_(cte_node.args["this"], as_=alias, copy=False)
+            elif isinstance(final_expression, (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union)):
                 final_expression = exp.With(expressions=list(self._with_ctes.values()), this=final_expression)
 
         # Apply SQLGlot optimizations if enabled
@@ -294,13 +291,27 @@ class QueryBuilder(ABC, Generic[RowT]):
         """
         safe_query = self.build()
 
-        return SQL(
-            statement=safe_query.sql,
-            parameters=safe_query.parameters,
-            _dialect=safe_query.dialect,
-            _config=config,
-            _builder_result_type=self._expected_result_type,
-        )
+        # Convert parameters to the expected format
+        if isinstance(safe_query.parameters, dict):
+            kwargs = safe_query.parameters
+            parameters = None
+        else:
+            kwargs = None
+            parameters = (
+                safe_query.parameters
+                if isinstance(safe_query.parameters, tuple)
+                else tuple(safe_query.parameters)
+                if safe_query.parameters
+                else None
+            )
+
+        # Create SQLConfig if needed
+        if config is None:
+            from sqlspec.statement.sql import SQLConfig
+
+            config = SQLConfig(dialect=safe_query.dialect)
+
+        return SQL(statement=safe_query.sql, parameters=parameters, kwargs=kwargs, config=config)
 
     def __str__(self) -> str:
         """Return the SQL string representation of the query.

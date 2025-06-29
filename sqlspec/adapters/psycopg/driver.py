@@ -25,8 +25,9 @@ from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.splitter import split_sql_script
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT, RowT, is_dict_with_field
+from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.type_guards import is_dict_with_field
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType

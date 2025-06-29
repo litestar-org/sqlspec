@@ -18,7 +18,8 @@ from sqlglot.optimizer import (
 )
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.validators.base import BaseValidator
+from sqlspec.protocols import ProcessorProtocol
+from sqlspec.statement.pipelines.context import ValidationError
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
@@ -126,7 +127,7 @@ class PerformanceAnalysis:
     potential_improvement: float = 0.0
 
 
-class PerformanceValidator(BaseValidator):
+class PerformanceValidator(ProcessorProtocol):
     """Comprehensive query performance validator.
 
     Validates query performance by detecting:
@@ -143,8 +144,30 @@ class PerformanceValidator(BaseValidator):
         Args:
             config: Configuration for performance validation
         """
-        super().__init__()
         self.config = config or PerformanceConfig()
+
+    def process(
+        self, expression: "Optional[exp.Expression]", context: "SQLProcessingContext"
+    ) -> "Optional[exp.Expression]":
+        """Process the expression for validation (implements ProcessorProtocol)."""
+        if expression is None:
+            return None
+        self.validate(expression, context)
+        return expression
+
+    def add_error(
+        self,
+        context: "SQLProcessingContext",
+        message: str,
+        code: str,
+        risk_level: RiskLevel,
+        expression: "Optional[exp.Expression]" = None,
+    ) -> None:
+        """Add a validation error to the context."""
+        error = ValidationError(
+            message=message, code=code, risk_level=risk_level, processor=self.__class__.__name__, expression=expression
+        )
+        context.validation_errors.append(error)
 
     def validate(self, expression: "exp.Expression", context: "SQLProcessingContext") -> None:
         """Validate SQL statement for performance issues.

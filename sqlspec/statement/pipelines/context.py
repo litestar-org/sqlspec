@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING, Any, Optional
 from sqlglot import exp
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.result_types import AnalysisFinding, TransformationLog, ValidationError
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -13,7 +12,37 @@ if TYPE_CHECKING:
     from sqlspec.statement.sql import SQLConfig
     from sqlspec.typing import SQLParameterType
 
-__all__ = ("PipelineResult", "SQLProcessingContext")
+__all__ = ("AnalysisFinding", "SQLProcessingContext", "TransformationLog", "ValidationError")
+
+
+@dataclass
+class ValidationError:
+    """A specific validation issue found during processing."""
+
+    message: str
+    code: str  # e.g., "risky-delete", "missing-where"
+    risk_level: "RiskLevel"
+    processor: str  # Which processor found it
+    expression: "Optional[exp.Expression]" = None  # Problematic sub-expression
+
+
+@dataclass
+class TransformationLog:
+    """Record of a transformation applied."""
+
+    description: str
+    processor: str
+    before: Optional[str] = None  # SQL before transform
+    after: Optional[str] = None  # SQL after transform
+
+
+@dataclass
+class AnalysisFinding:
+    """Metadata discovered during analysis."""
+
+    key: str  # e.g., "complexity_score", "table_count"
+    value: Any
+    processor: str
 
 
 @dataclass
@@ -81,39 +110,3 @@ class SQLProcessingContext:
         if not self.validation_errors:
             return RiskLevel.SAFE
         return max(error.risk_level for error in self.validation_errors)
-
-
-@dataclass
-class PipelineResult:
-    """Final result of pipeline execution."""
-
-    expression: exp.Expression
-    """The SQL expression after all transformations."""
-
-    context: SQLProcessingContext
-    """Contains all collected results."""
-
-    @property
-    def validation_errors(self) -> list[ValidationError]:
-        """Get validation errors from context."""
-        return self.context.validation_errors
-
-    @property
-    def has_errors(self) -> bool:
-        """Check if any validation errors exist."""
-        return self.context.has_errors
-
-    @property
-    def risk_level(self) -> RiskLevel:
-        """Get overall risk level."""
-        return self.context.risk_level
-
-    @property
-    def merged_parameters(self) -> "SQLParameterType":
-        """Get merged parameters from context."""
-        return self.context.merged_parameters
-
-    @property
-    def parameter_info(self) -> "list[ParameterInfo]":
-        """Get parameter info from context."""
-        return self.context.parameter_info

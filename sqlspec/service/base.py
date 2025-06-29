@@ -2,10 +2,20 @@
 # pyright: reportCallIssue=false, reportArgumentType=false
 from typing import TYPE_CHECKING, Any, Generic, Optional, TypeVar, Union, overload
 
+from sqlglot import exp, parse_one
+
 from sqlspec.typing import ConnectionT
+from sqlspec.utils.type_guards import (
+    is_dict_row,
+    is_indexable_row,
+    is_limit_offset_filter,
+    is_select_builder,
+    is_statement_filter,
+)
 
 if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
+    from sqlspec.service.pagination import OffsetPagination
     from sqlspec.statement import SQLConfig, Statement, StatementFilter
     from sqlspec.statement.builder import DeleteBuilder, InsertBuilder, QueryBuilder, SelectBuilder, UpdateBuilder
     from sqlspec.statement.sql import SQL
@@ -308,9 +318,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
         Expects exactly one row with one column.
         Raises an exception if no rows or more than one row/column is returned.
         """
-        result = self.driver.execute(
-            statement, *parameters, _connection=_connection, _config=_config, **kwargs
-        )
+        result = self.driver.execute(statement, *parameters, _connection=_connection, _config=_config, **kwargs)
         data = result.get_data()
         # For select operations, data should be a list
         if not isinstance(data, list):
@@ -324,14 +332,17 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
             raise ValueError(msg)
         row = data[0]
         # Extract the first column value
-        if isinstance(row, dict):
+        if is_dict_row(row):
             if not row:
                 msg = "Row has no columns"
                 raise ValueError(msg)
             # Get the first value from the dict
             return next(iter(row.values()))
-        if hasattr(row, "__getitem__"):
+        if is_indexable_row(row):
             # Tuple or list-like row
+            if not row:
+                msg = "Row has no columns"
+                raise ValueError(msg)
             return row[0]
         msg = f"Unexpected row type: {type(row)}"
         raise ValueError(msg)
@@ -351,9 +362,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
         Expects at most one row with one column.
         Raises an exception if more than one row is returned.
         """
-        result = self.driver.execute(
-            statement, *parameters, _connection=_connection, _config=_config, **kwargs
-        )
+        result = self.driver.execute(statement, *parameters, _connection=_connection, _config=_config, **kwargs)
         data = result.get_data()
         # For select operations, data should be a list
         if not isinstance(data, list):
@@ -371,11 +380,204 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
                 return None
             # Get the first value from the dict
             return next(iter(row.values()))
-        if hasattr(row, "__getitem__"):
+        if isinstance(row, (tuple, list)):
             # Tuple or list-like row
             return row[0]
-        msg = f"Unexpected row type: {type(row)}"
-        raise ValueError(msg)
+        try:
+            return row[0]
+        except (TypeError, IndexError) as e:
+            msg = f"Cannot extract value from row type {type(row).__name__}: {e}"
+            raise TypeError(msg) from e
+
+    @overload
+    def paginate(
+        self,
+        statement: "Union[Statement, SelectBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: "type[ModelDTOT]",
+        _connection: "Optional[ConnectionT]" = None,
+        _config: "Optional[SQLConfig]" = None,
+        **kwargs: Any,
+    ) -> "OffsetPagination[ModelDTOT]": ...
+
+    @overload
+    def paginate(
+        self,
+        statement: "Union[Statement, SelectBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: None = None,
+        _connection: "Optional[ConnectionT]" = None,
+        _config: "Optional[SQLConfig]" = None,
+        **kwargs: Any,
+    ) -> "OffsetPagination[RowT]": ...
+
+    def paginate(
+        self,
+        statement: "Union[Statement, SelectBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: "Optional[type[ModelDTOT]]" = None,
+        _connection: "Optional[ConnectionT]" = None,
+        _config: "Optional[SQLConfig]" = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Execute a paginated query with automatic counting.
+
+        This method performs two queries:
+        1. A count query to get the total number of results
+        2. A data query with limit/offset applied
+
+        Pagination can be specified either via LimitOffsetFilter in parameters
+        or via 'limit' and 'offset' in kwargs.
+
+        Args:
+            statement: The SELECT statement to paginate
+            *parameters: Statement parameters and filters (can include LimitOffsetFilter)
+            schema_type: Optional model type for automatic schema conversion
+            _connection: Optional connection to use
+            _config: Optional SQL configuration
+            **kwargs: Additional driver-specific arguments. Can include 'limit' and 'offset'
+                      if LimitOffsetFilter is not provided
+
+        Returns:
+            OffsetPagination object containing items, limit, offset, and total count
+
+        Raises:
+            ValueError: If neither LimitOffsetFilter nor limit/offset kwargs are provided
+
+        Example:
+            >>> # Using LimitOffsetFilter (recommended)
+            >>> from sqlspec.statement.filters import LimitOffsetFilter
+            >>> result = service.paginate(
+            ...     sql.select("*").from_("users"),
+            ...     LimitOffsetFilter(limit=10, offset=20),
+            ... )
+            >>> print(
+            ...     f"Showing {len(result.items)} of {result.total} users"
+            ... )
+
+            >>> # Using kwargs (convenience)
+            >>> result = service.paginate(
+            ...     sql.select("*").from_("users"), limit=10, offset=20
+            ... )
+
+            >>> # With schema conversion
+            >>> result = service.paginate(
+            ...     sql.select("*").from_("users"),
+            ...     LimitOffsetFilter(limit=10, offset=0),
+            ...     schema_type=User,
+            ... )
+            >>> # result.items is list[User] with proper type inference
+
+            >>> # With multiple filters
+            >>> from sqlspec.statement.filters import (
+            ...     LimitOffsetFilter,
+            ...     OrderByFilter,
+            ... )
+            >>> result = service.paginate(
+            ...     sql.select("*").from_("users"),
+            ...     OrderByFilter("created_at", "desc"),
+            ...     LimitOffsetFilter(limit=20, offset=40),
+            ...     schema_type=User,
+            ... )
+        """
+        # Import here to avoid circular imports
+        from sqlspec.service.pagination import OffsetPagination
+        from sqlspec.statement.sql import SQL
+
+        # Separate filters from parameters
+        filters: list[StatementFilter] = []
+        params: list[Any] = []
+
+        for p in parameters:
+            # Use type guard to check if it implements the StatementFilter protocol
+            if is_statement_filter(p):
+                filters.append(p)
+            else:
+                params.append(p)
+
+        # Check for LimitOffsetFilter in filters
+        limit_offset_filter = None
+        other_filters = []
+        for f in filters:
+            if is_limit_offset_filter(f):
+                limit_offset_filter = f
+            else:
+                other_filters.append(f)
+
+        # Get limit and offset from filter or kwargs
+        if limit_offset_filter is not None:
+            limit = limit_offset_filter.limit
+            offset = limit_offset_filter.offset
+        elif "limit" in kwargs and "offset" in kwargs:
+            # Fallback to kwargs if no LimitOffsetFilter provided
+            limit = kwargs.pop("limit")
+            offset = kwargs.pop("offset")
+        else:
+            msg = "Pagination requires either a LimitOffsetFilter in parameters or 'limit' and 'offset' in kwargs."
+            raise ValueError(msg)
+
+        # Convert statement to SQL object if needed
+        if isinstance(statement, str):
+            base_stmt = SQL(statement, *params, _config=_config)
+        elif is_select_builder(statement):
+            # SelectBuilder can be used directly
+            base_stmt = statement
+        else:
+            # statement is already SQL
+            base_stmt = statement
+
+        # Apply non-pagination filters
+        filtered_stmt = base_stmt
+        for filter_obj in other_filters:
+            filtered_stmt = filter_obj.append_to_statement(filtered_stmt)
+
+        # Create count query using AST transformation
+        # Get the SQL string from the statement
+        sql_str = filtered_stmt.build().sql if is_select_builder(filtered_stmt) else filtered_stmt.to_sql()
+
+        # Parse and transform the AST to create a count query
+        parsed = parse_one(sql_str)
+
+        # Create a new SELECT COUNT(*) wrapping the original query as a subquery
+        # Using exp.Subquery to properly wrap the parsed expression
+        subquery = exp.Subquery(this=parsed, alias="_count_subquery")
+        count_ast = exp.Select().select(exp.func("COUNT", exp.Star()).as_("total")).from_(subquery)
+
+        # Convert back to SQL object
+        count_stmt = SQL(count_ast.sql(), _config=_config)
+
+        # Execute count query
+        total = self.select_value(count_stmt, _connection=_connection, _config=_config, **kwargs)
+
+        # Apply all filters including pagination to data query
+        if isinstance(statement, str):
+            data_stmt = SQL(statement, *params, _config=_config)
+        elif is_select_builder(statement):
+            # SelectBuilder needs to be used directly for type safety
+            data_stmt = statement
+        else:
+            # statement is already SQL
+            data_stmt = statement
+
+        # Apply non-pagination filters
+        for filter_obj in other_filters:
+            data_stmt = filter_obj.append_to_statement(data_stmt)
+
+        # Apply limit/offset
+        if is_select_builder(data_stmt):
+            # SelectBuilder has limit/offset methods
+            data_stmt = data_stmt.limit(limit).offset(offset)
+        else:
+            # For SQL objects, use the SQL limit/offset methods
+            data_stmt = data_stmt.limit(limit).offset(offset)
+
+        # Execute data query
+        items = self.select(data_stmt, schema_type=schema_type, _connection=_connection, _config=_config, **kwargs)
+
+        return OffsetPagination(items=items, limit=limit, offset=offset, total=total)
 
 
 class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
@@ -671,9 +873,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
         Expects exactly one row with one column.
         Raises an exception if no rows or more than one row/column is returned.
         """
-        result = await self.driver.execute(
-            statement, *parameters, _connection=_connection, _config=_config, **kwargs
-        )
+        result = await self.driver.execute(statement, *parameters, _connection=_connection, _config=_config, **kwargs)
         data = result.get_data()
         # For select operations, data should be a list
         if not isinstance(data, list):
@@ -687,14 +887,17 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
             raise ValueError(msg)
         row = data[0]
         # Extract the first column value
-        if isinstance(row, dict):
+        if is_dict_row(row):
             if not row:
                 msg = "Row has no columns"
                 raise ValueError(msg)
             # Get the first value from the dict
             return next(iter(row.values()))
-        if hasattr(row, "__getitem__"):
+        if is_indexable_row(row):
             # Tuple or list-like row
+            if not row:
+                msg = "Row has no columns"
+                raise ValueError(msg)
             return row[0]
         msg = f"Unexpected row type: {type(row)}"
         raise ValueError(msg)
@@ -714,9 +917,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
         Expects at most one row with one column.
         Raises an exception if more than one row is returned.
         """
-        result = await self.driver.execute(
-            statement, *parameters, _connection=_connection, _config=_config, **kwargs
-        )
+        result = await self.driver.execute(statement, *parameters, _connection=_connection, _config=_config, **kwargs)
         data = result.get_data()
         # For select operations, data should be a list
         if not isinstance(data, list):
@@ -734,8 +935,199 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
                 return None
             # Get the first value from the dict
             return next(iter(row.values()))
-        if hasattr(row, "__getitem__"):
+        if isinstance(row, (tuple, list)):
             # Tuple or list-like row
             return row[0]
-        msg = f"Unexpected row type: {type(row)}"
-        raise ValueError(msg)
+        # Try indexing - if it fails, we'll get a proper error
+        try:
+            return row[0]
+        except (TypeError, IndexError) as e:
+            msg = f"Cannot extract value from row type {type(row).__name__}: {e}"
+            raise TypeError(msg) from e
+
+    @overload
+    async def paginate(
+        self,
+        statement: "Union[Statement, SelectBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: "type[ModelDTOT]",
+        _connection: "Optional[ConnectionT]" = None,
+        _config: "Optional[SQLConfig]" = None,
+        **kwargs: Any,
+    ) -> "OffsetPagination[ModelDTOT]": ...
+
+    @overload
+    async def paginate(
+        self,
+        statement: "Union[Statement, SelectBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: None = None,
+        _connection: "Optional[ConnectionT]" = None,
+        _config: "Optional[SQLConfig]" = None,
+        **kwargs: Any,
+    ) -> "OffsetPagination[RowT]": ...
+
+    async def paginate(
+        self,
+        statement: "Union[Statement, SelectBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: "Optional[type[ModelDTOT]]" = None,
+        _connection: "Optional[ConnectionT]" = None,
+        _config: "Optional[SQLConfig]" = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Execute a paginated query with automatic counting.
+
+        This method performs two queries:
+        1. A count query to get the total number of results
+        2. A data query with limit/offset applied
+
+        Pagination can be specified either via LimitOffsetFilter in parameters
+        or via 'limit' and 'offset' in kwargs.
+
+        Args:
+            statement: The SELECT statement to paginate
+            *parameters: Statement parameters and filters (can include LimitOffsetFilter)
+            schema_type: Optional model type for automatic schema conversion
+            _connection: Optional connection to use
+            _config: Optional SQL configuration
+            **kwargs: Additional driver-specific arguments. Can include 'limit' and 'offset'
+                      if LimitOffsetFilter is not provided
+
+        Returns:
+            OffsetPagination object containing items, limit, offset, and total count
+
+        Raises:
+            ValueError: If neither LimitOffsetFilter nor limit/offset kwargs are provided
+
+        Example:
+            >>> # Basic pagination
+            >>> from sqlspec.statement.filters import LimitOffsetFilter
+            >>> result = await service.paginate(
+            ...     sql.select("*").from_("users"),
+            ...     LimitOffsetFilter(limit=10, offset=20),
+            ... )
+            >>> print(
+            ...     f"Showing {len(result.items)} of {result.total} users"
+            ... )
+
+            >>> # With schema conversion
+            >>> result = await service.paginate(
+            ...     sql.select("*").from_("users"),
+            ...     LimitOffsetFilter(limit=10, offset=0),
+            ...     schema_type=User,
+            ... )
+            >>> # result.items is list[User] with proper type inference
+
+            >>> # With multiple filters
+            >>> from sqlspec.statement.filters import (
+            ...     LimitOffsetFilter,
+            ...     OrderByFilter,
+            ... )
+            >>> result = await service.paginate(
+            ...     sql.select("*").from_("users"),
+            ...     OrderByFilter("created_at", "desc"),
+            ...     LimitOffsetFilter(limit=20, offset=40),
+            ...     schema_type=User,
+            ... )
+        """
+        # Import here to avoid circular imports
+        from sqlspec.service.pagination import OffsetPagination
+        from sqlspec.statement.sql import SQL
+
+        # Separate filters from parameters
+        filters: list[StatementFilter] = []
+        params: list[Any] = []
+
+        for p in parameters:
+            # Use type guard to check if it implements the StatementFilter protocol
+            if is_statement_filter(p):
+                filters.append(p)
+            else:
+                params.append(p)
+
+        # Check for LimitOffsetFilter in filters
+        limit_offset_filter = None
+        other_filters = []
+        for f in filters:
+            if is_limit_offset_filter(f):
+                limit_offset_filter = f
+            else:
+                other_filters.append(f)
+
+        # Get limit and offset from filter or kwargs
+        if limit_offset_filter is not None:
+            limit = limit_offset_filter.limit
+            offset = limit_offset_filter.offset
+        elif "limit" in kwargs and "offset" in kwargs:
+            # Fallback to kwargs if no LimitOffsetFilter provided
+            limit = kwargs.pop("limit")
+            offset = kwargs.pop("offset")
+        else:
+            msg = "Pagination requires either a LimitOffsetFilter in parameters or 'limit' and 'offset' in kwargs."
+            raise ValueError(msg)
+
+        # Convert statement to SQL object if needed
+        if isinstance(statement, str):
+            base_stmt = SQL(statement, *params, _config=_config)
+        elif is_select_builder(statement):
+            # SelectBuilder can be used directly
+            base_stmt = statement
+        else:
+            # statement is already SQL
+            base_stmt = statement
+
+        # Apply non-pagination filters
+        filtered_stmt = base_stmt
+        for filter_obj in other_filters:
+            filtered_stmt = filter_obj.append_to_statement(filtered_stmt)
+
+        # Create count query using AST transformation
+        # Get the SQL string from the statement
+        sql_str = filtered_stmt.build().sql if is_select_builder(filtered_stmt) else filtered_stmt.to_sql()
+
+        # Parse and transform the AST to create a count query
+        parsed = parse_one(sql_str)
+
+        # Create a new SELECT COUNT(*) wrapping the original query as a subquery
+        # Using exp.Subquery to properly wrap the parsed expression
+        subquery = exp.Subquery(this=parsed, alias="_count_subquery")
+        count_ast = exp.Select().select(exp.func("COUNT", exp.Star()).as_("total")).from_(subquery)
+
+        # Convert back to SQL object
+        count_stmt = SQL(count_ast.sql(), _config=_config)
+
+        # Execute count query
+        total = await self.select_value(count_stmt, _connection=_connection, _config=_config, **kwargs)
+
+        # Apply all filters including pagination to data query
+        if isinstance(statement, str):
+            data_stmt = SQL(statement, *params, _config=_config)
+        elif is_select_builder(statement):
+            # SelectBuilder needs to be used directly for type safety
+            data_stmt = statement
+        else:
+            # statement is already SQL
+            data_stmt = statement
+
+        # Apply non-pagination filters
+        for filter_obj in other_filters:
+            data_stmt = filter_obj.append_to_statement(data_stmt)
+
+        # Apply limit/offset
+        if is_select_builder(data_stmt):
+            # SelectBuilder has limit/offset methods
+            data_stmt = data_stmt.limit(limit).offset(offset)
+        else:
+            # For SQL objects, use the SQL limit/offset methods
+            data_stmt = data_stmt.limit(limit).offset(offset)
+
+        # Execute data query
+        items = await self.select(
+            data_stmt, schema_type=schema_type, _connection=_connection, _config=_config, **kwargs
+        )
+
+        return OffsetPagination(items=items, limit=limit, offset=offset, total=total)

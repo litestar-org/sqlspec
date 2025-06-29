@@ -9,8 +9,8 @@ import pytest
 from msgspec import Struct
 from pydantic import BaseModel
 
-from sqlspec.typing import (
-    Empty,
+from sqlspec.typing import Empty
+from sqlspec.utils.type_guards import (
     dataclass_to_dict,
     extract_dataclass_fields,
     extract_dataclass_items,

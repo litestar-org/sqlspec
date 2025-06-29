@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING, Optional
 from sqlglot import expressions as exp
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.validators.base import BaseValidator
+from sqlspec.protocols import ProcessorProtocol
+from sqlspec.statement.pipelines.context import ValidationError
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
@@ -36,7 +37,7 @@ class DMLSafetyConfig:
     max_affected_rows: "Optional[int]" = None  # Limit for DML operations
 
 
-class DMLSafetyValidator(BaseValidator):
+class DMLSafetyValidator(ProcessorProtocol):
     """Unified validator for DML/DDL safety checks.
 
     This validator consolidates:
@@ -52,8 +53,30 @@ class DMLSafetyValidator(BaseValidator):
         Args:
             config: Configuration for safety validation
         """
-        super().__init__()
         self.config = config or DMLSafetyConfig()
+
+    def process(
+        self, expression: "Optional[exp.Expression]", context: "SQLProcessingContext"
+    ) -> "Optional[exp.Expression]":
+        """Process the expression for validation (implements ProcessorProtocol)."""
+        if expression is None:
+            return None
+        self.validate(expression, context)
+        return expression
+
+    def add_error(
+        self,
+        context: "SQLProcessingContext",
+        message: str,
+        code: str,
+        risk_level: RiskLevel,
+        expression: "Optional[exp.Expression]" = None,
+    ) -> None:
+        """Add a validation error to the context."""
+        error = ValidationError(
+            message=message, code=code, risk_level=risk_level, processor=self.__class__.__name__, expression=expression
+        )
+        context.validation_errors.append(error)
 
     def validate(self, expression: "exp.Expression", context: "SQLProcessingContext") -> None:
         """Validate SQL statement for safety issues.

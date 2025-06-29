@@ -3,7 +3,6 @@
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from asyncpg import Record
@@ -318,15 +317,16 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             An AsyncpgDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as connection:
-            # Create statement config with parameter style info if not already set
             statement_config = self.statement_config
-            if statement_config is not None and statement_config.allowed_parameter_styles is None:
+            # Inject parameter style info if not already set
+            if statement_config.allowed_parameter_styles is None:
+                from dataclasses import replace
+
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
                     target_parameter_style=self.preferred_parameter_style,
                 )
-
             yield self.driver_type(connection=connection, config=statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool[Record]":

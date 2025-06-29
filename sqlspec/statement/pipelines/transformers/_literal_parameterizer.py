@@ -6,8 +6,8 @@ from typing import Any, Optional
 from sqlglot import exp
 from sqlglot.expressions import Array, Binary, Boolean, DataType, Func, Literal, Null
 
+from sqlspec.protocols import ProcessorProtocol
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.pipelines.base import ProcessorProtocol
 from sqlspec.statement.pipelines.context import SQLProcessingContext
 
 __all__ = ("ParameterizationContext", "ParameterizeLiterals")
@@ -487,31 +487,19 @@ class ParameterizeLiterals(ProcessorProtocol):
 
         # Handle both style names and actual placeholder prefixes
         style = self.placeholder_style
-        if style in {"?", ParameterStyle.QMARK, "qmark"}:
+        if style is ParameterStyle.QMARK or style == "?":
             placeholder = exp.Placeholder()
-        elif style == ":name":
-            # Use hint in parameter name if available
+        elif style is ParameterStyle.NAMED_COLON or style == ":name" or style.startswith(":"):
             param_name = f"{hint}_{self._parameter_counter}" if hint else f"param_{self._parameter_counter}"
             placeholder = exp.Placeholder(this=param_name)
-        elif style in {ParameterStyle.NAMED_COLON, "named_colon"} or style.startswith(":"):
-            param_name = f"param_{self._parameter_counter}"
-            placeholder = exp.Placeholder(this=param_name)
-        elif style in {ParameterStyle.NUMERIC, "numeric"} or style.startswith("$"):
-            # PostgreSQL style numbered parameters - use Var for consistent $N format
-            # Note: PostgreSQL uses 1-based indexing
+        elif style is ParameterStyle.NUMERIC or style.startswith("$"):
             placeholder = exp.Var(this=f"${self._parameter_counter + 1}")  # type: ignore[assignment]
-        elif style in {ParameterStyle.NAMED_AT, "named_at"}:
-            # BigQuery style @param - don't include @ in the placeholder name
-            # The @ will be added during SQL generation
-            # Use 0-based indexing for consistency with parameter arrays
-            param_name = f"param_{self._parameter_counter}"
+        elif style is ParameterStyle.NAMED_AT:
+            param_name = f"{hint}_{self._parameter_counter}" if hint else f"param_{self._parameter_counter}"
             placeholder = exp.Placeholder(this=param_name)
-        elif style in {ParameterStyle.POSITIONAL_PYFORMAT, "pyformat"}:
-            # Don't use pyformat directly in SQLGlot - use standard placeholder
-            # and let the compile method convert it later
+        elif style is ParameterStyle.POSITIONAL_PYFORMAT:
             placeholder = exp.Placeholder()
         else:
-            # Default to question mark
             placeholder = exp.Placeholder()
 
         # Increment counter after creating placeholder

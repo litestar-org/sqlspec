@@ -5,7 +5,7 @@ from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._parsing_utils import parse_table_expression
-from sqlspec.typing import is_expression
+from sqlspec.utils.type_guards import is_expression
 
 if TYPE_CHECKING:
     from sqlspec.statement.builder.protocols import BuilderProtocol

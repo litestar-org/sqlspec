@@ -19,9 +19,10 @@ from sqlspec.driver.mixins import (
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT, RowT, is_dict_with_field
+from sqlspec.typing import DictRow, ModelDTOT, RowT
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.type_guards import is_dict_with_field
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType

@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING, Any, Optional
 from sqlglot import exp, parse_one
 from sqlglot.errors import ParseError as SQLGlotParseError
 
-from sqlspec.statement.pipelines.base import ProcessorProtocol
-from sqlspec.statement.pipelines.result_types import AnalysisFinding
+from sqlspec.protocols import ProcessorProtocol
+from sqlspec.statement.pipelines.context import AnalysisFinding
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
 

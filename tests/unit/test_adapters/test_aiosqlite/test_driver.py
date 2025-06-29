@@ -8,7 +8,7 @@ import pytest
 from sqlspec.adapters.aiosqlite import AiosqliteConnection, AiosqliteDriver
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import is_dict_with_field
+from sqlspec.utils.type_guards import is_dict_with_field
 
 
 @pytest.fixture

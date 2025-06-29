@@ -1,6 +1,7 @@
 """Synchronous driver protocol implementation."""
 
 from abc import ABC, abstractmethod
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from sqlspec.driver._common import CommonDriverAttributesMixin
@@ -58,9 +59,17 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
         if isinstance(statement, SQL):
             if parameters or kwargs:
                 # Create a new SQL object with the same SQL but additional parameters
-                return SQL(statement._sql, *parameters, _dialect=self.dialect, _config=_config, **kwargs)
+                # Create a new SQL object with additional parameters
+                new_config = _config
+                if self.dialect and not new_config.dialect:
+                    new_config = replace(new_config, dialect=self.dialect)
+                return SQL(statement, parameters=parameters or None, kwargs=kwargs, config=new_config)
             return statement
-        return SQL(statement, *parameters, _dialect=self.dialect, _config=_config, **kwargs)
+        # Create new SQL object
+        new_config = _config
+        if self.dialect and not new_config.dialect:
+            new_config = replace(new_config, dialect=self.dialect)
+        return SQL(statement, parameters=parameters or None, kwargs=kwargs, config=new_config)
 
     @abstractmethod
     def _execute_statement(
@@ -247,7 +256,12 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
                 allow_mixed_parameter_styles=script_config.allow_mixed_parameter_styles,
             )
 
-        sql_statement = SQL(statement, primary_params, *filters, _dialect=self.dialect, _config=script_config, **kwargs)
+        if filters:
+            sql_statement = SQL(statement, parameters=primary_params, config=script_config, **kwargs)
+            for filter_ in filters:
+                sql_statement = sql_statement.filter(filter_)
+        else:
+            sql_statement = SQL(statement, parameters=primary_params, config=script_config, **kwargs)
         sql_statement = sql_statement.as_script()
         script_output = self._execute_statement(
             statement=sql_statement, connection=self._connection(_connection), is_script=True, **kwargs

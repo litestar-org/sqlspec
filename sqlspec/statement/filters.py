@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 __all__ = (
     "AnyCollectionFilter",
     "BeforeAfterFilter",
+    "FilterTypeT",
     "FilterTypes",
     "InAnyFilter",
     "InCollectionFilter",
