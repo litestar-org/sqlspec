@@ -12,6 +12,8 @@ from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.pipelines import SQLProcessingContext, StatementPipeline
 from sqlspec.statement.sql import SQLConfig
 
+__all__ = ("SQLCompiler",)
+
 
 class SQLCompiler:
     """Handles SQL compilation and pipeline processing."""

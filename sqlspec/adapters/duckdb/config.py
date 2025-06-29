@@ -478,6 +478,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                 # Inject parameter style info if not already set
                 if statement_config.allowed_parameter_styles is None:
                     from dataclasses import replace
+
                     statement_config = replace(
                         statement_config,
                         allowed_parameter_styles=self.supported_parameter_styles,

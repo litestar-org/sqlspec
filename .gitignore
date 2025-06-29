@@ -46,3 +46,5 @@ TODO*
 .env
 GEMINI.md
 GEMINI.*.md
+.cursor/
+.cursorrules

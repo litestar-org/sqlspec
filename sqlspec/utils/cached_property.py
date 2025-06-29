@@ -2,6 +2,9 @@
 
 from typing import Any, Callable, Generic, TypeVar
 
+__all__ = ("CachedProperty",)
+
+
 T = TypeVar("T")
 Cls = TypeVar("Cls")
 
