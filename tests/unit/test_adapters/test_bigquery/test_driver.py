@@ -275,7 +275,7 @@ def test_execute_statement_routing(
 
     # Create config that allows DDL if needed
     config = SQLConfig(enable_validation=False) if "CREATE" in sql_text else SQLConfig()
-    statement = SQL(sql_text, _config=config)
+    statement = SQL(sql_text, config=config)
     statement._is_script = is_script
     statement._is_many = is_many
 
@@ -312,7 +312,7 @@ def test_execute_dml_statement(driver: BigQueryDriver, mock_connection: MagicMoc
     mock_job.errors = None
     mock_job.statement_type = "INSERT"  # This is the key - identify it as a DML statement
 
-    statement = SQL("INSERT INTO users (name) VALUES (@name)", {"name": "Alice"})
+    statement = SQL("INSERT INTO users (name) VALUES (@name)", kwargs={"name": "Alice"})
     result = driver._execute_statement(statement)
 
     assert result == {"rows_affected": 1, "status_message": "OK - job_id: test-job-123"}
@@ -334,7 +334,7 @@ def test_parameter_style_handling(
     driver: BigQueryDriver, mock_connection: MagicMock, sql_text: str, params: Any, expected_placeholder: str
 ) -> None:
     """Test parameter style detection and conversion."""
-    statement = SQL(sql_text, params, _config=driver.config)
+    statement = SQL(sql_text, parameters=params, config=driver.config)
 
     # Mock the query to return empty result
     mock_job = mock_connection.query.return_value
@@ -478,7 +478,7 @@ def test_wrap_execute_result_script(driver: BigQueryDriver) -> None:
     from sqlspec.statement.sql import SQLConfig
 
     config = SQLConfig(enable_validation=False)  # Allow DDL
-    statement = SQL("CREATE TABLE test; INSERT INTO test;", _config=config)
+    statement = SQL("CREATE TABLE test; INSERT INTO test;", config=config)
 
     result = {"statements_executed": 2, "status_message": "SCRIPT EXECUTED"}
 
@@ -606,7 +606,7 @@ def test_execute_with_no_parameters(driver: BigQueryDriver, mock_connection: Mag
     from sqlspec.statement.sql import SQLConfig
 
     config = SQLConfig(enable_validation=False)  # Allow DDL
-    statement = SQL("CREATE TABLE test (id INTEGER)", _config=config)
+    statement = SQL("CREATE TABLE test (id INTEGER)", config=config)
     driver._execute_statement(statement)
 
     mock_connection.query.assert_called_once()

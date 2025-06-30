@@ -255,7 +255,7 @@ def test_sync_execute_statement_routing(
     from sqlspec.statement.sql import SQLConfig
 
     config = SQLConfig(enable_validation=False) if is_script else SQLConfig()
-    statement = SQL(sql_text, _config=config)
+    statement = SQL(sql_text, config=config)
     statement._is_script = is_script
     statement._is_many = is_many
 
@@ -331,7 +331,7 @@ async def test_async_execute_statement_routing(
     from sqlspec.statement.sql import SQLConfig
 
     config = SQLConfig(enable_validation=False) if is_script else SQLConfig()
-    statement = SQL(sql_text, _config=config)
+    statement = SQL(sql_text, config=config)
     statement._is_script = is_script
     statement._is_many = is_many
 
@@ -410,11 +410,11 @@ def test_sync_parameter_style_handling(
     """Test sync parameter style detection and conversion."""
     # Create statement with parameters
     if detected_style == ParameterStyle.POSITIONAL_PYFORMAT:
-        statement = SQL(sql_text, 123)
+        statement = SQL(sql_text, parameters=[123])
     elif detected_style == ParameterStyle.NAMED_PYFORMAT:
-        statement = SQL(sql_text, id=123)
+        statement = SQL(sql_text, kwargs={"id": 123})
     else:  # NUMERIC
-        statement = SQL(sql_text, 123)
+        statement = SQL(sql_text, parameters=[123])
 
     # Set up cursor
     mock_cursor = mock_sync_connection.cursor.return_value
@@ -692,7 +692,7 @@ def test_sync_execute_with_no_parameters(sync_driver: PsycopgSyncDriver, mock_sy
 
     # Disable validation for DDL
     config = SQLConfig(enable_validation=False)
-    statement = SQL("CREATE TABLE test (id INTEGER)", _config=config)
+    statement = SQL("CREATE TABLE test (id INTEGER)", config=config)
     sync_driver._execute_statement(statement)
 
     # SQLGlot normalizes INTEGER to INT
@@ -709,7 +709,7 @@ async def test_async_execute_with_no_parameters(
 
     # Disable validation for DDL
     config = SQLConfig(enable_validation=False)
-    statement = SQL("CREATE TABLE test (id INTEGER)", _config=config)
+    statement = SQL("CREATE TABLE test (id INTEGER)", config=config)
     await async_driver._execute_statement(statement)
 
     # SQLGlot normalizes INTEGER to INT

@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from sqlspec.typing import SupportedSchemaModel
 
 __all__ = (
+    "can_convert_to_schema",
     "dataclass_to_dict",
     "extract_dataclass_fields",
     "extract_dataclass_items",
@@ -158,6 +159,23 @@ def has_with_method(obj: Any) -> "TypeGuard[WithMethodProtocol]":
         True if the object has a callable with_ method, False otherwise
     """
     return isinstance(obj, WithMethodProtocol)
+
+
+def can_convert_to_schema(obj: Any) -> "TypeGuard[Any]":
+    """Check if an object has the ToSchemaMixin capabilities.
+
+    This provides better DX than isinstance checks for driver mixins.
+
+    Args:
+        obj: The object to check (typically a driver instance)
+
+    Returns:
+        True if the object has to_schema method, False otherwise
+    """
+    # Import here to avoid circular imports
+    from sqlspec.driver.mixins import ToSchemaMixin
+
+    return isinstance(obj, ToSchemaMixin)
 
 
 # Type guards migrated from typing.py

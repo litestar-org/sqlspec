@@ -17,12 +17,11 @@ from sqlspec.driver.mixins import (
     TypeCoercionMixin,
 )
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT, RowT
+from sqlspec.typing import DictRow, RowT
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_guards import is_dict_with_field
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -103,10 +102,10 @@ class SqliteDriver(
 
     def _execute_statement(
         self, statement: SQL, connection: Optional[SqliteConnection] = None, **kwargs: Any
-    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
+    ) -> SQLResult[RowT]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
-            return self._execute_script(sql, connection=connection, **kwargs)
+            return self._execute_script(sql, connection=connection, statement=statement, **kwargs)
 
         # Determine if we need to convert parameter style
         detected_styles = {p.style for p in statement.parameter_info}
@@ -130,7 +129,7 @@ class SqliteDriver(
 
         if statement.is_many:
             sql, params = statement.compile(placeholder_style=target_style)
-            return self._execute_many(sql, params, connection=connection, **kwargs)
+            return self._execute_many(sql, params, connection=connection, statement=statement, **kwargs)
 
         sql, params = statement.compile(placeholder_style=target_style)
 
@@ -145,7 +144,7 @@ class SqliteDriver(
 
     def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[SqliteConnection] = None, **kwargs: Any
-    ) -> Union[SelectResultDict, DMLResultDict]:
+    ) -> SQLResult[RowT]:
         """Execute a single statement with parameters."""
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
@@ -156,16 +155,34 @@ class SqliteDriver(
             cursor.execute(sql, parameters or ())
             if self.returns_rows(statement.expression):
                 fetched_data: list[sqlite3.Row] = cursor.fetchall()
-                return {
-                    "data": fetched_data,
-                    "column_names": [col[0] for col in cursor.description or []],
-                    "rows_affected": len(fetched_data),
-                }
-            return {"rows_affected": cursor.rowcount, "status_message": "OK"}
+                return SQLResult(
+                    statement=statement,
+                    data=fetched_data,
+                    column_names=[col[0] for col in cursor.description or []],
+                    rows_affected=len(fetched_data),
+                    operation_type="SELECT",
+                )
+            # Determine operation type from the SQL expression
+            operation_type = "EXECUTE"  # Default for DML operations
+            if statement.expression:
+                expr_type = type(statement.expression).__name__.upper()
+                if "INSERT" in expr_type:
+                    operation_type = "INSERT"
+                elif "UPDATE" in expr_type:
+                    operation_type = "UPDATE"
+                elif "DELETE" in expr_type:
+                    operation_type = "DELETE"
+
+            return SQLResult(statement=statement, data=[], rows_affected=cursor.rowcount, operation_type=operation_type)
 
     def _execute_many(
-        self, sql: str, param_list: Any, connection: Optional[SqliteConnection] = None, **kwargs: Any
-    ) -> DMLResultDict:
+        self,
+        sql: str,
+        param_list: Any,
+        connection: Optional[SqliteConnection] = None,
+        statement: Optional[SQL] = None,
+        **kwargs: Any,
+    ) -> SQLResult[RowT]:
         """Execute a statement many times with a list of parameter tuples."""
         conn = self._connection(connection)
         if param_list:
@@ -184,19 +201,40 @@ class SqliteDriver(
 
         with self._get_cursor(conn) as cursor:
             cursor.executemany(sql, formatted_params)
-            return {"rows_affected": cursor.rowcount, "status_message": "OK"}
+
+            # Create a dummy statement if not provided (for backward compatibility)
+            if statement is None:
+                statement = SQL(sql)
+
+            return SQLResult(
+                statement=statement,
+                data=[],
+                rows_affected=cursor.rowcount,
+                operation_type="EXECUTE",  # executemany is typically used for DML
+            )
 
     def _execute_script(
-        self, script: str, connection: Optional[SqliteConnection] = None, **kwargs: Any
-    ) -> ScriptResultDict:
+        self, script: str, connection: Optional[SqliteConnection] = None, statement: Optional[SQL] = None, **kwargs: Any
+    ) -> SQLResult[RowT]:
         """Execute a script on the SQLite connection."""
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
             cursor.executescript(script)
         # executescript doesn't auto-commit in some cases
         conn.commit()
-        result: ScriptResultDict = {"statements_executed": -1, "status_message": "SCRIPT EXECUTED"}
-        return result
+
+        # Create a dummy statement if not provided
+        if statement is None:
+            statement = SQL(script)
+
+        return SQLResult(
+            statement=statement,
+            data=[],
+            rows_affected=-1,  # Unknown for scripts
+            operation_type="SCRIPT",
+            total_statements=-1,  # SQLite doesn't provide this info
+            successful_statements=-1,
+        )
 
     def _ingest_arrow_table(self, table: Any, table_name: str, mode: str = "create", **options: Any) -> int:
         """SQLite-specific Arrow table ingestion using CSV conversion.
@@ -259,46 +297,3 @@ class SqliteDriver(
             data_iter = list(reader)  # Read all data into memory
             cursor.executemany(sql, data_iter)
             return cursor.rowcount
-
-    def _wrap_select_result(
-        self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
-    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
-        rows_as_dicts = [dict(row) for row in result["data"]]
-        if schema_type:
-            return SQLResult[ModelDTOT](
-                statement=statement,
-                data=list(self.to_schema(data=rows_as_dicts, schema_type=schema_type)),
-                column_names=result["column_names"],
-                rows_affected=result["rows_affected"],
-                operation_type="SELECT",
-            )
-
-        return SQLResult[RowT](
-            statement=statement,
-            data=rows_as_dicts,
-            column_names=result["column_names"],
-            rows_affected=result["rows_affected"],
-            operation_type="SELECT",
-        )
-
-    def _wrap_execute_result(
-        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
-    ) -> SQLResult[RowT]:
-        if is_dict_with_field(result, "statements_executed"):
-            return SQLResult[RowT](
-                statement=statement,
-                data=[],
-                rows_affected=0,
-                operation_type="SCRIPT",
-                metadata={
-                    "status_message": result.get("status_message", ""),
-                    "statements_executed": result.get("statements_executed", -1),
-                },
-            )
-        return SQLResult[RowT](
-            statement=statement,
-            data=[],
-            rows_affected=cast("int", result.get("rows_affected", -1)),
-            operation_type=statement.expression.key.upper() if statement.expression else "UNKNOWN",
-            metadata={"status_message": result.get("status_message", "")},
-        )

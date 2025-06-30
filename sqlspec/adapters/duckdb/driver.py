@@ -3,7 +3,7 @@ import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
 from duckdb import DuckDBPyConnection
 from sqlglot import exp
@@ -17,9 +17,9 @@ from sqlspec.driver.mixins import (
     TypeCoercionMixin,
 )
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import ArrowTable, DictRow, ModelDTOT, RowT
+from sqlspec.typing import ArrowTable, DictRow, RowT
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -82,7 +82,7 @@ class DuckDBDriver(
 
     def _execute_statement(
         self, statement: SQL, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
-    ) -> "Union[SelectResultDict, DMLResultDict, ScriptResultDict]":
+    ) -> SQLResult[RowT]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
@@ -98,14 +98,20 @@ class DuckDBDriver(
 
     def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
-    ) -> "Union[SelectResultDict, DMLResultDict]":
+    ) -> SQLResult[RowT]:
         conn = self._connection(connection)
 
         if self.returns_rows(statement.expression):
             result = conn.execute(sql, parameters or [])
             fetched_data = result.fetchall()
             column_names = [col[0] for col in result.description or []]
-            return {"data": fetched_data, "column_names": column_names, "rows_affected": len(fetched_data)}
+            return SQLResult(
+                statement=statement,
+                data=fetched_data,
+                column_names=column_names,
+                rows_affected=len(fetched_data),
+                operation_type="SELECT",
+            )
 
         with self._get_cursor(conn) as cursor:
             cursor.execute(sql, parameters or [])
@@ -123,93 +129,62 @@ class DuckDBDriver(
                 except Exception:
                     # Fallback to 1 if fetchone fails
                     rows_affected = 1
-            return {"rows_affected": rows_affected}
+
+            return SQLResult(
+                statement=statement,
+                data=[],
+                rows_affected=rows_affected,
+                operation_type=self._determine_operation_type(statement),
+                metadata={"status_message": "OK"},
+            )
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
-    ) -> "DMLResultDict":
+    ) -> SQLResult[RowT]:
         conn = self._connection(connection)
         param_list = param_list or []
 
         # DuckDB throws an error if executemany is called with empty parameter list
         if not param_list:
-            return {"rows_affected": 0}
+            return SQLResult(
+                statement=SQL(sql),
+                data=[],
+                rows_affected=0,
+                operation_type="EXECUTE",
+                metadata={"status_message": "OK"},
+            )
         with self._get_cursor(conn) as cursor:
             cursor.executemany(sql, param_list)
             # DuckDB returns -1 for rowcount on DML operations
             # For executemany, fetchone() only returns the count from the last operation,
             # so use parameter list length as the most accurate estimate
             rows_affected = cursor.rowcount if cursor.rowcount >= 0 else len(param_list)
-            return {"rows_affected": rows_affected}
+            return SQLResult(
+                statement=SQL(sql),
+                data=[],
+                rows_affected=rows_affected,
+                operation_type="EXECUTE",
+                metadata={"status_message": "OK"},
+            )
 
     def _execute_script(
         self, script: str, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
-    ) -> "ScriptResultDict":
+    ) -> SQLResult[RowT]:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
             cursor.execute(script)
 
-        return {
-            "statements_executed": -1,
-            "status_message": "Script executed successfully.",
-            "description": "The script was sent to the database.",
-        }
-
-    def _wrap_select_result(
-        self, statement: SQL, result: "SelectResultDict", schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
-    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
-        fetched_tuples = result["data"]
-        column_names = result["column_names"]
-        rows_affected = result["rows_affected"]
-
-        rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row)) for row in fetched_tuples]
-
-        logger.debug("Query returned %d rows", len(rows_as_dicts))
-
-        if schema_type:
-            converted_data = self.to_schema(data=rows_as_dicts, schema_type=schema_type)
-            return SQLResult[ModelDTOT](
-                statement=statement,
-                data=list(converted_data),
-                column_names=column_names,
-                rows_affected=rows_affected,
-                operation_type="SELECT",
-            )
-
-        return SQLResult[RowT](
-            statement=statement,
-            data=rows_as_dicts,
-            column_names=column_names,
-            rows_affected=rows_affected,
-            operation_type="SELECT",
-        )
-
-    def _wrap_execute_result(
-        self, statement: SQL, result: "Union[DMLResultDict, ScriptResultDict]", **kwargs: Any
-    ) -> SQLResult[RowT]:
-        operation_type = "UNKNOWN"
-        if statement.expression:
-            operation_type = str(statement.expression.key).upper()
-
-        if "statements_executed" in result:
-            script_result = cast("ScriptResultDict", result)
-            return SQLResult[RowT](
-                statement=statement,
-                data=[],
-                rows_affected=0,
-                operation_type=operation_type or "SCRIPT",
-                metadata={"status_message": script_result.get("status_message", "")},
-            )
-
-        dml_result = cast("DMLResultDict", result)
-        rows_affected = dml_result.get("rows_affected", -1)
-        status_message = dml_result.get("status_message", "")
-        return SQLResult[RowT](
-            statement=statement,
+        return SQLResult(
+            statement=SQL(script),
             data=[],
-            rows_affected=rows_affected,
-            operation_type=operation_type,
-            metadata={"status_message": status_message},
+            rows_affected=0,
+            operation_type="SCRIPT",
+            metadata={
+                "status_message": "Script executed successfully.",
+                "description": "The script was sent to the database.",
+            },
+            total_statements=-1,
+            successful_statements=-1,
         )
 
     # ============================================================================

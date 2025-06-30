@@ -7,62 +7,17 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, Optional, Union, cast
 
-from typing_extensions import TypedDict, TypeVar
+from typing_extensions import TypeVar
 
 from sqlspec.typing import ArrowTable, RowT
 
 if TYPE_CHECKING:
     from sqlspec.statement.sql import SQL
 
-__all__ = ("ArrowResult", "DMLResultDict", "SQLResult", "ScriptResultDict", "SelectResultDict", "StatementResult")
+__all__ = ("ArrowResult", "SQLResult", "StatementResult")
 
 
 T = TypeVar("T")
-
-
-class SelectResultDict(TypedDict):
-    """TypedDict for SELECT/RETURNING query results.
-
-    This structure is returned by drivers when executing SELECT queries
-    or DML queries with RETURNING clauses.
-    """
-
-    data: "list[Any]"
-    """List of rows returned by the query."""
-    column_names: "list[str]"
-    """List of column names in the result set."""
-    rows_affected: int
-    """Number of rows affected (-1 when unsupported)."""
-
-
-class DMLResultDict(TypedDict, total=False):
-    """TypedDict for DML (INSERT/UPDATE/DELETE) results without RETURNING.
-
-    This structure is returned by drivers when executing DML operations
-    that don't return data (no RETURNING clause).
-    """
-
-    rows_affected: int
-    """Number of rows affected by the operation."""
-    status_message: str
-    """Status message from the database (-1 when unsupported)."""
-    description: str
-    """Optional description of the operation."""
-
-
-class ScriptResultDict(TypedDict, total=False):
-    """TypedDict for script execution results.
-
-    This structure is returned by drivers when executing multi-statement
-    SQL scripts.
-    """
-
-    statements_executed: int
-    """Number of statements that were executed."""
-    status_message: str
-    """Overall status message from the script execution."""
-    description: str
-    """Optional description of the script execution."""
 
 
 @dataclass
@@ -290,20 +245,6 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
     def get_affected_count(self) -> int:
         """Get the number of rows affected by a DML operation."""
         return self.rows_affected or 0
-
-    def get_inserted_id(self) -> "Optional[Union[int, str]]":
-        """Get the last inserted ID (typically for single row inserts)."""
-        return self.last_inserted_id
-
-    def get_inserted_ids(self) -> "list[Union[int, str]]":
-        """Get all inserted IDs (useful for batch inserts)."""
-        return self.inserted_ids
-
-    def get_returning_data(self) -> "list[RowT]":
-        """Get data returned by RETURNING clauses.
-        This is effectively self.data for this unified class.
-        """
-        return cast("list[RowT]", self.data)
 
     def was_inserted(self) -> bool:
         """Check if this was an INSERT operation."""

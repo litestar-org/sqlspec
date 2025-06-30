@@ -18,7 +18,7 @@ from sqlspec.driver.mixins import (
     TypeCoercionMixin,
 )
 from sqlspec.exceptions import MissingDependencyError, SQLConversionError
-from sqlspec.statement.sql import SQL
+from sqlspec.statement.sql import SQL, SQLConfig
 
 if TYPE_CHECKING:
     pass
@@ -53,7 +53,7 @@ def test_sql_translator_convert_to_dialect(
     driver = MockDriverWithTranslator(from_dialect)
 
     # Create SQL object
-    statement = SQL(input_sql, dialect=from_dialect)
+    statement = SQL(input_sql, config=SQLConfig(dialect=from_dialect))
 
     result = driver.convert_to_dialect(statement, to_dialect=to_dialect, pretty=False)
     assert expected_contains in result

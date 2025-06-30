@@ -5,7 +5,7 @@ import logging
 import uuid
 from collections.abc import Iterator
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, Union
 
 from google.cloud.bigquery import (
     ArrayQueryParameter,
@@ -30,9 +30,9 @@ from sqlspec.driver.mixins import (
 )
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT, RowT
+from sqlspec.typing import DictRow, RowT
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
@@ -290,15 +290,21 @@ class BigQueryDriver(
         """
         return [dict(row) for row in rows_iterator]  # type: ignore[misc]
 
-    def _handle_select_job(self, query_job: QueryJob) -> SelectResultDict:
+    def _handle_select_job(self, query_job: QueryJob, statement: SQL) -> SQLResult[RowT]:
         """Handle a query job that is expected to return rows."""
         job_result = query_job.result()
         rows_list = self._rows_to_results(iter(job_result))
         column_names = [field.name for field in query_job.schema] if query_job.schema else []
 
-        return {"data": rows_list, "column_names": column_names, "rows_affected": len(rows_list)}
+        return SQLResult(
+            statement=statement,
+            data=rows_list,
+            column_names=column_names,
+            rows_affected=len(rows_list),
+            operation_type="SELECT",
+        )
 
-    def _handle_dml_job(self, query_job: QueryJob) -> DMLResultDict:
+    def _handle_dml_job(self, query_job: QueryJob, statement: SQL) -> SQLResult[RowT]:
         """Handle a DML job.
 
         Note: BigQuery emulators (e.g., goccy/bigquery-emulator) may report 0 rows affected
@@ -324,7 +330,24 @@ class BigQueryDriver(
             )
             num_affected = 1  # Assume at least one row was affected
 
-        return {"rows_affected": num_affected or 0, "status_message": f"OK - job_id: {query_job.job_id}"}
+        # Determine operation type from the SQL
+        operation_type = "EXECUTE"
+        if statement.expression:
+            expr_type = type(statement.expression).__name__.upper()
+            if "INSERT" in expr_type:
+                operation_type = "INSERT"
+            elif "UPDATE" in expr_type:
+                operation_type = "UPDATE"
+            elif "DELETE" in expr_type:
+                operation_type = "DELETE"
+
+        return SQLResult(
+            statement=statement,
+            data=[],
+            rows_affected=num_affected or 0,
+            operation_type=operation_type,
+            metadata={"status_message": f"OK - job_id: {query_job.job_id}"},
+        )
 
     def _compile_bigquery_compatible(self, statement: SQL, target_style: ParameterStyle) -> tuple[str, Any]:
         """Compile SQL statement for BigQuery.
@@ -336,7 +359,7 @@ class BigQueryDriver(
 
     def _execute_statement(
         self, statement: SQL, connection: Optional[BigQueryConnection] = None, **kwargs: Any
-    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
+    ) -> SQLResult[RowT]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
@@ -366,7 +389,7 @@ class BigQueryDriver(
 
     def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[BigQueryConnection] = None, **kwargs: Any
-    ) -> Union[SelectResultDict, DMLResultDict]:
+    ) -> SQLResult[RowT]:
         # SQL should already be in correct format from compile()
         converted_sql = sql
         # Parameters are already in the correct format from compile()
@@ -400,12 +423,12 @@ class BigQueryDriver(
         if query_job.statement_type == "SELECT" or (
             hasattr(query_job, "schema") and query_job.schema and len(query_job.schema) > 0
         ):
-            return self._handle_select_job(query_job)
-        return self._handle_dml_job(query_job)
+            return self._handle_select_job(query_job, statement)
+        return self._handle_dml_job(query_job, statement)
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[BigQueryConnection] = None, **kwargs: Any
-    ) -> DMLResultDict:
+    ) -> SQLResult[RowT]:
         # Use a multi-statement script for batch execution
         script_parts = []
         all_params: dict[str, Any] = {}
@@ -448,11 +471,17 @@ class BigQueryDriver(
         query_job.result(timeout=kwargs.get("bq_job_timeout"))
         total_rowcount = query_job.num_dml_affected_rows or 0
 
-        return {"rows_affected": total_rowcount, "status_message": f"OK - executed batch job {query_job.job_id}"}
+        return SQLResult(
+            statement=SQL(sql),
+            data=[],
+            rows_affected=total_rowcount,
+            operation_type="EXECUTE",
+            metadata={"status_message": f"OK - executed batch job {query_job.job_id}"},
+        )
 
     def _execute_script(
         self, script: str, connection: Optional[BigQueryConnection] = None, **kwargs: Any
-    ) -> ScriptResultDict:
+    ) -> SQLResult[RowT]:
         # BigQuery does not support multi-statement scripts in a single job
         # Use the shared implementation to split and execute statements individually
         statements = self._split_script_statements(script)
@@ -462,64 +491,15 @@ class BigQueryDriver(
                 query_job = self._run_query_job(statement, [], connection=connection)
                 query_job.result(timeout=kwargs.get("bq_job_timeout"))
 
-        return {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
-
-    def _wrap_select_result(
-        self, statement: SQL, result: SelectResultDict, schema_type: "Optional[type[ModelDTOT]]" = None, **kwargs: Any
-    ) -> "Union[SQLResult[RowT], SQLResult[ModelDTOT]]":
-        if schema_type:
-            return cast(
-                "SQLResult[ModelDTOT]",
-                SQLResult(
-                    statement=statement,
-                    data=cast("list[ModelDTOT]", list(self.to_schema(data=result["data"], schema_type=schema_type))),
-                    column_names=result["column_names"],
-                    rows_affected=result["rows_affected"],
-                    operation_type="SELECT",
-                ),
-            )
-
-        return cast(
-            "SQLResult[RowT]",
-            SQLResult(
-                statement=statement,
-                data=result["data"],
-                column_names=result["column_names"],
-                operation_type="SELECT",
-                rows_affected=result["rows_affected"],
-            ),
+        return SQLResult(
+            statement=SQL(script),
+            data=[],
+            rows_affected=0,
+            operation_type="SCRIPT",
+            metadata={"status_message": "SCRIPT EXECUTED"},
+            total_statements=len(statements),
+            successful_statements=len(statements),
         )
-
-    def _wrap_execute_result(
-        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
-    ) -> "SQLResult[RowT]":
-        operation_type = "UNKNOWN"
-        if statement.expression:
-            operation_type = str(statement.expression.key).upper()
-        if "statements_executed" in result:
-            return SQLResult[RowT](
-                statement=statement,
-                data=[],
-                rows_affected=0,
-                operation_type="SCRIPT",
-                metadata={
-                    "status_message": result.get("status_message", ""),
-                    "statements_executed": result.get("statements_executed", -1),
-                },
-            )
-        if "rows_affected" in result:
-            dml_result = cast("DMLResultDict", result)
-            rows_affected = dml_result["rows_affected"]
-            status_message = dml_result.get("status_message", "")
-            return SQLResult[RowT](
-                statement=statement,
-                data=[],
-                rows_affected=rows_affected,
-                operation_type=operation_type,
-                metadata={"status_message": status_message},
-            )
-        msg = f"Unexpected result type: {type(result)}"
-        raise ValueError(msg)
 
     def _connection(self, connection: "Optional[Client]" = None) -> "Client":
         """Get the connection to use for the operation."""
