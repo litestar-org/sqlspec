@@ -476,8 +476,11 @@ class TestSQLFileLoaderWithFixtures:
         # Disable parsing to avoid errors with Oracle-specific syntax
         from sqlspec.statement.sql import SQLConfig
 
-        config = SQLConfig(enable_parsing=False, enable_validation=False, strict_mode=False)
-        stmt = SQL(content, dialect="oracle", config=config).as_script()
+        SQLConfig(enable_parsing=False, enable_validation=False, strict_mode=False)
+        stmt = SQL(
+            content,
+            config=SQLConfig(enable_parsing=False, enable_validation=False, strict_mode=False, dialect="oracle"),
+        ).as_script()
         assert stmt.is_script is True
 
         # Method 2: Programmatically add as a named query

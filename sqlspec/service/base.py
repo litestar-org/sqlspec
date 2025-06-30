@@ -50,6 +50,43 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
         """Get the connection instance."""
         return self._connection
 
+    def _normalize_statement(
+        self,
+        statement: "Union[Statement, SelectBuilder]",
+        params: "Optional[dict[str, Any]]" = None,
+        config: "Optional[SQLConfig]" = None,
+    ) -> "SQL":
+        """Normalize a statement of any supported type into a SQL object.
+
+        Args:
+            statement: The statement to normalize (str, Expression, SQL, or SelectBuilder)
+            params: Optional parameters (ignored for SelectBuilder and SQL objects)
+            config: Optional SQL configuration
+
+        Returns:
+            A normalized SQL object
+        """
+        from sqlspec.statement.sql import SQL
+
+        # Handle SelectBuilder
+        if is_select_builder(statement):
+            # SelectBuilder has its own parameters via build(), ignore external params
+            safe_query = statement.build()
+            return SQL(safe_query.sql, parameters=safe_query.parameters, config=config)
+
+        # Handle pre-built SQL objects
+        if isinstance(statement, SQL):
+            # SQL object is already complete, ignore external params
+            return statement
+
+        # Handle str and sqlglot Expressions
+        if isinstance(statement, (str, exp.Expression)):
+            return SQL(statement, parameters=params, config=config)
+
+        # Fallback for type safety
+        msg = f"Unsupported statement type: {type(statement).__name__}"
+        raise TypeError(msg)
+
     @overload
     def execute(
         self,
@@ -520,14 +557,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
             raise ValueError(msg)
 
         # Convert statement to SQL object if needed
-        if isinstance(statement, str):
-            base_stmt = SQL(statement, *params, _config=_config)
-        elif is_select_builder(statement):
-            # SelectBuilder can be used directly
-            base_stmt = statement
-        else:
-            # statement is already SQL
-            base_stmt = statement
+        base_stmt = self._normalize_statement(statement, params, _config)
 
         # Apply non-pagination filters
         filtered_stmt = base_stmt
@@ -535,8 +565,8 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
             filtered_stmt = filter_obj.append_to_statement(filtered_stmt)
 
         # Create count query using AST transformation
-        # Get the SQL string from the statement
-        sql_str = filtered_stmt.build().sql if is_select_builder(filtered_stmt) else filtered_stmt.to_sql()
+        # Get the SQL string from the statement (now guaranteed to be SQL object)
+        sql_str = filtered_stmt.to_sql()
 
         # Parse and transform the AST to create a count query
         parsed = parse_one(sql_str)
@@ -553,26 +583,14 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
         total = self.select_value(count_stmt, _connection=_connection, _config=_config, **kwargs)
 
         # Apply all filters including pagination to data query
-        if isinstance(statement, str):
-            data_stmt = SQL(statement, *params, _config=_config)
-        elif is_select_builder(statement):
-            # SelectBuilder needs to be used directly for type safety
-            data_stmt = statement
-        else:
-            # statement is already SQL
-            data_stmt = statement
+        data_stmt = self._normalize_statement(statement, params, _config)
 
         # Apply non-pagination filters
         for filter_obj in other_filters:
             data_stmt = filter_obj.append_to_statement(data_stmt)
 
-        # Apply limit/offset
-        if is_select_builder(data_stmt):
-            # SelectBuilder has limit/offset methods
-            data_stmt = data_stmt.limit(limit).offset(offset)
-        else:
-            # For SQL objects, use the SQL limit/offset methods
-            data_stmt = data_stmt.limit(limit).offset(offset)
+        # Apply limit/offset (data_stmt is now guaranteed to be SQL)
+        data_stmt = data_stmt.limit(limit).offset(offset)
 
         # Execute data query
         items = self.select(data_stmt, schema_type=schema_type, _connection=_connection, _config=_config, **kwargs)
@@ -600,6 +618,43 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
     def connection(self) -> "ConnectionT":
         """Get the connection instance."""
         return self._connection
+
+    def _normalize_statement(
+        self,
+        statement: "Union[Statement, SelectBuilder]",
+        params: "Optional[dict[str, Any]]" = None,
+        config: "Optional[SQLConfig]" = None,
+    ) -> "SQL":
+        """Normalize a statement of any supported type into a SQL object.
+
+        Args:
+            statement: The statement to normalize (str, Expression, SQL, or SelectBuilder)
+            params: Optional parameters (ignored for SelectBuilder and SQL objects)
+            config: Optional SQL configuration
+
+        Returns:
+            A normalized SQL object
+        """
+        from sqlspec.statement.sql import SQL
+
+        # Handle SelectBuilder
+        if is_select_builder(statement):
+            # SelectBuilder has its own parameters via build(), ignore external params
+            safe_query = statement.build()
+            return SQL(safe_query.sql, parameters=safe_query.parameters, config=config)
+
+        # Handle pre-built SQL objects
+        if isinstance(statement, SQL):
+            # SQL object is already complete, ignore external params
+            return statement
+
+        # Handle str and sqlglot Expressions
+        if isinstance(statement, (str, exp.Expression)):
+            return SQL(statement, parameters=params, config=config)
+
+        # Fallback for type safety
+        msg = f"Unsupported statement type: {type(statement).__name__}"
+        raise TypeError(msg)
 
     @overload
     async def execute(
@@ -1071,14 +1126,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
             raise ValueError(msg)
 
         # Convert statement to SQL object if needed
-        if isinstance(statement, str):
-            base_stmt = SQL(statement, *params, _config=_config)
-        elif is_select_builder(statement):
-            # SelectBuilder can be used directly
-            base_stmt = statement
-        else:
-            # statement is already SQL
-            base_stmt = statement
+        base_stmt = self._normalize_statement(statement, params, _config)
 
         # Apply non-pagination filters
         filtered_stmt = base_stmt
@@ -1086,8 +1134,8 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
             filtered_stmt = filter_obj.append_to_statement(filtered_stmt)
 
         # Create count query using AST transformation
-        # Get the SQL string from the statement
-        sql_str = filtered_stmt.build().sql if is_select_builder(filtered_stmt) else filtered_stmt.to_sql()
+        # Get the SQL string from the statement (now guaranteed to be SQL object)
+        sql_str = filtered_stmt.to_sql()
 
         # Parse and transform the AST to create a count query
         parsed = parse_one(sql_str)
@@ -1104,26 +1152,14 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
         total = await self.select_value(count_stmt, _connection=_connection, _config=_config, **kwargs)
 
         # Apply all filters including pagination to data query
-        if isinstance(statement, str):
-            data_stmt = SQL(statement, *params, _config=_config)
-        elif is_select_builder(statement):
-            # SelectBuilder needs to be used directly for type safety
-            data_stmt = statement
-        else:
-            # statement is already SQL
-            data_stmt = statement
+        data_stmt = self._normalize_statement(statement, params, _config)
 
         # Apply non-pagination filters
         for filter_obj in other_filters:
             data_stmt = filter_obj.append_to_statement(data_stmt)
 
-        # Apply limit/offset
-        if is_select_builder(data_stmt):
-            # SelectBuilder has limit/offset methods
-            data_stmt = data_stmt.limit(limit).offset(offset)
-        else:
-            # For SQL objects, use the SQL limit/offset methods
-            data_stmt = data_stmt.limit(limit).offset(offset)
+        # Apply limit/offset (data_stmt is now guaranteed to be SQL)
+        data_stmt = data_stmt.limit(limit).offset(offset)
 
         # Execute data query
         items = await self.select(

@@ -240,11 +240,14 @@ class QueryBuilder(ABC, Generic[RowT]):
                 final_expression = exp.With(expressions=list(self._with_ctes.values()), this=final_expression)
 
         # Apply SQLGlot optimizations if enabled
-        if self.enable_optimization:
+        if self.enable_optimization and isinstance(final_expression, exp.Expression):
             final_expression = self._optimize_expression(final_expression)
 
         try:
-            sql_string = final_expression.sql(dialect=self.dialect_name, pretty=True)
+            if hasattr(final_expression, "sql") and callable(getattr(final_expression, "sql", None)):
+                sql_string = final_expression.sql(dialect=self.dialect_name, pretty=True)  # pyright: ignore[reportAttributeAccessIssue]
+            else:
+                sql_string = str(final_expression)
         except Exception as e:
             err_msg = f"Error generating SQL from expression: {e!s}"
             logger.exception("SQL generation failed")
@@ -311,7 +314,9 @@ class QueryBuilder(ABC, Generic[RowT]):
 
             config = SQLConfig(dialect=safe_query.dialect)
 
-        return SQL(statement=safe_query.sql, parameters=parameters, kwargs=kwargs, config=config)
+        if kwargs:
+            return SQL(safe_query.sql, parameters=parameters, config=config, **kwargs)
+        return SQL(safe_query.sql, parameters=parameters, config=config)
 
     def __str__(self) -> str:
         """Return the SQL string representation of the query.

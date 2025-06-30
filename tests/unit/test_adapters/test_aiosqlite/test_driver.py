@@ -7,8 +7,8 @@ import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConnection, AiosqliteDriver
 from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.utils.type_guards import is_dict_with_field
 
 
 @pytest.fixture
@@ -156,10 +156,9 @@ async def test_aiosqlite_driver_non_query_statement(
     # Verify cursor operations
     mock_cursor.execute.assert_called_once()
 
-    # The result should be a DMLResultDict for non-query statements
-    assert isinstance(result, dict)
-    assert is_dict_with_field(result, "rows_affected")
-    assert result["rows_affected"] == 1  # pyright: ignore
+    # The result should be an SQLResult for non-query statements
+    assert isinstance(result, SQLResult)
+    assert result.rows_affected == 1
 
 
 @pytest.mark.asyncio

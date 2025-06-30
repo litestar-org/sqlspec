@@ -1,7 +1,7 @@
 """Unit tests for ADBC driver."""
 
 import tempfile
-from typing import Any, cast
+from typing import Any
 from unittest.mock import Mock
 
 import pyarrow as pa
@@ -13,7 +13,7 @@ from sqlspec.adapters.adbc.driver import AdbcDriver
 from sqlspec.exceptions import RepositoryError
 from sqlspec.statement.builder import QueryBuilder
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, SelectResultDict, SQLResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
@@ -237,17 +237,15 @@ def test_adbc_driver_execute_statement_select(adbc_driver: AdbcDriver, mock_curs
     mock_cursor.fetchall.return_value = [(1, "John Doe", "john@example.com")]
     mock_cursor.description = [("id",), ("name",), ("email",)]
 
-    statement = SQL("SELECT * FROM users WHERE id = ?", parameters=[123])
-    result = cast("SelectResultDict", adbc_driver._execute_statement(statement))
+    # Use PostgreSQL-style placeholders since the mock connection is PostgreSQL
+    statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[123])
+    result = adbc_driver._execute_statement(statement)
 
-    assert isinstance(result, dict)
-    assert "data" in result
-    assert "column_names" in result
-    assert "rows_affected" in result
-
-    assert len(result["data"]) == 1
-    assert result["column_names"] == ["id", "name", "email"]
-    assert result["rows_affected"] == 1
+    assert isinstance(result, SQLResult)
+    assert len(result.data) == 1
+    assert result.column_names == ["id", "name", "email"]
+    assert result.rows_affected == 1
+    assert result.operation_type == "SELECT"
 
     # Verify execute and fetchall were called
     mock_cursor.execute.assert_called_once_with("SELECT * FROM users WHERE id = $1", [123])
@@ -394,11 +392,10 @@ def test_adbc_driver_instrumentation_logging(mock_adbc_connection: Mock, mock_cu
 
     statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[123])
     # Parameters argument removed from _execute_statement call
-    cursor_result = driver._execute_statement(statement)
-    assert isinstance(cursor_result, dict) and "data" in cursor_result  # Type narrowing
-    select_result = driver._wrap_select_result(statement, cast("SelectResultDict", cursor_result))
+    result = driver._execute_statement(statement)
 
-    assert isinstance(select_result, SQLResult)
+    assert isinstance(result, SQLResult)
+    assert result.operation_type == "SELECT"
     # Logging calls are verified through the instrumentation config
 
 
@@ -438,7 +435,7 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
 
     sql_config = SQLConfig()
     # Test with SQL statement
-    sql_stmt = SQL("SELECT * FROM users", _config=sql_config)
+    sql_stmt = SQL("SELECT * FROM users", config=sql_config)
     result = adbc_driver._build_statement(sql_stmt, _config=sql_config)
     assert isinstance(result, SQL)
     assert result.sql == sql_stmt.sql
@@ -452,7 +449,7 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
 
     # Test with plain string SQL input
     string_sql = "SELECT id FROM another_table"
-    built_stmt_from_string = adbc_driver._build_statement(string_sql, _config=sql_config)
+    built_stmt_from_string = adbc_driver._build_statement(string_sql, config=sql_config)
     assert isinstance(built_stmt_from_string, SQL)
     assert built_stmt_from_string.sql == string_sql
     assert built_stmt_from_string.parameters is None
@@ -460,7 +457,7 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
     # Test with plain string SQL and parameters
     string_sql_with_params = "SELECT id FROM yet_another_table WHERE id = ?"
     params_for_string = (1,)
-    built_stmt_with_params = adbc_driver._build_statement(string_sql_with_params, params_for_string, _config=sql_config)
+    built_stmt_with_params = adbc_driver._build_statement(string_sql_with_params, params_for_string, config=sql_config)
     assert isinstance(built_stmt_with_params, SQL)
     assert built_stmt_with_params.sql == string_sql_with_params
     assert built_stmt_with_params.parameters == [1]  # Tuple params are unpacked into list

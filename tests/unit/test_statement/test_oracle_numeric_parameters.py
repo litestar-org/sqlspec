@@ -92,13 +92,13 @@ def test_mixed_parameter_styles(
         strict_mode=True,  # Enable strict mode to raise validation errors
     )
     if error_type:
-        stmt = SQL(sql, parameters=parameters, _config=config)
+        stmt = SQL(sql, parameters=parameters, config=config)
         # In strict mode, validation errors are wrapped in SQLValidationError
         with pytest.raises((error_type, SQLValidationError)):
             # Trigger validation by accessing property
             _ = stmt.to_sql()
     else:
-        stmt = SQL(sql, parameters=parameters, _config=config)
+        stmt = SQL(sql, parameters=parameters, config=config)
         # Should not raise
         _ = stmt.to_sql()
 
@@ -269,7 +269,7 @@ def test_positional_colon_parameter_validation(
         allowed_parameter_styles=("positional_colon", "positional_colon"),
         strict_mode=True,  # Enable strict mode to raise validation errors
     )
-    stmt = SQL(sql, parameters=parameters, _config=config)
+    stmt = SQL(sql, parameters=parameters, config=config)
 
     if should_fail:
         with pytest.raises((ParameterError, MissingParameterError, SQLValidationError)):
@@ -297,7 +297,7 @@ def test_positional_colon_in_strings_and_comments() -> None:
     from sqlspec.statement.sql import SQLConfig
 
     config = SQLConfig(strict_mode=False)
-    stmt = SQL(sql, parameters=[42], _config=config)
+    stmt = SQL(sql, parameters=[42], config=config)
 
     # Should only find :5 as a real parameter
     assert len(stmt.parameter_info) == 1

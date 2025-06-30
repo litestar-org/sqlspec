@@ -15,7 +15,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, RowT
@@ -103,7 +103,14 @@ class AiosqliteDriver(
             return await self._execute_script(sql, connection=connection, **kwargs)
 
         # Determine if we need to convert parameter style
-        detected_styles = {p.style for p in statement.parameter_info}
+        detected_styles = set()
+        # Extract parameter styles from the SQL string
+        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
+        validator = self.config.parameter_validator if self.config else ParameterValidator()
+        param_infos = validator.extract_parameters(sql_str)
+        if param_infos:
+            detected_styles = {p.style for p in param_infos}
+
         target_style = self.default_parameter_style
 
         # Check if any detected style is not supported

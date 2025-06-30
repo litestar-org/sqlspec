@@ -60,13 +60,13 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
                 new_config = _config
                 if self.dialect and not new_config.dialect:
                     new_config = replace(new_config, dialect=self.dialect)
-                return SQL(statement, parameters=parameters or None, kwargs=kwargs or None, config=new_config)
+                return SQL(statement, parameters=parameters or None, **(kwargs or {}), config=new_config)
             return statement
         # Create new SQL object
         new_config = _config
         if self.dialect and not new_config.dialect:
             new_config = replace(new_config, dialect=self.dialect)
-        return SQL(statement, parameters=parameters or None, kwargs=kwargs or None, config=new_config)
+        return SQL(statement, parameters=parameters or None, **(kwargs or {}), config=new_config)
 
     @abstractmethod
     def _execute_statement(
@@ -153,7 +153,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
         # If schema_type is provided and we have data, convert it
         if schema_type and result.data and can_convert_to_schema(self):
             converted_data = list(self.to_schema(data=result.data, schema_type=schema_type))
-            return SQLResult[ModelDTOT](
+            return SQLResult(
                 statement=result.statement,
                 data=converted_data,
                 column_names=result.column_names,

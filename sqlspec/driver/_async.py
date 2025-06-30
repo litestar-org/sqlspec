@@ -55,13 +55,13 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
                 new_config = _config
                 if self.dialect and not new_config.dialect:
                     new_config = replace(new_config, dialect=self.dialect)
-                return SQL(statement, parameters=parameters or None, kwargs=kwargs or None, config=new_config)
+                return SQL(statement, parameters=parameters or None, **(kwargs or {}), config=new_config)
             return statement
         # Create new SQL object
         new_config = _config
         if self.dialect and not new_config.dialect:
             new_config = replace(new_config, dialect=self.dialect)
-        return SQL(statement, parameters=parameters or None, kwargs=kwargs, config=new_config)
+        return SQL(statement, parameters=parameters or None, **kwargs, config=new_config)
 
     @abstractmethod
     async def _execute_statement(

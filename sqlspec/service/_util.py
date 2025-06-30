@@ -6,18 +6,8 @@ from sqlspec.driver.mixins._result_utils import _DEFAULT_TYPE_DECODERS, _default
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.service.pagination import OffsetPagination
 from sqlspec.statement.filters import FilterTypeT, LimitOffsetFilter, StatementFilter
-from sqlspec.typing import (
-    BaseModel,
-    DataclassProtocol,
-    ModelDTOT,
-    ModelT,
-    Struct,
-    convert,
-    get_type_adapter,
-    is_dataclass,
-    is_msgspec_struct,
-    is_pydantic_model,
-)
+from sqlspec.typing import BaseModel, DataclassProtocol, ModelDTOT, ModelT, Struct, convert, get_type_adapter
+from sqlspec.utils.type_guards import is_dataclass, is_msgspec_struct, is_pydantic_model
 
 __all__ = ("ResultConverter", "find_filter")
 

@@ -297,7 +297,9 @@ def test_execute_select_statement(driver: BigQueryDriver, mock_connection: Magic
     statement = SQL("SELECT * FROM users")
     result = driver._execute_statement(statement)
 
-    assert result == {"data": [], "column_names": ["id"], "rows_affected": 0}
+    assert result.data == []
+    assert result.column_names == ["id"]
+    assert result.rows_affected == 0
 
     mock_connection.query.assert_called_once()
 
@@ -312,10 +314,11 @@ def test_execute_dml_statement(driver: BigQueryDriver, mock_connection: MagicMoc
     mock_job.errors = None
     mock_job.statement_type = "INSERT"  # This is the key - identify it as a DML statement
 
-    statement = SQL("INSERT INTO users (name) VALUES (@name)", kwargs={"name": "Alice"})
+    statement = SQL("INSERT INTO users (name) VALUES (@name)", parameters=None, name="Alice")
     result = driver._execute_statement(statement)
 
-    assert result == {"rows_affected": 1, "status_message": "OK - job_id: test-job-123"}
+    assert result.rows_affected == 1
+    assert result.metadata["status_message"] == "OK - job_id: test-job-123"
 
     mock_connection.query.assert_called_once()
 
@@ -364,7 +367,8 @@ def test_execute_many(driver: BigQueryDriver, mock_connection: MagicMock) -> Non
 
     result = driver._execute_many(sql, params)
 
-    assert result == {"rows_affected": 3, "status_message": "OK - executed batch job batch-job-123"}
+    assert result.rows_affected == 3
+    assert result.metadata["status_message"] == "OK - executed batch job batch-job-123"
 
     mock_connection.query.assert_called_once()
 
@@ -390,8 +394,8 @@ def test_execute_many_with_non_dict_parameters(driver: BigQueryDriver, mock_conn
     assert "INSERT INTO users VALUES (@p_1)" in executed_sql
 
     # Verify result
-    assert result["rows_affected"] == 2
-    assert "batch-job-123" in result["status_message"]
+    assert result.rows_affected == 2
+    assert "batch-job-123" in result.metadata["status_message"]
 
 
 # Execute Script Tests
@@ -408,7 +412,8 @@ def test_execute_script(driver: BigQueryDriver, mock_connection: MagicMock) -> N
 
     result = driver._execute_script(script)
 
-    assert result == {"statements_executed": 3, "status_message": "SCRIPT EXECUTED"}
+    assert result.total_statements == 3
+    assert result.metadata["status_message"] == "SCRIPT EXECUTED"
 
     # Should be called once for each non-empty statement
     assert mock_connection.query.call_count == 3
@@ -624,7 +629,9 @@ def test_execute_select_with_empty_result(driver: BigQueryDriver, mock_connectio
     statement = SQL("SELECT * FROM users WHERE 1=0")
     result = driver._execute_statement(statement)
 
-    assert result == {"data": [], "column_names": ["id"], "rows_affected": 0}
+    assert result.data == []
+    assert result.column_names == ["id"]
+    assert result.rows_affected == 0
 
 
 def test_rows_to_results_conversion(driver: BigQueryDriver) -> None:

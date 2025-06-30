@@ -3,7 +3,7 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
 
 from adbc_driver_manager.dbapi import Connection, Cursor
 
@@ -16,12 +16,11 @@ from sqlspec.driver.mixins import (
     TypeCoercionMixin,
 )
 from sqlspec.exceptions import wrap_exceptions
-from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
+from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT, RowT
+from sqlspec.typing import DictRow, RowT
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.type_guards import is_dict_with_field
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -170,13 +169,20 @@ class AdbcDriver(
 
     def _execute_statement(
         self, statement: SQL, connection: Optional["AdbcConnection"] = None, **kwargs: Any
-    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
+    ) -> SQLResult[RowT]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
         # Determine if we need to convert parameter style
-        detected_styles = {p.style for p in statement.parameter_info}
+        detected_styles = set()
+        # Extract parameter styles from the SQL string
+        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
+        validator = self.config.parameter_validator if self.config else ParameterValidator()
+        param_infos = validator.extract_parameters(sql_str)
+        if param_infos:
+            detected_styles = {p.style for p in param_infos}
+
         target_style = self.default_parameter_style
         unsupported_styles = detected_styles - set(self.supported_parameter_styles)
 
@@ -197,7 +203,7 @@ class AdbcDriver(
 
     def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional["AdbcConnection"] = None, **kwargs: Any
-    ) -> Union[SelectResultDict, DMLResultDict]:
+    ) -> SQLResult[RowT]:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
             # ADBC expects parameters as a list for most drivers
@@ -218,19 +224,26 @@ class AdbcDriver(
             if self.returns_rows(statement.expression):
                 fetched_data = cursor.fetchall()
                 column_names = [col[0] for col in cursor.description or []]
-                result: SelectResultDict = {
-                    "data": fetched_data,
-                    "column_names": column_names,
-                    "rows_affected": len(fetched_data),
-                }
-                return result
+                return SQLResult(
+                    statement=statement,
+                    data=cast("list[RowT]", fetched_data),
+                    column_names=column_names,
+                    rows_affected=len(fetched_data),
+                    operation_type="SELECT",
+                )
 
-            dml_result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
-            return dml_result
+            operation_type = self._determine_operation_type(statement)
+            return SQLResult(
+                statement=statement,
+                data=cast("list[RowT]", []),
+                rows_affected=cursor.rowcount,
+                operation_type=operation_type,
+                metadata={"status_message": "OK"},
+            )
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional["AdbcConnection"] = None, **kwargs: Any
-    ) -> DMLResultDict:
+    ) -> SQLResult[RowT]:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
             try:
@@ -242,12 +255,17 @@ class AdbcDriver(
                 # Always re-raise the original exception
                 raise e from e
 
-            result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
-            return result
+            return SQLResult(
+                statement=SQL(sql),
+                data=[],
+                rows_affected=cursor.rowcount,
+                operation_type="EXECUTE",
+                metadata={"status_message": "OK"},
+            )
 
     def _execute_script(
         self, script: str, connection: Optional["AdbcConnection"] = None, **kwargs: Any
-    ) -> ScriptResultDict:
+    ) -> SQLResult[RowT]:
         conn = self._connection(connection)
         # ADBC drivers don't support multiple statements in a single execute
         # Use the shared implementation to split the script
@@ -258,8 +276,15 @@ class AdbcDriver(
             for statement in statements:
                 executed_count += self._execute_single_script_statement(cursor, statement)
 
-        result: ScriptResultDict = {"statements_executed": executed_count, "status_message": "SCRIPT EXECUTED"}
-        return result
+        return SQLResult(
+            statement=SQL(script),
+            data=[],
+            rows_affected=0,
+            operation_type="SCRIPT",
+            metadata={"status_message": "SCRIPT EXECUTED"},
+            total_statements=executed_count,
+            successful_statements=executed_count,
+        )
 
     def _execute_single_script_statement(self, cursor: "Cursor", statement: str) -> int:
         """Execute a single statement from a script and handle errors.
@@ -281,59 +306,6 @@ class AdbcDriver(
             raise e from e
         else:
             return 1
-
-    def _wrap_select_result(
-        self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
-    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
-        # result must be a dict with keys: data, column_names, rows_affected
-
-        rows_as_dicts = [dict(zip(result["column_names"], row)) for row in result["data"]]
-
-        if schema_type:
-            return SQLResult[ModelDTOT](
-                statement=statement,
-                data=list(self.to_schema(data=rows_as_dicts, schema_type=schema_type)),
-                column_names=result["column_names"],
-                rows_affected=result["rows_affected"],
-                operation_type="SELECT",
-            )
-        return SQLResult[RowT](
-            statement=statement,
-            data=rows_as_dicts,
-            column_names=result["column_names"],
-            rows_affected=result["rows_affected"],
-            operation_type="SELECT",
-        )
-
-    def _wrap_execute_result(
-        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
-    ) -> SQLResult[RowT]:
-        operation_type = (
-            str(statement.expression.key).upper()
-            if statement.expression and hasattr(statement.expression, "key")
-            else "UNKNOWN"
-        )
-
-        # Handle TypedDict results
-        if is_dict_with_field(result, "statements_executed"):
-            return SQLResult[RowT](
-                statement=statement,
-                data=[],
-                rows_affected=0,
-                total_statements=result["statements_executed"],
-                operation_type="SCRIPT",  # Scripts always have operation_type SCRIPT
-                metadata={"status_message": result["status_message"]},
-            )
-        if is_dict_with_field(result, "rows_affected"):
-            return SQLResult[RowT](
-                statement=statement,
-                data=[],
-                rows_affected=result["rows_affected"],
-                operation_type=operation_type,
-                metadata={"status_message": result["status_message"]},
-            )
-        msg = f"Unexpected result type: {type(result)}"
-        raise ValueError(msg)
 
     def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
         """ADBC native Arrow table fetching.

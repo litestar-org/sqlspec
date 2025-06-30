@@ -22,7 +22,7 @@ async def psycopg_async_session(postgres_service: PostgresService) -> AsyncGener
         password=postgres_service.password,
         dbname=postgres_service.database,
         autocommit=True,  # Enable autocommit for tests
-        statement_config=SQLConfig(enable_transformations=False, enable_normalization=False, enable_parsing=False),
+        statement_config=SQLConfig(enable_transformations=False, enable_validation=False, enable_parsing=False),
     )
 
     async with config.provide_session() as session:

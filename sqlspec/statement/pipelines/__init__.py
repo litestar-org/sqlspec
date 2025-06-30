@@ -66,8 +66,6 @@ __all__ = (
     "SecurityValidator",
     "SecurityValidatorConfig",
     "SimplificationConfig",
-    "StatementAnalysis",
-    "StatementAnalyzer",
     "StatementPipeline",
     "TransformationLog",
     "ValidationError",

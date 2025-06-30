@@ -303,7 +303,7 @@ class TestDialectPropagation:
         # When driver builds a statement, it should pass its dialect
         statement = driver._build_statement("SELECT * FROM users")
         assert isinstance(statement, SQL)
-        assert statement._dialect == "sqlite"
+        assert statement.dialect == "sqlite"
 
     def test_dialect_in_execute_script(self) -> None:
         """Test that dialect is passed in execute_script."""
@@ -320,7 +320,7 @@ class TestDialectPropagation:
             call_args = mock_execute.call_args
             sql_statement = call_args[1]["statement"]
             assert isinstance(sql_statement, SQL)
-            assert sql_statement._dialect == "sqlite"
+            assert sql_statement.dialect == "sqlite"
 
     def test_sql_translator_mixin_uses_driver_dialect(self) -> None:
         """Test that SQLTranslatorMixin uses the driver's dialect."""
@@ -357,9 +357,9 @@ class TestDialectValidation:
         dialects = ["sqlite", Dialect.get_or_raise("postgres"), None]
 
         for dialect in dialects:
-            sql = SQL("SELECT 1", _dialect=dialect)  # type: ignore[arg-type]
+            sql = SQL("SELECT 1", config=SQLConfig(dialect=dialect))  # type: ignore[arg-type]
             # Should not raise during initialization
-            assert sql._dialect == dialect
+            assert sql.dialect == dialect
 
     def test_config_missing_driver_type_attribute_error(self) -> None:
         """Test proper error when accessing dialect on config without driver_type."""

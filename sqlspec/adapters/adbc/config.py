@@ -463,15 +463,18 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
                 # Create statement config with parameter style info if not already set
                 statement_config = self.statement_config
-                updates = {}
-                if statement_config.dialect is None:
-                    updates["dialect"] = self._get_dialect()
-                if statement_config.allowed_parameter_styles is None:
-                    updates["allowed_parameter_styles"] = supported_styles
-                    updates["target_parameter_style"] = preferred_style
+                if statement_config is not None:
+                    # Update dialect if not set
+                    if statement_config.dialect is None:
+                        statement_config = replace(statement_config, dialect=self._get_dialect())
 
-                if updates:
-                    statement_config = replace(statement_config, **updates)
+                    # Update parameter styles if not set
+                    if statement_config.allowed_parameter_styles is None:
+                        statement_config = replace(
+                            statement_config,
+                            allowed_parameter_styles=supported_styles,
+                            target_parameter_style=preferred_style,
+                        )
 
                 driver = self.driver_type(connection=connection, config=statement_config)
                 yield driver

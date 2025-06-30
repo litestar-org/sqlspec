@@ -248,9 +248,9 @@ class SyncStorageMixin(StorageMixinBase):
 
         # Only pass params if it's not None to avoid adding None as a parameter
         sql = (
-            SQL(statement, parameters=params, config=_config, kwargs=kwargs)
+            SQL(statement, parameters=params, config=_config, **kwargs)
             if params is not None
-            else SQL(statement, config=_config, kwargs=kwargs)
+            else SQL(statement, config=_config, **kwargs)
         )
 
         # Apply filters after creation
@@ -747,9 +747,9 @@ class AsyncStorageMixin(StorageMixinBase):
 
         # Only pass params if it's not None to avoid adding None as a parameter
         sql = (
-            SQL(statement, parameters=params, config=_config, kwargs=kwargs)
+            SQL(statement, parameters=params, config=_config, **kwargs)
             if params is not None
-            else SQL(statement, config=_config, kwargs=kwargs)
+            else SQL(statement, config=_config, **kwargs)
         )
 
         # Apply filters after creation
@@ -809,9 +809,9 @@ class AsyncStorageMixin(StorageMixinBase):
             _config = replace(_config, enable_transformations=False)
 
         if params is not None:
-            sql = SQL(statement, parameters=params, kwargs=options, config=_config)
+            sql = SQL(statement, parameters=params, config=_config, **options)
         else:
-            sql = SQL(statement, kwargs=options, config=_config)
+            sql = SQL(statement, config=_config, **options)
 
         # Apply filters after creation
         for filter_ in filters:

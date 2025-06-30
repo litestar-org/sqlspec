@@ -1,7 +1,7 @@
 import io
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 if TYPE_CHECKING:
     from psycopg.abc import Query
@@ -21,13 +21,12 @@ from sqlspec.driver.mixins import (
     TypeCoercionMixin,
 )
 from sqlspec.exceptions import PipelineExecutionError
-from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
+from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.splitter import split_sql_script
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT, RowT
+from sqlspec.typing import DictRow, RowT
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.type_guards import is_dict_with_field
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -74,12 +73,20 @@ class PsycopgSyncDriver(
 
     def _execute_statement(
         self, statement: SQL, connection: Optional[PsycopgSyncConnection] = None, **kwargs: Any
-    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
+    ) -> SQLResult[RowT]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
-        detected_styles = {p.style for p in statement.parameter_info}
+        # Determine if we need to convert parameter style
+        detected_styles = set()
+        # Extract parameter styles from the SQL string
+        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
+        validator = self.config.parameter_validator if self.config else ParameterValidator()
+        param_infos = validator.extract_parameters(sql_str)
+        if param_infos:
+            detected_styles = {p.style for p in param_infos}
+
         target_style = self.default_parameter_style
         unsupported_styles = detected_styles - set(self.supported_parameter_styles)
         if unsupported_styles:
@@ -113,7 +120,7 @@ class PsycopgSyncDriver(
         statement: SQL,
         connection: Optional[PsycopgSyncConnection] = None,
         **kwargs: Any,
-    ) -> Union[SelectResultDict, DMLResultDict]:
+    ) -> SQLResult[RowT]:
         conn = self._connection(connection)
 
         # Check if this is a COPY command
@@ -128,12 +135,23 @@ class PsycopgSyncDriver(
             if cursor.description is not None:
                 fetched_data = cursor.fetchall()
                 column_names = [col.name for col in cursor.description]
-                return {"data": fetched_data, "column_names": column_names, "rows_affected": len(fetched_data)}
-            return {"rows_affected": cursor.rowcount, "status_message": cursor.statusmessage or "OK"}
+                return SQLResult(
+                    statement=statement,
+                    data=cast("list[RowT]", fetched_data),
+                    column_names=column_names,
+                    rows_affected=len(fetched_data),
+                    operation_type="SELECT",
+                )
+            operation_type = self._determine_operation_type(statement)
+            return SQLResult(
+                statement=statement,
+                data=[],
+                rows_affected=cursor.rowcount or 0,
+                operation_type=operation_type,
+                metadata={"status_message": cursor.statusmessage or "OK"},
+            )
 
-    def _handle_copy_command(
-        self, sql: str, data: Any, connection: PsycopgSyncConnection
-    ) -> Union[SelectResultDict, DMLResultDict]:
+    def _handle_copy_command(self, sql: str, data: Any, connection: PsycopgSyncConnection) -> SQLResult[RowT]:
         """Handle PostgreSQL COPY commands using cursor.copy() method."""
         sql_upper = sql.strip().upper()
 
@@ -144,8 +162,14 @@ class PsycopgSyncDriver(
                 with cursor.copy(cast("Query", sql)) as copy:
                     output_data.extend(row for row in copy)
 
-                # Return as SelectResultDict with the raw COPY data
-                return {"data": output_data, "column_names": ["copy_data"], "rows_affected": len(output_data)}
+                # Return as SQLResult with the raw COPY data
+                return SQLResult(
+                    statement=SQL(sql),
+                    data=cast("list[RowT]", output_data),
+                    column_names=["copy_data"],
+                    rows_affected=len(output_data),
+                    operation_type="SELECT",
+                )
             # COPY FROM STDIN - write data to the database
             with cursor.copy(cast("Query", sql)) as copy:
                 if data:
@@ -161,11 +185,17 @@ class PsycopgSyncDriver(
                         copy.write_row(data)
 
             # For COPY operations, cursor.rowcount contains the number of rows affected
-            return {"rows_affected": cursor.rowcount or -1, "status_message": cursor.statusmessage or "COPY COMPLETE"}
+            return SQLResult(
+                statement=SQL(sql),
+                data=[],
+                rows_affected=cursor.rowcount or -1,
+                operation_type="EXECUTE",
+                metadata={"status_message": cursor.statusmessage or "COPY COMPLETE"},
+            )
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[PsycopgSyncConnection] = None, **kwargs: Any
-    ) -> DMLResultDict:
+    ) -> SQLResult[RowT]:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
             cursor.executemany(sql, param_list or [])
@@ -174,20 +204,29 @@ class PsycopgSyncDriver(
             rows_affected = cursor.rowcount
             if rows_affected <= 0 and param_list:
                 rows_affected = len(param_list)
-            result: DMLResultDict = {"rows_affected": rows_affected, "status_message": cursor.statusmessage or "OK"}
-            return result
+            return SQLResult(
+                statement=SQL(sql),
+                data=[],
+                rows_affected=rows_affected,
+                operation_type="EXECUTE",
+                metadata={"status_message": cursor.statusmessage or "OK"},
+            )
 
     def _execute_script(
         self, script: str, connection: Optional[PsycopgSyncConnection] = None, **kwargs: Any
-    ) -> ScriptResultDict:
+    ) -> SQLResult[RowT]:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
             cursor.execute(script)
-            result: ScriptResultDict = {
-                "statements_executed": -1,
-                "status_message": cursor.statusmessage or "SCRIPT EXECUTED",
-            }
-            return result
+            return SQLResult(
+                statement=SQL(script),
+                data=[],
+                rows_affected=0,
+                operation_type="SCRIPT",
+                metadata={"status_message": cursor.statusmessage or "SCRIPT EXECUTED"},
+                total_statements=1,
+                successful_statements=1,
+            )
 
     def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
         self._ensure_pyarrow_installed()
@@ -209,61 +248,6 @@ class PsycopgSyncDriver(
                 copy.write(buffer.read())
 
             return cursor.rowcount if cursor.rowcount is not None else -1
-
-    def _wrap_select_result(
-        self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
-    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
-        rows_as_dicts: list[dict[str, Any]] = [dict(row) for row in result["data"]]
-
-        if schema_type:
-            return SQLResult[ModelDTOT](
-                statement=statement,
-                data=list(self.to_schema(data=result["data"], schema_type=schema_type)),
-                column_names=result["column_names"],
-                rows_affected=result["rows_affected"],
-                operation_type="SELECT",
-            )
-        return SQLResult[RowT](
-            statement=statement,
-            data=rows_as_dicts,
-            column_names=result["column_names"],
-            rows_affected=result["rows_affected"],
-            operation_type="SELECT",
-        )
-
-    def _wrap_execute_result(
-        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
-    ) -> SQLResult[RowT]:
-        operation_type = "UNKNOWN"
-        if statement.expression:
-            operation_type = str(statement.expression.key).upper()
-
-        # Handle case where we got a SelectResultDict but it was routed here due to parsing being disabled
-        if is_dict_with_field(result, "data") and is_dict_with_field(result, "column_names"):
-            # This is actually a SELECT result, wrap it properly
-            return self._wrap_select_result(statement, cast("SelectResultDict", result), **kwargs)
-
-        if is_dict_with_field(result, "statements_executed"):
-            return SQLResult[RowT](
-                statement=statement,
-                data=[],
-                rows_affected=0,
-                operation_type="SCRIPT",
-                metadata={"status_message": result.get("status_message", "")},
-            )
-
-        if is_dict_with_field(result, "rows_affected"):
-            return SQLResult[RowT](
-                statement=statement,
-                data=[],
-                rows_affected=cast("int", result.get("rows_affected", -1)),
-                operation_type=operation_type,
-                metadata={"status_message": result.get("status_message", "")},
-            )
-
-        # This shouldn't happen with TypedDict approach
-        msg = f"Unexpected result type: {type(result)}"
-        raise ValueError(msg)
 
     def _connection(self, connection: Optional[PsycopgSyncConnection] = None) -> PsycopgSyncConnection:
         """Get the connection to use for the operation."""
@@ -356,7 +340,7 @@ class PsycopgSyncDriver(
                 statement=sql,
                 data=cast("list[RowT]", []),
                 rows_affected=cursor.rowcount,
-                operation_type="execute_many",
+                operation_type="EXECUTE",
                 metadata={"status_message": "OK"},
             )
 
@@ -371,7 +355,7 @@ class PsycopgSyncDriver(
                 statement=sql,
                 data=cast("list[RowT]", data),
                 rows_affected=len(data),
-                operation_type="select",
+                operation_type="SELECT",
                 metadata={"column_names": column_names},
             )
 
@@ -392,7 +376,7 @@ class PsycopgSyncDriver(
             statement=sql,
             data=cast("list[RowT]", []),
             rows_affected=total_affected,
-            operation_type="execute_script",
+            operation_type="SCRIPT",
             metadata={"status_message": "SCRIPT EXECUTED", "statements_executed": len(script_statements)},
         )
 
@@ -404,7 +388,7 @@ class PsycopgSyncDriver(
                 statement=sql,
                 data=cast("list[RowT]", []),
                 rows_affected=cursor.rowcount or 0,
-                operation_type="execute",
+                operation_type="EXECUTE",
                 metadata={"status_message": "OK"},
             )
 
@@ -483,13 +467,21 @@ class PsycopgAsyncDriver(
 
     async def _execute_statement(
         self, statement: SQL, connection: Optional[PsycopgAsyncConnection] = None, **kwargs: Any
-    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
+    ) -> SQLResult[RowT]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
         # Determine if we need to convert parameter style
-        detected_styles = {p.style for p in statement.parameter_info}
+        # Determine if we need to convert parameter style
+        detected_styles = set()
+        # Extract parameter styles from the SQL string
+        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
+        validator = self.config.parameter_validator if self.config else ParameterValidator()
+        param_infos = validator.extract_parameters(sql_str)
+        if param_infos:
+            detected_styles = {p.style for p in param_infos}
+
         target_style = self.default_parameter_style
 
         # Check if any detected style is not supported
@@ -526,7 +518,7 @@ class PsycopgAsyncDriver(
         statement: SQL,
         connection: Optional[PsycopgAsyncConnection] = None,
         **kwargs: Any,
-    ) -> Union[SelectResultDict, DMLResultDict]:
+    ) -> SQLResult[RowT]:
         conn = self._connection(connection)
 
         # Check if this is a COPY command
@@ -542,22 +534,35 @@ class PsycopgAsyncDriver(
                 # For SELECT statements, extract data while cursor is open
                 fetched_data = await cursor.fetchall()
                 column_names = [col.name for col in cursor.description or []]
-                return {"data": fetched_data, "column_names": column_names, "rows_affected": len(fetched_data)}
+                return SQLResult(
+                    statement=statement,
+                    data=cast("list[RowT]", fetched_data),
+                    column_names=column_names,
+                    rows_affected=len(fetched_data),
+                    operation_type="SELECT",
+                )
             if not statement.expression and sql.strip().upper().startswith("SELECT"):
                 # For SELECT statements when parsing is disabled
                 fetched_data = await cursor.fetchall()
                 column_names = [col.name for col in cursor.description or []]
-                return {"data": fetched_data, "column_names": column_names, "rows_affected": len(fetched_data)}
+                return SQLResult(
+                    statement=statement,
+                    data=cast("list[RowT]", fetched_data),
+                    column_names=column_names,
+                    rows_affected=len(fetched_data),
+                    operation_type="SELECT",
+                )
             # For DML statements
-            dml_result: DMLResultDict = {
-                "rows_affected": cursor.rowcount,
-                "status_message": cursor.statusmessage or "OK",
-            }
-            return dml_result
+            operation_type = self._determine_operation_type(statement)
+            return SQLResult(
+                statement=statement,
+                data=[],
+                rows_affected=cursor.rowcount or 0,
+                operation_type=operation_type,
+                metadata={"status_message": cursor.statusmessage or "OK"},
+            )
 
-    async def _handle_copy_command(
-        self, sql: str, data: Any, connection: PsycopgAsyncConnection
-    ) -> Union[SelectResultDict, DMLResultDict]:
+    async def _handle_copy_command(self, sql: str, data: Any, connection: PsycopgAsyncConnection) -> SQLResult[RowT]:
         """Handle PostgreSQL COPY commands using cursor.copy() method."""
         sql_upper = sql.strip().upper()
 
@@ -568,8 +573,14 @@ class PsycopgAsyncDriver(
                 async with cursor.copy(cast("Query", sql)) as copy:
                     output_data.extend([row async for row in copy])
 
-                # Return as SelectResultDict with the raw COPY data
-                return {"data": output_data, "column_names": ["copy_data"], "rows_affected": len(output_data)}
+                # Return as SQLResult with the raw COPY data
+                return SQLResult(
+                    statement=SQL(sql),
+                    data=cast("list[RowT]", output_data),
+                    column_names=["copy_data"],
+                    rows_affected=len(output_data),
+                    operation_type="SELECT",
+                )
             # COPY FROM STDIN - write data to the database
             async with cursor.copy(cast("Query", sql)) as copy:
                 if data:
@@ -585,27 +596,44 @@ class PsycopgAsyncDriver(
                         await copy.write_row(data)
 
             # For COPY operations, cursor.rowcount contains the number of rows affected
-            return {"rows_affected": cursor.rowcount or -1, "status_message": cursor.statusmessage or "COPY COMPLETE"}
+            return SQLResult(
+                statement=SQL(sql),
+                data=[],
+                rows_affected=cursor.rowcount or -1,
+                operation_type="EXECUTE",
+                metadata={"status_message": cursor.statusmessage or "COPY COMPLETE"},
+            )
 
     async def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[PsycopgAsyncConnection] = None, **kwargs: Any
-    ) -> DMLResultDict:
+    ) -> SQLResult[RowT]:
         conn = self._connection(connection)
         async with conn.cursor() as cursor:
             await cursor.executemany(cast("Query", sql), param_list or [])
-            return {"rows_affected": cursor.rowcount, "status_message": cursor.statusmessage or "OK"}
+            return SQLResult(
+                statement=SQL(sql),
+                data=[],
+                rows_affected=cursor.rowcount,
+                operation_type="EXECUTE",
+                metadata={"status_message": cursor.statusmessage or "OK"},
+            )
 
     async def _execute_script(
         self, script: str, connection: Optional[PsycopgAsyncConnection] = None, **kwargs: Any
-    ) -> ScriptResultDict:
+    ) -> SQLResult[RowT]:
         conn = self._connection(connection)
         async with conn.cursor() as cursor:
             await cursor.execute(cast("Query", script))
             # For scripts, return script result format
-            return {
-                "statements_executed": -1,  # Psycopg doesn't provide this info
-                "status_message": cursor.statusmessage or "SCRIPT EXECUTED",
-            }
+            return SQLResult(
+                statement=SQL(script),
+                data=[],
+                rows_affected=0,
+                operation_type="SCRIPT",
+                metadata={"status_message": cursor.statusmessage or "SCRIPT EXECUTED"},
+                total_statements=1,
+                successful_statements=1,
+            )
 
     async def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
         self._ensure_pyarrow_installed()
@@ -639,64 +667,6 @@ class PsycopgAsyncDriver(
                 await copy.write(buffer.read())
 
             return cursor.rowcount if cursor.rowcount is not None else -1
-
-    async def _wrap_select_result(
-        self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
-    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
-        # result must be a dict with keys: data, column_names, rows_affected
-        fetched_data = result["data"]
-        column_names = result["column_names"]
-        rows_affected = result["rows_affected"]
-        rows_as_dicts: list[dict[str, Any]] = [dict(row) for row in fetched_data]
-
-        if schema_type:
-            return SQLResult[ModelDTOT](
-                statement=statement,
-                data=list(self.to_schema(data=fetched_data, schema_type=schema_type)),
-                column_names=column_names,
-                rows_affected=rows_affected,
-                operation_type="SELECT",
-            )
-        return SQLResult[RowT](
-            statement=statement,
-            data=rows_as_dicts,
-            column_names=column_names,
-            rows_affected=rows_affected,
-            operation_type="SELECT",
-        )
-
-    async def _wrap_execute_result(
-        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
-    ) -> SQLResult[RowT]:
-        operation_type = "UNKNOWN"
-        if statement.expression:
-            operation_type = str(statement.expression.key).upper()
-
-        # Handle case where we got a SelectResultDict but it was routed here due to parsing being disabled
-        if is_dict_with_field(result, "data") and is_dict_with_field(result, "column_names"):
-            # This is actually a SELECT result, wrap it properly
-            return await self._wrap_select_result(statement, cast("SelectResultDict", result), **kwargs)
-
-        if is_dict_with_field(result, "statements_executed"):
-            return SQLResult[RowT](
-                statement=statement,
-                data=[],
-                rows_affected=0,
-                operation_type="SCRIPT",
-                metadata={"status_message": result.get("status_message", "")},
-            )
-
-        if is_dict_with_field(result, "rows_affected"):
-            return SQLResult[RowT](
-                statement=statement,
-                data=[],
-                rows_affected=cast("int", result.get("rows_affected", -1)),
-                operation_type=operation_type,
-                metadata={"status_message": result.get("status_message", "")},
-            )
-        # This shouldn't happen with TypedDict approach
-        msg = f"Unexpected result type: {type(result)}"
-        raise ValueError(msg)
 
     def _connection(self, connection: Optional[PsycopgAsyncConnection] = None) -> PsycopgAsyncConnection:
         """Get the connection to use for the operation."""
@@ -780,7 +750,7 @@ class PsycopgAsyncDriver(
                 statement=sql,
                 data=cast("list[RowT]", []),
                 rows_affected=cursor.rowcount,
-                operation_type="execute_many",
+                operation_type="EXECUTE",
                 metadata={"status_message": "OK"},
             )
 
@@ -797,7 +767,7 @@ class PsycopgAsyncDriver(
                 statement=sql,
                 data=cast("list[RowT]", data),
                 rows_affected=len(data),
-                operation_type="select",
+                operation_type="SELECT",
                 metadata={"column_names": column_names},
             )
 
@@ -818,7 +788,7 @@ class PsycopgAsyncDriver(
             statement=sql,
             data=cast("list[RowT]", []),
             rows_affected=total_affected,
-            operation_type="execute_script",
+            operation_type="SCRIPT",
             metadata={"status_message": "SCRIPT EXECUTED", "statements_executed": len(script_statements)},
         )
 
@@ -832,7 +802,7 @@ class PsycopgAsyncDriver(
                 statement=sql,
                 data=cast("list[RowT]", []),
                 rows_affected=cursor.rowcount or 0,
-                operation_type="execute",
+                operation_type="EXECUTE",
                 metadata={"status_message": "OK"},
             )
 

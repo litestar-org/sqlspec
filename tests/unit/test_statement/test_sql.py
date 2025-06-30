@@ -60,7 +60,7 @@ def test_sql_initialization_with_parameters() -> None:
     """Test SQL initialization with parameters."""
     sql_str = "SELECT * FROM users WHERE id = :id"
     params = {"id": 1}
-    stmt = SQL(sql_str, kwargs=params)
+    stmt = SQL(sql_str, parameters=params)
 
     assert stmt.sql == sql_str
     assert stmt.parameters == params
@@ -77,7 +77,7 @@ def test_sql_initialization_with_parameters() -> None:
 def test_sql_with_different_parameter_styles(sql: str, params: "SQLParameterType", expected_sql: str) -> None:
     """Test SQL handles different parameter styles."""
     if isinstance(params, dict):
-        stmt = SQL(sql, kwargs=params)
+        stmt = SQL(sql, **params) if isinstance(params, dict) else SQL(sql, parameters=params)
     else:
         stmt = SQL(sql, parameters=params)
     assert stmt.sql == expected_sql
@@ -156,7 +156,7 @@ def test_sql_parameters_property() -> None:
     assert stmt2.parameters["pos_param_0"] == 1
 
     # Dict parameters
-    stmt3 = SQL("SELECT * FROM users WHERE id = :id", kwargs={"id": 1})
+    stmt3 = SQL("SELECT * FROM users WHERE id = :id", id=1)
     assert stmt3.parameters == {"id": 1}
 
 
@@ -399,7 +399,7 @@ def test_sql_complex_queries(complex_sql: str) -> None:
 # Test SQL copy behavior
 def test_sql_copy() -> None:
     """Test SQL objects can be copied with modifications."""
-    stmt1 = SQL("SELECT * FROM users", kwargs={"id": 1})
+    stmt1 = SQL("SELECT * FROM users", id=1)
 
     # Create new instance with different config
     new_config = SQLConfig(parse_errors_as_warnings=True)

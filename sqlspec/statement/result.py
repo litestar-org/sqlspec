@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 # Import Mapping for type checking in __post_init__
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Generic, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Generic, Literal, Optional, Union
 
 from typing_extensions import TypeVar
 
@@ -18,6 +18,8 @@ __all__ = ("ArrowResult", "SQLResult", "StatementResult")
 
 
 T = TypeVar("T")
+
+OperationType = Literal["SELECT", "INSERT", "UPDATE", "DELETE", "EXECUTE", "SCRIPT"]
 
 
 @dataclass
@@ -102,6 +104,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
     For script execution, this class also tracks multiple statement results and errors.
     """
 
+    data: "list[RowT]" = field(default_factory=list)
     error: Optional[Exception] = None
     operation_index: Optional[int] = None
     pipeline_sql: Optional["SQL"] = None
@@ -113,7 +116,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
     has_more: bool = False  # For pagination
 
     # Attributes primarily for DML-like results
-    operation_type: str = "SELECT"  # Default, override for DML
+    operation_type: OperationType = "SELECT"  # Default, override for DML
     inserted_ids: "list[Union[int, str]]" = field(default_factory=list)
     # rows_affected and last_inserted_id are inherited from StatementResult
 
@@ -176,7 +179,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
             }
 
         # For regular operations, return the data as usual
-        return cast("list[RowT]", self.data)
+        return self.data
 
     # --- Script execution methods ---
 
@@ -281,7 +284,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         if self.data is None:
             msg = "No data available"
             raise TypeError(msg)
-        return cast("RowT", self.data[index])
+        return self.data[index]
 
     # --- SQLAlchemy-style convenience methods ---
 
@@ -293,7 +296,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         """
         if self.data is None:
             return []
-        return cast("list[RowT]", self.data)
+        return self.data
 
     def one(self) -> "RowT":
         """Return exactly one row.
@@ -310,7 +313,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         if len(self.data) > 1:
             msg = f"Multiple results found ({len(self.data)}), exactly one row expected"
             raise ValueError(msg)
-        return cast("RowT", self.data[0])
+        return self.data[0]
 
     def one_or_none(self) -> "Optional[RowT]":
         """Return at most one row.
@@ -326,7 +329,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         if len(self.data) > 1:
             msg = f"Multiple results found ({len(self.data)}), at most one row expected"
             raise ValueError(msg)
-        return cast("RowT", self.data[0])
+        return self.data[0]
 
     def scalar(self) -> Any:
         """Return the first column of the first row.
@@ -343,14 +346,14 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
             if not row:
                 msg = "Row has no columns"
                 raise ValueError(msg)
-            first_key = cast("str", next(iter(row.keys())))
-            return cast("Any", row[first_key])
+            first_key = next(iter(row.keys()))
+            return row[first_key]
         if isinstance(row, Sequence) and not isinstance(row, (str, bytes)):
             # For tuple/list-like rows
             if len(row) == 0:
                 msg = "Row has no columns"
                 raise ValueError(msg)
-            return cast("Any", row[0])
+            return row[0]
         # For scalar values returned directly
         return row
 
@@ -373,7 +376,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
             # For tuple/list-like rows
             if len(row) == 0:
                 return None
-            return cast("Any", row[0])
+            return row[0]
         # For scalar values returned directly
         return row
 

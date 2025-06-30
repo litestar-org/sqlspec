@@ -11,14 +11,14 @@ This module tests the AsyncpgDriver class including:
 """
 
 from decimal import Decimal
-from typing import Any, cast
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from sqlspec.adapters.asyncpg import AsyncpgDriver
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import SelectResultDict, SQLResult
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
@@ -220,7 +220,9 @@ async def test_execute_select_statement(driver: AsyncpgDriver, mock_connection: 
         result = await driver._execute_statement(statement)
 
         # Now expect the converted dictionary data
-        assert result == {"data": [mock_dict, mock_dict], "column_names": ["id", "name", "email"], "rows_affected": 2}
+        assert result.data == [mock_dict, mock_dict]
+        assert result.column_names == ["id", "name", "email"]
+        assert result.rows_affected == 2
 
     mock_connection.fetch.assert_called_once_with("SELECT * FROM users")
 
@@ -233,7 +235,8 @@ async def test_execute_dml_statement(driver: AsyncpgDriver, mock_connection: Asy
     statement = SQL("INSERT INTO users (name, email) VALUES ($1, $2)", ["Alice", "alice@example.com"])
     result = await driver._execute_statement(statement)
 
-    assert result == {"rows_affected": 1, "status_message": "INSERT 0 1"}
+    assert result.rows_affected == 1
+    assert result.metadata["status_message"] == "INSERT 0 1"
 
     mock_connection.execute.assert_called_once_with(
         "INSERT INTO users (name, email) VALUES ($1, $2)", "Alice", "alice@example.com"
@@ -279,7 +282,8 @@ async def test_execute_many(driver: AsyncpgDriver, mock_connection: AsyncMock) -
 
     result = await driver._execute_many(sql, params)
 
-    assert result == {"rows_affected": 3, "status_message": "OK"}
+    assert result.rows_affected == 3
+    assert result.metadata["status_message"] == "OK"
 
     expected_params = [("Alice", "alice@example.com"), ("Bob", "bob@example.com"), ("Charlie", "charlie@example.com")]
     mock_connection.executemany.assert_called_once_with(sql, expected_params)
@@ -319,7 +323,8 @@ async def test_execute_script(driver: AsyncpgDriver, mock_connection: AsyncMock)
 
     result = await driver._execute_script(script)
 
-    assert result == {"statements_executed": -1, "status_message": "CREATE TABLE"}
+    assert result.total_statements == -1
+    assert result.metadata["status_message"] == "CREATE TABLE"
 
     mock_connection.execute.assert_called_once_with(script)
 
@@ -329,14 +334,11 @@ async def test_execute_script(driver: AsyncpgDriver, mock_connection: AsyncMock)
 async def test_wrap_select_result(driver: AsyncpgDriver) -> None:
     """Test wrapping SELECT results."""
     statement = SQL("SELECT * FROM users")
-    result = cast(
-        "SelectResultDict",
-        {
-            "data": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
-            "column_names": ["id", "name"],
-            "rows_affected": 2,
-        },
-    )
+    result = {
+        "data": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
+        "column_names": ["id", "name"],
+        "rows_affected": 2,
+    }
 
     wrapped: SQLResult[Any] = await driver._wrap_select_result(statement, result)  # type: ignore[arg-type]
 
@@ -521,7 +523,9 @@ async def test_execute_select_with_empty_result(driver: AsyncpgDriver, mock_conn
     statement = SQL("SELECT * FROM users WHERE 1=0")
     result = await driver._execute_statement(statement)
 
-    assert result == {"data": [], "column_names": [], "rows_affected": 0}
+    assert result.data == []
+    assert result.column_names == []
+    assert result.rows_affected == 0
 
 
 @pytest.mark.asyncio

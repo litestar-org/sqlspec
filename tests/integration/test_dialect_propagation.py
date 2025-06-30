@@ -20,7 +20,7 @@ from tests.integration.test_adapters.test_adbc.conftest import PostgresService
 
 
 # Sync dialect propagation tests
-def test_sqlite_dialect_propagation_through_execute() -> None:
+def test_sqlitedialect_propagation_through_execute() -> None:
     """Test that SQLite dialect propagates through execute calls."""
     config = SqliteConfig(database=":memory:")
 
@@ -55,12 +55,12 @@ def test_sqlite_dialect_propagation_through_execute() -> None:
     assert result.data[0]["name"] == "test"
 
     # Verify the internal SQL object has the correct dialect
-    assert result.statement._dialect == "sqlite"
+    assert result.statement.dialect == "sqlite"
 
     connection.close()
 
 
-def test_duckdb_dialect_propagation_with_query_builder() -> None:
+def test_duckdbdialect_propagation_with_query_builder() -> None:
     """Test that DuckDB dialect propagates through query builder."""
     config = DuckDBConfig(connection_config={"database": ":memory:"})
 
@@ -92,13 +92,13 @@ def test_duckdb_dialect_propagation_with_query_builder() -> None:
     assert result.data[0]["name"] == "test"
 
     # Verify the dialect propagated correctly
-    assert result.statement._dialect == "duckdb"
+    assert result.statement.dialect == "duckdb"
 
     connection.close()
 
 
 @pytest.mark.postgres
-def test_psycopg_dialect_in_execute_script() -> None:
+def test_psycopgdialect_in_execute_script() -> None:
     """Test that Psycopg dialect propagates in execute_script."""
     config = PsycopgSyncConfig(pool_config={"conninfo": "postgresql://test:test@localhost/test"})
 
@@ -112,7 +112,7 @@ def test_psycopg_dialect_in_execute_script() -> None:
             driver = PsycopgSyncDriver(connection=connection, config=SQLConfig())
 
             # Execute script and verify dialect
-            script = "CREATE TEMP TABLE test_dialect (id INT); INSERT INTO test_dialect VALUES (1);"
+            script = "CREATE TEMP TABLE testdialect (id INT); INSERT INTO testdialect VALUES (1);"
             result = driver.execute_script(script)
 
             # Verify result
@@ -120,7 +120,7 @@ def test_psycopg_dialect_in_execute_script() -> None:
             assert result.operation_type == "SCRIPT"
 
             # Verify the dialect propagated correctly
-            assert result.statement._dialect == "postgres"
+            assert result.statement.dialect == "postgres"
             assert result.statement.is_script is True
     except Exception:
         pytest.skip("PostgreSQL not available for testing")
@@ -129,7 +129,7 @@ def test_psycopg_dialect_in_execute_script() -> None:
 # Async dialect propagation tests
 @pytest.mark.asyncio
 @pytest.mark.postgres
-async def test_asyncpg_dialect_propagation_through_execute(postgres_service: PostgresService) -> None:
+async def test_asyncpgdialect_propagation_through_execute(postgres_service: PostgresService) -> None:
     """Test that AsyncPG dialect propagates through execute calls."""
     config = AsyncpgConfig(host="localhost", port=5432, database="test", user="test", password="test")
 
@@ -155,14 +155,14 @@ async def test_asyncpg_dialect_propagation_through_execute(postgres_service: Pos
             assert result.data[0]["name"] == "test"
 
             # Verify the dialect propagated correctly
-            assert result.statement._dialect == "postgres"
+            assert result.statement.dialect == "postgres"
     except Exception:
         pytest.skip("PostgreSQL not available for async testing")
 
 
 @pytest.mark.asyncio
 @pytest.mark.mysql
-async def test_asyncmy_dialect_propagation_with_filters(mysql_service: MySQLService) -> None:
+async def test_asyncmydialect_propagation_with_filters(mysql_service: MySQLService) -> None:
     """Test that AsyncMy dialect propagates with filters."""
     config = AsyncmyConfig(host="localhost", port=3306, database="test", user="test", password="test")
 
@@ -191,13 +191,13 @@ async def test_asyncmy_dialect_propagation_with_filters(mysql_service: MySQLServ
             assert len(result.data) == 1
 
             # Verify the dialect propagated correctly
-            assert result.statement._dialect == "mysql"
+            assert result.statement.dialect == "mysql"
     except Exception:
         pytest.skip("MySQL not available for async testing")
 
 
 # SQL processing tests
-def test_sql_processing_context_with_dialect() -> None:
+def test_sql_processing_context_withdialect() -> None:
     """Test that SQLProcessingContext properly handles dialect."""
 
     # Create context with dialect
@@ -207,7 +207,7 @@ def test_sql_processing_context_with_dialect() -> None:
     assert context.initial_sql_string == "SELECT * FROM users"
 
 
-def test_query_builder_dialect_inheritance() -> None:
+def test_query_builderdialect_inheritance() -> None:
     """Test that query builders inherit dialect correctly."""
     # Test with explicit dialect
     select_builder = SelectBuilder(dialect="sqlite")
@@ -215,7 +215,7 @@ def test_query_builder_dialect_inheritance() -> None:
 
     # Build SQL and check dialect
     sql = select_builder.from_("users").to_statement()
-    assert sql._dialect == "sqlite"
+    assert sql.dialect == "sqlite"
 
     # Test with different dialects
     for dialect in ["postgres", "mysql", "duckdb"]:
@@ -223,10 +223,10 @@ def test_query_builder_dialect_inheritance() -> None:
         assert builder.dialect == dialect
 
         sql = builder.from_("test_table").to_statement()
-        assert sql._dialect == dialect
+        assert sql.dialect == dialect
 
 
-def test_sql_translator_mixin_dialect_usage() -> None:
+def test_sql_translator_mixindialect_usage() -> None:
     """Test that SQLTranslatorMixin uses dialect properly."""
 
     class TestDriver(SqliteDriver, SQLTranslatorMixin):
@@ -235,7 +235,7 @@ def test_sql_translator_mixin_dialect_usage() -> None:
     mock_connection = Mock()
     driver = TestDriver(connection=mock_connection, config=SQLConfig())
 
-    # Test convert_to_dialect with string input
+    # Test convert_todialect with string input
     # NOTE: This test patches internal implementation to verify dialect propagation.
     # This is acceptable for testing the critical dialect handling contract.
     with patch("sqlspec.driver.mixins._sql_translator.parse_one") as mock_parse:
@@ -267,7 +267,7 @@ def test_sql_translator_mixin_dialect_usage() -> None:
 
 
 # Error handling tests
-def test_missing_dialect_in_driver() -> None:
+def test_missingdialect_in_driver() -> None:
     """Test handling of driver without dialect attribute."""
     # Create a mock driver without dialect
     mock_driver = Mock(spec=["connection", "config"])
@@ -277,22 +277,22 @@ def test_missing_dialect_in_driver() -> None:
         _ = mock_driver.dialect
 
 
-def test_different_dialect_in_sql_creation() -> None:
+def test_differentdialect_in_sql_creation() -> None:
     """Test that different dialects can be used in SQL creation."""
     # SQL should accept various valid dialect values
-    sql = SQL("SELECT 1", _dialect="mysql")
-    assert sql._dialect == "mysql"
+    sql = SQL("SELECT 1", config=SQLConfig(dialect="mysql"))
+    assert sql.dialect == "mysql"
 
     # None dialect should also work
-    sql = SQL("SELECT 1", _dialect=None)
-    assert sql._dialect is None
+    sql = SQL("SELECT 1", config=SQLConfig(dialect=None))
+    assert sql.dialect is None
 
     # Test with another valid dialect
-    sql = SQL("SELECT 1", _dialect="bigquery")
-    assert sql._dialect == "bigquery"
+    sql = SQL("SELECT 1", config=SQLConfig(dialect="bigquery"))
+    assert sql.dialect == "bigquery"
 
 
-def test_dialect_mismatch_handling() -> None:
+def testdialect_mismatch_handling() -> None:
     """Test that drivers convert SQL to their own dialect."""
     # Create driver with one dialect
     import sqlite3
@@ -302,7 +302,7 @@ def test_dialect_mismatch_handling() -> None:
     driver = SqliteDriver(connection=connection, config=SQLConfig())
 
     # Create SQL with different dialect
-    sql = SQL("SELECT 1 AS num", _dialect="postgres")
+    sql = SQL("SELECT 1 AS num", config=SQLConfig(dialect="postgres"))
 
     # Should still execute without error (driver handles conversion if needed)
     result = driver.execute(sql)
@@ -314,6 +314,6 @@ def test_dialect_mismatch_handling() -> None:
 
     # Verify the SQL object retained its original dialect
     # (the driver internally handles any necessary conversion)
-    assert result.statement._dialect == "postgres"
+    assert result.statement.dialect == "postgres"
 
     connection.close()

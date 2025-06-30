@@ -1,7 +1,5 @@
-from __future__ import annotations
-
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
 import sqlglot
 import sqlglot.expressions as exp
@@ -11,33 +9,34 @@ from sqlspec.exceptions import SQLParsingError
 from sqlspec.protocols import HasLimitProtocol, HasOffsetProtocol, HasOrderByProtocol, HasWhereProtocol
 from sqlspec.statement.parameter_manager import ParameterManager
 from sqlspec.statement.parameters import ParameterConverter, ParameterStyle, ParameterValidator
-from sqlspec.statement.sql_compiler import SQLCompiler
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.type_guards import is_dict
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.statement.filters import StatementFilter
+    from sqlspec.statement.sql_compiler import SQLCompiler
 
 __all__ = ("SQL", "SQLConfig", "Statement")
 
 logger = get_logger("sqlspec.statement")
 
 Statement = Union[str, exp.Expression, "SQL"]
-_expression_cache: dict[int, exp.Expression] = {}
+_expression_cache: "dict[int, exp.Expression]" = {}
 
 
 @dataclass
 class SQLConfig:
     """Configuration for SQL statement behavior."""
 
-    dialect: DialectType | None = None
+    dialect: "Optional[DialectType]" = None
     parse_errors_as_warnings: bool = False
     cache_expressions: bool = True
-    parameter_converter: ParameterConverter = field(default_factory=ParameterConverter)
-    parameter_validator: ParameterValidator = field(default_factory=ParameterValidator)
+    parameter_converter: "ParameterConverter" = field(default_factory=ParameterConverter)
+    parameter_validator: "ParameterValidator" = field(default_factory=ParameterValidator)
     # Parameter style validation
-    allowed_parameter_styles: tuple[str, ...] | None = None
+    allowed_parameter_styles: "Optional[tuple[str, ...]]" = None
     allow_mixed_parameter_styles: bool = False
     input_sql_had_placeholders: bool = False
     # Legacy attributes for compatibility
@@ -48,7 +47,7 @@ class SQLConfig:
     strict_mode: bool = False
     cache_parsed_expression: bool = True
     analysis_cache_size: int = 128
-    target_parameter_style: str | None = None
+    target_parameter_style: "Optional[str]" = None
 
     def validate_parameter_style(self, style: str) -> bool:
         """Check if a parameter style is allowed.
@@ -80,26 +79,40 @@ class SQL:
         "_statement",
     )
 
-    _default_config: ClassVar[SQLConfig] = SQLConfig()
+    _compiler: "Optional[SQLCompiler]"
+    _statement: "Union[str, exp.Expression]"
+    _default_config: "ClassVar[SQLConfig]" = SQLConfig()
 
     def __init__(
         self,
-        statement: Statement,
-        parameters: tuple[Any, ...] | list[Any] | None = None,
-        kwargs: dict[str, Any] | None = None,
-        config: SQLConfig | None = None,
+        statement: "Statement",
+        parameters: "Optional[Union[tuple[Any, ...], list[Any], dict[str, Any]]]" = None,
+        /,
+        config: "Optional[SQLConfig]" = None,
+        **kwargs: Any,
     ) -> None:
         self._config = config or self._default_config
-        # Convert list to tuple if needed
-        if isinstance(parameters, list):
-            parameters = tuple(parameters)
+        # Handle different parameter types
+        positional_params: Optional[tuple[Any, ...]] = None
+        if parameters is not None:
+            if isinstance(parameters, list):
+                positional_params = tuple(parameters)
+            elif isinstance(parameters, tuple):
+                positional_params = parameters
+            elif is_dict(parameters):
+                kwargs.update(parameters)
+                positional_params = None
+            else:
+                # Single parameter case - wrap in tuple
+                positional_params = (parameters,)
+
         self._parameter_manager = ParameterManager(
-            parameters=parameters, kwargs=kwargs, converter=self._config.parameter_converter
+            parameters=positional_params, kwargs=kwargs, converter=self._config.parameter_converter
         )
         self._filters: list[StatementFilter] = []
         self._is_many = False
         self._is_script = False
-        self._compiler: SQLCompiler | None = None
+        self._compiler = None
         self._original_parameters: Any = None
 
         if isinstance(statement, SQL):
@@ -121,16 +134,20 @@ class SQL:
             self._raw_parameters = (parameters, kwargs)
 
     @classmethod
-    def from_sql_object(cls, sql_obj: SQL, **kwargs: Any) -> SQL:
+    def from_sql_object(cls, sql_obj: "SQL", **kwargs: Any) -> "SQL":
         """Create a new SQL object from an existing one, with modifications."""
-        new_kwargs = {
-            "statement": sql_obj._statement,
-            "parameters": sql_obj._parameter_manager.positional_parameters,
-            "kwargs": sql_obj._parameter_manager.named_parameters,
-            "config": sql_obj._config,
-            **kwargs,
-        }
-        instance = cls(**new_kwargs)
+        # Extract the statement and config
+        statement = kwargs.pop("statement", sql_obj._statement)
+        config = kwargs.pop("config", sql_obj._config)
+
+        # Get parameters and named parameters
+        parameters = kwargs.pop("parameters", sql_obj._parameter_manager.positional_parameters)
+        named_params = sql_obj._parameter_manager.named_parameters
+
+        # Create new instance with proper constructor signature
+        instance = cls(statement, parameters=parameters, config=config, **named_params)
+
+        # Copy filters and flags
         instance._filters.extend(sql_obj._filters)
         instance._is_many = kwargs.get("is_many", sql_obj._is_many)
         instance._is_script = kwargs.get("is_script", sql_obj._is_script)
@@ -139,12 +156,16 @@ class SQL:
 
     @classmethod
     def from_str_or_expression(
-        cls, statement: str | exp.Expression, *parameters: Any, config: SQLConfig | None = None, **kwargs: Any
-    ) -> SQL:
+        cls,
+        statement: "Union[str, exp.Expression]",
+        *parameters: Any,
+        config: "Optional[SQLConfig]" = None,
+        **kwargs: Any,
+    ) -> "SQL":
         """Create a new SQL object from a string or SQLGlot expression."""
-        return cls(statement, parameters=parameters, kwargs=kwargs, config=config)
+        return cls(statement, parameters, config=config, **kwargs)
 
-    def to_expression(self, statement: str | exp.Expression) -> exp.Expression:
+    def to_expression(self, statement: "Union[str, exp.Expression]") -> "exp.Expression":
         """Parse a string into a SQLGlot expression, with optional caching."""
         if isinstance(statement, exp.Expression):
             return statement
@@ -171,14 +192,14 @@ class SQL:
                 _expression_cache[cache_key] = parsed
             return parsed
 
-    def copy(self, **kwargs: Any) -> SQL:
+    def copy(self, **kwargs: Any) -> "SQL":
         """Create a copy of the current SQL object with updated attributes."""
         new_sql = self.from_sql_object(self, **kwargs)
         # Copy over any attributes not handled by from_sql_object
         new_sql._original_parameters = getattr(self, "_original_parameters", None)
         return new_sql
 
-    def where(self, condition: str | exp.Condition) -> SQL:
+    def where(self, condition: "Union[str, exp.Condition]") -> "SQL":
         """Add a WHERE clause to the statement."""
         current_statement = self._statement
         if not isinstance(current_statement, HasWhereProtocol):
@@ -188,7 +209,7 @@ class SQL:
         new_statement = cast("HasWhereProtocol", current_statement).where(condition_expr)
         return self.copy(statement=new_statement)
 
-    def limit(self, limit: int, use_parameter: bool = False) -> SQL:
+    def limit(self, limit: int, use_parameter: bool = False) -> "SQL":
         """Add a LIMIT clause to the statement."""
         current_statement = self._statement
         if not isinstance(current_statement, HasLimitProtocol):
@@ -204,7 +225,7 @@ class SQL:
         new_statement = cast("HasLimitProtocol", current_statement).limit(limit)
         return self.copy(statement=new_statement)
 
-    def offset(self, offset: int, use_parameter: bool = False) -> SQL:
+    def offset(self, offset: int, use_parameter: bool = False) -> "SQL":
         """Add an OFFSET clause to the statement."""
         current_statement = self._statement
         if not isinstance(current_statement, HasOffsetProtocol):
@@ -220,7 +241,7 @@ class SQL:
         new_statement = cast("HasOffsetProtocol", current_statement).offset(offset)
         return self.copy(statement=new_statement)
 
-    def order_by(self, *expressions: str | exp.Expression) -> SQL:
+    def order_by(self, *expressions: "Union[str, exp.Expression]") -> "SQL":
         """Add an ORDER BY clause to the statement."""
         current_statement = self._statement
         if not isinstance(current_statement, HasOrderByProtocol):
@@ -230,13 +251,13 @@ class SQL:
         new_statement = cast("HasOrderByProtocol", current_statement).order_by(*order_exprs)
         return self.copy(statement=new_statement)
 
-    def filter(self, filter_obj: StatementFilter) -> SQL:
+    def filter(self, filter_obj: "StatementFilter") -> "SQL":
         """Apply a statement filter."""
         new_sql = self.copy()
         new_sql._filters.append(filter_obj)
         return new_sql
 
-    def as_many(self, parameters: Any = None) -> SQL:
+    def as_many(self, parameters: Any = None) -> "SQL":
         """Flag the statement for 'execute many' style execution.
 
         Args:
@@ -257,14 +278,16 @@ class SQL:
 
         return new_sql
 
-    def as_script(self, is_script: bool = True) -> SQL:
+    def as_script(self, is_script: bool = True) -> "SQL":
         """Flag the statement as a script to be executed."""
         return self.copy(is_script=is_script)
 
-    def _get_compiler(self) -> SQLCompiler:
+    def _get_compiler(self) -> "SQLCompiler":
         if self._compiler is None:
+            from sqlspec.statement.sql_compiler import SQLCompiler
+
             self._compiler = SQLCompiler(
-                expression=self._statement,
+                expression=self.to_expression(self._statement),
                 dialect=self._config.dialect,
                 parameter_manager=self._parameter_manager,
                 is_many=self._is_many,
@@ -275,15 +298,10 @@ class SQL:
     @property
     def sql(self) -> str:
         """Get the compiled SQL string."""
-        # Apply filters to get the final SQL object
         final_sql = self
         for filter_obj in self._filters:
             final_sql = filter_obj.append_to_statement(final_sql)
-
-        # If filters were applied, use the final SQL's compiler
         sql_str = final_sql._get_compiler().to_sql() if final_sql is not self else self._get_compiler().to_sql()
-
-        # Handle empty SQL case
         if sql_str == "()" and isinstance(self._statement, exp.Anonymous) and not self._statement.this:
             return ""
 
@@ -305,15 +323,15 @@ class SQL:
         return final_sql._parameter_manager.named_parameters
 
     @property
-    def expression(self) -> exp.Expression:
+    def expression(self) -> "exp.Expression":
         """Get the compiled SQLGlot expression."""
         return self._get_compiler().expression
 
-    def to_sql(self, placeholder_style: str | None = None) -> str:
+    def to_sql(self, placeholder_style: "Optional[str]" = None) -> str:
         """Get the SQL string with a specific placeholder style."""
         return self._get_compiler().to_sql(placeholder_style=placeholder_style)
 
-    def get_parameters(self, style: ParameterStyle | str | None = None) -> Any:
+    def get_parameters(self, style: "Optional[Union[ParameterStyle, str]]" = None) -> Any:
         """Get the parameters in a specific style."""
         return self._get_compiler().get_parameters(style=style)
 
@@ -327,7 +345,7 @@ class SQL:
         """Check if the statement is configured as a script."""
         return self._is_script
 
-    def validate(self) -> list[Any]:
+    def validate(self) -> "list[Any]":
         """Validate the SQL statement and return any validation errors.
 
         Returns:
@@ -337,7 +355,7 @@ class SQL:
         # This method exists for compatibility with tests
         return []
 
-    def add_named_parameter(self, name: str, value: Any) -> SQL:
+    def add_named_parameter(self, name: str, value: Any) -> "SQL":
         """Add a named parameter to the SQL object.
 
         This is used by filters to add their parameters.
@@ -345,7 +363,7 @@ class SQL:
         self._parameter_manager.add_named_parameter(name, value)
         return self
 
-    def compile(self, placeholder_style: str | None = None) -> tuple[str, Any]:
+    def compile(self, placeholder_style: "Optional[str]" = None) -> "tuple[str, Any]":
         """Compile the SQL statement to a string and parameters.
 
         Args:
@@ -369,14 +387,18 @@ class SQL:
     def parameter_info(self) -> Any:
         """Backward-compatibility shim for drivers that expect this attribute.
 
-        This property provides access to parameter information in a format
-        compatible with legacy code that expects the old parameter_info attribute.
+        This property provides access to parameter information
 
         Returns:
-            The raw parameters or parameter information from the manager
+            parameter information from the manager
         """
-        # If we have the new parameter manager with info method
-        if hasattr(self._parameter_manager, "get_parameter_info"):
-            return self._parameter_manager.get_parameter_info()
-        # Fallback to raw parameters for compatibility
-        return getattr(self, "_raw_parameters", ())
+        return self._parameter_manager.get_parameter_info()
+
+    @property
+    def dialect(self) -> "Optional[DialectType]":
+        """Get the SQL dialect for this statement.
+
+        Returns:
+            The SQL dialect from the configuration
+        """
+        return self._config.dialect

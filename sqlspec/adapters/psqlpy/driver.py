@@ -2,7 +2,7 @@
 
 import io
 import logging
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from psqlpy import Connection
 
@@ -15,9 +15,9 @@ from sqlspec.driver.mixins import (
     TypeCoercionMixin,
 )
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT, RowT
+from sqlspec.typing import DictRow, RowT
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -76,7 +76,7 @@ class PsqlpyDriver(
 
     async def _execute_statement(
         self, statement: SQL, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
-    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
+    ) -> SQLResult[RowT]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
@@ -92,7 +92,7 @@ class PsqlpyDriver(
 
     async def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
-    ) -> Union[SelectResultDict, DMLResultDict]:
+    ) -> SQLResult[RowT]:
         conn = self._connection(connection)
         if self.returns_rows(statement.expression):
             query_result = await conn.fetch(sql, parameters=parameters)
@@ -102,33 +102,57 @@ class PsqlpyDriver(
                 # psqlpy QueryResult has a result() method that returns list of dicts
                 dict_rows = query_result.result()
             column_names = list(dict_rows[0].keys()) if dict_rows else []
-            return {"data": dict_rows, "column_names": column_names, "rows_affected": len(dict_rows)}
+            return SQLResult(
+                statement=statement,
+                data=cast("list[RowT]", dict_rows),
+                column_names=column_names,
+                rows_affected=len(dict_rows),
+                operation_type="SELECT",
+            )
+
         query_result = await conn.execute(sql, parameters=parameters)
         # Note: psqlpy doesn't provide rows_affected for DML operations
         # The QueryResult object only has result(), as_class(), and row_factory() methods
         # For accurate row counts, use RETURNING clause
         affected_count = -1  # Unknown, as psqlpy doesn't provide this info
-        return {"rows_affected": affected_count, "status_message": "OK"}
+        return SQLResult(
+            statement=statement,
+            data=[],
+            rows_affected=affected_count,
+            operation_type=self._determine_operation_type(statement),
+            metadata={"status_message": "OK"},
+        )
 
     async def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
-    ) -> DMLResultDict:
+    ) -> SQLResult[RowT]:
         conn = self._connection(connection)
         await conn.execute_many(sql, param_list or [])
         # execute_many doesn't return a value with rows_affected
         affected_count = -1
-        return {"rows_affected": affected_count, "status_message": "OK"}
+        return SQLResult(
+            statement=SQL(sql),
+            data=[],
+            rows_affected=affected_count,
+            operation_type="EXECUTE",
+            metadata={"status_message": "OK"},
+        )
 
     async def _execute_script(
         self, script: str, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
-    ) -> ScriptResultDict:
+    ) -> SQLResult[RowT]:
         conn = self._connection(connection)
         # psqlpy can execute multi-statement scripts directly
         await conn.execute(script)
-        return {
-            "statements_executed": -1,  # Not directly supported, but script is executed
-            "status_message": "SCRIPT EXECUTED",
-        }
+        return SQLResult(
+            statement=SQL(script),
+            data=[],
+            rows_affected=0,
+            operation_type="SCRIPT",
+            metadata={"status_message": "SCRIPT EXECUTED"},
+            total_statements=-1,  # Not directly supported, but script is executed
+            successful_statements=-1,
+        )
 
     async def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
         self._ensure_pyarrow_installed()
@@ -153,61 +177,6 @@ class PsqlpyDriver(
             return table.num_rows  # type: ignore[no-any-return]
         msg = "Connection does not support COPY operations"
         raise NotImplementedError(msg)
-
-    async def _wrap_select_result(
-        self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
-    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
-        dict_rows = result["data"]
-        column_names = result["column_names"]
-        rows_affected = result["rows_affected"]
-
-        if schema_type:
-            converted_data = self.to_schema(data=dict_rows, schema_type=schema_type)
-            return SQLResult[ModelDTOT](
-                statement=statement,
-                data=list(converted_data),
-                column_names=column_names,
-                rows_affected=rows_affected,
-                operation_type="SELECT",
-            )
-        return SQLResult[RowT](
-            statement=statement,
-            data=cast("list[RowT]", dict_rows),
-            column_names=column_names,
-            rows_affected=rows_affected,
-            operation_type="SELECT",
-        )
-
-    async def _wrap_execute_result(
-        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
-    ) -> SQLResult[RowT]:
-        operation_type = "UNKNOWN"
-        if statement.expression:
-            operation_type = str(statement.expression.key).upper()
-
-        if "statements_executed" in result:
-            script_result = cast("ScriptResultDict", result)
-            return SQLResult[RowT](
-                statement=statement,
-                data=[],
-                rows_affected=0,
-                operation_type="SCRIPT",
-                metadata={
-                    "status_message": script_result.get("status_message", ""),
-                    "statements_executed": script_result.get("statements_executed", -1),
-                },
-            )
-
-        dml_result = cast("DMLResultDict", result)
-        rows_affected = dml_result.get("rows_affected", -1)
-        status_message = dml_result.get("status_message", "")
-        return SQLResult[RowT](
-            statement=statement,
-            data=[],
-            rows_affected=rows_affected,
-            operation_type=operation_type,
-            metadata={"status_message": status_message},
-        )
 
     def _connection(self, connection: Optional[PsqlpyConnection] = None) -> PsqlpyConnection:
         """Get the connection to use for the operation."""

@@ -136,7 +136,7 @@ class Pipeline:
         """
         self._operations.append(
             PipelineOperation(
-                sql=SQL(statement, parameters=parameters or None, config=self.driver.config, kwargs=kwargs),
+                sql=SQL(statement, parameters=parameters or None, config=self.driver.config, **kwargs),
                 operation_type="execute",
             )
         )
@@ -154,7 +154,7 @@ class Pipeline:
         """Add a select operation to the pipeline."""
         self._operations.append(
             PipelineOperation(
-                sql=SQL(statement, parameters=parameters or None, config=self.driver.config, kwargs=kwargs),
+                sql=SQL(statement, parameters=parameters or None, config=self.driver.config, **kwargs),
                 operation_type="select",
             )
         )
@@ -182,10 +182,7 @@ class Pipeline:
             batch_params = list(batch_params)
         # Create SQL object and mark as many, passing remaining args as filters
         sql_obj = SQL(
-            statement,
-            parameters=parameters[1:] if len(parameters) > 1 else None,
-            config=self.driver.config,
-            kwargs=kwargs,
+            statement, parameters=parameters[1:] if len(parameters) > 1 else None, config=self.driver.config, **kwargs
         ).as_many(batch_params)
 
         self._operations.append(PipelineOperation(sql=sql_obj, operation_type="execute_many"))
@@ -196,7 +193,7 @@ class Pipeline:
         if isinstance(script, SQL):
             sql_obj = script.as_script()
         else:
-            sql_obj = SQL(script, parameters=filters or None, config=self.driver.config, kwargs=kwargs).as_script()
+            sql_obj = SQL(script, parameters=filters or None, config=self.driver.config, **kwargs).as_script()
 
         self._operations.append(PipelineOperation(sql=sql_obj, operation_type="execute_script"))
         return self
@@ -382,7 +379,7 @@ class AsyncPipeline:
         """Add an execute operation to the async pipeline."""
         self._operations.append(
             PipelineOperation(
-                sql=SQL(statement, parameters=parameters or None, config=self.driver.config, kwargs=kwargs),
+                sql=SQL(statement, parameters=parameters or None, config=self.driver.config, **kwargs),
                 operation_type="execute",
             )
         )
@@ -400,7 +397,7 @@ class AsyncPipeline:
         """Add a select operation to the async pipeline."""
         self._operations.append(
             PipelineOperation(
-                sql=SQL(statement, parameters=parameters or None, config=self.driver.config, kwargs=kwargs),
+                sql=SQL(statement, parameters=parameters or None, config=self.driver.config, **kwargs),
                 operation_type="select",
             )
         )
@@ -421,10 +418,7 @@ class AsyncPipeline:
             batch_params = list(batch_params)
         # Create SQL object and mark as many, passing remaining args as filters
         sql_obj = SQL(
-            statement,
-            parameters=parameters[1:] if len(parameters) > 1 else None,
-            config=self.driver.config,
-            kwargs=kwargs,
+            statement, parameters=parameters[1:] if len(parameters) > 1 else None, config=self.driver.config, **kwargs
         ).as_many(batch_params)
 
         self._operations.append(PipelineOperation(sql=sql_obj, operation_type="execute_many"))
@@ -437,7 +431,7 @@ class AsyncPipeline:
         if isinstance(script, SQL):
             sql_obj = script.as_script()
         else:
-            sql_obj = SQL(script, parameters=filters or None, config=self.driver.config, kwargs=kwargs).as_script()
+            sql_obj = SQL(script, parameters=filters or None, config=self.driver.config, **kwargs).as_script()
 
         self._operations.append(PipelineOperation(sql=sql_obj, operation_type="execute_script"))
         return self

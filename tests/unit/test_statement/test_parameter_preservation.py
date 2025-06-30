@@ -23,7 +23,7 @@ def test_ctas_preserves_parameter_names() -> None:
     safe_query = ctas_builder.build()
     # Disable validation for DDL operations
     config = SQLConfig(enable_validation=False, strict_mode=False)
-    sql_statement = SQL(safe_query.sql, parameters=safe_query.parameters, _config=config)
+    sql_statement = SQL(safe_query.sql, parameters=safe_query.parameters, config=config)
 
     # Parameters should preserve original names
     assert "active" in safe_query.parameters
@@ -67,7 +67,7 @@ def test_mixed_parameter_style_normalization() -> None:
     """Test mixed parameter style handling without unnecessary renaming."""
     # Create SQL with mixed styles - pass both positional and named params
     sql = SQL(
-        "SELECT * FROM users WHERE id = ? AND status = :active", parameters=[123], active="enabled"
+        "SELECT * FROM users WHERE id = ? AND status = :active", parameters=[123], kwargs={"active": "enabled"}
     )  # Use kwargs directly
 
     # Parameters should be properly handled
@@ -119,19 +119,19 @@ def test_get_unique_parameter_name_with_namespace() -> None:
     sql = SQL("SELECT 1")
 
     # Test without namespace - should preserve original
-    name1 = sql.get_unique_parameter_name("test", preserve_original=True)
+    name1 = sql.get_unique_parameter_name("test", preserve_original=True)  # type: ignore[attr-defined]
     assert name1 == "test"
 
     # Add the parameter
     sql = sql.add_named_parameter("test", "value1")
 
     # Test with namespace - should add namespace prefix
-    name2 = sql.get_unique_parameter_name("test", namespace="cte", preserve_original=True)
+    name2 = sql.get_unique_parameter_name("test", namespace="cte", preserve_original=True)  # type: ignore[attr-defined]
     assert name2 == "cte_test"
 
     # Test collision - should add suffix
     sql = sql.add_named_parameter("cte_test", "value2")
-    name3 = sql.get_unique_parameter_name("test", namespace="cte", preserve_original=True)
+    name3 = sql.get_unique_parameter_name("test", namespace="cte", preserve_original=True)  # type: ignore[attr-defined]
     assert name3 == "cte_test_1"
 
 

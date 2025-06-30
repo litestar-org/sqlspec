@@ -243,11 +243,9 @@ def test_execute_select_statement(driver: SqliteDriver, mock_connection: MagicMo
     statement = SQL("SELECT * FROM users")
     result = driver._execute_statement(statement)
 
-    assert result == {
-        "data": mock_cursor.fetchall.return_value,
-        "column_names": ["id", "name", "email"],
-        "rows_affected": 2,
-    }
+    assert result.data == mock_cursor.fetchall.return_value
+    assert result.column_names == ["id", "name", "email"]
+    assert result.rows_affected == 2
 
     mock_cursor.execute.assert_called_once_with("SELECT * FROM users", ())
 
@@ -260,7 +258,8 @@ def test_execute_dml_statement(driver: SqliteDriver, mock_connection: MagicMock)
     statement = SQL("INSERT INTO users (name, email) VALUES (?, ?)", ["Alice", "alice@example.com"])
     result = driver._execute_statement(statement)
 
-    assert result == {"rows_affected": 1, "status_message": "OK"}
+    assert result.rows_affected == 1
+    assert result.metadata["status_message"] == "OK"
 
     mock_cursor.execute.assert_called_once_with(
         "INSERT INTO users (name, email) VALUES (?, ?)", ("Alice", "alice@example.com")
@@ -310,7 +309,8 @@ def test_execute_many(driver: SqliteDriver, mock_connection: MagicMock) -> None:
 
     result = driver._execute_many(sql, params)
 
-    assert result == {"rows_affected": 3, "status_message": "OK"}
+    assert result.rows_affected == 3
+    assert result.metadata["status_message"] == "OK"
 
     expected_params = [("Alice", "alice@example.com"), ("Bob", "bob@example.com"), ("Charlie", "charlie@example.com")]
     mock_cursor.executemany.assert_called_once_with(sql, expected_params)
@@ -350,7 +350,8 @@ def test_execute_script(driver: SqliteDriver, mock_connection: MagicMock) -> Non
 
     result = driver._execute_script(script)
 
-    assert result == {"statements_executed": -1, "status_message": "SCRIPT EXECUTED"}
+    assert result.total_statements == -1
+    assert result.metadata["status_message"] == "SCRIPT EXECUTED"
 
     mock_cursor.executescript.assert_called_once_with(script)
     mock_connection.commit.assert_called_once()
@@ -439,4 +440,6 @@ def test_execute_select_with_empty_result(driver: SqliteDriver, mock_connection:
     statement = SQL("SELECT * FROM users WHERE 1=0")
     result = driver._execute_statement(statement)
 
-    assert result == {"data": [], "column_names": ["id", "name"], "rows_affected": 0}
+    assert result.data == []
+    assert result.column_names == ["id", "name"]
+    assert result.rows_affected == 0

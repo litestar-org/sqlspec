@@ -5,8 +5,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from sqlspec.statement.result import ArrowResult, SQLResult, StatementResult
-from sqlspec.statement.sql import SQL
+from sqlspec.statement.result import ArrowResult, OperationType, SQLResult, StatementResult
+from sqlspec.statement.sql import SQL, SQLConfig
 
 if TYPE_CHECKING:
     pass
@@ -51,7 +51,7 @@ def test_statement_result_metadata_operations() -> None:
 
 # Test SQLResult for SELECT operations
 @pytest.mark.parametrize(
-    "data,column_names,rows_affected,expected_success",
+    ("data", "column_names", "rows_affected", "expected_success"),
     [
         ([{"id": 1}, {"id": 2}], ["id"], 2, True),
         ([], ["id"], 0, True),  # Empty result set is still successful
@@ -67,7 +67,7 @@ def test_sql_result_select_is_success(
     """Test is_success method for SELECT operations."""
     result = SQLResult[dict[str, Any]](
         statement=SQL("SELECT * FROM users"),
-        data=data,
+        data=data if data is not None else [],
         column_names=column_names,
         rows_affected=rows_affected or 0,
         operation_type="SELECT",
@@ -140,7 +140,7 @@ def test_sql_result_select_methods() -> None:
 
 
 @pytest.mark.parametrize(
-    "data,expected_first,expected_count,expected_empty",
+    ("data", "expected_first", "expected_count", "expected_empty"),
     [([], None, 0, True), ([{"id": 1}], {"id": 1}, 1, False), ([{"id": 1}, {"id": 2}], {"id": 1}, 2, False)],
     ids=["empty", "single_row", "multiple_rows"],
 )
@@ -157,7 +157,7 @@ def test_sql_result_select_row_operations(
 
 # Test SQLResult for DML operations
 @pytest.mark.parametrize(
-    "operation_type,rows_affected,expected_success",
+    ("operation_type", "rows_affected", "expected_success"),
     [
         ("INSERT", 1, True),
         ("UPDATE", 5, True),
@@ -166,10 +166,12 @@ def test_sql_result_select_row_operations(
         ("DELETE", -1, False),  # Negative rows_affected is failure
     ],
 )
-def test_sql_result_dml_is_success(operation_type: str, rows_affected: int, expected_success: bool) -> None:
+def test_sql_result_dml_is_success(operation_type: OperationType, rows_affected: int, expected_success: bool) -> None:
     """Test is_success method for DML operations."""
+    # Create SQL statement with parsing errors as warnings to handle invalid SQL
+    config = SQLConfig(parse_errors_as_warnings=True)
     result = SQLResult[dict[str, Any]](
-        statement=SQL(f"{operation_type} ..."),
+        statement=SQL(f"{operation_type} FROM test_table", config=config),
         data=[],  # DML typically has empty data unless RETURNING
         rows_affected=rows_affected,
         operation_type=operation_type,
@@ -189,16 +191,16 @@ def test_sql_result_dml_operations() -> None:
         metadata={"transaction_id": "tx-456"},
     )
 
-    assert result.get_affected_count() == 1
-    assert result.get_inserted_id() == 123
-    assert result.get_inserted_ids() == [123]
+    assert result.rows_affected == 1
+    assert result.last_inserted_id == 123
+    assert result.inserted_ids == [123]
     assert result.was_inserted() is True
     assert result.was_updated() is False
     assert result.was_deleted() is False
 
 
 @pytest.mark.parametrize(
-    "operation_type,expected_insert,expected_update,expected_delete",
+    ("operation_type", "expected_insert", "expected_update", "expected_delete"),
     [
         ("INSERT", True, False, False),
         ("insert", True, False, False),  # Case insensitive
@@ -214,7 +216,12 @@ def test_sql_result_operation_type_checks(
     operation_type: str, expected_insert: bool, expected_update: bool, expected_delete: bool
 ) -> None:
     """Test operation type checking methods."""
-    result = SQLResult[dict[str, Any]](statement=SQL("..."), data=[], operation_type=operation_type)
+    config = SQLConfig(parse_errors_as_warnings=True)
+    result = SQLResult[dict[str, Any]](
+        statement=SQL("SELECT * FROM test", config=config),
+        data=[],
+        operation_type=operation_type,  # type: ignore[arg-type]
+    )
 
     assert result.was_inserted() == expected_insert
     assert result.was_updated() == expected_update
@@ -228,8 +235,9 @@ def test_sql_result_dml_with_returning() -> None:
         {"id": 2, "name": "Bob", "created_at": "2023-01-01"},
     ]
 
+    config = SQLConfig(parse_errors_as_warnings=True)
     result = SQLResult[dict[str, Any]](
-        statement=SQL("INSERT INTO users ... RETURNING *"),
+        statement=SQL("INSERT INTO users (name) VALUES ('Alice'), ('Bob') RETURNING *", config=config),
         data=returned_data,
         column_names=["id", "name", "created_at"],
         rows_affected=2,
@@ -239,16 +247,17 @@ def test_sql_result_dml_with_returning() -> None:
 
     assert result.is_success() is True
     assert result.get_data() == returned_data
-    assert result.get_returning_data() == returned_data
-    assert result.get_affected_count() == 2
-    assert result.get_inserted_ids() == [1, 2]
+    assert result.data == returned_data  # RETURNING data is in data property
+    assert result.rows_affected == 2
+    assert result.inserted_ids == [1, 2]
 
 
 # Test SQLResult for script execution
 def test_sql_result_script_initialization() -> None:
     """Test SQLResult initialization for script execution."""
+    config = SQLConfig(parse_errors_as_warnings=True)
     result = SQLResult[Any](
-        statement=SQL("-- Script\nINSERT ...; UPDATE ...;"),
+        statement=SQL("-- Script\nINSERT INTO test VALUES (1); UPDATE test SET id = 2;", config=config),
         data=[],
         operation_type="SCRIPT",
         execution_time=1.5,
@@ -267,15 +276,17 @@ def test_sql_result_script_execution() -> None:
     script_result = SQLResult[Any](statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
 
     # Add successful statements
-    stmt1 = SQLResult[Any](statement=SQL("INSERT INTO test"), data=[], rows_affected=2, operation_type="INSERT")
+    stmt1 = SQLResult[Any](
+        statement=SQL("INSERT INTO test VALUES (1)"), data=[], rows_affected=2, operation_type="INSERT"
+    )
     script_result.add_statement_result(stmt1)
 
-    stmt2 = SQLResult[Any](statement=SQL("UPDATE test"), data=[], rows_affected=3, operation_type="UPDATE")
+    stmt2 = SQLResult[Any](statement=SQL("UPDATE test SET id=1"), data=[], rows_affected=3, operation_type="UPDATE")
     script_result.add_statement_result(stmt2)
 
     # Add failed statement
     stmt3 = SQLResult[Any](
-        statement=SQL("DELETE FROM test"),
+        statement=SQL("DELETE FROM test WHERE id=1"),
         data=[],
         rows_affected=-1,  # Indicates failure
         operation_type="DELETE",
@@ -306,7 +317,9 @@ def test_sql_result_script_get_data() -> None:
 
     # Add some statement results
     for i in range(3):
-        stmt = SQLResult[Any](statement=SQL(f"Statement {i}"), data=[], rows_affected=i + 1, operation_type="INSERT")
+        stmt = SQLResult[Any](
+            statement=SQL(f"INSERT INTO table{i} VALUES (1)"), data=[], rows_affected=i + 1, operation_type="INSERT"
+        )
         script_result.add_statement_result(stmt)
 
     data = script_result.get_data()
@@ -326,7 +339,9 @@ def test_sql_result_script_statement_access() -> None:
     # Add statements
     stmts = []
     for i in range(3):
-        stmt = SQLResult[Any](statement=SQL(f"Statement {i}"), data=[], rows_affected=1, operation_type="INSERT")
+        stmt = SQLResult[Any](
+            statement=SQL(f"INSERT INTO stmt{i} VALUES (1)"), data=[], rows_affected=1, operation_type="INSERT"
+        )
         stmts.append(stmt)
         script_result.add_statement_result(stmt)
 
@@ -346,13 +361,15 @@ def test_sql_result_script_total_rows_affected() -> None:
 
     # Add statements with various rows_affected values
     script_result.add_statement_result(
-        SQLResult[Any](statement=SQL("INSERT"), data=[], rows_affected=5, operation_type="INSERT")
+        SQLResult[Any](statement=SQL("INSERT INTO users VALUES (1)"), data=[], rows_affected=5, operation_type="INSERT")
     )
     script_result.add_statement_result(
-        SQLResult[Any](statement=SQL("UPDATE"), data=[], rows_affected=3, operation_type="UPDATE")
+        SQLResult[Any](statement=SQL("UPDATE users SET active = 1"), data=[], rows_affected=3, operation_type="UPDATE")
     )
     script_result.add_statement_result(
-        SQLResult[Any](statement=SQL("DELETE"), data=[], rows_affected=-1, operation_type="DELETE")  # Failed
+        SQLResult[Any](
+            statement=SQL("DELETE FROM users WHERE id = 999"), data=[], rows_affected=-1, operation_type="DELETE"
+        )  # Failed
     )
 
     assert script_result.get_total_rows_affected() == 8  # 5 + 3 + 0
@@ -452,10 +469,12 @@ def test_result_inheritance() -> None:
 @pytest.mark.parametrize(
     "result_factory",
     [
-        lambda: SQLResult(statement=SQL("SELECT"), data=[], operation_type="SELECT"),
-        lambda: SQLResult(statement=SQL("INSERT"), data=[], rows_affected=1, operation_type="INSERT"),
-        lambda: SQLResult(statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT"),
-        lambda: ArrowResult(statement=SQL("SELECT"), data=Mock()),
+        lambda: SQLResult(statement=SQL("SELECT * FROM test"), data=[], operation_type="SELECT"),
+        lambda: SQLResult(
+            statement=SQL("INSERT INTO test VALUES (1)"), data=[], rows_affected=1, operation_type="INSERT"
+        ),
+        lambda: SQLResult(statement=SQL("-- Script\nINSERT INTO test VALUES (1);"), data=[], operation_type="SCRIPT"),
+        lambda: ArrowResult(statement=SQL("SELECT * FROM test"), data=Mock()),
     ],
     ids=["sql_select", "sql_dml", "sql_script", "arrow"],
 )
@@ -495,12 +514,16 @@ def test_sql_result_edge_cases() -> None:
     assert result_with_data.total_count == 2  # Should be inferred from data length
 
 
-def test_sql_result_returning_data_alias() -> None:
-    """Test that get_returning_data is an alias for get_data."""
+def test_sql_result_returning_data_access() -> None:
+    """Test accessing data from INSERT RETURNING statement."""
     data = [{"id": 1, "name": "Test"}]
+    config = SQLConfig(parse_errors_as_warnings=True)
     result = SQLResult[dict[str, Any]](
-        statement=SQL("INSERT INTO users ... RETURNING *"), data=data, operation_type="INSERT"
+        statement=SQL("INSERT INTO users (name) VALUES ('Test') RETURNING *", config=config),
+        data=data,
+        operation_type="INSERT",
     )
 
-    assert result.get_returning_data() == result.get_data()
-    assert result.get_returning_data() == data
+    # Returned data is stored in the data property
+    assert result.data == data
+    assert result.get_data() == data

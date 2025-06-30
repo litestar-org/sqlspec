@@ -16,7 +16,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, RowT
@@ -108,7 +108,14 @@ class SqliteDriver(
             return self._execute_script(sql, connection=connection, statement=statement, **kwargs)
 
         # Determine if we need to convert parameter style
-        detected_styles = {p.style for p in statement.parameter_info}
+        detected_styles = set()
+        # Extract parameter styles from the SQL string
+        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
+        validator = self.config.parameter_validator if self.config else ParameterValidator()
+        param_infos = validator.extract_parameters(sql_str)
+        if param_infos:
+            detected_styles = {p.style for p in param_infos}
+
         target_style = self.default_parameter_style
 
         # Check if any detected style is not supported
@@ -157,21 +164,12 @@ class SqliteDriver(
                 fetched_data: list[sqlite3.Row] = cursor.fetchall()
                 return SQLResult(
                     statement=statement,
-                    data=fetched_data,
+                    data=cast("list[RowT]", fetched_data),
                     column_names=[col[0] for col in cursor.description or []],
                     rows_affected=len(fetched_data),
                     operation_type="SELECT",
                 )
-            # Determine operation type from the SQL expression
-            operation_type = "EXECUTE"  # Default for DML operations
-            if statement.expression:
-                expr_type = type(statement.expression).__name__.upper()
-                if "INSERT" in expr_type:
-                    operation_type = "INSERT"
-                elif "UPDATE" in expr_type:
-                    operation_type = "UPDATE"
-                elif "DELETE" in expr_type:
-                    operation_type = "DELETE"
+            operation_type = self._determine_operation_type(statement)
 
             return SQLResult(statement=statement, data=[], rows_affected=cursor.rowcount, operation_type=operation_type)
 
