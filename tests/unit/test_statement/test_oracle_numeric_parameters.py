@@ -53,8 +53,10 @@ def test_positional_colon_parameter_detection(sql: str, expected_style: Paramete
 )
 def test_positional_colon_parameter_extraction(sql: str, parameters: list[Any], expected_param_count: int) -> None:
     """Test extraction of Oracle numeric parameters."""
-    stmt = SQL(sql, parameters=parameters)
-    assert len(stmt.parameter_info) == expected_param_count
+    # Extract parameters from the SQL string
+    validator = ParameterValidator()
+    extracted_params = validator.extract_parameters(sql)
+    assert len(extracted_params) == expected_param_count
 
 
 # Test mixed parameter styles
@@ -86,19 +88,20 @@ def test_mixed_parameter_styles(
 ) -> None:
     """Test handling of mixed parameter styles."""
     # Enable parameter validation by setting allowed_parameter_styles
+    # sqlglot can't parse these mixed styles but SQL class handles this gracefully
     config = SQLConfig(
         allowed_parameter_styles=("positional_colon", "qmark", "named_colon"),
         allow_mixed_parameter_styles=True,  # Allow mixed styles for these tests
         strict_mode=True,  # Enable strict mode to raise validation errors
     )
     if error_type:
-        stmt = SQL(sql, parameters=parameters, config=config)
+        stmt = SQL(sql, parameters=parameters, _config=config)
         # In strict mode, validation errors are wrapped in SQLValidationError
         with pytest.raises((error_type, SQLValidationError)):
             # Trigger validation by accessing property
             _ = stmt.to_sql()
     else:
-        stmt = SQL(sql, parameters=parameters, config=config)
+        stmt = SQL(sql, parameters=parameters, _config=config)
         # Should not raise
         _ = stmt.to_sql()
 
@@ -269,7 +272,7 @@ def test_positional_colon_parameter_validation(
         allowed_parameter_styles=("positional_colon", "positional_colon"),
         strict_mode=True,  # Enable strict mode to raise validation errors
     )
-    stmt = SQL(sql, parameters=parameters, config=config)
+    stmt = SQL(sql, parameters=parameters, _config=config)
 
     if should_fail:
         with pytest.raises((ParameterError, MissingParameterError, SQLValidationError)):
@@ -294,10 +297,8 @@ def test_positional_colon_in_strings_and_comments() -> None:
     FROM dual
     """
     # Create SQL with strict mode disabled to avoid validation errors
-    from sqlspec.statement.sql import SQLConfig
-
     config = SQLConfig(strict_mode=False)
-    stmt = SQL(sql, parameters=[42], config=config)
+    stmt = SQL(sql, parameters=[42], _config=config)
 
     # Should only find :5 as a real parameter
     assert len(stmt.parameter_info) == 1

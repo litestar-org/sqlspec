@@ -404,6 +404,8 @@ class LimitOffsetFilter(PaginationFilter):
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         return statement.limit(self.limit, use_parameter=True).offset(self.offset, use_parameter=True)
+        # Note: The limit() and offset() methods already add their parameters when use_parameter=True
+        # so we don't need to manually add them here like other filters do
 
 
 @dataclass

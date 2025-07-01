@@ -18,7 +18,7 @@ import pytest
 
 from sqlspec.adapters.duckdb import DuckDBDriver
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.result import ArrowResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
@@ -263,103 +263,7 @@ def test_execute_script(driver: DuckDBDriver, mock_connection: MagicMock) -> Non
     mock_cursor.execute.assert_called_once_with(script)
 
 
-# Result Wrapping Tests
-def test_wrap_select_result(driver: DuckDBDriver) -> None:
-    """Test wrapping SELECT results."""
-    statement = SQL("SELECT * FROM users")
-    # Create SQLResult directly for SELECT operation
-    result = SQLResult(
-        statement=statement,
-        data=[(1, "Alice"), (2, "Bob")],
-        column_names=["id", "name"],
-        rows_affected=2,
-        operation_type="SELECT",
-    )
-
-    wrapped = driver._wrap_select_result(statement, result)  # type: ignore[attr-defined]
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.statement is statement
-    assert len(wrapped.data) == 2
-    # Note: _wrap_select_result converts tuples to dicts
-    assert wrapped.data == [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
-    assert wrapped.column_names == ["id", "name"]
-    assert wrapped.rows_affected == 2
-    assert wrapped.operation_type == "SELECT"
-
-
-def test_wrap_select_result_with_schema(driver: DuckDBDriver) -> None:
-    """Test wrapping SELECT results with schema type."""
-    from dataclasses import dataclass
-
-    @dataclass
-    class User:
-        id: int
-        name: str
-
-    statement = SQL("SELECT * FROM users")
-    # Create SQLResult directly for SELECT operation
-    result = SQLResult(
-        statement=statement,
-        data=[(1, "Alice"), (2, "Bob")],
-        column_names=["id", "name"],
-        rows_affected=2,
-        operation_type="SELECT",
-    )
-
-    wrapped = driver._wrap_select_result(statement, result, schema_type=User)  # type: ignore[attr-defined]
-
-    assert isinstance(wrapped, SQLResult)
-    assert all(isinstance(item, User) for item in wrapped.data)
-    assert wrapped.data[0].id == 1
-    assert wrapped.data[0].name == "Alice"
-
-
-def test_wrap_execute_result_dml(driver: DuckDBDriver) -> None:
-    """Test wrapping DML results."""
-    statement = SQL("INSERT INTO users VALUES (?)")
-    # No need to mock _expression - it's computed from the SQL
-
-    # Create SQLResult directly for DML operation
-    result = SQLResult(statement=statement, data=[], rows_affected=1, operation_type="INSERT")
-
-    wrapped = driver._wrap_execute_result(statement, result)  # pyright: ignore
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.data == []
-    assert wrapped.rows_affected == 1
-    assert wrapped.operation_type == "INSERT"
-
-
-def test_wrap_execute_result_script(driver: DuckDBDriver) -> None:
-    """Test wrapping script results."""
-    from sqlspec.statement.result import SQLResult
-    from sqlspec.statement.sql import SQLConfig
-
-    config = SQLConfig(enable_validation=False)  # Allow DDL
-    statement = SQL("CREATE TABLE test; INSERT INTO test;", config=config)
-    # No need to set _expression
-
-    # Create SQLResult directly for script execution
-    result = SQLResult(
-        statement=statement,
-        data=[],
-        operation_type="SCRIPT",
-        total_statements=2,
-        successful_statements=2,
-        metadata={
-            "status_message": "Script executed successfully.",
-            "description": "The script was sent to the database.",
-        },
-    )
-
-    wrapped = driver._wrap_execute_result(statement, result)  # pyright: ignore
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.data == []
-    assert wrapped.rows_affected == 0
-    assert wrapped.operation_type == "SCRIPT"
-    assert wrapped.metadata["status_message"] == "Script executed successfully."
+# Note: Result wrapping tests removed - drivers now return SQLResult directly from execute methods
 
 
 # Connection Tests

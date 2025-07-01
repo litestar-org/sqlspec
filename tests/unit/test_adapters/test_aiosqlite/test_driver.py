@@ -92,7 +92,7 @@ async def test_aiosqlite_driver_execute_statement_select(
     mock_aiosqlite_connection.cursor.side_effect = _cursor
     mock_cursor.execute.return_value = None
     # Create SQL statement with parameters
-    statement = SQL("SELECT * FROM users WHERE id = ?", parameters=[1])
+    statement = SQL("SELECT * FROM users WHERE id = ?", 1)
 
     # Call execute_statement which will handle the mock setup
     result = await aiosqlite_driver._execute_statement(statement)
@@ -101,8 +101,12 @@ async def test_aiosqlite_driver_execute_statement_select(
     mock_cursor.execute.assert_called_once()
     mock_cursor.fetchall.assert_called_once()
 
-    # The result should be a dict with expected structure
-    assert isinstance(result, dict)
+    # The result should be a SQLResult now
+    from sqlspec.statement.result import SQLResult
+
+    assert isinstance(result, SQLResult)
+    assert result.data == [(1, "test")]  # type: ignore[comparison-overlap]
+    assert result.operation_type == "SELECT"
 
 
 @pytest.mark.asyncio
@@ -121,7 +125,7 @@ async def test_aiosqlite_driver_fetch_arrow_table_with_parameters(
     mock_aiosqlite_connection.cursor.side_effect = _cursor
     mock_cursor.execute.return_value = None
     # Create SQL statement with parameters
-    statement = SQL("SELECT id, name FROM users WHERE id = ?", parameters=[42])
+    statement = SQL("SELECT id, name FROM users WHERE id = ?", 42)
 
     # Call execute_statement which will handle the mock setup
     result = await aiosqlite_driver._execute_statement(statement)
@@ -130,8 +134,12 @@ async def test_aiosqlite_driver_fetch_arrow_table_with_parameters(
     mock_cursor.execute.assert_called_once()
     mock_cursor.fetchall.assert_called_once()
 
-    # The result should be a dict with expected structure
-    assert isinstance(result, dict)
+    # The result should be a SQLResult now
+    from sqlspec.statement.result import SQLResult
+
+    assert isinstance(result, SQLResult)
+    assert result.data == [{"id": 42, "name": "Test User"}]
+    assert result.operation_type == "SELECT"
 
 
 @pytest.mark.asyncio
@@ -184,5 +192,7 @@ async def test_aiosqlite_driver_execute_with_connection_override(aiosqlite_drive
     mock_cursor.execute.assert_called_once()
     mock_cursor.fetchall.assert_called_once()
 
-    # The result should be a dict with expected structure
-    assert isinstance(result, dict)
+    # The result should be a SQLResult now
+    assert isinstance(result, SQLResult)
+    assert result.data == [{"id": 1}]
+    assert result.operation_type == "SELECT"

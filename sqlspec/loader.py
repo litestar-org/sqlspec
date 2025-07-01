@@ -26,7 +26,7 @@ logger = get_logger("loader")
 # Matches: -- name: query_name (supports hyphens and special suffixes)
 # We capture the name plus any trailing special characters
 QUERY_NAME_PATTERN = re.compile(r"^\s*--\s*name\s*:\s*([\w-]+[^\w\s]*)\s*$", re.MULTILINE | re.IGNORECASE)
-
+TRIM_TRAILING_SPECIAL_CHARS = re.compile(r"[^\w-]+$")
 MIN_QUERY_PARTS = 3
 
 
@@ -42,10 +42,8 @@ def _normalize_query_name(name: str) -> str:
     Returns:
         Normalized query name suitable as Python identifier
     """
-    # First strip any trailing special characters
-    name = re.sub(r"[^\w-]+$", "", name)
-    # Then replace hyphens with underscores
-    return name.replace("-", "_")
+    # Strip trailing non-alphanumeric characters (excluding underscore) and replace hyphens
+    return TRIM_TRAILING_SPECIAL_CHARS.sub("", name).replace("-", "_")
 
 
 @dataclass
@@ -151,48 +149,28 @@ class SQLFileLoader:
 
     @staticmethod
     def _parse_sql_content(content: str, file_path: str) -> dict[str, str]:
-        """Parse SQL content and extract named queries.
-
-        Args:
-            content: SQL file content.
-            file_path: Path to the file (for error messages).
-
-        Returns:
-            Dictionary mapping query names to SQL text.
-
-        Raises:
-            SQLFileParseError: If no named queries found.
-        """
+        """Parse SQL content and extract named queries."""
         queries: dict[str, str] = {}
-
-        # Split content by query name patterns
-        parts = QUERY_NAME_PATTERN.split(content)
-
-        if len(parts) < MIN_QUERY_PARTS:
-            # No named queries found
+        # Find all query names and their starting positions
+        matches = list(QUERY_NAME_PATTERN.finditer(content))
+        if not matches:
             raise SQLFileParseError(
                 file_path, file_path, ValueError("No named SQL statements found (-- name: query_name)")
             )
 
-        # Process each named query
-        for i in range(1, len(parts), 2):
-            if i + 1 >= len(parts):
-                break
+        for i, match in enumerate(matches):
+            raw_query_name = match.group(1).strip()
+            start_pos = match.end()
+            end_pos = matches[i + 1].start() if i + 1 < len(matches) else len(content)
 
-            raw_query_name = parts[i].strip()
-            sql_text = parts[i + 1].strip()
-
+            sql_text = content[start_pos:end_pos].strip()
             if not raw_query_name or not sql_text:
                 continue
 
             clean_sql = SQLFileLoader._strip_leading_comments(sql_text)
-
             if clean_sql:
-                # Normalize to Python-compatible identifier
                 query_name = _normalize_query_name(raw_query_name)
-
                 if query_name in queries:
-                    # Duplicate query name
                     raise SQLFileParseError(file_path, file_path, ValueError(f"Duplicate query name: {raw_query_name}"))
                 queries[query_name] = clean_sql
 
@@ -221,19 +199,13 @@ class SQLFileLoader:
         try:
             for path in paths:
                 path_str = str(path)
-
-                # Check if it's a URI
                 if "://" in path_str:
-                    # URIs are always treated as files, not directories
                     self._load_single_file(path, None)
                     loaded_count += 1
                 else:
-                    # Local path - check if it's a directory or file
                     path_obj = Path(path)
                     if path_obj.is_dir():
-                        file_count_before = len(self._files)
-                        self._load_directory(path_obj)
-                        loaded_count += len(self._files) - file_count_before
+                        loaded_count += self._load_directory(path_obj)
                     else:
                         self._load_single_file(path_obj, None)
                         loaded_count += 1
@@ -267,31 +239,18 @@ class SQLFileLoader:
             )
             raise
 
-    def _load_directory(self, dir_path: Path) -> None:
-        """Load all SQL files from a directory with namespacing.
-
-        Args:
-            dir_path: Directory path to scan for SQL files.
-
-        Raises:
-            SQLFileParseError: If directory contains no SQL files.
-        """
+    def _load_directory(self, dir_path: Path) -> int:
+        """Load all SQL files from a directory with namespacing."""
         sql_files = list(dir_path.rglob("*.sql"))
-
         if not sql_files:
-            raise SQLFileParseError(
-                str(dir_path), str(dir_path), ValueError(f"No SQL files found in directory: {dir_path}")
-            )
+            return 0
 
         for file_path in sql_files:
-            # Calculate namespace based on relative path from base directory
             relative_path = file_path.relative_to(dir_path)
             namespace_parts = relative_path.parent.parts
-
-            # Create namespace (empty for root-level files)
             namespace = ".".join(namespace_parts) if namespace_parts else None
-
             self._load_single_file(file_path, namespace)
+        return len(sql_files)
 
     def _load_single_file(self, file_path: Union[str, Path], namespace: Optional[str]) -> None:
         """Load a single SQL file with optional namespace.
@@ -302,42 +261,24 @@ class SQLFileLoader:
         """
         path_str = str(file_path)
 
-        # Check if already loaded
         if path_str in self._files:
-            # File already loaded, just ensure queries are in the main dict
-            file_obj = self._files[path_str]
-            queries = self._parse_sql_content(file_obj.content, path_str)
-            for name in queries:
-                namespaced_name = f"{namespace}.{name}" if namespace else name
-                if namespaced_name not in self._queries:
-                    self._queries[namespaced_name] = queries[name]
-                    self._query_to_file[namespaced_name] = path_str
-            return
+            return  # Already loaded
 
-        # Read file content
         content = self._read_file_content(file_path)
-
-        # Create SQLFile object
         sql_file = SQLFile(content=content, path=path_str)
-
-        # Cache the file
         self._files[path_str] = sql_file
 
-        # Parse and cache queries
         queries = self._parse_sql_content(content, path_str)
-
-        # Merge into main query dictionary with namespace
         for name, sql in queries.items():
             namespaced_name = f"{namespace}.{name}" if namespace else name
-
-            if namespaced_name in self._queries and self._query_to_file.get(namespaced_name) != path_str:
-                # Query name exists from a different file
+            if namespaced_name in self._queries:
                 existing_file = self._query_to_file.get(namespaced_name, "unknown")
-                raise SQLFileParseError(
-                    path_str,
-                    path_str,
-                    ValueError(f"Query name '{namespaced_name}' already exists in file: {existing_file}"),
-                )
+                if existing_file != path_str:
+                    raise SQLFileParseError(
+                        path_str,
+                        path_str,
+                        ValueError(f"Query name '{namespaced_name}' already exists in file: {existing_file}"),
+                    )
             self._queries[namespaced_name] = sql
             self._query_to_file[namespaced_name] = path_str
 
@@ -357,7 +298,6 @@ class SQLFileLoader:
             raise ValueError(msg)
 
         self._queries[name] = sql.strip()
-        # Use special marker for directly added queries
         self._query_to_file[name] = "<directly added>"
 
     def get_sql(self, name: str, parameters: "Optional[Any]" = None, **kwargs: "Any") -> "SQL":
@@ -405,12 +345,10 @@ class SQLFileLoader:
             )
             raise SQLFileNotFoundError(name, path=f"Query '{name}' not found. Available queries: {available}")
 
-        # Merge parameters and kwargs for SQL object creation
         sql_kwargs = dict(kwargs)
         if parameters is not None:
             sql_kwargs["parameters"] = parameters
 
-        # Get source file for additional context
         source_file = self._query_to_file.get(safe_name, "unknown")
 
         logger.debug(

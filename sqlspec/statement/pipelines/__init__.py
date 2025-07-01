@@ -148,6 +148,18 @@ class StatementPipeline:
                 else:
                     processor.process(context.current_expression, context)
             except Exception as e:
+                # In strict mode, re-raise validation exceptions
+                from sqlspec.exceptions import MissingParameterError
+                from sqlspec.statement.pipelines.validators._parameter_style import (
+                    MixedParameterStyleError,
+                    UnsupportedParameterStyleError,
+                )
+
+                if context.config.strict_mode and isinstance(
+                    e, (MissingParameterError, MixedParameterStyleError, UnsupportedParameterStyleError)
+                ):
+                    raise
+
                 error = ValidationError(
                     message=f"{processor_type.capitalize()} {processor_name} failed: {e}",
                     code=f"{processor_type}-failure",

@@ -171,7 +171,13 @@ class SqliteDriver(
                 )
             operation_type = self._determine_operation_type(statement)
 
-            return SQLResult(statement=statement, data=[], rows_affected=cursor.rowcount, operation_type=operation_type)
+            return SQLResult(
+                statement=statement,
+                data=[],
+                rows_affected=cursor.rowcount,
+                operation_type=operation_type,
+                metadata={"status_message": "OK"},
+            )
 
     def _execute_many(
         self,
@@ -209,6 +215,7 @@ class SqliteDriver(
                 data=[],
                 rows_affected=cursor.rowcount,
                 operation_type="EXECUTE",  # executemany is typically used for DML
+                metadata={"status_message": "OK"},
             )
 
     def _execute_script(
@@ -232,6 +239,7 @@ class SqliteDriver(
             operation_type="SCRIPT",
             total_statements=-1,  # SQLite doesn't provide this info
             successful_statements=-1,
+            metadata={"status_message": "SCRIPT EXECUTED"},
         )
 
     def _ingest_arrow_table(self, table: Any, table_name: str, mode: str = "create", **options: Any) -> int:

@@ -18,7 +18,6 @@ import pytest
 
 from sqlspec.adapters.asyncpg import AsyncpgDriver
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
@@ -323,92 +322,13 @@ async def test_execute_script(driver: AsyncpgDriver, mock_connection: AsyncMock)
 
     result = await driver._execute_script(script)
 
-    assert result.total_statements == -1
+    assert result.total_statements == 1  # Script executed as a single statement
     assert result.metadata["status_message"] == "CREATE TABLE"
 
     mock_connection.execute.assert_called_once_with(script)
 
 
-# Result Wrapping Tests
-@pytest.mark.asyncio
-async def test_wrap_select_result(driver: AsyncpgDriver) -> None:
-    """Test wrapping SELECT results."""
-    statement = SQL("SELECT * FROM users")
-    result = {
-        "data": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
-        "column_names": ["id", "name"],
-        "rows_affected": 2,
-    }
-
-    wrapped: SQLResult[Any] = await driver._wrap_select_result(statement, result)  # type: ignore[arg-type]
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.statement is statement
-    assert len(wrapped.data) == 2
-    assert wrapped.column_names == ["id", "name"]
-    assert wrapped.rows_affected == 2
-    assert wrapped.operation_type == "SELECT"
-
-
-@pytest.mark.asyncio
-async def test_wrap_select_result_with_schema(driver: AsyncpgDriver) -> None:
-    """Test wrapping SELECT results with schema type."""
-    from dataclasses import dataclass
-
-    @dataclass
-    class User:
-        id: int
-        name: str
-
-    statement = SQL("SELECT * FROM users")
-    result = {
-        "data": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
-        "column_names": ["id", "name"],
-        "rows_affected": 2,
-    }
-
-    wrapped = await driver._wrap_select_result(statement, result, schema_type=User)  # type: ignore[arg-type]
-
-    assert isinstance(wrapped, SQLResult)
-    assert all(isinstance(item, User) for item in wrapped.data)
-    assert wrapped.data[0].id == 1
-    assert wrapped.data[0].name == "Alice"
-
-
-@pytest.mark.asyncio
-async def test_wrap_execute_result_dml(driver: AsyncpgDriver) -> None:
-    """Test wrapping DML results."""
-    statement = SQL("INSERT INTO users VALUES ($1)")
-
-    result = {"rows_affected": 1, "status_message": "INSERT 0 1"}
-
-    wrapped = await driver._wrap_execute_result(statement, result)  # type: ignore[arg-type]
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.data == []
-    assert wrapped.rows_affected == 1
-    assert wrapped.operation_type == "INSERT"
-    assert wrapped.metadata["status_message"] == "INSERT 0 1"
-
-
-@pytest.mark.asyncio
-async def test_wrap_execute_result_script(driver: AsyncpgDriver) -> None:
-    """Test wrapping script results."""
-    from sqlspec.statement.sql import SQLConfig
-
-    config = SQLConfig(enable_validation=False)  # Allow DDL
-    statement = SQL("CREATE TABLE test; INSERT INTO test;", config=config)
-
-    result = {"statements_executed": -1, "status_message": "CREATE TABLE"}
-
-    wrapped = await driver._wrap_execute_result(statement, result)  # type: ignore[arg-type]
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.data == []
-    assert wrapped.rows_affected == 0
-    assert wrapped.operation_type == "SCRIPT"
-    assert wrapped.metadata["status_message"] == "CREATE TABLE"
-    assert wrapped.metadata["statements_executed"] == -1
+# Note: Result wrapping tests removed - drivers now return SQLResult directly from execute methods
 
 
 # Parameter Processing Tests

@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from sqlspec.statement.result import ArrowResult, OperationType, SQLResult, StatementResult
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQL
 
 if TYPE_CHECKING:
     pass
@@ -57,7 +57,7 @@ def test_statement_result_metadata_operations() -> None:
         ([], ["id"], 0, True),  # Empty result set is still successful
         ([{"id": 1}], ["id"], None, True),  # None rows_affected is ok for SELECT
         ([{"id": 1}], ["id"], -1, False),  # Negative rows_affected indicates failure
-        (None, [], None, False),  # None data indicates failure
+        (None, [], None, False),  # Explicitly passing None for data indicates failure
     ],
     ids=["normal_select", "empty_select", "none_rows_affected", "negative_rows_affected", "none_data"],
 )
@@ -65,13 +65,29 @@ def test_sql_result_select_is_success(
     data: Optional[list[dict[str, Any]]], column_names: list[str], rows_affected: Optional[int], expected_success: bool
 ) -> None:
     """Test is_success method for SELECT operations."""
-    result = SQLResult[dict[str, Any]](
-        statement=SQL("SELECT * FROM users"),
-        data=data if data is not None else [],
-        column_names=column_names,
-        rows_affected=rows_affected or 0,
-        operation_type="SELECT",
-    )
+    # When data is None, we want to test the failure case
+    # But SQLResult's dataclass field has default_factory=list
+    # So we need to pass the actual None value without conversion
+    # Create SQLResult with explicit parameters matching dataclass definition
+    statement = SQL("SELECT * FROM users")
+
+    if data is None:
+        # Need to explicitly pass None for data to override default_factory
+        result = SQLResult[dict[str, Any]](
+            statement=statement,
+            data=None,  # type: ignore  # We're testing the None case
+            rows_affected=rows_affected if rows_affected is not None else 0,
+            column_names=column_names,
+            operation_type="SELECT",
+        )
+    else:
+        result = SQLResult[dict[str, Any]](
+            statement=statement,
+            data=data,
+            rows_affected=rows_affected if rows_affected is not None else 0,
+            column_names=column_names,
+            operation_type="SELECT",
+        )
     assert result.is_success() == expected_success
 
 
@@ -168,10 +184,18 @@ def test_sql_result_select_row_operations(
 )
 def test_sql_result_dml_is_success(operation_type: OperationType, rows_affected: int, expected_success: bool) -> None:
     """Test is_success method for DML operations."""
-    # Create SQL statement with parsing errors as warnings to handle invalid SQL
-    config = SQLConfig(parse_errors_as_warnings=True)
+    # Create valid SQL for each operation type
+    if operation_type == "INSERT":
+        sql = "INSERT INTO test_table (id) VALUES (1)"
+    elif operation_type == "UPDATE":
+        sql = "UPDATE test_table SET name = 'test'"
+    elif operation_type == "DELETE":
+        sql = "DELETE FROM test_table"
+    else:
+        sql = f"{operation_type} test_table"  # Fallback
+
     result = SQLResult[dict[str, Any]](
-        statement=SQL(f"{operation_type} FROM test_table", config=config),
+        statement=SQL(sql),
         data=[],  # DML typically has empty data unless RETURNING
         rows_affected=rows_affected,
         operation_type=operation_type,
@@ -216,9 +240,8 @@ def test_sql_result_operation_type_checks(
     operation_type: str, expected_insert: bool, expected_update: bool, expected_delete: bool
 ) -> None:
     """Test operation type checking methods."""
-    config = SQLConfig(parse_errors_as_warnings=True)
     result = SQLResult[dict[str, Any]](
-        statement=SQL("SELECT * FROM test", config=config),
+        statement=SQL("SELECT * FROM test"),
         data=[],
         operation_type=operation_type,  # type: ignore[arg-type]
     )
@@ -235,9 +258,8 @@ def test_sql_result_dml_with_returning() -> None:
         {"id": 2, "name": "Bob", "created_at": "2023-01-01"},
     ]
 
-    config = SQLConfig(parse_errors_as_warnings=True)
     result = SQLResult[dict[str, Any]](
-        statement=SQL("INSERT INTO users (name) VALUES ('Alice'), ('Bob') RETURNING *", config=config),
+        statement=SQL("INSERT INTO users (name) VALUES ('Alice'), ('Bob') RETURNING *"),
         data=returned_data,
         column_names=["id", "name", "created_at"],
         rows_affected=2,
@@ -255,9 +277,8 @@ def test_sql_result_dml_with_returning() -> None:
 # Test SQLResult for script execution
 def test_sql_result_script_initialization() -> None:
     """Test SQLResult initialization for script execution."""
-    config = SQLConfig(parse_errors_as_warnings=True)
     result = SQLResult[Any](
-        statement=SQL("-- Script\nINSERT INTO test VALUES (1); UPDATE test SET id = 2;", config=config),
+        statement=SQL("-- Script\nINSERT INTO test VALUES (1); UPDATE test SET id = 2;"),
         data=[],
         operation_type="SCRIPT",
         execution_time=1.5,
@@ -517,11 +538,8 @@ def test_sql_result_edge_cases() -> None:
 def test_sql_result_returning_data_access() -> None:
     """Test accessing data from INSERT RETURNING statement."""
     data = [{"id": 1, "name": "Test"}]
-    config = SQLConfig(parse_errors_as_warnings=True)
     result = SQLResult[dict[str, Any]](
-        statement=SQL("INSERT INTO users (name) VALUES ('Test') RETURNING *", config=config),
-        data=data,
-        operation_type="INSERT",
+        statement=SQL("INSERT INTO users (name) VALUES ('Test') RETURNING *"), data=data, operation_type="INSERT"
     )
 
     # Returned data is stored in the data property

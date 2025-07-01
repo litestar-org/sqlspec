@@ -22,11 +22,11 @@ if TYPE_CHECKING:
     [
         (
             {},  # Default values
-            {"dialect": None, "parse_errors_as_warnings": False, "cache_expressions": True},
+            {"dialect": None, "cache_parsed_expression": True},
         ),
         (
-            {"dialect": "duckdb", "parse_errors_as_warnings": True, "cache_expressions": False},
-            {"dialect": "duckdb", "parse_errors_as_warnings": True, "cache_expressions": False},
+            {"dialect": "duckdb", "cache_parsed_expression": False},
+            {"dialect": "duckdb", "cache_parsed_expression": False},
         ),
     ],
     ids=["defaults", "custom"],
@@ -59,8 +59,8 @@ def test_sql_initialization_with_string() -> None:
 def test_sql_initialization_with_parameters() -> None:
     """Test SQL initialization with parameters."""
     sql_str = "SELECT * FROM users WHERE id = :id"
-    params = {"id": 1}
-    stmt = SQL(sql_str, parameters=params)
+    params: dict[str, Any] = {"id": 1}
+    stmt = SQL(sql_str, **params)  # type: ignore[arg-type]  # kwargs are passed correctly
 
     assert stmt.sql == sql_str
     assert stmt.parameters == params
@@ -77,9 +77,11 @@ def test_sql_initialization_with_parameters() -> None:
 def test_sql_with_different_parameter_styles(sql: str, params: "SQLParameterType", expected_sql: str) -> None:
     """Test SQL handles different parameter styles."""
     if isinstance(params, dict):
-        stmt = SQL(sql, **params) if isinstance(params, dict) else SQL(sql, parameters=params)
+        stmt = SQL(sql, **params)
+    elif isinstance(params, tuple):
+        stmt = SQL(sql, *params)
     else:
-        stmt = SQL(sql, parameters=params)
+        stmt = SQL(sql, params)
     assert stmt.sql == expected_sql
 
 
@@ -94,12 +96,11 @@ def test_sql_initialization_with_expression() -> None:
 
 def test_sql_initialization_with_custom_config() -> None:
     """Test SQL initialization with custom config."""
-    config = SQLConfig(dialect="sqlite", parse_errors_as_warnings=True)
+    config = SQLConfig(dialect="sqlite")
     stmt = SQL("SELECT * FROM users", config=config)
 
     assert stmt._config == config
     assert stmt._config.dialect == "sqlite"
-    assert stmt._config.parse_errors_as_warnings is True
 
 
 # Test SQL immutability
@@ -117,15 +118,15 @@ def test_sql_immutability() -> None:
 
 # Test SQL lazy processing
 def test_sql_lazy_processing() -> None:
-    """Test SQL compiler is created lazily."""
+    """Test SQL processing is done lazily."""
     stmt = SQL("SELECT * FROM users")
 
-    # Compiler not created yet
-    assert stmt._compiler is None
+    # Processing not done yet
+    assert stmt._processed_state is None
 
-    # Accessing sql property creates compiler
+    # Accessing sql property triggers processing
     _ = stmt.sql
-    assert stmt._compiler is not None
+    assert stmt._processed_state is not None
 
 
 # Test SQL properties
@@ -144,16 +145,18 @@ def test_sql_property(sql_input: "str | exp.Expression", expected_sql: str) -> N
 
 
 def test_sql_parameters_property() -> None:
-    """Test SQL.parameters property returns processed parameters."""
+    """Test SQL.parameters property returns original parameters."""
     # No parameters
     stmt1 = SQL("SELECT * FROM users")
     assert stmt1.parameters == {}
 
-    # With parameters - positional params are stored in named_params dict
-    stmt2 = SQL("SELECT * FROM users WHERE id = ?", parameters=(1,))
-    assert isinstance(stmt2.parameters, dict)
-    assert "pos_param_0" in stmt2.parameters
-    assert stmt2.parameters["pos_param_0"] == 1
+    # With positional parameters - returns the original tuple
+    stmt2 = SQL("SELECT * FROM users WHERE id = ?", 1)
+    assert stmt2.parameters == (1,)
+
+    # With tuple of parameters
+    stmt2b = SQL("SELECT * FROM users WHERE id = ? AND name = ?", 1, "test")
+    assert stmt2b.parameters == (1, "test")
 
     # Dict parameters
     stmt3 = SQL("SELECT * FROM users WHERE id = :id", id=1)
@@ -187,9 +190,8 @@ def test_sql_validate_method() -> None:
     assert isinstance(errors1, list)
     assert len(errors1) == 0
 
-    # SQL with validation issues - parse_errors_as_warnings allows getting errors
-    config2 = SQLConfig(parse_errors_as_warnings=True)
-    stmt2 = SQL("UPDATE users SET name = 'test'", config=config2)  # No WHERE clause
+    # SQL with validation issues
+    stmt2 = SQL("UPDATE users SET name = 'test'")  # No WHERE clause
     errors2 = stmt2.validate()
     assert isinstance(errors2, list)
     # The actual validation happens in the pipeline validators
@@ -258,28 +260,31 @@ def test_sql_with_missing_parameters() -> None:
 
 def test_sql_with_extra_parameters() -> None:
     """Test SQL handles extra parameters gracefully."""
-    stmt = SQL("SELECT * FROM users WHERE id = ?", parameters=(1, 2, 3))
-    # Parameters are stored in named_params dict
-    assert isinstance(stmt.parameters, dict)
-    assert stmt.parameters["pos_param_0"] == 1
-    assert stmt.parameters["pos_param_1"] == 2
-    assert stmt.parameters["pos_param_2"] == 3
+    # The variadic parameter API - passing multiple values becomes a tuple
+    stmt = SQL("SELECT * FROM users WHERE id = ?", 1, 2, 3)
+    # Parameters are returned as the original tuple
+    assert stmt.parameters == (1, 2, 3)
     assert stmt.sql == "SELECT * FROM users WHERE id = ?"
 
 
 # Test SQL transformations
 def test_sql_with_literal_parameterization() -> None:
     """Test SQL literal parameterization when enabled."""
-    # Literal parameterization happens in the pipeline transformers
+    # By default, enable_transformations is True, which includes ParameterizeLiterals
     stmt = SQL("SELECT * FROM users WHERE id = 1")
 
-    # The SQL should remain as-is unless pipeline transformers are configured
+    # The SQL should have the literal parameterized
     sql = stmt.sql
     params = stmt.parameters
 
-    # Without transformers configured, SQL remains unchanged
-    assert sql == "SELECT * FROM users WHERE id = 1"
-    assert params == {}
+    # With default transformers enabled, literal should be parameterized
+    assert sql == "SELECT * FROM users WHERE id = ?"
+    # The extracted parameters are returned as a list
+    assert isinstance(params, list)
+    assert len(params) == 1
+    # TypedParameter objects have a value attribute
+    assert hasattr(params[0], "value")
+    assert params[0].value == 1
 
 
 def test_sql_comment_removal() -> None:
@@ -312,10 +317,8 @@ def test_sql_with_dialect(dialect: str, expected_sql: str) -> None:
 # Test SQL error handling
 def test_sql_parsing_error() -> None:
     """Test SQL handles parsing errors gracefully."""
+    # Test with parse_errors_as_warnings=True
     config = SQLConfig(parse_errors_as_warnings=True)
-
-    # SQLGlot is very permissive and wraps invalid SQL in Anonymous expressions
-    # rather than raising parsing errors
     stmt = SQL("INVALID SQL SYNTAX !", config=config)
     sql = stmt.sql
 
@@ -351,7 +354,7 @@ def test_sql_whitespace_only() -> None:
 # Test SQL caching behavior
 def test_sql_expression_caching() -> None:
     """Test SQL expression caching when enabled."""
-    config = SQLConfig(cache_expressions=True)
+    config = SQLConfig(cache_parsed_expression=True)
     stmt = SQL("SELECT * FROM users", config=config)
 
     # First access
@@ -364,7 +367,7 @@ def test_sql_expression_caching() -> None:
 
 def test_sql_no_expression_caching() -> None:
     """Test SQL expression not cached when disabled."""
-    config = SQLConfig(cache_expressions=False)
+    config = SQLConfig(cache_parsed_expression=False)
     stmt = SQL("SELECT * FROM users", config=config)
 
     # Access expression multiple times
@@ -402,7 +405,7 @@ def test_sql_copy() -> None:
     stmt1 = SQL("SELECT * FROM users", id=1)
 
     # Create new instance with different config
-    new_config = SQLConfig(parse_errors_as_warnings=True)
+    new_config = SQLConfig(dialect="sqlite")
     stmt2 = SQL(stmt1, config=new_config)
 
     assert stmt2._raw_sql == stmt1._raw_sql

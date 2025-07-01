@@ -22,10 +22,7 @@ class ParameterManager:
         self.filters: list[StatementFilter] = []
         self._positional_parameters = parameters or ()
         self._named_parameters = kwargs or {}
-
-        # Process initial parameters
         if parameters:
-            # Parameters is a tuple of values, process each one
             for i, param in enumerate(parameters):
                 self.named_params[f"pos_param_{i}"] = param
         if kwargs:
@@ -33,12 +30,10 @@ class ParameterManager:
 
     def process_parameters(self, *parameters: Any, **kwargs: Any) -> None:
         """Process positional parameters and kwargs into named parameters."""
-        # Process positional parameters, converting them to named parameters
         for i, param in enumerate(parameters):
             if isinstance(param, StatementFilter):
                 self.filters.append(param)
                 pos_params, named_params = param.extract_parameters()
-                # Convert positional params from filter to named params
                 for j, p_param in enumerate(pos_params):
                     self.named_params[f"pos_param_{i}_{j}"] = p_param
                 self.named_params.update(named_params)
@@ -49,8 +44,6 @@ class ParameterManager:
                 self.named_params.update(param)
             else:
                 self.named_params[f"pos_param_{i}"] = param
-
-        # Handle 'parameters' kwarg if present
         if "parameters" in kwargs:
             param_value = kwargs.pop("parameters")
             if isinstance(param_value, (list, tuple)):
@@ -61,7 +54,6 @@ class ParameterManager:
             else:
                 self.named_params["kw_single_param"] = param_value
 
-        # Add remaining kwargs as named parameters
         for key, value in kwargs.items():
             if not key.startswith("_"):
                 self.named_params[key] = value
@@ -86,6 +78,7 @@ class ParameterManager:
     def add_named_parameter(self, name: str, value: Any) -> None:
         """Add a named parameter."""
         self.named_params[name] = value
+        self._named_parameters[name] = value
 
     def get_unique_parameter_name(
         self, base_name: str, namespace: Optional[str] = None, preserve_original: bool = False
@@ -117,10 +110,8 @@ class ParameterManager:
 
         result = []
         for i, info in enumerate(param_info):
-            # First try the actual parameter name
             if info.name and info.name in params:
                 result.append(params[info.name])
-            # Then try generated positional names
             elif f"pos_param_{i}" in params:
                 result.append(params[f"pos_param_{i}"])
             elif f"kw_pos_param_{i}" in params:
@@ -128,17 +119,49 @@ class ParameterManager:
             elif f"_arg_{i}" in params:
                 result.append(params[f"_arg_{i}"])
             else:
-                # If not found, append None (will cause error later in validation)
                 result.append(None)
         return result
 
-    def _convert_to_positional_colon_format(self, params: dict[str, Any], param_info: list[Any]) -> list[Any]:
+    def _convert_to_positional_colon_format(self, params: dict[str, Any], param_info: list[Any]) -> dict[str, Any]:
         """Convert to positional colon format (Oracle :1, :2 style).
 
-        Oracle's positional parameters are 1-indexed, but we still return a 0-indexed list.
-        The driver will handle the 1-based indexing when building the SQL.
+        Oracle's positional parameters are 1-indexed and are accessed by string keys.
+        Returns a dict with string keys "1", "2", etc.
         """
-        return self._convert_to_positional_format(params, param_info)
+        digit_keys = {k: v for k, v in params.items() if k.isdigit()}
+        if (
+            digit_keys
+            and param_info
+            and all(hasattr(info, "style") and info.style == ParameterStyle.POSITIONAL_COLON for info in param_info)
+        ):
+            required_nums = {info.name for info in param_info if hasattr(info, "name")}
+            if required_nums.issubset(digit_keys.keys()):
+                return digit_keys
+
+        # Check if the param_info already contains Oracle numeric parameters with specific numbers
+        # This handles cases like :0, :1, :3 (with gaps) where we should preserve the actual numbers
+        if param_info and all(
+            hasattr(info, "style")
+            and info.style == ParameterStyle.POSITIONAL_COLON
+            and hasattr(info, "name")
+            and info.name.isdigit()
+            for info in param_info
+        ):
+            result = {}
+            positional_values = self._convert_to_positional_format(params, param_info)
+            for i, value in enumerate(positional_values):
+                if value is not None:
+                    numeric_key = str(i)
+                    if any(info.name == numeric_key for info in param_info):
+                        result[numeric_key] = value
+                    else:
+                        result[str(i + 1)] = value
+
+            return result
+
+        positional_list = self._convert_to_positional_format(params, param_info)
+        # Convert to dict with 1-based string keys
+        return {str(i + 1): value for i, value in enumerate(positional_list)}
 
     def _convert_to_named_colon_format(self, params: dict[str, Any], param_info: list[Any]) -> dict[str, Any]:
         """Convert to named colon format (:name style).
@@ -147,21 +170,16 @@ class ParameterManager:
         We need to ensure all placeholders have corresponding values.
         """
         result = {}
-
-        # For each parameter in the SQL, find its value
         for info in param_info:
             if info.name:
-                # Named parameter - look for it in params
                 if info.name in params:
                     result[info.name] = params[info.name]
                 else:
-                    # Check if it's a generated name that needs mapping
                     for key, value in params.items():
                         if key.endswith(f"_{info.ordinal}") or key == f"_arg_{info.ordinal}":
                             result[info.name] = value
                             break
             else:
-                # Positional parameter converted to named - use generated name
                 gen_name = f"_arg_{info.ordinal}"
                 if f"pos_param_{info.ordinal}" in params:
                     result[gen_name] = params[f"pos_param_{info.ordinal}"]
@@ -169,8 +187,6 @@ class ParameterManager:
                     result[gen_name] = params[f"kw_pos_param_{info.ordinal}"]
                 elif gen_name in params:
                     result[gen_name] = params[gen_name]
-
-        # Include any extra named parameters that might be needed
         for key, value in params.items():
             if not key.startswith(("pos_param_", "kw_pos_param_", "_arg_")) and key not in result:
                 result[key] = value
@@ -182,7 +198,6 @@ class ParameterManager:
 
         This is similar to named colon format but uses Python string formatting syntax.
         """
-        # Same logic as named colon format - pyformat also expects a dictionary
         return self._convert_to_named_colon_format(params, param_info)
 
     @property

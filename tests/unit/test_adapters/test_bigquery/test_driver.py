@@ -22,7 +22,6 @@ import pytest
 from sqlspec.adapters.bigquery import BigQueryDriver
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
@@ -314,7 +313,7 @@ def test_execute_dml_statement(driver: BigQueryDriver, mock_connection: MagicMoc
     mock_job.errors = None
     mock_job.statement_type = "INSERT"  # This is the key - identify it as a DML statement
 
-    statement = SQL("INSERT INTO users (name) VALUES (@name)", parameters=None, name="Alice")
+    statement = SQL("INSERT INTO users (name) VALUES (@name)", name="Alice")
     result = driver._execute_statement(statement)
 
     assert result.rows_affected == 1
@@ -419,82 +418,7 @@ def test_execute_script(driver: BigQueryDriver, mock_connection: MagicMock) -> N
     assert mock_connection.query.call_count == 3
 
 
-# Result Wrapping Tests
-def test_wrap_select_result(driver: BigQueryDriver) -> None:
-    """Test wrapping SELECT results."""
-    statement = SQL("SELECT * FROM users")
-    result = {
-        "data": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
-        "column_names": ["id", "name"],
-        "rows_affected": 2,
-    }
-
-    wrapped = driver._wrap_select_result(statement, result)  # type: ignore[arg-type]
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.statement is statement
-    assert len(wrapped.data) == 2
-    assert wrapped.column_names == ["id", "name"]
-    assert wrapped.rows_affected == 2
-    assert wrapped.operation_type == "SELECT"
-
-
-def test_wrap_select_result_with_schema(driver: BigQueryDriver) -> None:
-    """Test wrapping SELECT results with schema type."""
-    from dataclasses import dataclass
-
-    @dataclass
-    class User:
-        id: int
-        name: str
-
-    statement = SQL("SELECT * FROM users")
-    result = {
-        "data": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
-        "column_names": ["id", "name"],
-        "rows_affected": 2,
-    }
-
-    wrapped = driver._wrap_select_result(statement, result, schema_type=User)  # type: ignore[arg-type]
-
-    assert isinstance(wrapped, SQLResult)
-    assert all(isinstance(item, User) for item in wrapped.data)
-    assert wrapped.data[0].id == 1
-    assert wrapped.data[0].name == "Alice"
-
-
-def test_wrap_execute_result_dml(driver: BigQueryDriver) -> None:
-    """Test wrapping DML results."""
-    statement = SQL("INSERT INTO users VALUES (@id)")
-
-    result = {"rows_affected": 1, "status_message": "OK - job_id: test-job"}
-
-    wrapped = driver._wrap_execute_result(statement, result)  # type: ignore[arg-type]
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.data == []
-    assert wrapped.rows_affected == 1
-    assert wrapped.operation_type == "INSERT"
-    assert wrapped.metadata["status_message"] == "OK - job_id: test-job"
-
-
-def test_wrap_execute_result_script(driver: BigQueryDriver) -> None:
-    """Test wrapping script results."""
-    from sqlspec.statement.sql import SQLConfig
-
-    config = SQLConfig(enable_validation=False)  # Allow DDL
-    statement = SQL("CREATE TABLE test; INSERT INTO test;", config=config)
-
-    result = {"statements_executed": 2, "status_message": "SCRIPT EXECUTED"}
-
-    wrapped = driver._wrap_execute_result(statement, result)  # type: ignore[arg-type]
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.data == []
-    assert wrapped.rows_affected == 0
-    assert wrapped.operation_type == "SCRIPT"
-    assert wrapped.metadata["status_message"] == "SCRIPT EXECUTED"
-    assert wrapped.metadata["statements_executed"] == 2
+# Note: Result wrapping tests removed - drivers now return SQLResult directly from execute methods
 
 
 # Connection Tests

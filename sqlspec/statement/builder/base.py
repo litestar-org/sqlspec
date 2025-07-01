@@ -314,9 +314,12 @@ class QueryBuilder(ABC, Generic[RowT]):
 
             config = SQLConfig(dialect=safe_query.dialect)
 
+        # SQL expects parameters as variadic args, not as a keyword
         if kwargs:
-            return SQL(safe_query.sql, parameters=parameters, config=config, **kwargs)
-        return SQL(safe_query.sql, parameters=parameters, config=config)
+            return SQL(safe_query.sql, config=config, **kwargs)
+        if parameters:
+            return SQL(safe_query.sql, *parameters, config=config)
+        return SQL(safe_query.sql, config=config)
 
     def __str__(self) -> str:
         """Return the SQL string representation of the query.

@@ -1,16 +1,21 @@
 """SQL compilation logic separated from the main SQL class."""
 
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 import sqlglot.expressions as exp
+
+from sqlspec.exceptions import SQLCompilationError
+from sqlspec.statement.parameters import ParameterConverter, ParameterStyle
+from sqlspec.statement.pipelines import SQLProcessingContext, StatementPipeline
+from sqlspec.statement.sql import SQLConfig
+from sqlspec.utils.cached_property import cached_property
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-from sqlspec.exceptions import SQLCompilationError
-from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.pipelines import SQLProcessingContext, StatementPipeline
-from sqlspec.statement.sql import SQLConfig
+    from sqlspec.protocols import ProcessorProtocol
+    from sqlspec.statement.parameter_manager import ParameterManager
+
 
 __all__ = ("SQLCompiler",)
 
@@ -22,85 +27,123 @@ class SQLCompiler:
         self,
         expression: exp.Expression,
         dialect: "Optional[DialectType]" = None,
-        parameter_manager: Optional[Any] = None,
-        is_many: bool = False,
+        parameter_manager: "Optional[ParameterManager]" = None,
         is_script: bool = False,
+        original_sql: Optional[str] = None,
+        config: Optional[SQLConfig] = None,
     ) -> None:
         self.expression = expression
         self.dialect = dialect
         self.parameter_manager = parameter_manager
-        self.is_many = is_many
         self.is_script = is_script
+        self._original_sql = original_sql
+        self.config = config or SQLConfig(dialect=dialect)
+
+    @cached_property
+    def _pipeline(self) -> StatementPipeline:
+        """Get the statement pipeline."""
+        # Create pipeline with validators based on config
+        validators: list[ProcessorProtocol] = []
+
+        # Add parameter style validator if validation is enabled
+        if self.config.enable_validation and self.config.allowed_parameter_styles is not None:
+            from sqlspec.statement.pipelines.validators._parameter_style import ParameterStyleValidator
+
+            # In strict mode, fail on violations
+            validators.append(ParameterStyleValidator(fail_on_violation=self.config.strict_mode))
+
+        return StatementPipeline(validators=validators)
+
+    @cached_property
+    def _context(self) -> SQLProcessingContext:
+        """Get the processing context."""
+        # Get the SQL string
+        if isinstance(self.expression, exp.Anonymous) and self.expression.this:
+            sql_string = str(self.expression.this)
+        else:
+            sql_string = self.expression.sql(dialect=self.dialect)
+
+        context = SQLProcessingContext(initial_sql_string=sql_string, dialect=self.dialect, config=self.config)
+        context.initial_expression = self.expression
+        context.current_expression = self.expression
+
+        # Extract parameter info from the SQL
+        from sqlspec.statement.parameters import ParameterValidator
+
+        validator = ParameterValidator()
+        context.parameter_info = validator.extract_parameters(sql_string)
+
+        if self.parameter_manager:
+            # For positional parameters, use positional_parameters
+            if self.parameter_manager.positional_parameters:
+                context.merged_parameters = self.parameter_manager.positional_parameters
+                context.initial_parameters = self.parameter_manager.positional_parameters
+            # For named parameters, use named_parameters
+            elif self.parameter_manager.named_parameters:
+                context.merged_parameters = self.parameter_manager.named_parameters
+                context.initial_kwargs = self.parameter_manager.named_parameters
+            # Set initial values for both
+            context.initial_parameters = self.parameter_manager.positional_parameters
+            context.initial_kwargs = self.parameter_manager.named_parameters
+        return context
+
+    @cached_property
+    def _processed_expr(self) -> exp.Expression:
+        """Execute the processing pipeline and cache the result."""
+        try:
+            result = self._pipeline.execute_pipeline(self._context)
+        except Exception as e:
+            msg = f"Failed to compile SQL: {self._context.initial_sql_string}"
+            raise SQLCompilationError(msg) from e
+        else:
+            return cast("exp.Expression", result.expression)
+
+    @cached_property
+    def _compiled_sql(self) -> str:
+        """Get the compiled SQL string."""
+        if self.is_script:
+            return str(self._original_sql or self.expression.sql(dialect=self.dialect))
+        # Always go through the pipeline to ensure validation runs
+        processed = self._processed_expr
+        # Handle Anonymous expressions properly
+        if isinstance(processed, exp.Anonymous) and processed.this:
+            return str(processed.this)
+        return str(processed.sql(dialect=self.dialect, comments=False))
 
     def compile(self, placeholder_style: Optional[str] = None) -> tuple[str, Any]:
         """Compile SQL and parameters."""
         if self.is_script:
-            return self.expression.sql(dialect=self.dialect), None
+            return self._compiled_sql, None
 
-        pipeline = self._get_pipeline()
-        context = self._get_processing_context(pipeline)
-        processed_expr = self._execute_pipeline(pipeline, context)
-
-        sql = processed_expr.sql(dialect=self.dialect, comments=False)
-        params = self._get_compiled_parameters(context, placeholder_style)
-
+        sql = self.to_sql(placeholder_style)
+        params = self._get_compiled_parameters(placeholder_style)
         return sql, params
 
     def to_sql(self, placeholder_style: Optional[str] = None) -> str:
         """Get the SQL string with a specific placeholder style."""
-        sql, _ = self.compile(placeholder_style=placeholder_style)
-        return sql
+        if placeholder_style is None or self.is_script:
+            return cast("str", self._compiled_sql)
+
+        converter = ParameterConverter()
+        sql = self._compiled_sql
+
+        # Convert placeholders to the target style
+        target_style = ParameterStyle(placeholder_style)
+        return converter.convert_placeholders(sql, target_style, self._context.parameter_info)
 
     def get_parameters(self, style: Union[ParameterStyle, str, None] = None) -> Any:
         """Get the parameters in a specific style."""
-        _, params = self.compile(placeholder_style=str(style) if style else None)
-        return params
+        if self.is_script:
+            return None
+        return cast("Any", self._get_compiled_parameters(str(style) if style else None))
 
-    def _get_pipeline(self) -> StatementPipeline:
-        """Get the statement pipeline."""
-        # This can be extended to use a configured pipeline from SQLConfig
-        return StatementPipeline()
-
-    def _get_processing_context(self, pipeline: StatementPipeline) -> SQLProcessingContext:
-        """Get the processing context."""
-
-        # Create a proper context with all required fields
-        context = SQLProcessingContext(
-            initial_sql_string=self.expression.sql(dialect=self.dialect),
-            dialect=self.dialect,
-            config=SQLConfig(dialect=self.dialect),
-        )
-
-        # Set the expression fields
-        context.initial_expression = self.expression
-        context.current_expression = self.expression
-
-        # Set the parameter fields
-        if self.parameter_manager:
-            context.merged_parameters = self.parameter_manager.named_parameters
-            context.initial_parameters = self.parameter_manager.positional_parameters
-            context.initial_kwargs = self.parameter_manager.named_parameters
-
-        return context
-
-    def _execute_pipeline(self, pipeline: StatementPipeline, context: SQLProcessingContext) -> exp.Expression:
-        """Execute the processing pipeline."""
-        try:
-            result = pipeline.execute_pipeline(context)
-        except Exception as e:
-            msg = f"Failed to compile SQL: {context.initial_sql_string}"
-            raise SQLCompilationError(msg) from e
-        else:
-            return result.expression
-
-    def _get_compiled_parameters(self, context: SQLProcessingContext, placeholder_style: Optional[str]) -> Any:
+    def _get_compiled_parameters(self, placeholder_style: Optional[str]) -> Any:
         """Get compiled parameters in target style."""
         if not self.parameter_manager:
             return None
 
-        if placeholder_style:
-            style = ParameterStyle(placeholder_style) if isinstance(placeholder_style, str) else placeholder_style
-        else:
-            # Default to named colon style
-            style = ParameterStyle.NAMED_COLON
-        return self.parameter_manager.get_compiled_parameters(context.parameter_info, style)
+        # This ensures the pipeline has run and context is populated
+        _ = self._processed_expr
+
+        style_enum = ParameterStyle(placeholder_style) if placeholder_style else ParameterStyle.NAMED_COLON
+        return self.parameter_manager.get_compiled_parameters(self._context.parameter_info, style_enum)

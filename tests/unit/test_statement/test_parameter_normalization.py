@@ -59,7 +59,7 @@ class TestParameterNormalization:
     def test_denormalization(self) -> None:
         """Test denormalization back to original style."""
         sql = "SELECT * FROM users WHERE name = %s"
-        stmt = SQL(sql, parameters=["john"])
+        stmt = SQL(sql, "john")
 
         # Get SQL with original style
         result_sql = stmt.to_sql(placeholder_style=ParameterStyle.POSITIONAL_PYFORMAT)

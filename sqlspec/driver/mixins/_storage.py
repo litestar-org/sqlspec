@@ -247,11 +247,16 @@ class SyncStorageMixin(StorageMixinBase):
             _config = replace(_config, strict_mode=False, enable_validation=False)
 
         # Only pass params if it's not None to avoid adding None as a parameter
-        sql = (
-            SQL(statement, parameters=params, config=_config, **kwargs)
-            if params is not None
-            else SQL(statement, config=_config, **kwargs)
-        )
+        if params is not None:
+            # Handle different parameter types
+            if isinstance(params, dict):
+                sql = SQL(statement, config=_config, **params, **kwargs)
+            elif isinstance(params, (list, tuple)):
+                sql = SQL(statement, *params, config=_config, **kwargs)
+            else:
+                sql = SQL(statement, params, config=_config, **kwargs)
+        else:
+            sql = SQL(statement, config=_config, **kwargs)
 
         # Apply filters after creation
         for filter_ in filters:
@@ -746,11 +751,16 @@ class AsyncStorageMixin(StorageMixinBase):
             _config = replace(_config, strict_mode=False, enable_validation=False)
 
         # Only pass params if it's not None to avoid adding None as a parameter
-        sql = (
-            SQL(statement, parameters=params, config=_config, **kwargs)
-            if params is not None
-            else SQL(statement, config=_config, **kwargs)
-        )
+        if params is not None:
+            # Handle different parameter types
+            if isinstance(params, dict):
+                sql = SQL(statement, config=_config, **params, **kwargs)
+            elif isinstance(params, (list, tuple)):
+                sql = SQL(statement, *params, config=_config, **kwargs)
+            else:
+                sql = SQL(statement, params, config=_config, **kwargs)
+        else:
+            sql = SQL(statement, config=_config, **kwargs)
 
         # Apply filters after creation
         for filter_ in filters:

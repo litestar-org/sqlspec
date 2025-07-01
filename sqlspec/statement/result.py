@@ -1,8 +1,6 @@
 """SQL statement result classes for handling different types of SQL operations."""
 
 from abc import ABC, abstractmethod
-
-# Import Mapping for type checking in __post_init__
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, Literal, Optional, Union
@@ -90,9 +88,6 @@ class StatementResult(ABC, Generic[RowT]):
         self.metadata[key] = value
 
 
-# RowT is introduced for clarity within SQLResult, representing the type of a single row.
-
-
 @dataclass
 class SQLResult(StatementResult[RowT], Generic[RowT]):
     """Unified result class for SQL operations that return a list of rows
@@ -106,21 +101,14 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
 
     data: "list[RowT]" = field(default_factory=list)
     error: Optional[Exception] = None
+    operation_type: OperationType = "SELECT"
     operation_index: Optional[int] = None
     pipeline_sql: Optional["SQL"] = None
     parameters: Optional[Any] = None
-
-    # Attributes primarily for SELECT-like results or results with column structure
     column_names: "list[str]" = field(default_factory=list)
-    total_count: Optional[int] = None  # Total rows if pagination/limit was involved
-    has_more: bool = False  # For pagination
-
-    # Attributes primarily for DML-like results
-    operation_type: OperationType = "SELECT"  # Default, override for DML
+    total_count: Optional[int] = None
+    has_more: bool = False
     inserted_ids: "list[Union[int, str]]" = field(default_factory=list)
-    # rows_affected and last_inserted_id are inherited from StatementResult
-
-    # Attributes for script execution
     statement_results: "list[SQLResult[Any]]" = field(default_factory=list)
     """Individual statement results when executing scripts."""
     errors: "list[str]" = field(default_factory=list)
@@ -134,40 +122,35 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         """Post-initialization to infer column names and total count if not provided."""
         if not self.column_names and self.data and isinstance(self.data[0], Mapping):
             self.column_names = list(self.data[0].keys())
-
         if self.total_count is None:
             self.total_count = len(self.data) if self.data is not None else 0
 
-        # If data is populated for a DML, it implies returning data.
-        # No separate returning_data field needed; self.data serves this purpose.
-
     def is_success(self) -> bool:
         """Check if the operation was successful.
+
         - For SELECT: True if data is not None and rows_affected is not negative.
         - For DML (INSERT, UPDATE, DELETE, EXECUTE): True if rows_affected is >= 0.
         - For SCRIPT: True if no errors and all statements succeeded.
         """
-        op_type_upper = self.operation_type.upper()
+        op_type = self.operation_type.upper()
 
-        # For script execution, check if there are no errors and all statements succeeded
-        if op_type_upper == "SCRIPT" or self.statement_results:
-            return len(self.errors) == 0 and self.total_statements == self.successful_statements
+        if op_type == "SCRIPT" or self.statement_results:
+            return not self.errors and self.total_statements == self.successful_statements
 
-        if op_type_upper == "SELECT":
-            # For SELECT, success means we got some data container and rows_affected is not negative
-            data_success = self.data is not None
-            rows_success = self.rows_affected is None or self.rows_affected >= 0
-            return data_success and rows_success
-        if op_type_upper in {"INSERT", "UPDATE", "DELETE", "EXECUTE"}:
+        if op_type == "SELECT":
+            return self.data is not None and (self.rows_affected is None or self.rows_affected >= 0)
+
+        if op_type in {"INSERT", "UPDATE", "DELETE", "EXECUTE"}:
             return self.rows_affected is not None and self.rows_affected >= 0
-        return False  # Should not happen if operation_type is one of the above
+
+        return False
 
     def get_data(self) -> "Union[list[RowT], dict[str, Any]]":
         """Get the data from the result.
+
         For regular operations, returns the list of rows.
         For script operations, returns a summary dictionary.
         """
-        # For script execution, return summary data
         if self.operation_type.upper() == "SCRIPT" or self.statement_results:
             return {
                 "total_statements": self.total_statements,
@@ -177,11 +160,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
                 "statement_results": self.statement_results,
                 "total_rows_affected": self.get_total_rows_affected(),
             }
-
-        # For regular operations, return the data as usual
         return self.data
-
-    # --- Script execution methods ---
 
     def add_statement_result(self, result: "SQLResult[Any]") -> None:
         """Add a statement result to the script execution results."""
@@ -203,15 +182,10 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
     def get_total_rows_affected(self) -> int:
         """Get the total number of rows affected across all statements."""
         if self.statement_results:
-            # For script execution, sum up rows affected from all statements
-            total = 0
-            for stmt_result in self.statement_results:
-                if stmt_result.rows_affected is not None and stmt_result.rows_affected >= 0:
-                    # Only count non-negative values, -1 indicates failure
-                    total += stmt_result.rows_affected
-            return total
-        # For single statement execution
-        return max(self.rows_affected or 0, 0)  # Treat negative values as 0
+            return sum(
+                stmt.rows_affected for stmt in self.statement_results if stmt.rows_affected and stmt.rows_affected > 0
+            )
+        return self.rows_affected if self.rows_affected and self.rows_affected > 0 else 0
 
     @property
     def num_rows(self) -> int:
@@ -230,8 +204,6 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         """Check if there are any errors from script execution."""
         return len(self.errors) > 0
 
-    # --- Existing methods for regular operations ---
-
     def get_first(self) -> "Optional[RowT]":
         """Get the first row from the result, if any."""
         return self.data[0] if self.data else None
@@ -244,7 +216,6 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         """Check if the result set (self.data) is empty."""
         return not self.data
 
-    # --- Methods related to DML operations ---
     def get_affected_count(self) -> int:
         """Get the number of rows affected by a DML operation."""
         return self.rows_affected or 0
@@ -285,8 +256,6 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
             msg = "No data available"
             raise TypeError(msg)
         return self.data[index]
-
-    # --- SQLAlchemy-style convenience methods ---
 
     def all(self) -> "list[RowT]":
         """Return all rows as a list.
@@ -342,19 +311,16 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         """
         row = self.one()
         if isinstance(row, Mapping):
-            # For dict-like rows, get the first column value
             if not row:
                 msg = "Row has no columns"
                 raise ValueError(msg)
             first_key = next(iter(row.keys()))
             return row[first_key]
         if isinstance(row, Sequence) and not isinstance(row, (str, bytes)):
-            # For tuple/list-like rows
             if len(row) == 0:
                 msg = "Row has no columns"
                 raise ValueError(msg)
             return row[0]
-        # For scalar values returned directly
         return row
 
     def scalar_or_none(self) -> Any:
@@ -373,11 +339,9 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
             first_key = next(iter(row.keys()))
             return row[first_key]
         if isinstance(row, Sequence) and not isinstance(row, (str, bytes)):
-            # For tuple/list-like rows
             if len(row) == 0:
                 return None
             return row[0]
-        # For scalar values returned directly
         return row
 
 
@@ -401,12 +365,12 @@ class ArrowResult(StatementResult[ArrowTable]):
     """The result data from the operation."""
 
     def is_success(self) -> bool:
-        """Check if the Arrow operation was successful.
+        """Check if the operation was successful.
 
         Returns:
-            True if the operation completed successfully and has valid Arrow data.
+            True if Arrow table data is available, False otherwise.
         """
-        return bool(self.data)
+        return self.data is not None
 
     def get_data(self) -> "ArrowTable":
         """Get the Apache Arrow Table from the result.

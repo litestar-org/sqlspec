@@ -519,6 +519,102 @@ class ParameterConverter:
         transformed_sql_parts.append(original_sql[current_pos:])
         return "".join(transformed_sql_parts), placeholder_map
 
+    def convert_placeholders(
+        self, sql: str, target_style: "ParameterStyle", parameter_info: "Optional[list[ParameterInfo]]" = None
+    ) -> str:
+        """Convert SQL placeholders to a target style.
+
+        Args:
+            sql: The SQL string with placeholders
+            target_style: The target parameter style to convert to
+            parameter_info: Optional list of parameter info (will be extracted if not provided)
+
+        Returns:
+            SQL string with converted placeholders
+        """
+        if parameter_info is None:
+            parameter_info = self.validator.extract_parameters(sql)
+
+        if not parameter_info:
+            return sql
+
+        # Build the converted SQL
+        result_parts = []
+        current_pos = 0
+
+        for i, param in enumerate(parameter_info):
+            # Add the SQL before this parameter
+            result_parts.append(sql[current_pos : param.position])
+
+            # Convert the placeholder based on target style
+            if target_style == ParameterStyle.QMARK:
+                placeholder = "?"
+            elif target_style == ParameterStyle.NUMERIC:
+                placeholder = f"${i + 1}"
+            elif target_style == ParameterStyle.POSITIONAL_PYFORMAT:
+                placeholder = "%s"
+            elif target_style == ParameterStyle.NAMED_COLON:
+                # When converting from positional styles to named, always generate new names
+                if param.style in {
+                    ParameterStyle.POSITIONAL_COLON,
+                    ParameterStyle.QMARK,
+                    ParameterStyle.NUMERIC,
+                    ParameterStyle.POSITIONAL_PYFORMAT,
+                }:
+                    name = f"param_{i}"
+                else:
+                    name = param.name or f"param_{i}"
+                placeholder = f":{name}"
+            elif target_style == ParameterStyle.NAMED_PYFORMAT:
+                # When converting from positional styles to named, always generate new names
+                if param.style in {
+                    ParameterStyle.POSITIONAL_COLON,
+                    ParameterStyle.QMARK,
+                    ParameterStyle.NUMERIC,
+                    ParameterStyle.POSITIONAL_PYFORMAT,
+                }:
+                    name = f"param_{i}"
+                else:
+                    name = param.name or f"param_{i}"
+                placeholder = f"%({name})s"
+            elif target_style == ParameterStyle.NAMED_AT:
+                # When converting from positional styles to named, always generate new names
+                if param.style in {
+                    ParameterStyle.POSITIONAL_COLON,
+                    ParameterStyle.QMARK,
+                    ParameterStyle.NUMERIC,
+                    ParameterStyle.POSITIONAL_PYFORMAT,
+                }:
+                    name = f"param_{i}"
+                else:
+                    name = param.name or f"param_{i}"
+                placeholder = f"@{name}"
+            elif target_style == ParameterStyle.NAMED_DOLLAR:
+                # When converting from positional styles to named, always generate new names
+                if param.style in {
+                    ParameterStyle.POSITIONAL_COLON,
+                    ParameterStyle.QMARK,
+                    ParameterStyle.NUMERIC,
+                    ParameterStyle.POSITIONAL_PYFORMAT,
+                }:
+                    name = f"param_{i}"
+                else:
+                    name = param.name or f"param_{i}"
+                placeholder = f"${name}"
+            elif target_style == ParameterStyle.POSITIONAL_COLON:
+                placeholder = f":{i + 1}"
+            else:
+                # Keep original if unknown
+                placeholder = param.placeholder_text
+
+            result_parts.append(placeholder)
+            current_pos = param.position + len(param.placeholder_text)
+
+        # Add remaining SQL
+        result_parts.append(sql[current_pos:])
+
+        return "".join(result_parts)
+
     def convert_parameters(
         self,
         sql: str,

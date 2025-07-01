@@ -19,7 +19,6 @@ import pytest
 
 from sqlspec.adapters.psycopg import PsycopgAsyncDriver, PsycopgSyncDriver
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
@@ -483,7 +482,7 @@ def test_sync_execute_script(sync_driver: PsycopgSyncDriver, mock_sync_connectio
 
     result = sync_driver._execute_script(script)
 
-    assert result.total_statements == -1
+    assert result.total_statements == 1  # Script executed as a single statement
     assert result.metadata["status_message"] == "CREATE TABLE"
 
     mock_cursor.execute.assert_called_once_with(script)
@@ -503,103 +502,13 @@ async def test_async_execute_script(async_driver: PsycopgAsyncDriver, mock_async
 
     result = await async_driver._execute_script(script)
 
-    assert result.total_statements == -1
+    assert result.total_statements == 1  # Script executed as a single statement
     assert result.metadata["status_message"] == "CREATE TABLE"
 
     mock_cursor.execute.assert_called_once_with(script)
 
 
-# Result Wrapping Tests
-def test_sync_wrap_select_result(sync_driver: PsycopgSyncDriver) -> None:
-    """Test sync wrapping SELECT results."""
-    from sqlspec.statement.result import SQLResult
-
-    statement = SQL("SELECT * FROM users")
-    # Create SQLResult directly for SELECT operation
-    result = SQLResult(
-        statement=statement,
-        data=[{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
-        column_names=["id", "name"],
-        rows_affected=2,
-        operation_type="SELECT",
-    )
-
-    wrapped = sync_driver._wrap_select_result(statement, result)  # pyright: ignore
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.statement is statement
-    assert len(wrapped.data) == 2
-    assert wrapped.column_names == ["id", "name"]
-    assert wrapped.rows_affected == 2
-    assert wrapped.operation_type == "SELECT"
-
-
-@pytest.mark.asyncio
-async def test_async_wrap_select_result(async_driver: PsycopgAsyncDriver) -> None:
-    """Test async wrapping SELECT results."""
-    statement = SQL("SELECT * FROM users")
-    # Create SQLResult directly for SELECT operation
-    result = SQLResult(
-        statement=statement,
-        data=[{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
-        column_names=["id", "name"],
-        rows_affected=2,
-        operation_type="SELECT",
-    )
-
-    wrapped: SQLResult[Any] = await async_driver._wrap_select_result(statement, result)  # pyright: ignore
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.statement is statement
-    assert len(wrapped.data) == 2
-    assert wrapped.column_names == ["id", "name"]
-    assert wrapped.rows_affected == 2
-    assert wrapped.operation_type == "SELECT"
-
-
-def test_sync_wrap_execute_result_dml(sync_driver: PsycopgSyncDriver) -> None:
-    """Test sync wrapping DML results."""
-    statement = SQL("INSERT INTO users VALUES (%s)")
-
-    # Create SQLResult directly for DML operation
-    result = SQLResult(
-        statement=statement,
-        data=[],
-        rows_affected=1,
-        operation_type="INSERT",
-        metadata={"status_message": "INSERT 0 1"},
-    )
-
-    wrapped = sync_driver._wrap_execute_result(statement, result)  # type: ignore[attr-defined]
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.data == []
-    assert wrapped.rows_affected == 1
-    assert wrapped.operation_type == "INSERT"
-    assert wrapped.metadata["status_message"] == "INSERT 0 1"
-
-
-@pytest.mark.asyncio
-async def test_async_wrap_execute_result_dml(async_driver: PsycopgAsyncDriver) -> None:
-    """Test async wrapping DML results."""
-    statement = SQL("INSERT INTO users VALUES (%s)")
-
-    # Create SQLResult directly for DML operation
-    result = SQLResult(
-        statement=statement,
-        data=[],
-        rows_affected=1,
-        operation_type="INSERT",
-        metadata={"status_message": "INSERT 0 1"},
-    )
-
-    wrapped = await async_driver._wrap_execute_result(statement, result)  # type: ignore[attr-defined]
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.data == []
-    assert wrapped.rows_affected == 1
-    assert wrapped.operation_type == "INSERT"
-    assert wrapped.metadata["status_message"] == "INSERT 0 1"
+# Note: Result wrapping tests removed - drivers now return SQLResult directly from execute methods
 
 
 # Parameter Processing Tests - These tests removed as _format_parameters doesn't exist

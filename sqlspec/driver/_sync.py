@@ -56,17 +56,16 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
         if isinstance(statement, SQL):
             if parameters or kwargs:
                 # Create a new SQL object with the same SQL but additional parameters
-                # Create a new SQL object with additional parameters
                 new_config = _config
                 if self.dialect and not new_config.dialect:
                     new_config = replace(new_config, dialect=self.dialect)
-                return SQL(statement, parameters=parameters or None, **(kwargs or {}), config=new_config)
+                return SQL(statement._statement, *parameters, config=new_config, **kwargs)
             return statement
         # Create new SQL object
         new_config = _config
         if self.dialect and not new_config.dialect:
             new_config = replace(new_config, dialect=self.dialect)
-        return SQL(statement, parameters=parameters or None, **(kwargs or {}), config=new_config)
+        return SQL(statement, *parameters, config=new_config, **kwargs)
 
     @abstractmethod
     def _execute_statement(
@@ -196,13 +195,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
             param_sequence
         )
 
-        return self._execute_statement(
-            statement=sql_statement,
-            connection=self._connection(_connection),
-            parameters=param_sequence,
-            is_many=True,
-            **kwargs,
-        )
+        return self._execute_statement(statement=sql_statement, connection=self._connection(_connection), **kwargs)
 
     def execute_script(
         self,
@@ -213,42 +206,10 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> "SQLResult[RowT]":
-        # Separate parameters from filters
-        param_values = []
-        filters = []
-        for param in parameters:
-            if isinstance(param, StatementFilter):
-                filters.append(param)
-            else:
-                param_values.append(param)
-
-        # Use first parameter as the primary parameter value, or None if no parameters
-        primary_params = param_values[0] if param_values else None
-
         script_config = _config or self.config
         if script_config.enable_validation:
-            script_config = SQLConfig(
-                enable_parsing=script_config.enable_parsing,
-                enable_validation=False,
-                enable_transformations=script_config.enable_transformations,
-                enable_analysis=script_config.enable_analysis,
-                strict_mode=False,
-                cache_parsed_expression=script_config.cache_parsed_expression,
-                parameter_converter=script_config.parameter_converter,
-                parameter_validator=script_config.parameter_validator,
-                analysis_cache_size=script_config.analysis_cache_size,
-                allowed_parameter_styles=script_config.allowed_parameter_styles,
-                target_parameter_style=script_config.target_parameter_style,
-                allow_mixed_parameter_styles=script_config.allow_mixed_parameter_styles,
-            )
+            script_config = replace(script_config, enable_validation=False, strict_mode=False)
 
-        if filters:
-            sql_statement = SQL(statement, parameters=primary_params or None, config=script_config, **kwargs)
-            for filter_ in filters:
-                sql_statement = sql_statement.filter(filter_)
-        else:
-            sql_statement = SQL(statement, parameters=primary_params or None, config=script_config, **kwargs)
+        sql_statement = self._build_statement(statement, *parameters, _config=script_config, **kwargs)
         sql_statement = sql_statement.as_script()
-        return self._execute_statement(
-            statement=sql_statement, connection=self._connection(_connection), is_script=True, **kwargs
-        )
+        return self._execute_statement(statement=sql_statement, connection=self._connection(_connection), **kwargs)

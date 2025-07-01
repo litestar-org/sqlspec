@@ -449,18 +449,18 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
 
     # Test with plain string SQL input
     string_sql = "SELECT id FROM another_table"
-    built_stmt_from_string = adbc_driver._build_statement(string_sql, config=sql_config)
+    built_stmt_from_string = adbc_driver._build_statement(string_sql, _config=sql_config)
     assert isinstance(built_stmt_from_string, SQL)
     assert built_stmt_from_string.sql == string_sql
-    assert built_stmt_from_string.parameters is None
+    assert built_stmt_from_string.parameters == {}
 
     # Test with plain string SQL and parameters
     string_sql_with_params = "SELECT id FROM yet_another_table WHERE id = ?"
-    params_for_string = (1,)
-    built_stmt_with_params = adbc_driver._build_statement(string_sql_with_params, params_for_string, config=sql_config)
+    params_for_string = 1  # Pass as individual parameter, not tuple
+    built_stmt_with_params = adbc_driver._build_statement(string_sql_with_params, params_for_string, _config=sql_config)
     assert isinstance(built_stmt_with_params, SQL)
     assert built_stmt_with_params.sql == string_sql_with_params
-    assert built_stmt_with_params.parameters == [1]  # Tuple params are unpacked into list
+    assert built_stmt_with_params.parameters == (1,)  # Parameters wrapped as tuple by SQL constructor
 
 
 def test_adbc_driver_fetch_arrow_table_native(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:

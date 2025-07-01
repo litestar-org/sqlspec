@@ -101,7 +101,7 @@ async def test_asyncmy_driver_execute_statement_select(
     """Test Asyncmy driver _execute_statement for SELECT statements."""
     # Get the mock cursor from the fixture and configure it
     mock_cursor = await mock_asyncmy_connection.cursor()
-    mock_cursor.fetchall.return_value = [(1, "test")]
+    mock_cursor.fetchall.return_value = [(1, "test", "test@example.com")]  # Match the 3 columns
     mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
 
     # Reset call count after setup
@@ -129,7 +129,7 @@ async def test_asyncmy_driver_fetch_arrow_table_with_parameters(
     """Test Asyncmy driver fetch_arrow_table method with parameters."""
     # Get the mock cursor from the fixture and configure it
     mock_cursor = await mock_asyncmy_connection.cursor()
-    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
+    mock_cursor.description = [(col,) for col in ["id", "name"]]  # Match the SELECT query
     mock_cursor.fetchall.return_value = [(42, "Test User")]
 
     # Reset call count after setup
