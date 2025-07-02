@@ -10,8 +10,6 @@ and storage backend operations for optimal performance.
 
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 # Allow Any types for mixin compatibility
-import csv
-import json
 import logging
 import tempfile
 from abc import ABC
@@ -20,10 +18,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 from urllib.parse import urlparse
 
+from sqlspec.driver.mixins._csv_writer import write_csv
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.statement import SQL, ArrowResult, StatementFilter
 from sqlspec.storage import storage_registry
 from sqlspec.typing import ArrowTable, RowT, StatementParameters
+from sqlspec.utils.serializers import to_json
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -552,26 +552,12 @@ class SyncStorageMixin(StorageMixinBase):
     @staticmethod
     def _write_csv(result: "SQLResult", file: Any, **options: Any) -> None:
         """Write result to CSV file."""
-        csv_options = options.copy()
-        csv_options.pop("compression", None)  # Handle compression separately
-        csv_options.pop("partition_by", None)  # Not applicable to CSV
-
-        writer = csv.writer(file, **csv_options)  # TODO: anything better?
-        if result.column_names:
-            writer.writerow(result.column_names)
-        if result.data:
-            if result.data and isinstance(result.data[0], dict):
-                rows = []
-                for row_dict in result.data:
-                    row_values = [row_dict.get(col) for col in result.column_names or []]
-                    rows.append(row_values)
-                writer.writerows(rows)
-            else:
-                writer.writerows(result.data)
+        write_csv(result, file, **options)
 
     @staticmethod
     def _write_json(result: "SQLResult", file: Any, **options: Any) -> None:
         """Write result to JSON file."""
+        _ = options
 
         if result.data and result.column_names:
             if result.data and isinstance(result.data[0], dict):
@@ -579,9 +565,11 @@ class SyncStorageMixin(StorageMixinBase):
                 rows = result.data
             else:
                 rows = [dict(zip(result.column_names, row)) for row in result.data]
-            json.dump(rows, file, **options)  # TODO: use sqlspec.utils.serializer
+            json_str = to_json(rows)
+            file.write(json_str)
         else:
-            json.dump([], file)  # TODO: use sqlspec.utils.serializer
+            json_str = to_json([])
+            file.write(json_str)
 
     def _bulk_load_file(self, file_path: Path, table_name: str, format: str, mode: str, **options: Any) -> int:
         """Database-specific bulk load implementation. Override in drivers."""
@@ -884,23 +872,12 @@ class AsyncStorageMixin(StorageMixinBase):
     @staticmethod
     def _write_csv(result: "SQLResult", file: Any, **options: Any) -> None:
         """Reuse sync implementation."""
-
-        writer = csv.writer(file, **options)
-        if result.column_names:
-            writer.writerow(result.column_names)
-        if result.data:
-            if result.data and isinstance(result.data[0], dict):
-                rows = []
-                for row_dict in result.data:
-                    row_values = [row_dict.get(col) for col in result.column_names or []]
-                    rows.append(row_values)
-                writer.writerows(rows)
-            else:
-                writer.writerows(result.data)
+        write_csv(result, file, **options)
 
     @staticmethod
     def _write_json(result: "SQLResult", file: Any, **options: Any) -> None:
         """Reuse sync implementation."""
+        _ = options  # May be used in the future for JSON formatting options
 
         if result.data and result.column_names:
             if result.data and isinstance(result.data[0], dict):
@@ -908,9 +885,11 @@ class AsyncStorageMixin(StorageMixinBase):
                 rows = result.data
             else:
                 rows = [dict(zip(result.column_names, row)) for row in result.data]
-            json.dump(rows, file, **options)
+            json_str = to_json(rows)
+            file.write(json_str)
         else:
-            json.dump([], file)
+            json_str = to_json([])
+            file.write(json_str)
 
     async def _bulk_load_file(self, file_path: Path, table_name: str, format: str, mode: str, **options: Any) -> int:
         """Async database-specific bulk load implementation."""

@@ -2,10 +2,11 @@
 import logging
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Union
 
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.storage.backends.base import ObjectStoreBase
+from sqlspec.storage.capabilities import HasStorageCapabilities, StorageCapabilities
 from sqlspec.typing import FSSPEC_INSTALLED, PYARROW_INSTALLED
 from sqlspec.utils.sync_tools import async_
 
@@ -39,13 +40,23 @@ def _join_path(prefix: str, path: str) -> str:
     return f"{prefix}/{path}"
 
 
-class FSSpecBackend(ObjectStoreBase):
+class FSSpecBackend(ObjectStoreBase, HasStorageCapabilities):
     """Extended protocol support via fsspec.
 
     This backend implements the ObjectStoreProtocol using fsspec,
     providing support for extended protocols not covered by obstore
     and offering fallback capabilities.
     """
+
+    # FSSpec supports most operations but varies by underlying filesystem
+    capabilities: ClassVar[StorageCapabilities] = StorageCapabilities(
+        supports_arrow=PYARROW_INSTALLED,
+        supports_streaming=PYARROW_INSTALLED,
+        supports_async=True,
+        supports_compression=True,
+        is_remote=True,
+        is_cloud_native=False,
+    )
 
     def __init__(self, fs: "Union[str, AbstractFileSystem]", base_path: str = "") -> None:
         if not FSSPEC_INSTALLED:

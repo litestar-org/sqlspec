@@ -5,11 +5,19 @@ This module provides a flexible storage system with:
 - Lazy loading and configuration-based registration
 - URI scheme-based automatic backend resolution
 - Key-based named storage configurations
+- Capability-based backend selection
 """
 
+from sqlspec.storage.capabilities import HasStorageCapabilities, StorageCapabilities
 from sqlspec.storage.protocol import ObjectStoreProtocol
 from sqlspec.storage.registry import StorageRegistry
 
 storage_registry = StorageRegistry()
 
-__all__ = ("ObjectStoreProtocol", "StorageRegistry", "storage_registry")
+__all__ = (
+    "HasStorageCapabilities",
+    "ObjectStoreProtocol",
+    "StorageCapabilities",
+    "StorageRegistry",
+    "storage_registry",
+)

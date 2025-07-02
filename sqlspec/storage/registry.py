@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Optional, TypeVar, Union, cast
 
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
+from sqlspec.storage.capabilities import StorageCapabilities
 from sqlspec.storage.protocol import ObjectStoreProtocol
 from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED
 
@@ -158,9 +159,10 @@ class StorageRegistry:
         raise MissingDependencyError(msg) from last_exc
 
     def _determine_backend_class(self, uri: str) -> type[ObjectStoreProtocol]:
-        """Determine the best backend class for a URI based on availability.
+        """Determine the best backend class for a URI based on availability and capabilities.
 
-        Prefers ObStore, falls back to FSSpec.
+        Prefers ObStore for its superior performance and native capabilities,
+        falls back to FSSpec for extended protocol support.
 
         Args:
             uri: URI to determine backend for.
@@ -168,12 +170,20 @@ class StorageRegistry:
         Returns:
             Backend class (not instance)
         """
+        scheme = self._get_scheme(uri)
+
+        # Check if scheme requires FSSpec (not supported by ObStore)
+        if scheme in FSSPEC_ONLY_SCHEMES and FSSPEC_INSTALLED:
+            return self._get_backend_class("fsspec")
+
+        # Prefer ObStore for its superior performance
         if OBSTORE_INSTALLED:
             return self._get_backend_class("obstore")
+            # Could check capabilities here if needed
+
         if FSSPEC_INSTALLED:
             return self._get_backend_class("fsspec")
 
-        scheme = uri.split("://", maxsplit=1)[0].lower()
         msg = f"No backend available for URI scheme '{scheme}'. Install obstore or fsspec."
         raise MissingDependencyError(msg)
 
@@ -245,6 +255,34 @@ class StorageRegistry:
         """Clear only aliases, keeping cached instances."""
         self._alias_configs.clear()
         self._aliases.clear()
+
+    def get_backend_capabilities(self, uri_or_alias: Union[str, Path]) -> "StorageCapabilities":
+        """Get capabilities for a backend without creating an instance.
+
+        Args:
+            uri_or_alias: URI or alias to check capabilities for
+
+        Returns:
+            StorageCapabilities object describing backend capabilities
+        """
+        if isinstance(uri_or_alias, Path):
+            uri_or_alias = f"file://{uri_or_alias.resolve()}"
+
+        if "://" in uri_or_alias:
+            backend_cls = self._determine_backend_class(uri_or_alias)
+        elif uri_or_alias in self._alias_configs:
+            backend_cls, _, _ = self._alias_configs[uri_or_alias]
+        else:
+            msg = f"Unknown storage alias or invalid URI: '{uri_or_alias}'"
+            raise ImproperConfigurationError(msg)
+
+        # Get capabilities from the backend class
+        if hasattr(backend_cls, "capabilities"):
+            return backend_cls.capabilities
+
+        # Default capabilities if not defined
+
+        return StorageCapabilities()
 
 
 # Global registry instance

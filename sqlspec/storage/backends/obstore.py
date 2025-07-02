@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import fnmatch
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from sqlspec.exceptions import MissingDependencyError, StorageOperationFailedError
 from sqlspec.storage.backends.base import ObjectStoreBase
+from sqlspec.storage.capabilities import HasStorageCapabilities, StorageCapabilities
 from sqlspec.typing import OBSTORE_INSTALLED
 
 if TYPE_CHECKING:
@@ -26,7 +27,7 @@ __all__ = ("ObStoreBackend",)
 logger = logging.getLogger(__name__)
 
 
-class ObStoreBackend(ObjectStoreBase):
+class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
     """High-performance object storage backend using obstore.
 
     This backend leverages obstore's Rust-based implementation for maximum
@@ -39,6 +40,18 @@ class ObStoreBackend(ObjectStoreBase):
 
     Features native Arrow support and ~9x better performance than fsspec.
     """
+
+    # ObStore has excellent native capabilities
+    capabilities: ClassVar[StorageCapabilities] = StorageCapabilities(
+        supports_arrow=True,
+        supports_streaming=True,
+        supports_async=True,
+        supports_batch_operations=True,
+        supports_multipart_upload=True,
+        supports_compression=True,
+        is_cloud_native=True,
+        has_low_latency=True,  # Native Rust implementation
+    )
 
     def __init__(self, store_uri: str, base_path: str = "", **store_options: Any) -> None:
         """Initialize obstore backend.

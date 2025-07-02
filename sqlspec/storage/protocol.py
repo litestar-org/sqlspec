@@ -1,9 +1,10 @@
-from typing import TYPE_CHECKING, Any, Protocol, Union, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Union, runtime_checkable
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
     from pathlib import Path
 
+    from sqlspec.storage.capabilities import StorageCapabilities
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = ("ObjectStoreProtocol",)
@@ -19,6 +20,9 @@ class ObjectStoreProtocol(Protocol):
 
     All methods use 'path' terminology for consistency with object store patterns.
     """
+
+    # Class-level capability descriptor
+    capabilities: ClassVar["StorageCapabilities"]
 
     def __init__(self, uri: str, **kwargs: Any) -> None:
         return
