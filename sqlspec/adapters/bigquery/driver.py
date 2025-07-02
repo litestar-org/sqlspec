@@ -158,7 +158,6 @@ class BigQueryDriver(
         if value_type in type_map:
             return type_map[value_type]
 
-        # Handle lists/tuples for ARRAY type
         if isinstance(value, (list, tuple)):
             if not value:
                 msg = "Cannot determine BigQuery ARRAY type for empty sequence. Provide typed empty array or ensure context implies type."
@@ -192,7 +191,6 @@ class BigQueryDriver(
             for name, value in params_dict.items():
                 param_name_for_bq = name.lstrip("@")
 
-                # Extract value from TypedParameter if needed
                 actual_value = value.value if hasattr(value, "value") else value
 
                 param_type, array_element_type = self._get_bq_param_type(actual_value)
@@ -238,18 +236,14 @@ class BigQueryDriver(
         """
         conn = connection or self.connection
 
-        # Build final job configuration
         final_job_config = QueryJobConfig()
 
-        # Apply default configuration if available
         if self._default_query_job_config:
             self._copy_job_config_attrs(self._default_query_job_config, final_job_config)
 
-        # Apply override configuration if provided
         if job_config:
             self._copy_job_config_attrs(job_config, final_job_config)
 
-        # Set query parameters
         final_job_config.query_parameters = bq_query_parameters or []
 
         # Debug log the actual parameters being sent
@@ -266,14 +260,11 @@ class BigQueryDriver(
                 )
         query_job = conn.query(sql_str, job_config=final_job_config)
 
-        # Get the auto-generated job ID for callbacks
         if self.on_job_start and query_job.job_id:
             with contextlib.suppress(Exception):
-                # Callback errors should not interfere with job execution
                 self.on_job_start(query_job.job_id)
         if self.on_job_complete and query_job.job_id:
             with contextlib.suppress(Exception):
-                # Callback errors should not interfere with job execution
                 self.on_job_complete(query_job.job_id, query_job)
 
         return query_job
@@ -354,9 +345,7 @@ class BigQueryDriver(
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
-        # Determine if we need to convert parameter style
         detected_styles = set()
-        # Extract parameter styles from the SQL string
         sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
         validator = self.config.parameter_validator if self.config else ParameterValidator()
         param_infos = validator.extract_parameters(sql_str)
@@ -393,8 +382,6 @@ class BigQueryDriver(
         # Parameters are already in the correct format from compile()
         converted_params = parameters
 
-        # Prepare BigQuery parameters
-        # Convert various parameter formats to dict format for BigQuery
         param_dict: dict[str, Any]
         if converted_params is None:
             param_dict = {}
@@ -407,7 +394,6 @@ class BigQueryDriver(
                 if k.startswith("param_") or (not k.startswith("_") and k not in {"dialect", "config"})
             }
         elif isinstance(converted_params, (list, tuple)):
-            # Convert positional parameters to named parameters for BigQuery
             # Use param_N to match the compiled SQL placeholders
             param_dict = {f"param_{i}": val for i, val in enumerate(converted_params)}
         else:
@@ -433,11 +419,9 @@ class BigQueryDriver(
         param_counter = 0
 
         for params in param_list or []:
-            # Convert various parameter formats to dict format for BigQuery
             if isinstance(params, dict):
                 param_dict = params
             elif isinstance(params, (list, tuple)):
-                # Convert positional parameters to named parameters matching SQL placeholders
                 param_dict = {f"param_{i}": val for i, val in enumerate(params)}
             else:
                 # Single scalar parameter
@@ -452,7 +436,6 @@ class BigQueryDriver(
                 param_mapping[key] = new_key
                 all_params[new_key] = value
 
-            # Replace placeholders in the SQL for this statement
             for old_key, new_key in param_mapping.items():
                 current_sql = current_sql.replace(f"@{old_key}", f"@{new_key}")
 
@@ -481,7 +464,6 @@ class BigQueryDriver(
         self, script: str, connection: Optional[BigQueryConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # BigQuery does not support multi-statement scripts in a single job
-        # Use the shared implementation to split and execute statements individually
         statements = self._split_script_statements(script)
 
         for statement in statements:
@@ -531,7 +513,6 @@ class BigQueryDriver(
         if destination_str.startswith("gs://"):
             return self._export_to_gcs_native(query, destination_str, format, **options)
 
-        # For non-GCS destinations, check if staging is configured
         staging_bucket = options.get("gcs_staging_bucket") or getattr(self.config, "gcs_staging_bucket", None)
         if not staging_bucket:
             # Fall back to fetch + write for non-GCS destinations without staging
@@ -583,12 +564,10 @@ class BigQueryDriver(
         temp_table_id = f"temp_export_{uuid.uuid4().hex[:8]}"
         dataset_id = getattr(self.connection, "default_dataset", None) or options.get("dataset", "temp")
 
-        # Create a temporary table with query results
         query_with_table = f"CREATE OR REPLACE TABLE `{dataset_id}.{temp_table_id}` AS {query}"
         create_job = self._run_query_job(query_with_table, [])
         create_job.result()
 
-        # Get row count
         count_query = f"SELECT COUNT(*) as cnt FROM `{dataset_id}.{temp_table_id}`"
         count_job = self._run_query_job(count_query, [])
         count_result = list(count_job.result())
@@ -598,7 +577,6 @@ class BigQueryDriver(
             # Configure extract job
             extract_config = ExtractJobConfig(**options)  # type: ignore[no-untyped-call]
 
-            # Set format
             format_mapping = {
                 "parquet": SourceFormat.PARQUET,
                 "csv": SourceFormat.CSV,
@@ -607,7 +585,6 @@ class BigQueryDriver(
             }
             extract_config.destination_format = format_mapping.get(format, SourceFormat.PARQUET)
 
-            # Extract table to GCS
             table_ref = self.connection.dataset(dataset_id).table(temp_table_id)
             extract_job = self.connection.extract_table(table_ref, gcs_uri, job_config=extract_config)
             extract_job.result()
@@ -720,7 +697,6 @@ class BigQueryDriver(
             raise ValueError(msg)
 
         # Use BigQuery's native Arrow loading
-        # Convert Arrow table to bytes for direct loading
 
         import pyarrow.parquet as pq
 

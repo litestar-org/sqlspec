@@ -79,7 +79,6 @@ def run_(async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]") -
         if loop is not None:
             # Running in an existing event loop
             return asyncio.run(partial_f())
-        # Create a new event loop and run the function
         if uvloop and sys.platform != "win32":
             uvloop.install()  # pyright: ignore[reportUnknownMemberType]
         return asyncio.run(partial_f())
@@ -107,7 +106,6 @@ def await_(
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            # No running event loop
             if raise_sync_error:
                 msg = "Cannot run async function"
                 raise RuntimeError(msg) from None
@@ -116,7 +114,6 @@ def await_(
             # Running in an existing event loop.
             if loop.is_running():
                 try:
-                    # Check if the current context is within a task managed by this loop
                     current_task = asyncio.current_task(loop=loop)
                 except RuntimeError:
                     # Not running inside a task managed by this loop
@@ -138,7 +135,6 @@ def await_(
             if raise_sync_error:
                 msg = "Cannot run async function"
                 raise RuntimeError(msg)
-            # Fallback to running in a new loop
             return asyncio.run(partial_f())
 
     return wrapper

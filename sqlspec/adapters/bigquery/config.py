@@ -272,13 +272,12 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         self.extras = kwargs or {}
 
         # Store other config
-        self.statement_config = statement_config or SQLConfig()
+        self.statement_config = statement_config or SQLConfig(dialect="bigquery")
         self.default_row_type = default_row_type
         self.on_connection_create = on_connection_create
         self.on_job_start = on_job_start
         self.on_job_complete = on_job_complete
 
-        # Set up default query job config if not provided
         if self.default_query_job_config is None:
             self._setup_default_job_config()
 

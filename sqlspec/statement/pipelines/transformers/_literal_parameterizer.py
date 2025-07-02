@@ -107,7 +107,7 @@ class ParameterizeLiterals(ProcessorProtocol):
 
     def process(self, expression: Optional[exp.Expression], context: SQLProcessingContext) -> Optional[exp.Expression]:
         """Advanced literal parameterization with context-aware AST analysis."""
-        if expression is None or context.current_expression is None or context.config.input_sql_had_placeholders:
+        if expression is None or context.current_expression is None or context.input_sql_had_placeholders:
             return expression
 
         self.extracted_parameters = []
@@ -125,10 +125,8 @@ class ParameterizeLiterals(ProcessorProtocol):
 
     def _transform_with_context(self, node: exp.Expression, context: ParameterizationContext) -> exp.Expression:
         """Transform expression tree with context tracking."""
-        # Update context based on node type
         self._update_context(node, context, entering=True)
 
-        # Process the node
         if isinstance(node, Literal):
             result = self._process_literal_with_context(node, context)
         elif isinstance(node, (Boolean, Null)):
@@ -153,7 +151,6 @@ class ParameterizeLiterals(ProcessorProtocol):
                     )
             result = node
 
-        # Update context when leaving
         self._update_context(node, context, entering=False)
 
         return result
@@ -165,7 +162,6 @@ class ParameterizeLiterals(ProcessorProtocol):
 
             if isinstance(node, Func):
                 context.function_depth += 1
-                # Get function name from class name or node.name
                 func_name = node.__class__.__name__.upper()
                 if func_name in self.preserve_in_functions or (
                     node.name and node.name.upper() in self.preserve_in_functions
@@ -179,7 +175,6 @@ class ParameterizeLiterals(ProcessorProtocol):
                 context.in_in_clause = True
             elif isinstance(node, exp.CTE):
                 context.cte_depth += 1
-                # Check if this CTE is recursive:
                 # 1. Parent WITH must be RECURSIVE
                 # 2. CTE must contain UNION (characteristic of recursive CTEs)
                 is_in_recursive_with = any(
@@ -211,14 +206,12 @@ class ParameterizeLiterals(ProcessorProtocol):
         self, literal: exp.Expression, context: ParameterizationContext
     ) -> exp.Expression:
         """Process a literal with awareness of its AST context."""
-        # Check if this literal should be preserved based on context
         if self._should_preserve_literal_in_context(literal, context):
             return literal
 
         # Use optimized extraction for single-pass processing
         value, type_hint, sqlglot_type, semantic_name = self._extract_literal_value_and_type_optimized(literal, context)
 
-        # Create TypedParameter object
         from sqlspec.statement.parameters import TypedParameter
 
         typed_param = TypedParameter(
@@ -228,7 +221,6 @@ class ParameterizeLiterals(ProcessorProtocol):
             semantic_name=semantic_name,
         )
 
-        # Add to parameters list
         self.extracted_parameters.append(typed_param)
         self._parameter_metadata.append(
             {
@@ -239,20 +231,16 @@ class ParameterizeLiterals(ProcessorProtocol):
             }
         )
 
-        # Create appropriate placeholder
         return self._create_placeholder(hint=semantic_name)
 
     def _should_preserve_literal_in_context(self, literal: exp.Expression, context: ParameterizationContext) -> bool:
         """Context-aware decision on literal preservation."""
-        # Check for NULL values
         if self.preserve_null and isinstance(literal, Null):
             return True
 
-        # Check for boolean values
         if self.preserve_boolean and isinstance(literal, Boolean):
             return True
 
-        # Check if in preserved function arguments
         if context.in_function_args:
             return True
 
@@ -260,13 +248,10 @@ class ParameterizeLiterals(ProcessorProtocol):
         if self.preserve_in_recursive_cte and context.in_recursive_cte:
             return True
 
-        # Check if this literal is being used as an alias value in SELECT
         # e.g., 'computed' as process_status should be preserved
         if hasattr(literal, "parent") and literal.parent:
             parent = literal.parent
-            # Check if it's an Alias node and the literal is the expression (not the alias name)
             if isinstance(parent, exp.Alias) and parent.this == literal:
-                # Check if this alias is in a SELECT clause
                 for ancestor in context.parent_stack:
                     if isinstance(ancestor, exp.Select):
                         return True
@@ -288,10 +273,8 @@ class ParameterizeLiterals(ProcessorProtocol):
 
             # Preserve in CASE conditions for readability
             if isinstance(parent, exp.Case) and context.in_case_when:
-                # Only preserve simple comparisons
                 return not isinstance(literal.parent, Binary)
 
-        # Check string length
         if isinstance(literal, exp.Literal) and self._is_string_literal(literal):
             string_value = str(literal.this)
             if len(string_value) > self.max_string_length:
@@ -304,7 +287,6 @@ class ParameterizeLiterals(ProcessorProtocol):
         if isinstance(literal, Null) or literal.this is None:
             return None, "null"
 
-        # Ensure we have a Literal for type checking methods
         if not isinstance(literal, exp.Literal):
             return str(literal), "string"
 
@@ -320,7 +302,6 @@ class ParameterizeLiterals(ProcessorProtocol):
                 value_str = str(literal.this)
                 if "." in value_str or "e" in value_str.lower():
                     try:
-                        # Check if it's a decimal that needs precision
                         decimal_places = len(value_str.split(".")[1]) if "." in value_str else 0
                         if decimal_places > MAX_DECIMAL_PRECISION:  # Likely needs decimal precision
                             return value_str, "decimal"
@@ -333,7 +314,6 @@ class ParameterizeLiterals(ProcessorProtocol):
                     except ValueError:
                         return str(literal.this), "numeric_string"
                     else:
-                        # Check for bigint
                         if abs(value) > MAX_INT32_VALUE:  # Max 32-bit int
                             return value, "bigint"
                         return value, "integer"
@@ -346,7 +326,6 @@ class ParameterizeLiterals(ProcessorProtocol):
                 except ValueError:
                     return str(literal.this), "numeric_string"
 
-        # Handle date/time literals - these are DataType attributes not Literal attributes
         # Date/time values are typically string literals that need context-aware processing
         # We'll return them as strings and let the database handle type conversion
 
@@ -368,10 +347,8 @@ class ParameterizeLiterals(ProcessorProtocol):
         Returns:
             Tuple of (value, type_hint, sqlglot_type, semantic_name)
         """
-        # Extract value and basic type hint using existing logic
         value, type_hint = self._extract_literal_value_and_type(literal)
 
-        # Determine SQLGlot type based on the type hint without additional parsing
         sqlglot_type = self._infer_sqlglot_type(type_hint, value)
 
         # Generate semantic name from context if available
@@ -404,7 +381,6 @@ class ParameterizeLiterals(ProcessorProtocol):
 
         type_name = type_mapping.get(type_hint, "VARCHAR")
 
-        # Build DataType with appropriate parameters
         if type_hint == "decimal" and isinstance(value, str):
             # Try to infer precision and scale
             parts = value.split(".")
@@ -446,7 +422,6 @@ class ParameterizeLiterals(ProcessorProtocol):
                 if parent.this and isinstance(parent.this, exp.Column):
                     return f"{parent.this.name}_value"
 
-        # Check if we're in a specific SQL clause
         for parent in reversed(context.parent_stack):
             if isinstance(parent, exp.Where):
                 return "where_value"
@@ -461,7 +436,6 @@ class ParameterizeLiterals(ProcessorProtocol):
 
     def _is_string_literal(self, literal: exp.Literal) -> bool:
         """Check if a literal is a string."""
-        # Check if it's explicitly a string literal
         return (hasattr(literal, "is_string") and literal.is_string) or (
             isinstance(literal.this, str) and not self._is_number_literal(literal)
         )
@@ -469,7 +443,6 @@ class ParameterizeLiterals(ProcessorProtocol):
     @staticmethod
     def _is_number_literal(literal: exp.Literal) -> bool:
         """Check if a literal is a number."""
-        # Check if it's explicitly a number literal
         if hasattr(literal, "is_number") and literal.is_number:
             return True
         if literal.this is None:
@@ -485,7 +458,6 @@ class ParameterizeLiterals(ProcessorProtocol):
         """Create a placeholder expression with optional type hint."""
         # Import ParameterStyle for proper comparison
 
-        # Handle both style names and actual placeholder prefixes
         style = self.placeholder_style
         if style is ParameterStyle.QMARK or style == "?":
             placeholder = exp.Placeholder()
@@ -511,12 +483,10 @@ class ParameterizeLiterals(ProcessorProtocol):
         if not array_node.expressions:
             return array_node
 
-        # Check array size
         if len(array_node.expressions) > self.max_array_length:
             # Too large, preserve as-is
             return array_node
 
-        # Extract all array elements
         array_values = []
         element_types = []
         all_literals = True
@@ -531,14 +501,11 @@ class ParameterizeLiterals(ProcessorProtocol):
                 break
 
         if all_literals:
-            # Determine array element type from the first element
             element_type = element_types[0] if element_types else "unknown"
 
-            # Create SQLGlot array type
             element_sqlglot_type = self._infer_sqlglot_type(element_type, array_values[0] if array_values else None)
             array_sqlglot_type = exp.DataType.build("ARRAY", expressions=[element_sqlglot_type])
 
-            # Create TypedParameter for the entire array
             from sqlspec.statement.parameters import TypedParameter
 
             typed_param = TypedParameter(
@@ -548,7 +515,6 @@ class ParameterizeLiterals(ProcessorProtocol):
                 semantic_name="array_values",
             )
 
-            # Replace entire array with a single parameter
             self.extracted_parameters.append(typed_param)
             self._parameter_metadata.append(
                 {
@@ -559,7 +525,6 @@ class ParameterizeLiterals(ProcessorProtocol):
                 }
             )
             return self._create_placeholder("array")
-        # Process individual elements
         new_expressions = []
         for expr in array_node.expressions:
             if isinstance(expr, Literal):
@@ -571,23 +536,19 @@ class ParameterizeLiterals(ProcessorProtocol):
 
     def _process_in_clause(self, in_node: exp.In, context: ParameterizationContext) -> exp.Expression:
         """Process IN clause for intelligent parameterization."""
-        # Check if it's a subquery IN clause (has 'query' in args)
         if in_node.args.get("query"):
             # Don't parameterize subqueries, just process them recursively
             in_node.set("query", self._transform_with_context(in_node.args["query"], context))
             return in_node
 
-        # Check if it has literal expressions (the values on the right side)
         if "expressions" not in in_node.args or not in_node.args["expressions"]:
             return in_node
 
-        # Check if the IN list is too large
         expressions = in_node.args["expressions"]
         if len(expressions) > self.max_in_list_size:
             # Consider alternative strategies for large IN lists
             return in_node
 
-        # Process the expressions in the IN clause
         has_literals = any(isinstance(expr, Literal) for expr in expressions)
 
         if has_literals:
@@ -599,7 +560,6 @@ class ParameterizeLiterals(ProcessorProtocol):
                 else:
                     new_expressions.append(self._transform_with_context(expr, context))
 
-            # Update the IN node's expressions using set method
             in_node.set("expressions", new_expressions)
 
         return in_node

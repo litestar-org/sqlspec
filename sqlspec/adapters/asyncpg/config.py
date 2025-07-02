@@ -223,7 +223,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         super().__init__()
 
-        # Set pool_instance after super().__init__() to ensure it's not overridden
         if pool_instance_from_kwargs is not None:
             self.pool_instance = pool_instance_from_kwargs
 
@@ -240,7 +239,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             if getattr(self, field, None) is not None and getattr(self, field) is not Empty
         }
 
-        # Add connection-specific extras (not pool-specific ones)
         config.update(self.extras)
 
         return config
@@ -348,10 +346,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Returns:
             Dictionary mapping type names to types.
         """
-        # Get base types from parent
         namespace = super().get_signature_namespace()
 
-        # Add AsyncPG-specific types
         try:
             from asyncpg import Connection, Record
             from asyncpg.connection import ConnectionMeta

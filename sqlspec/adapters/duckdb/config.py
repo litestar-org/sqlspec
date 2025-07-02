@@ -335,11 +335,9 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         # DuckDB connect() only accepts database, read_only, and config parameters
         connect_params: dict[str, Any] = {}
 
-        # Set database if provided
         if hasattr(self, "database") and self.database is not None:
             connect_params["database"] = self.database
 
-        # Set read_only if provided
         if hasattr(self, "read_only") and self.read_only is not None:
             connect_params["read_only"] = self.read_only
 
@@ -351,7 +349,6 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                 if value is not None and value is not Empty:
                     config_dict[field] = value
 
-        # Add extras to config dict
         config_dict.update(self.extras)
 
         # If we have config parameters, add them

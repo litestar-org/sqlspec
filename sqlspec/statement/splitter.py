@@ -115,7 +115,6 @@ class DialectConfig(ABC):
         # 3. Dynamically build and insert keyword/separator patterns
         all_keywords = self.block_starters | self.block_enders | self.batch_separators
         if all_keywords:
-            # Sort by length descending to match longer keywords first
             sorted_keywords = sorted(all_keywords, key=len, reverse=True)
             patterns.append((TokenType.KEYWORD, r"\b(" + "|".join(re.escape(kw) for kw in sorted_keywords) + r")\b"))
 
@@ -337,7 +336,6 @@ class PostgreSQLDialectConfig(DialectConfig):
         tag = start_match.group(0)  # The full opening tag, e.g., "$tag$"
         content_start = position + len(tag)
 
-        # Find the corresponding closing tag
         try:
             content_end = text.index(tag, content_start)
             full_value = text[position : content_end + len(tag)]
@@ -502,7 +500,6 @@ class StatementSplitter:
                     column = pos - line_start + 1
                     token = pattern(sql, pos, line, column)
                     if token:
-                        # Update position tracking
                         newlines = token.value.count("\n")
                         if newlines > 0:
                             line += newlines
@@ -520,7 +517,6 @@ class StatementSplitter:
                         value = match.group(0)
                         column = pos - line_start + 1
 
-                        # Update line tracking
                         newlines = value.count("\n")
                         if newlines > 0:
                             line += newlines
@@ -544,7 +540,6 @@ class StatementSplitter:
         current_statement_chars = []
         block_stack = []
 
-        # Convert token generator to list so we can look ahead
         all_tokens = list(self._tokenize(sql))
 
         for token_idx, token in enumerate(all_tokens):
@@ -559,7 +554,6 @@ class StatementSplitter:
             current_statement_tokens.append(token)
             token_upper = token.value.upper()
 
-            # Update block nesting
             if token.type == TokenType.KEYWORD:
                 if token_upper in self.dialect.block_starters:
                     block_stack.append(token_upper)
@@ -567,7 +561,6 @@ class StatementSplitter:
                         msg = f"Maximum nesting depth ({self.dialect.max_nesting_depth}) exceeded"
                         raise ValueError(msg)
                 elif token_upper in self.dialect.block_enders:
-                    # Check if this is actually a block ender (not END IF, END LOOP, etc.)
                     if block_stack and self.dialect.is_real_block_ender(all_tokens, token_idx):
                         block_stack.pop()
 
@@ -576,7 +569,6 @@ class StatementSplitter:
             if not block_stack:  # Only terminate when not inside a block
                 if token.type == TokenType.TERMINATOR:
                     if token.value in self.dialect.statement_terminators:
-                        # Check if we should delay this termination (e.g., for Oracle END; /)
                         should_delay = self.dialect.should_delay_semicolon_termination(all_tokens, token_idx)
 
                         # Also check if there's a batch separator coming up (for T-SQL GO)
@@ -601,7 +593,6 @@ class StatementSplitter:
                 # Save the statement
                 statement = "".join(current_statement_chars).strip()
 
-                # Determine if this is a PL/SQL block
                 is_plsql_block = self._is_plsql_block(current_statement_tokens)
 
                 # Optionally strip the trailing terminator
@@ -619,7 +610,6 @@ class StatementSplitter:
                 current_statement_tokens = []
                 current_statement_chars = []
 
-        # Handle any remaining content
         if current_statement_chars:
             statement = "".join(current_statement_chars).strip()
             if statement and self._contains_executable_content(statement):
@@ -637,7 +627,6 @@ class StatementSplitter:
         Returns:
             True if this is a PL/SQL block (BEGIN...END or DECLARE...END)
         """
-        # Find the first meaningful keyword token (skip whitespace and comments)
         for token in tokens:
             if token.type == TokenType.KEYWORD:
                 return token.value.upper() in {"BEGIN", "DECLARE"}
@@ -655,7 +644,6 @@ class StatementSplitter:
         # Tokenize the statement to check its content
         tokens = list(self._tokenize(statement))
 
-        # Check if there are any non-comment, non-whitespace tokens
         for token in tokens:
             if token.type not in {TokenType.WHITESPACE, TokenType.COMMENT_LINE, TokenType.COMMENT_BLOCK}:
                 return True

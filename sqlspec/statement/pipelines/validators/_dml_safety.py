@@ -89,7 +89,6 @@ class DMLSafetyValidator(ProcessorProtocol):
         category = self._categorize_statement(expression)
         operation = self._get_operation_type(expression)
 
-        # Check DDL restrictions
         if category == StatementCategory.DDL and self.config.prevent_ddl:
             if operation not in self.config.allowed_ddl_operations:
                 self.add_error(
@@ -100,7 +99,6 @@ class DMLSafetyValidator(ProcessorProtocol):
                     expression=expression,
                 )
 
-        # Check DML safety
         elif category == StatementCategory.DML:
             if operation in self.config.require_where_clause and not self._has_where_clause(expression):
                 self.add_error(
@@ -111,7 +109,6 @@ class DMLSafetyValidator(ProcessorProtocol):
                     expression=expression,
                 )
 
-            # Check affected row limits
             if self.config.max_affected_rows:
                 estimated_rows = self._estimate_affected_rows(expression)
                 if estimated_rows > self.config.max_affected_rows:
@@ -123,7 +120,6 @@ class DMLSafetyValidator(ProcessorProtocol):
                         expression=expression,
                     )
 
-        # Check DCL restrictions
         elif category == StatementCategory.DCL and self.config.prevent_dcl:
             self.add_error(
                 context,
@@ -210,10 +206,8 @@ class DMLSafetyValidator(ProcessorProtocol):
 
         where = expression.args.get("where")
         if where:
-            # Check for primary key or unique conditions
             if self._has_unique_condition(where):
                 return 1
-            # Check for indexed conditions
             if self._has_indexed_condition(where):
                 return 100  # Rough estimate
 

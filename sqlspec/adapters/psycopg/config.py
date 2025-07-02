@@ -210,7 +210,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         self.configure = configure
         self.kwargs = kwargs or {}
 
-        # Handle extras and additional kwargs
         self.extras = extras or {}
         self.extras.update(additional_kwargs)
 
@@ -239,7 +238,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         if self.kwargs:
             config.update(self.kwargs)
 
-        # Set DictRow as the row factory
         config["row_factory"] = dict_row
 
         return config
@@ -262,7 +260,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         if self.kwargs:
             config.update(self.kwargs)
 
-        # Set DictRow as the row factory
         config["row_factory"] = dict_row
 
         return config
@@ -272,7 +269,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         logger.info("Creating Psycopg connection pool", extra={"adapter": "psycopg"})
 
         try:
-            # Get all config (creates a new dict)
             all_config = self.pool_config_dict.copy()
 
             # Separate pool-specific parameters that ConnectionPool accepts directly
@@ -288,28 +284,21 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 "num_workers": all_config.pop("num_workers", 3),
             }
 
-            # Create a configure callback to set row_factory
             def configure_connection(conn: "PsycopgSyncConnection") -> None:
-                # Set DictRow as the row factory
                 conn.row_factory = dict_row
 
             pool_params["configure"] = all_config.pop("configure", configure_connection)
 
-            # Remove None values from pool_params
             pool_params = {k: v for k, v in pool_params.items() if v is not None}
 
-            # Handle conninfo vs individual connection parameters
             conninfo = all_config.pop("conninfo", None)
             if conninfo:
                 # If conninfo is provided, use it directly
                 # Don't pass kwargs when using conninfo string
                 pool = ConnectionPool(conninfo, open=True, **pool_params)
             else:
-                # Otherwise, pass connection parameters via kwargs
-                # Remove any non-connection parameters
                 # row_factory is already popped out earlier
                 all_config.pop("row_factory", None)
-                # Remove pool-specific settings that may have been left
                 all_config.pop("kwargs", None)
                 pool = ConnectionPool("", kwargs=all_config, open=True, **pool_params)
 
@@ -327,7 +316,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         logger.info("Closing Psycopg connection pool", extra={"adapter": "psycopg"})
 
         try:
-            # Set a flag to prevent __del__ from running cleanup
             # This avoids the "cannot join current thread" error during garbage collection
             if hasattr(self.pool_instance, "_closed"):
                 self.pool_instance._closed = True
@@ -338,7 +326,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             logger.exception("Failed to close Psycopg connection pool", extra={"adapter": "psycopg", "error": str(e)})
             raise
         finally:
-            # Clear the reference to help garbage collection
             self.pool_instance = None
 
     def create_connection(self) -> "PsycopgSyncConnection":
@@ -555,7 +542,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         self.configure = configure
         self.kwargs = kwargs or {}
 
-        # Handle extras and additional kwargs
         self.extras = extras or {}
         self.extras.update(additional_kwargs)
 
@@ -584,7 +570,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if self.kwargs:
             config.update(self.kwargs)
 
-        # Set DictRow as the row factory
         config["row_factory"] = dict_row
 
         return config
@@ -607,7 +592,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if self.kwargs:
             config.update(self.kwargs)
 
-        # Set DictRow as the row factory
         config["row_factory"] = dict_row
 
         return config
@@ -615,7 +599,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
     async def _create_pool(self) -> "AsyncConnectionPool":
         """Create the actual async connection pool."""
 
-        # Get all config (creates a new dict)
         all_config = self.pool_config_dict.copy()
 
         # Separate pool-specific parameters that AsyncConnectionPool accepts directly
@@ -631,28 +614,21 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             "num_workers": all_config.pop("num_workers", 3),
         }
 
-        # Create a configure callback to set row_factory
         async def configure_connection(conn: "PsycopgAsyncConnection") -> None:
-            # Set DictRow as the row factory
             conn.row_factory = dict_row
 
         pool_params["configure"] = all_config.pop("configure", configure_connection)
 
-        # Remove None values from pool_params
         pool_params = {k: v for k, v in pool_params.items() if v is not None}
 
-        # Handle conninfo vs individual connection parameters
         conninfo = all_config.pop("conninfo", None)
         if conninfo:
             # If conninfo is provided, use it directly
             # Don't pass kwargs when using conninfo string
             pool = AsyncConnectionPool(conninfo, open=False, **pool_params)
         else:
-            # Otherwise, pass connection parameters via kwargs
-            # Remove any non-connection parameters
             # row_factory is already popped out earlier
             all_config.pop("row_factory", None)
-            # Remove pool-specific settings that may have been left
             all_config.pop("kwargs", None)
             pool = AsyncConnectionPool("", kwargs=all_config, open=False, **pool_params)
 
@@ -666,14 +642,12 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             return
 
         try:
-            # Set a flag to prevent __del__ from running cleanup
             # This avoids the "cannot join current thread" error during garbage collection
             if hasattr(self.pool_instance, "_closed"):
                 self.pool_instance._closed = True
 
             await self.pool_instance.close()
         finally:
-            # Clear the reference to help garbage collection
             self.pool_instance = None
 
     async def create_connection(self) -> "PsycopgAsyncConnection":  # pyright: ignore

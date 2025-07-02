@@ -151,15 +151,12 @@ class SelectBuilder(
         Returns:
             SafeQuery: A dataclass containing the SQL string and parameters.
         """
-        # Call parent build method which handles CTEs and optimization
         safe_query = super().build()
 
-        # Apply hints using SQLGlot's proper hint support (more robust than regex)
         if hasattr(self, "_hints") and self._hints:
             modified_expr = self._expression.copy() if self._expression else None
 
             if modified_expr and isinstance(modified_expr, exp.Select):
-                # Apply statement-level hints using SQLGlot's Hint expression
                 statement_hints = [h["hint"] for h in self._hints if h.get("location") == "statement"]
                 if statement_hints:
                     # Parse each hint and create proper hint expressions
@@ -172,12 +169,10 @@ class SelectBuilder(
                             if hint_expr:
                                 hint_expressions.append(hint_expr)
                             else:
-                                # Create a raw identifier for unparsable hints
                                 hint_expressions.append(exp.Anonymous(this=hint_str))
                         except Exception:  # noqa: PERF203
                             hint_expressions.append(exp.Anonymous(this=str(hint)))
 
-                    # Create a Hint node and attach to SELECT
                     if hint_expressions:
                         hint_node = exp.Hint(expressions=hint_expressions)
                         modified_expr.set("hint", hint_node)
@@ -186,7 +181,6 @@ class SelectBuilder(
                 # since SQLGlot doesn't have a standard way to attach hints to individual tables
                 modified_sql = modified_expr.sql(dialect=self.dialect_name, pretty=True)
 
-                # Apply table-level hints via string manipulation (as fallback)
                 table_hints = [h for h in self._hints if h.get("location") == "table" and h.get("table")]
                 if table_hints:
                     for th in table_hints:

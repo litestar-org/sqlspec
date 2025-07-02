@@ -239,7 +239,6 @@ class QueryBuilder(ABC, Generic[RowT]):
             elif isinstance(final_expression, (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union)):
                 final_expression = exp.With(expressions=list(self._with_ctes.values()), this=final_expression)
 
-        # Apply SQLGlot optimizations if enabled
         if self.enable_optimization and isinstance(final_expression, exp.Expression):
             final_expression = self._optimize_expression(final_expression)
 
@@ -294,7 +293,6 @@ class QueryBuilder(ABC, Generic[RowT]):
         """
         safe_query = self.build()
 
-        # Convert parameters to the expected format
         if isinstance(safe_query.parameters, dict):
             kwargs = safe_query.parameters
             parameters = None
@@ -308,7 +306,6 @@ class QueryBuilder(ABC, Generic[RowT]):
                 else None
             )
 
-        # Create SQLConfig if needed
         if config is None:
             from sqlspec.statement.sql import SQLConfig
 
@@ -330,7 +327,6 @@ class QueryBuilder(ABC, Generic[RowT]):
         try:
             return self.build().sql
         except Exception:
-            # Fallback to default representation if build fails
             return super().__str__()
 
     @property
@@ -343,7 +339,6 @@ class QueryBuilder(ABC, Generic[RowT]):
                 return self.dialect.__name__.lower()
             if isinstance(self.dialect, Dialect):
                 return type(self.dialect).__name__.lower()
-            # Handle case where dialect might have a __name__ attribute
             if hasattr(self.dialect, "__name__"):
                 return self.dialect.__name__.lower()
         return None

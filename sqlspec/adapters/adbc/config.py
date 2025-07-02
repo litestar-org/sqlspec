@@ -270,7 +270,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
         # If explicit driver path is provided, normalize it
         if isinstance(driver_name, str):
-            # Handle convenience aliases
             driver_aliases = {
                 "sqlite": "adbc_driver_sqlite.dbapi.connect",
                 "sqlite3": "adbc_driver_sqlite.dbapi.connect",
@@ -294,7 +293,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
             resolved_driver = driver_aliases.get(driver_name, driver_name)
 
-            # Ensure it ends with .dbapi.connect
             if not resolved_driver.endswith(".dbapi.connect"):
                 resolved_driver = f"{resolved_driver}.dbapi.connect"
 
@@ -458,17 +456,13 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         @contextmanager
         def session_manager() -> "Generator[AdbcDriver, None, None]":
             with self.provide_connection(*args, **kwargs) as connection:
-                # Get parameter styles based on the actual driver
                 supported_styles, preferred_style = self._get_parameter_styles()
 
-                # Create statement config with parameter style info if not already set
                 statement_config = self.statement_config
                 if statement_config is not None:
-                    # Update dialect if not set
                     if statement_config.dialect is None:
                         statement_config = replace(statement_config, dialect=self._get_dialect())
 
-                    # Update parameter styles if not set
                     if statement_config.allowed_parameter_styles is None:
                         statement_config = replace(
                             statement_config,
@@ -498,7 +492,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         # Merge extras parameters
         config.update(self.extras)
 
-        # Process URI based on driver type
         if "driver_name" in config:
             driver_name = config["driver_name"]
 
@@ -532,7 +525,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                 if isinstance(db_kwargs, dict):
                     config.update(db_kwargs)
 
-            # Remove driver_name from config as it's not a connection parameter
             config.pop("driver_name", None)
 
         return config

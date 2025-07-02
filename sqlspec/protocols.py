@@ -13,12 +13,16 @@ if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
 
 __all__ = (
+    "FilterAppenderProtocol",
+    "FilterParameterProtocol",
     "HasLimitProtocol",
     "HasOffsetProtocol",
     "HasOrderByProtocol",
+    "HasRiskLevelProtocol",
     "HasWhereProtocol",
     "IndexableRow",
     "IterableParameters",
+    "ParameterValueProtocol",
     "ProcessorProtocol",
     "WithMethodProtocol",
 )
@@ -92,6 +96,41 @@ class HasOrderByProtocol(Protocol):
 
     def order_by(self, *args: Any, **kwargs: Any) -> Any:
         """Add ORDER BY clause to expression."""
+        ...
+
+
+@runtime_checkable
+class FilterParameterProtocol(Protocol):
+    """Protocol for filter objects that can extract parameters."""
+
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract parameters from the filter."""
+        ...
+
+
+@runtime_checkable
+class FilterAppenderProtocol(Protocol):
+    """Protocol for filter objects that can append to SQL statements."""
+
+    def append_to_statement(self, sql: Any) -> Any:
+        """Append this filter to a SQL statement."""
+        ...
+
+
+@runtime_checkable
+class ParameterValueProtocol(Protocol):
+    """Protocol for parameter objects with a value attribute."""
+
+    value: Any
+
+
+@runtime_checkable
+class HasRiskLevelProtocol(Protocol):
+    """Protocol for objects with a risk_level attribute."""
+
+    @property
+    def risk_level(self) -> Any:
+        """Get the risk level of this object."""
         ...
 
 

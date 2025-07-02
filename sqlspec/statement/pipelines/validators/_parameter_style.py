@@ -78,7 +78,6 @@ class ParameterStyleValidator(ProcessorProtocol):
             if config.allowed_parameter_styles is not None and param_info:
                 unique_styles = {p.style for p in param_info}
 
-                # Check for mixed styles first (before checking individual styles)
                 if len(unique_styles) > 1 and not config.allow_mixed_parameter_styles:
                     detected_style_strs = [str(s) for s in unique_styles]
                     detected_styles = ", ".join(sorted(detected_style_strs))
@@ -95,7 +94,6 @@ class ParameterStyleValidator(ProcessorProtocol):
                     context.validation_errors.append(error)
                     has_style_errors = True
 
-                # Check for disallowed styles
                 disallowed_styles = {str(s) for s in unique_styles if not config.validate_parameter_style(s)}
                 if disallowed_styles:
                     disallowed_str = ", ".join(sorted(disallowed_styles))

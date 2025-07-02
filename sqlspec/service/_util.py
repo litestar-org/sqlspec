@@ -92,7 +92,6 @@ class ResultConverter:
         *,
         schema_type: "type[ModelDTOT] | None" = None,
     ) -> "Union[ModelT,   ModelDTOT ,  OffsetPagination[ModelT] , OffsetPagination[ModelDTOT]]":
-        # Handle single items first (these are not paginated)
         if not isinstance(data, Sequence):
             if schema_type is None:
                 return cast("ModelT", data)

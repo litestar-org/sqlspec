@@ -50,7 +50,6 @@ class WhereClauseMixin:
             msg = f"Cannot add WHERE clause to unsupported expression type: {type(builder._expression).__name__}."
             raise SQLBuilderError(msg)
 
-        # Check if table is set for DELETE queries
         if isinstance(builder._expression, exp.Delete) and not builder._expression.args.get("this"):
             msg = "WHERE clause requires a table to be set. Use from() to set the table first."
             raise SQLBuilderError(msg)
@@ -58,7 +57,6 @@ class WhereClauseMixin:
         # Normalize the condition using enhanced parsing
         condition_expr: exp.Expression
         if isinstance(condition, tuple):
-            # Handle tuple format with proper parameter binding
             if len(condition) == 2:
                 # 2-tuple: (column, value) -> column = value
                 param_name = builder.add_parameter(condition[1])[1]
@@ -87,7 +85,6 @@ class WhereClauseMixin:
                     "any": exp.Any,
                 }
                 operator = operator.lower()
-                # Handle special cases for NOT operators
                 if operator == "not like":
                     condition_expr = exp.Not(this=exp.Like(this=col_expr, expression=placeholder_expr))
                 elif operator == "not in":

@@ -113,9 +113,7 @@ class BeforeAfterFilter(StatementFilter):
             final_condition = conditions[0]
             for cond in conditions[1:]:
                 final_condition = exp.And(this=final_condition, expression=cond)
-            # Use the SQL object's where method which handles all cases
             result = statement.where(final_condition)
-            # Add the filter's parameters to the result
             _, named_params = self.extract_parameters()
             for name, value in named_params.items():
                 result = result.add_named_parameter(name, value)
@@ -172,7 +170,6 @@ class OnBeforeAfterFilter(StatementFilter):
             for cond in conditions[1:]:
                 final_condition = exp.And(this=final_condition, expression=cond)
             result = statement.where(final_condition)
-            # Add the filter's parameters to the result
             _, named_params = self.extract_parameters()
             for name, value in named_params.items():
                 result = result.add_named_parameter(name, value)
@@ -230,7 +227,6 @@ class InCollectionFilter(InAnyFilter[T]):
         ]
 
         result = statement.where(exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions))
-        # Add the filter's parameters to the result
         _, named_params = self.extract_parameters()
         for name, value in named_params.items():
             result = result.add_named_parameter(name, value)
@@ -274,7 +270,6 @@ class NotInCollectionFilter(InAnyFilter[T]):
         result = statement.where(
             exp.Not(this=exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions))
         )
-        # Add the filter's parameters to the result
         _, named_params = self.extract_parameters()
         for name, value in named_params.items():
             result = result.add_named_parameter(name, value)
@@ -324,7 +319,6 @@ class AnyCollectionFilter(InAnyFilter[T]):
         array_expr = exp.Array(expressions=placeholder_expressions)
         # Generates SQL like: self.field_name = ANY(ARRAY[?, ?, ...])
         result = statement.where(exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr)))
-        # Add the filter's parameters to the result
         _, named_params = self.extract_parameters()
         for name, value in named_params.items():
             result = result.add_named_parameter(name, value)
@@ -373,7 +367,6 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
         # Generates SQL like: NOT (self.field_name = ANY(ARRAY[?, ?, ...]))
         condition = exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr))
         result = statement.where(exp.Not(this=condition))
-        # Add the filter's parameters to the result
         _, named_params = self.extract_parameters()
         for name, value in named_params.items():
             result = result.add_named_parameter(name, value)
@@ -399,7 +392,6 @@ class LimitOffsetFilter(PaginationFilter):
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
-        # Return the limit and offset values as named parameters
         return [], {"limit": self.limit, "offset": self.offset}
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
@@ -453,7 +445,6 @@ class SearchFilter(StatementFilter):
             if isinstance(self.field_name, str):
                 self._param_name = f"{self.field_name}_search"
             else:
-                # For multiple fields, use a generic search parameter name
                 self._param_name = "search_value"
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
@@ -487,7 +478,6 @@ class SearchFilter(StatementFilter):
                     final_condition = exp.Or(this=final_condition, expression=cond)
             result = statement.where(final_condition)
 
-        # Add the filter's parameters to the result
         _, named_params = self.extract_parameters()
         for name, value in named_params.items():
             result = result.add_named_parameter(name, value)
@@ -505,7 +495,6 @@ class NotInSearchFilter(SearchFilter):
             if isinstance(self.field_name, str):
                 self._param_name = f"{self.field_name}_not_search"
             else:
-                # For multiple fields, use a generic search parameter name
                 self._param_name = "not_search_value"
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
@@ -539,7 +528,6 @@ class NotInSearchFilter(SearchFilter):
                     final_condition = exp.And(this=final_condition, expression=cond)
             result = statement.where(final_condition)
 
-        # Add the filter's parameters to the result
         _, named_params = self.extract_parameters()
         for name, value in named_params.items():
             result = result.add_named_parameter(name, value)

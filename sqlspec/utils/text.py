@@ -14,7 +14,6 @@ _SLUGIFY_HYPHEN_COLLAPSE = re.compile(r"-+")
 _SNAKE_CASE_LOWER_OR_DIGIT_TO_UPPER = re.compile(r"(?<=[a-z0-9])(?=[A-Z])", re.UNICODE)
 # Insert underscore between uppercase letter and uppercase followed by lowercase
 _SNAKE_CASE_UPPER_TO_UPPER_LOWER = re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])", re.UNICODE)
-# Replace hyphens, spaces, dots, and @ symbols with underscores for snake_case
 _SNAKE_CASE_HYPHEN_SPACE = re.compile(r"[.\s@-]+", re.UNICODE)
 # Collapse multiple underscores
 _SNAKE_CASE_MULTIPLE_UNDERSCORES = re.compile(r"__+", re.UNICODE)
@@ -66,17 +65,13 @@ def slugify(value: str, allow_unicode: bool = False, separator: Optional[str] = 
     value = value.lower().strip()
     sep = separator if separator is not None else "-"
     if not sep:
-        # Remove all non-alphanumeric characters and return
         return _SLUGIFY_REMOVE_NON_ALPHANUMERIC.sub("", value)
-    # Replace all runs of non-alphanumeric chars with the separator
     value = _SLUGIFY_REMOVE_NON_ALPHANUMERIC.sub(sep, value)
-    # Remove leading/trailing separators and collapse multiple separators
     # For dynamic separators, we need to use re.sub with escaped separator
     if sep == "-":
         # Use pre-compiled regex for common case
         value = value.strip("-")
         return _SLUGIFY_HYPHEN_COLLAPSE.sub("-", value)
-    # For other separators, use dynamic regex
     value = re.sub(rf"^{re.escape(sep)}+|{re.escape(sep)}+$", "", value)
     return re.sub(rf"{re.escape(sep)}+", sep, value)
 

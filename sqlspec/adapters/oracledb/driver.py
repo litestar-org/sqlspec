@@ -41,30 +41,21 @@ def _process_oracle_parameters(params: Any) -> Any:
     if params is None:
         return None
 
-    # Handle TypedParameter objects
     if isinstance(params, TypedParameter):
         return _process_oracle_parameters(params.value)
 
     if isinstance(params, tuple):
-        # Convert single tuple to list and process each element
         return [_process_oracle_parameters(item) for item in params]
     if isinstance(params, list):
-        # Process list of parameter sets
         processed = []
         for param_set in params:
-            if isinstance(param_set, tuple):
-                # Convert tuple to list and process each element
-                processed.append([_process_oracle_parameters(item) for item in param_set])
-            elif isinstance(param_set, list):
-                # Process each element in the list
+            if isinstance(param_set, (tuple, list)):
                 processed.append([_process_oracle_parameters(item) for item in param_set])
             else:
                 processed.append(_process_oracle_parameters(param_set))
         return processed
     if isinstance(params, dict):
-        # Process dict values
         return {key: _process_oracle_parameters(value) for key, value in params.items()}
-    # Return as-is for other types
     return params
 
 
@@ -119,9 +110,7 @@ class OracleSyncDriver(
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
-        # Determine if we need to convert parameter style
         detected_styles = set()
-        # Extract parameter styles from the SQL string
         sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
         validator = self.config.parameter_validator if self.config else ParameterValidator()
         param_infos = validator.extract_parameters(sql_str)
@@ -130,13 +119,10 @@ class OracleSyncDriver(
 
         target_style = self.default_parameter_style
 
-        # Check if any detected style is not supported
         unsupported_styles = detected_styles - set(self.supported_parameter_styles)
         if unsupported_styles:
-            # Convert to default style if we have unsupported styles
             target_style = self.default_parameter_style
         elif detected_styles:
-            # Use the first detected style if all are supported
             # Prefer the first supported style found
             for style in detected_styles:
                 if style in self.supported_parameter_styles:
@@ -145,17 +131,14 @@ class OracleSyncDriver(
 
         if statement.is_many:
             sql, params = statement.compile(placeholder_style=target_style)
-            # Process parameters to convert tuples to lists for Oracle
             params = self._process_parameters(params)
             # Oracle doesn't like underscores in bind parameter names
             if isinstance(params, list) and params and isinstance(params[0], dict):
                 # Fix the SQL and parameters
                 for key in list(params[0].keys()):
                     if key.startswith("_arg_"):
-                        # Remove leading underscore: _arg_0 -> arg0
                         new_key = key[1:].replace("_", "")
                         sql = sql.replace(f":{key}", f":{new_key}")
-                        # Update all parameter sets
                         for param_set in params:
                             if isinstance(param_set, dict) and key in param_set:
                                 param_set[new_key] = param_set.pop(key)
@@ -167,7 +150,6 @@ class OracleSyncDriver(
             # Fix the SQL and parameters
             for key in list(params.keys()):
                 if key.startswith("_arg_"):
-                    # Remove leading underscore: _arg_0 -> arg0
                     new_key = key[1:].replace("_", "")
                     sql = sql.replace(f":{key}", f":{new_key}")
                     params[new_key] = params.pop(key)
@@ -183,7 +165,6 @@ class OracleSyncDriver(
     ) -> SQLResult[RowT]:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
-            # Process parameters to extract values from TypedParameter objects
             processed_params = self._process_parameters(parameters) if parameters else []
             cursor.execute(sql, processed_params)
 
@@ -211,10 +192,8 @@ class OracleSyncDriver(
     ) -> SQLResult[RowT]:
         conn = self._connection(connection)
         with self._get_cursor(conn) as cursor:
-            # Handle None or empty param_list
             if param_list is None:
                 param_list = []
-            # Ensure param_list is a list of parameter sets
             elif param_list and not isinstance(param_list, list):
                 # Single parameter set, wrap it
                 param_list = [param_list]
@@ -255,13 +234,11 @@ class OracleSyncDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(connection)
 
-        # Get SQL and parameters using compile to ensure they match
         # For fetch_arrow_table, we need to use POSITIONAL_COLON style since the SQL has :1 placeholders
         sql_str, params = sql.compile(placeholder_style=ParameterStyle.POSITIONAL_COLON)
         if params is None:
             params = []
 
-        # Process parameters to extract values from TypedParameter objects
         processed_params = self._process_parameters(params) if params else []
 
         oracle_df = conn.fetch_df_all(sql_str, processed_params)
@@ -348,9 +325,7 @@ class OracleAsyncDriver(
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
-        # Determine if we need to convert parameter style
         detected_styles = set()
-        # Extract parameter styles from the SQL string
         sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
         validator = self.config.parameter_validator if self.config else ParameterValidator()
         param_infos = validator.extract_parameters(sql_str)
@@ -359,13 +334,10 @@ class OracleAsyncDriver(
 
         target_style = self.default_parameter_style
 
-        # Check if any detected style is not supported
         unsupported_styles = detected_styles - set(self.supported_parameter_styles)
         if unsupported_styles:
-            # Convert to default style if we have unsupported styles
             target_style = self.default_parameter_style
         elif detected_styles:
-            # Use the first detected style if all are supported
             # Prefer the first supported style found
             for style in detected_styles:
                 if style in self.supported_parameter_styles:
@@ -374,17 +346,14 @@ class OracleAsyncDriver(
 
         if statement.is_many:
             sql, params = statement.compile(placeholder_style=target_style)
-            # Process parameters to convert tuples to lists for Oracle
             params = self._process_parameters(params)
             # Oracle doesn't like underscores in bind parameter names
             if isinstance(params, list) and params and isinstance(params[0], dict):
                 # Fix the SQL and parameters
                 for key in list(params[0].keys()):
                     if key.startswith("_arg_"):
-                        # Remove leading underscore: _arg_0 -> arg0
                         new_key = key[1:].replace("_", "")
                         sql = sql.replace(f":{key}", f":{new_key}")
-                        # Update all parameter sets
                         for param_set in params:
                             if isinstance(param_set, dict) and key in param_set:
                                 param_set[new_key] = param_set.pop(key)
@@ -396,7 +365,6 @@ class OracleAsyncDriver(
             # Fix the SQL and parameters
             for key in list(params.keys()):
                 if key.startswith("_arg_"):
-                    # Remove leading underscore: _arg_0 -> arg0
                     new_key = key[1:].replace("_", "")
                     sql = sql.replace(f":{key}", f":{new_key}")
                     params[new_key] = params.pop(key)
@@ -415,7 +383,6 @@ class OracleAsyncDriver(
             if parameters is None:
                 await cursor.execute(sql)
             else:
-                # Process parameters to extract values from TypedParameter objects
                 processed_params = self._process_parameters(parameters)
                 await cursor.execute(sql, processed_params)
 
@@ -444,10 +411,8 @@ class OracleAsyncDriver(
     ) -> SQLResult[RowT]:
         conn = self._connection(connection)
         async with self._get_cursor(conn) as cursor:
-            # Handle None or empty param_list
             if param_list is None:
                 param_list = []
-            # Ensure param_list is a list of parameter sets
             elif param_list and not isinstance(param_list, list):
                 # Single parameter set, wrap it
                 param_list = [param_list]
@@ -491,13 +456,11 @@ class OracleAsyncDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(connection)
 
-        # Get SQL and parameters using compile to ensure they match
         # For fetch_arrow_table, we need to use POSITIONAL_COLON style since the SQL has :1 placeholders
         sql_str, params = sql.compile(placeholder_style=ParameterStyle.POSITIONAL_COLON)
         if params is None:
             params = []
 
-        # Process parameters to extract values from TypedParameter objects
         processed_params = self._process_parameters(params) if params else []
 
         oracle_df = await conn.fetch_df_all(sql_str, processed_params)

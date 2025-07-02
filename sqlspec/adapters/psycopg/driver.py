@@ -78,9 +78,7 @@ class PsycopgSyncDriver(
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
-        # Determine if we need to convert parameter style
         detected_styles = set()
-        # Extract parameter styles from the SQL string
         sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
         validator = self.config.parameter_validator if self.config else ParameterValidator()
         param_infos = validator.extract_parameters(sql_str)
@@ -99,8 +97,6 @@ class PsycopgSyncDriver(
 
         if statement.is_many:
             sql, params = statement.compile(placeholder_style=target_style)
-            # For execute_many, check if parameters were passed via kwargs (legacy support)
-            # Otherwise use the parameters from the SQL object
             kwargs_params = kwargs.get("parameters")
             if kwargs_params is not None:
                 params = kwargs_params
@@ -123,15 +119,12 @@ class PsycopgSyncDriver(
     ) -> SQLResult[RowT]:
         conn = self._connection(connection)
 
-        # Check if this is a COPY command
         sql_upper = sql.strip().upper()
         if sql_upper.startswith("COPY") and ("FROM STDIN" in sql_upper or "TO STDOUT" in sql_upper):
             return self._handle_copy_command(sql, parameters, conn)
 
         with conn.cursor() as cursor:
             cursor.execute(cast("Query", sql), parameters)
-            # Check if the statement returns rows by checking cursor.description
-            # This is more reliable than parsing when parsing is disabled
             if cursor.description is not None:
                 fetched_data = cursor.fetchall()
                 column_names = [col.name for col in cursor.description]
@@ -162,7 +155,6 @@ class PsycopgSyncDriver(
                 with cursor.copy(cast("Query", sql)) as copy:
                     output_data.extend(row for row in copy)
 
-                # Return as SQLResult with the raw COPY data
                 return SQLResult(
                     statement=SQL(sql),
                     data=cast("list[RowT]", output_data),
@@ -291,7 +283,6 @@ class PsycopgSyncDriver(
         from sqlspec.exceptions import PipelineExecutionError
 
         try:
-            # Prepare SQL and parameters
             filtered_sql = self._apply_operation_filters(operation.sql, operation.filters)
             sql_str = filtered_sql.to_sql(placeholder_style=self.default_parameter_style)
             params = self._convert_psycopg_params(filtered_sql.parameters)
@@ -409,7 +400,6 @@ class PsycopgSyncDriver(
             # Psycopg handles dict parameters directly for named placeholders
             return params
         if isinstance(params, (list, tuple)):
-            # Convert to tuple for positional parameters
             return tuple(params)
         # Single parameter
         return (params,)
@@ -429,7 +419,6 @@ class PsycopgSyncDriver(
     def _split_script_statements(self, script: str, strip_trailing_semicolon: bool = False) -> "list[str]":
         """Split a SQL script into individual statements."""
 
-        # Use the sophisticated splitter with PostgreSQL dialect
         return split_sql_script(script=script, dialect="postgresql", strip_trailing_semicolon=strip_trailing_semicolon)
 
 
@@ -472,10 +461,7 @@ class PsycopgAsyncDriver(
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
-        # Determine if we need to convert parameter style
-        # Determine if we need to convert parameter style
         detected_styles = set()
-        # Extract parameter styles from the SQL string
         sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
         validator = self.config.parameter_validator if self.config else ParameterValidator()
         param_infos = validator.extract_parameters(sql_str)
@@ -484,13 +470,10 @@ class PsycopgAsyncDriver(
 
         target_style = self.default_parameter_style
 
-        # Check if any detected style is not supported
         unsupported_styles = detected_styles - set(self.supported_parameter_styles)
         if unsupported_styles:
-            # Convert to default style if we have unsupported styles
             target_style = self.default_parameter_style
         elif detected_styles:
-            # Use the first detected style if all are supported
             # Prefer the first supported style found
             for style in detected_styles:
                 if style in self.supported_parameter_styles:
@@ -499,10 +482,8 @@ class PsycopgAsyncDriver(
 
         if statement.is_many:
             sql, _ = statement.compile(placeholder_style=target_style)
-            # For execute_many, use the parameters passed via kwargs
             params = kwargs.get("parameters")
             if params is not None:
-                # Process each parameter set individually
                 processed_params = [self._process_parameters(param_set) for param_set in params]
                 params = processed_params
             return await self._execute_many(sql, params, connection=connection, **kwargs)
@@ -521,7 +502,6 @@ class PsycopgAsyncDriver(
     ) -> SQLResult[RowT]:
         conn = self._connection(connection)
 
-        # Check if this is a COPY command
         sql_upper = sql.strip().upper()
         if sql_upper.startswith("COPY") and ("FROM STDIN" in sql_upper or "TO STDOUT" in sql_upper):
             return await self._handle_copy_command(sql, parameters, conn)
@@ -573,7 +553,6 @@ class PsycopgAsyncDriver(
                 async with cursor.copy(cast("Query", sql)) as copy:
                     output_data.extend([row async for row in copy])
 
-                # Return as SQLResult with the raw COPY data
                 return SQLResult(
                     statement=SQL(sql),
                     data=cast("list[RowT]", output_data),
@@ -624,7 +603,6 @@ class PsycopgAsyncDriver(
         conn = self._connection(connection)
         async with conn.cursor() as cursor:
             await cursor.execute(cast("Query", script))
-            # For scripts, return script result format
             return SQLResult(
                 statement=SQL(script),
                 data=[],
@@ -700,7 +678,6 @@ class PsycopgAsyncDriver(
         from sqlspec.exceptions import PipelineExecutionError
 
         try:
-            # Prepare SQL and parameters
             filtered_sql = self._apply_operation_filters(operation.sql, operation.filters)
             sql_str = filtered_sql.to_sql(placeholder_style=self.default_parameter_style)
             params = self._convert_psycopg_params(filtered_sql.parameters)
@@ -722,7 +699,6 @@ class PsycopgAsyncDriver(
                 msg, operation_index=index, partial_results=[], failed_operation=operation
             ) from e
         else:
-            # Add pipeline context
             result.operation_index = index
             result.pipeline_sql = operation.sql
             return result
@@ -823,7 +799,6 @@ class PsycopgAsyncDriver(
             # Psycopg handles dict parameters directly for named placeholders
             return params
         if isinstance(params, (list, tuple)):
-            # Convert to tuple for positional parameters
             return tuple(params)
         # Single parameter
         return (params,)

@@ -141,7 +141,6 @@ class UpdateBuilder(
             msg = f"Unsupported join type: {join_type}"
             raise SQLBuilderError(msg)
 
-        # Add join to the UPDATE expression
         if not self._expression.args.get("joins"):
             self._expression.set("joins", [])
         self._expression.args["joins"].append(join_expr)
@@ -165,12 +164,10 @@ class UpdateBuilder(
             msg = "No UPDATE expression to build or expression is of the wrong type."
             raise SQLBuilderError(msg)
 
-        # Check that the table is set
         if getattr(self._expression, "this", None) is None:
             msg = "No table specified for UPDATE statement."
             raise SQLBuilderError(msg)
 
-        # Check that at least one SET expression exists
         if not self._expression.args.get("expressions"):
             msg = "At least one SET clause must be specified for UPDATE statement."
             raise SQLBuilderError(msg)

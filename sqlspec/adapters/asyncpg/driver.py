@@ -69,12 +69,10 @@ class AsyncpgDriver(
     # AsyncPG-specific type coercion overrides (PostgreSQL has rich native types)
     def _coerce_boolean(self, value: Any) -> Any:
         """AsyncPG/PostgreSQL has native boolean support."""
-        # Keep booleans as-is, AsyncPG handles them natively
         return value
 
     def _coerce_decimal(self, value: Any) -> Any:
         """AsyncPG/PostgreSQL has native decimal/numeric support."""
-        # Keep decimals as-is, AsyncPG handles them natively
         return value
 
     def _coerce_json(self, value: Any) -> Any:
@@ -84,10 +82,8 @@ class AsyncpgDriver(
 
     def _coerce_array(self, value: Any) -> Any:
         """AsyncPG/PostgreSQL has native array support."""
-        # Convert tuples to lists for consistency
         if isinstance(value, tuple):
             return list(value)
-        # Keep other arrays as-is, AsyncPG handles them natively
         return value
 
     async def _execute_statement(
@@ -97,9 +93,7 @@ class AsyncpgDriver(
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
-        # Determine if we need to convert parameter style
         detected_styles = set()
-        # Extract parameter styles from the SQL string
         sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
         validator = self.config.parameter_validator if self.config else ParameterValidator()
         param_infos = validator.extract_parameters(sql_str)
@@ -127,10 +121,8 @@ class AsyncpgDriver(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         conn = self._connection(connection)
-        # Process parameters to handle TypedParameter objects
         parameters = self._process_parameters(parameters)
 
-        # Check if this is actually a many operation that was misrouted
         if statement.is_many:
             # This should have gone to _execute_many, redirect it
             return await self._execute_many(sql, parameters, connection=connection, **kwargs)
@@ -146,9 +138,7 @@ class AsyncpgDriver(
 
         if self.returns_rows(statement.expression):
             records = await conn.fetch(sql, *args_for_driver)
-            # Convert asyncpg Records to dicts
             data = [dict(record) for record in records]
-            # Get column names from first record or empty list
             column_names = list(records[0].keys()) if records else []
             return SQLResult(
                 statement=statement,
@@ -179,7 +169,6 @@ class AsyncpgDriver(
         self, sql: str, param_list: Any, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         conn = self._connection(connection)
-        # Process parameters to handle TypedParameter objects
         param_list = self._process_parameters(param_list)
 
         params_list: list[tuple[Any, ...]] = []
@@ -258,11 +247,9 @@ class AsyncpgDriver(
         from sqlspec.exceptions import PipelineExecutionError
 
         try:
-            # Convert parameters to positional for AsyncPG (requires $1, $2, etc.)
             sql_str = op.sql.to_sql(placeholder_style=ParameterStyle.NUMERIC)
             params = self._convert_to_positional_params(op.sql.parameters)
 
-            # Apply operation-specific filters
             filtered_sql = self._apply_operation_filters(op.sql, op.filters)
             if filtered_sql != op.sql:
                 sql_str = filtered_sql.to_sql(placeholder_style=ParameterStyle.NUMERIC)
@@ -284,7 +271,6 @@ class AsyncpgDriver(
             elif op.operation_type == "select":
                 # Use fetch for SELECT statements
                 rows = await connection.fetch(sql_str, *params)
-                # Convert AsyncPG Records to dictionaries
                 data = [dict(record) for record in rows] if rows else []
                 result = SQLResult[RowT](
                     statement=op.sql,
@@ -323,14 +309,12 @@ class AsyncpgDriver(
                     metadata={"status_message": status},
                 )
 
-            # Add operation context
             result.operation_index = i
             result.pipeline_sql = op.sql
             results.append(result)
 
         except Exception as e:
             if options.get("continue_on_error"):
-                # Create error result
                 error_result = SQLResult[RowT](
                     statement=op.sql, error=e, operation_index=i, parameters=op.original_params, data=[]
                 )
@@ -358,7 +342,6 @@ class AsyncpgDriver(
         if isinstance(params, dict):
             if not params:
                 return ()
-            # Convert dict to positional based on $1, $2, etc. order
             # This assumes the SQL was compiled with NUMERIC style
             max_param = 0
             for key in params:

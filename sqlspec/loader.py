@@ -125,8 +125,6 @@ class SQLFileLoader:
         path_str = str(path)
 
         try:
-            # Always use storage backend for consistent behavior
-            # Pass the original path object to allow storage registry to handle Path -> file:// conversion
             backend = self.storage_registry.get(path)
             return backend.read_text(path_str, encoding=self.encoding)
         except KeyError as e:
@@ -151,7 +149,6 @@ class SQLFileLoader:
     def _parse_sql_content(content: str, file_path: str) -> dict[str, str]:
         """Parse SQL content and extract named queries."""
         queries: dict[str, str] = {}
-        # Find all query names and their starting positions
         matches = list(QUERY_NAME_PATTERN.finditer(content))
         if not matches:
             raise SQLFileParseError(

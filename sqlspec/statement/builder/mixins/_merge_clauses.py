@@ -145,13 +145,11 @@ class MergeMatchedClauseMixin:
         if not isinstance(self._expression, exp.Merge):
             self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
 
-        # Get or create the whens object
         whens = self._expression.args.get("whens")
         if not whens:
             whens = exp.Whens(expressions=[])
             self._expression.set("whens", whens)
 
-        # Add the when clause to the whens expressions using SQLGlot's append method
         whens.append("expressions", when_clause)
 
     def when_matched_then_update(

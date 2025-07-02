@@ -106,7 +106,6 @@ class GroupByClauseMixin:
         for column_set in column_sets:
             if isinstance(column_set, (tuple, list)):
                 if len(column_set) == 0:
-                    # Empty set for grand total
                     set_expressions.append(exp.Tuple(expressions=[]))
                 else:
                     columns = [exp.column(col) for col in column_set]

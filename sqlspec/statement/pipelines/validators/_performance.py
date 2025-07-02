@@ -190,7 +190,6 @@ class PerformanceValidator(ProcessorProtocol):
         if self.config.enable_optimization_analysis:
             self._analyze_optimization_opportunities(expression, analysis, context)
 
-        # Check for cartesian products
         if self.config.warn_on_cartesian:
             cartesian_issues = self._check_cartesian_products(analysis)
             for issue in cartesian_issues:
@@ -202,7 +201,6 @@ class PerformanceValidator(ProcessorProtocol):
                     expression=expression,
                 )
 
-        # Check join complexity
         if analysis.join_count > self.config.max_joins:
             self.add_error(
                 context,
@@ -212,7 +210,6 @@ class PerformanceValidator(ProcessorProtocol):
                 expression=expression,
             )
 
-        # Check subquery depth
         if analysis.max_subquery_depth > self.config.max_subqueries:
             self.add_error(
                 context,
@@ -236,7 +233,6 @@ class PerformanceValidator(ProcessorProtocol):
         # Calculate overall complexity score
         complexity_score = self._calculate_complexity(analysis)
 
-        # Build metadata
         context.metadata[self.__class__.__name__] = {
             "complexity_score": complexity_score,
             "join_analysis": {
@@ -283,7 +279,6 @@ class PerformanceValidator(ProcessorProtocol):
             analysis.current_subquery_depth = max(analysis.current_subquery_depth, depth + 1)
             analysis.max_subquery_depth = max(analysis.max_subquery_depth, analysis.current_subquery_depth)
 
-            # Check if correlated
             if self._is_correlated_subquery(expr):
                 analysis.correlated_subqueries += 1
 
@@ -293,7 +288,6 @@ class PerformanceValidator(ProcessorProtocol):
             join_type = expr.args.get("kind", "INNER").upper()
             analysis.join_types[join_type] = analysis.join_types.get(join_type, 0) + 1
 
-            # Extract join condition
             condition = expr.args.get("on")
             left_table = self._get_table_name(expr.parent) if expr.parent else "unknown"
             right_table = self._get_table_name(expr.this)
@@ -358,11 +352,9 @@ class PerformanceValidator(ProcessorProtocol):
                     )
                 )
             else:
-                # Build join graph
                 join_graph[condition.left_table].add(condition.right_table)
                 join_graph[condition.right_table].add(condition.left_table)
 
-        # Check for disconnected tables (implicit cartesian)
         if len(analysis.tables) > 1:
             connected = self._find_connected_components(join_graph, analysis.tables)
             if len(connected) > 1:
@@ -618,7 +610,6 @@ class PerformanceValidator(ProcessorProtocol):
 
             for opt_type, optimizer, description in optimizations:
                 try:
-                    # Apply the optimization
                     optimized = optimizer(expression.copy(), dialect=context.dialect)  # type: ignore[operator]
 
                     if optimized is None:
@@ -646,7 +637,6 @@ class PerformanceValidator(ProcessorProtocol):
                     else:
                         improvement = 0.0
 
-                    # Only add if improvement meets threshold
                     if improvement >= self.config.optimization_threshold:
                         opportunities.append(
                             OptimizationOpportunity(
@@ -659,7 +649,6 @@ class PerformanceValidator(ProcessorProtocol):
                             )
                         )
 
-                        # Update the best optimization if this is better
                         if improvement > cumulative_improvement:
                             best_optimized = optimized
                             cumulative_improvement = improvement

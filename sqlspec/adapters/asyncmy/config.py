@@ -192,7 +192,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             if getattr(self, field, None) is not None and getattr(self, field) is not Empty
         }
 
-        # Add connection-specific extras (not pool-specific ones)
         config.update(self.extras)
 
         return config

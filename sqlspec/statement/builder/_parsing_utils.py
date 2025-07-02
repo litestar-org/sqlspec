@@ -96,7 +96,6 @@ def parse_condition_expression(
 
     tuple_condition_parts = 2
     if isinstance(condition_input, tuple) and len(condition_input) == tuple_condition_parts:
-        # Handle (column, value) tuple format with proper parameter binding
         column, value = condition_input
         column_expr = parse_column_expression(column)
         if value is None:
@@ -105,7 +104,6 @@ def parse_condition_expression(
         if builder and hasattr(builder, "add_parameter"):
             _, param_name = builder.add_parameter(value)
             return exp.EQ(this=column_expr, expression=exp.Placeholder(this=param_name))
-        # Fallback to literal value
         if isinstance(value, str):
             return exp.EQ(this=column_expr, expression=exp.Literal.string(value))
         if isinstance(value, (int, float)):

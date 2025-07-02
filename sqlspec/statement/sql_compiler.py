@@ -8,7 +8,7 @@ from sqlspec.exceptions import SQLCompilationError
 from sqlspec.statement.parameters import ParameterConverter, ParameterStyle
 from sqlspec.statement.pipelines import SQLProcessingContext, StatementPipeline
 from sqlspec.statement.sql import SQLConfig
-from sqlspec.utils.cached_property import cached_property
+from sqlspec.utils.cached_property import CachedProperty
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -39,13 +39,11 @@ class SQLCompiler:
         self._original_sql = original_sql
         self.config = config or SQLConfig(dialect=dialect)
 
-    @cached_property
+    @CachedProperty
     def _pipeline(self) -> StatementPipeline:
         """Get the statement pipeline."""
-        # Create pipeline with validators based on config
         validators: list[ProcessorProtocol] = []
 
-        # Add parameter style validator if validation is enabled
         if self.config.enable_validation and self.config.allowed_parameter_styles is not None:
             from sqlspec.statement.pipelines.validators._parameter_style import ParameterStyleValidator
 
@@ -54,10 +52,9 @@ class SQLCompiler:
 
         return StatementPipeline(validators=validators)
 
-    @cached_property
+    @CachedProperty
     def _context(self) -> SQLProcessingContext:
         """Get the processing context."""
-        # Get the SQL string
         if isinstance(self.expression, exp.Anonymous) and self.expression.this:
             sql_string = str(self.expression.this)
         else:
@@ -67,27 +64,23 @@ class SQLCompiler:
         context.initial_expression = self.expression
         context.current_expression = self.expression
 
-        # Extract parameter info from the SQL
         from sqlspec.statement.parameters import ParameterValidator
 
         validator = ParameterValidator()
         context.parameter_info = validator.extract_parameters(sql_string)
 
         if self.parameter_manager:
-            # For positional parameters, use positional_parameters
             if self.parameter_manager.positional_parameters:
                 context.merged_parameters = self.parameter_manager.positional_parameters
                 context.initial_parameters = self.parameter_manager.positional_parameters
-            # For named parameters, use named_parameters
             elif self.parameter_manager.named_parameters:
                 context.merged_parameters = self.parameter_manager.named_parameters
                 context.initial_kwargs = self.parameter_manager.named_parameters
-            # Set initial values for both
             context.initial_parameters = self.parameter_manager.positional_parameters
             context.initial_kwargs = self.parameter_manager.named_parameters
         return context
 
-    @cached_property
+    @CachedProperty
     def _processed_expr(self) -> exp.Expression:
         """Execute the processing pipeline and cache the result."""
         try:
@@ -98,14 +91,13 @@ class SQLCompiler:
         else:
             return cast("exp.Expression", result.expression)
 
-    @cached_property
+    @CachedProperty
     def _compiled_sql(self) -> str:
         """Get the compiled SQL string."""
         if self.is_script:
             return str(self._original_sql or self.expression.sql(dialect=self.dialect))
         # Always go through the pipeline to ensure validation runs
         processed = self._processed_expr
-        # Handle Anonymous expressions properly
         if isinstance(processed, exp.Anonymous) and processed.this:
             return str(processed.this)
         return str(processed.sql(dialect=self.dialect, comments=False))
@@ -127,7 +119,6 @@ class SQLCompiler:
         converter = ParameterConverter()
         sql = self._compiled_sql
 
-        # Convert placeholders to the target style
         target_style = ParameterStyle(placeholder_style)
         return converter.convert_placeholders(sql, target_style, self._context.parameter_info)
 

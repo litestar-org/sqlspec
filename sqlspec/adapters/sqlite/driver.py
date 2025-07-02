@@ -107,9 +107,7 @@ class SqliteDriver(
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, statement=statement, **kwargs)
 
-        # Determine if we need to convert parameter style
         detected_styles = set()
-        # Extract parameter styles from the SQL string
         sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
         validator = self.config.parameter_validator if self.config else ParameterValidator()
         param_infos = validator.extract_parameters(sql_str)
@@ -118,10 +116,8 @@ class SqliteDriver(
 
         target_style = self.default_parameter_style
 
-        # Check if any detected style is not supported
         unsupported_styles = detected_styles - set(self.supported_parameter_styles)
         if unsupported_styles:
-            # Convert to default style if we have unsupported styles
             target_style = self.default_parameter_style
         elif len(detected_styles) > 1:
             # Mixed styles detected - use default style for consistency
@@ -140,7 +136,6 @@ class SqliteDriver(
 
         sql, params = statement.compile(placeholder_style=target_style)
 
-        # Process parameters through type coercion
         params = self._process_parameters(params)
 
         # SQLite expects tuples for positional parameters
@@ -157,7 +152,6 @@ class SqliteDriver(
         with self._get_cursor(conn) as cursor:
             # SQLite expects tuple or dict parameters
             if parameters is not None and not isinstance(parameters, (tuple, list, dict)):
-                # Convert scalar to tuple
                 parameters = (parameters,)
             cursor.execute(sql, parameters or ())
             if self.returns_rows(statement.expression):
@@ -192,7 +186,6 @@ class SqliteDriver(
         if param_list:
             param_list = self._process_parameters(param_list)
 
-        # Convert parameter list to proper format for executemany
         formatted_params: list[tuple[Any, ...]] = []
         if param_list and isinstance(param_list, list):
             for param_set in cast("list[Union[list, tuple]]", param_list):
@@ -206,7 +199,6 @@ class SqliteDriver(
         with self._get_cursor(conn) as cursor:
             cursor.executemany(sql, formatted_params)
 
-            # Create a dummy statement if not provided (for backward compatibility)
             if statement is None:
                 statement = SQL(sql)
 
@@ -228,7 +220,6 @@ class SqliteDriver(
         # executescript doesn't auto-commit in some cases
         conn.commit()
 
-        # Create a dummy statement if not provided
         if statement is None:
             statement = SQL(script)
 
@@ -253,12 +244,10 @@ class SqliteDriver(
 
         import pyarrow.csv as pa_csv
 
-        # Convert Arrow table to CSV in memory
         csv_buffer = io.BytesIO()
         pa_csv.write_csv(table, csv_buffer)
         csv_content = csv_buffer.getvalue()
 
-        # Create a temporary file path
         temp_filename = f"sqlspec_temp_{table_name}_{id(self)}.csv"
         temp_path = Path(tempfile.gettempdir()) / temp_filename
 

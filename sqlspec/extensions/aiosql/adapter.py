@@ -40,11 +40,9 @@ def _normalize_dialect(dialect: "Union[str, Any, None]") -> str:
     Returns:
         Normalized dialect name
     """
-    # Handle different dialect types
     if dialect is None:
         return "sql"
 
-    # Extract string from dialect class or instance
     if hasattr(dialect, "__name__"):  # It's a class
         dialect_str = str(dialect.__name__).lower()  # pyright: ignore
     elif hasattr(dialect, "name"):  # It's an instance with name attribute
@@ -134,7 +132,6 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
                 "Use schema_type in driver.execute or _sqlspec_schema_type in parameters."
             )
 
-        # Create SQL object and apply filters
         sql_obj = self._create_sql_object(sql, parameters)
         # Execute using SQLSpec driver
         result = self.driver.execute(sql_obj, connection=conn)
@@ -192,12 +189,9 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
             return None
 
         if isinstance(row, dict):
-            # Return first value from dict
             return next(iter(row.values())) if row else None
         if hasattr(row, "__getitem__"):
-            # Handle tuple/list-like objects
             return row[0] if len(row) > 0 else None
-        # Handle scalar or object with attributes
         return row
 
     @contextmanager
@@ -216,7 +210,6 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
         sql_obj = self._create_sql_object(sql, parameters)
         result = self.driver.execute(sql_obj, connection=conn)
 
-        # Create a cursor-like object
         class CursorLike:
             def __init__(self, result: Any) -> None:
                 self.result = result
@@ -386,12 +379,9 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
             return None
 
         if isinstance(row, dict):
-            # Return first value from dict
             return next(iter(row.values())) if row else None
         if hasattr(row, "__getitem__"):
-            # Handle tuple/list-like objects
             return row[0] if len(row) > 0 else None
-        # Handle scalar or object with attributes
         return row
 
     @asynccontextmanager

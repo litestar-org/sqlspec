@@ -71,7 +71,6 @@ class FSSpecBackend(ObjectStoreBase):
         fs_config = config.get("fs_config", {})
         base_path = config.get("base_path", "")
 
-        # Create filesystem instance from protocol
         import fsspec
 
         fs_instance = fsspec.filesystem(protocol, **fs_config)
@@ -82,7 +81,6 @@ class FSSpecBackend(ObjectStoreBase):
         """Resolve path relative to base_path."""
         path_str = str(path)
         if self.base_path:
-            # Ensure no double slashes
             clean_base = self.base_path.rstrip("/")
             clean_path = path_str.lstrip("/")
             return f"{clean_base}/{clean_path}"
@@ -174,7 +172,6 @@ class FSSpecBackend(ObjectStoreBase):
         else:
             pattern = f"{resolved_prefix}/*" if resolved_prefix else "*"
 
-        # Get all files (not directories)
         paths = [str(path) for path in self.fs.glob(pattern, **kwargs) if not self.fs.isdir(path)]
         return sorted(paths)
 
@@ -200,7 +197,6 @@ class FSSpecBackend(ObjectStoreBase):
         """Get object metadata."""
         info = self.fs.info(self._resolve_path(path), **kwargs)
 
-        # Convert fsspec info to dict
         if isinstance(info, dict):
             return info
 
@@ -210,7 +206,6 @@ class FSSpecBackend(ObjectStoreBase):
         except AttributeError:
             pass
 
-        # Fallback to basic metadata with safe attribute access
         resolved_path = self._resolve_path(path)
         return {
             "path": resolved_path,
@@ -268,7 +263,6 @@ class FSSpecBackend(ObjectStoreBase):
         if not PYARROW_INSTALLED:
             raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
 
-        # Get paths asynchronously
         paths = await async_(self.glob)(pattern, **kwargs)
 
         # Stream batches from each path

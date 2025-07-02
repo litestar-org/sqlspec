@@ -25,7 +25,7 @@ def bigquery_arrow_session(bigquery_service: BigQueryService) -> "Generator[BigQ
         dataset_id=bigquery_service.dataset,
         client_options=ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
         credentials=AnonymousCredentials(),  # type: ignore[no-untyped-call]
-        statement_config=SQLConfig(strict_mode=False),
+        statement_config=SQLConfig(dialect="bigquery"),
     )
 
     with config.provide_session() as session:

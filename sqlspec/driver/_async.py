@@ -54,13 +54,11 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
         # If statement is already a SQL object, handle additional parameters
         if isinstance(statement, SQL):
             if parameters or kwargs:
-                # Create a new SQL object with the same SQL but additional parameters
                 new_config = _config
                 if self.dialect and not new_config.dialect:
                     new_config = replace(new_config, dialect=self.dialect)
                 return SQL(statement._statement, *parameters, config=new_config, **kwargs)
             return statement
-        # Create new SQL object
         new_config = _config
         if self.dialect and not new_config.dialect:
             new_config = replace(new_config, dialect=self.dialect)
@@ -186,10 +184,8 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
 
         # Use first parameter as the sequence for execute_many
         param_sequence = param_sequences[0] if param_sequences else None
-        # Convert tuple to list if needed
         if isinstance(param_sequence, tuple):
             param_sequence = list(param_sequence)
-        # Ensure param_sequence is a list or None
         if param_sequence is not None and not isinstance(param_sequence, list):
             param_sequence = list(param_sequence) if hasattr(param_sequence, "__iter__") else None
         sql_statement = self._build_statement(statement, _config=_config or self.config, **kwargs).as_many(

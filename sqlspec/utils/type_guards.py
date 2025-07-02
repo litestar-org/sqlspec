@@ -8,7 +8,19 @@ from collections.abc import Iterable, Sequence
 from collections.abc import Set as AbstractSet
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
-from sqlspec.protocols import DictProtocol, IndexableRow, WithMethodProtocol
+from sqlspec.protocols import (
+    DictProtocol,
+    FilterAppenderProtocol,
+    FilterParameterProtocol,
+    HasLimitProtocol,
+    HasOffsetProtocol,
+    HasOrderByProtocol,
+    HasRiskLevelProtocol,
+    HasWhereProtocol,
+    IndexableRow,
+    ParameterValueProtocol,
+    WithMethodProtocol,
+)
 from sqlspec.typing import (
     LITESTAR_INSTALLED,
     MSGSPEC_INSTALLED,
@@ -30,11 +42,19 @@ if TYPE_CHECKING:
     from sqlspec.typing import SupportedSchemaModel
 
 __all__ = (
+    "can_append_to_statement",
     "can_convert_to_schema",
+    "can_extract_parameters",
     "dataclass_to_dict",
     "extract_dataclass_fields",
     "extract_dataclass_items",
     "has_dict_attribute",
+    "has_limit_clause",
+    "has_offset_clause",
+    "has_order_by_clause",
+    "has_parameter_value",
+    "has_risk_level",
+    "has_where_clause",
     "has_with_method",
     "is_dataclass",
     "is_dataclass_instance",
@@ -76,7 +96,6 @@ def is_statement_filter(obj: Any) -> "TypeGuard[StatementFilter]":
     Returns:
         True if the object is a StatementFilter, False otherwise
     """
-    # Import here to avoid circular imports
     from sqlspec.statement.filters import StatementFilter as FilterProtocol
 
     return isinstance(obj, FilterProtocol)
@@ -91,7 +110,6 @@ def is_limit_offset_filter(obj: Any) -> "TypeGuard[LimitOffsetFilter]":
     Returns:
         True if the object is a LimitOffsetFilter, False otherwise
     """
-    # Import here to avoid circular imports
     from sqlspec.statement.filters import LimitOffsetFilter
 
     return isinstance(obj, LimitOffsetFilter)
@@ -172,7 +190,6 @@ def can_convert_to_schema(obj: Any) -> "TypeGuard[Any]":
     Returns:
         True if the object has to_schema method, False otherwise
     """
-    # Import here to avoid circular imports
     from sqlspec.driver.mixins import ToSchemaMixin
 
     return isinstance(obj, ToSchemaMixin)
@@ -190,7 +207,6 @@ def is_dataclass_instance(obj: Any) -> "TypeGuard[DataclassProtocol]":
     Returns:
         True if the object is a dataclass instance.
     """
-    # Ensure obj is an instance and not the class itself,
     # and that its type is a dataclass.
     return not isinstance(obj, type) and hasattr(type(obj), "__dataclass_fields__")
 
@@ -600,3 +616,46 @@ def schema_dump(
     if has_dict_attribute(data):
         return data.__dict__
     return cast("dict[str, Any]", data)
+
+
+# New type guards for hasattr() pattern replacement
+
+
+def can_extract_parameters(obj: Any) -> "TypeGuard[FilterParameterProtocol]":
+    """Check if an object can extract parameters."""
+    return isinstance(obj, FilterParameterProtocol)
+
+
+def can_append_to_statement(obj: Any) -> "TypeGuard[FilterAppenderProtocol]":
+    """Check if an object can append to SQL statements."""
+    return isinstance(obj, FilterAppenderProtocol)
+
+
+def has_parameter_value(obj: Any) -> "TypeGuard[ParameterValueProtocol]":
+    """Check if an object has a value attribute (parameter wrapper)."""
+    return isinstance(obj, ParameterValueProtocol)
+
+
+def has_risk_level(obj: Any) -> "TypeGuard[HasRiskLevelProtocol]":
+    """Check if an object has a risk_level attribute."""
+    return isinstance(obj, HasRiskLevelProtocol)
+
+
+def has_where_clause(obj: Any) -> "TypeGuard[HasWhereProtocol]":
+    """Check if an SQL expression supports WHERE clauses."""
+    return isinstance(obj, HasWhereProtocol)
+
+
+def has_limit_clause(obj: Any) -> "TypeGuard[HasLimitProtocol]":
+    """Check if an SQL expression supports LIMIT clauses."""
+    return isinstance(obj, HasLimitProtocol)
+
+
+def has_offset_clause(obj: Any) -> "TypeGuard[HasOffsetProtocol]":
+    """Check if an SQL expression supports OFFSET clauses."""
+    return isinstance(obj, HasOffsetProtocol)
+
+
+def has_order_by_clause(obj: Any) -> "TypeGuard[HasOrderByProtocol]":
+    """Check if an SQL expression supports ORDER BY clauses."""
+    return isinstance(obj, HasOrderByProtocol)

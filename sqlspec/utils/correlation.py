@@ -72,7 +72,6 @@ class CorrelationContext:
         previous_id = cls.get()
 
         try:
-            # Set the new correlation ID
             cls.set(correlation_id)
             yield correlation_id
         finally:
@@ -145,7 +144,6 @@ def get_correlation_adapter(logger: Any) -> LoggerAdapter:
             """
             extra = kwargs.get("extra", {})
 
-            # Add correlation ID if available
             if correlation_id := CorrelationContext.get():
                 extra["correlation_id"] = correlation_id
 

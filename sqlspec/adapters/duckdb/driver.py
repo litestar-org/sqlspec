@@ -105,11 +105,17 @@ class DuckDBDriver(
             result = conn.execute(sql, parameters or [])
             fetched_data = result.fetchall()
             column_names = [col[0] for col in result.description or []]
-            return SQLResult(
+
+            if fetched_data and isinstance(fetched_data[0], tuple):
+                dict_data = [dict(zip(column_names, row)) for row in fetched_data]
+            else:
+                dict_data = fetched_data
+
+            return SQLResult[RowT](
                 statement=statement,
-                data=fetched_data,
+                data=dict_data,  # type: ignore[arg-type]
                 column_names=column_names,
-                rows_affected=len(fetched_data),
+                rows_affected=len(dict_data),
                 operation_type="SELECT",
             )
 
@@ -120,14 +126,12 @@ class DuckDBDriver(
             rows_affected = cursor.rowcount
             if rows_affected < 0:
                 try:
-                    # Get actual affected row count from fetchone()
                     fetch_result = cursor.fetchone()
                     if fetch_result and isinstance(fetch_result, (tuple, list)) and len(fetch_result) > 0:
                         rows_affected = fetch_result[0]
                     else:
                         rows_affected = 0
                 except Exception:
-                    # Fallback to 1 if fetchone fails
                     rows_affected = 1
 
             return SQLResult(

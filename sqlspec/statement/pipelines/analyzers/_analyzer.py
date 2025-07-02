@@ -146,7 +146,6 @@ class StatementAnalyzer(ProcessorProtocol):
 
         duration = time.perf_counter() - start_time
 
-        # Add analysis findings to context
         if analysis_result_obj.complexity_warnings:
             for warning in analysis_result_obj.complexity_warnings:
                 finding = AnalysisFinding(key="complexity_warning", value=warning, processor=self.__class__.__name__)
@@ -194,7 +193,6 @@ class StatementAnalyzer(ProcessorProtocol):
                 if expr is None:
                     expr = parse_one(sql_string, dialect=dialect)
 
-                # Check if the parsed expression is a valid SQL statement type
                 # Simple expressions like Alias or Identifier are not valid SQL statements
                 valid_statement_types = (
                     exp.Select,
@@ -230,7 +228,6 @@ class StatementAnalyzer(ProcessorProtocol):
         self, expression: exp.Expression, dialect: "DialectType" = None, config: "Optional[SQLConfig]" = None
     ) -> StatementAnalysis:
         """Analyze a SQLGlot expression directly, potentially using validation results for context."""
-        # Check cache first (using expression.sql() as key)
         # This caching needs to be context-aware if analysis depends on prior steps (e.g. validation_result)
         # For simplicity, let's assume for now direct expression analysis is cacheable if validation_result is not used deeply.
         cache_key = expression.sql()  # Simplified cache key
@@ -342,7 +339,6 @@ class StatementAnalyzer(ProcessorProtocol):
             """Calculate the maximum depth of nested SELECT statements."""
             max_depth = 0
 
-            # Find all SELECT statements
             select_statements = list(expr.find_all(exp.Select))
 
             for select in select_statements:
@@ -350,7 +346,6 @@ class StatementAnalyzer(ProcessorProtocol):
                 depth = 0
                 current = select.parent
                 while current:
-                    # Check if parent is a SELECT or if it's inside a SELECT via Subquery/IN/EXISTS
                     if isinstance(current, exp.Select):
                         depth += 1
                     elif isinstance(current, (exp.Subquery, exp.In, exp.Exists)):
@@ -478,7 +473,6 @@ class StatementAnalyzer(ProcessorProtocol):
         """Extract the primary table name from an expression."""
         if isinstance(expr, exp.Insert):
             if expr.this and hasattr(expr.this, "this"):
-                # Handle schema.table cases
                 table = expr.this
                 if isinstance(table, exp.Table):
                     return table.name
@@ -499,7 +493,6 @@ class StatementAnalyzer(ProcessorProtocol):
             if expr.this and hasattr(expr.this, "expressions"):
                 columns.extend(str(col_expr.name) for col_expr in expr.this.expressions if hasattr(col_expr, "name"))
         elif isinstance(expr, exp.Select):
-            # Extract selected columns
             for projection in expr.expressions:
                 if isinstance(projection, exp.Column):
                     columns.append(str(projection.name))
@@ -563,7 +556,6 @@ class StatementAnalyzer(ProcessorProtocol):
         # but exclude those within CTEs
         select_statements = []
         for select in expr.find_all(exp.Select):
-            # Check if this SELECT is inside a CTE
             parent = select.parent
             is_in_cte = False
             while parent:

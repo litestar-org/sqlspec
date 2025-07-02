@@ -102,9 +102,7 @@ class AiosqliteDriver(
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
-        # Determine if we need to convert parameter style
         detected_styles = set()
-        # Extract parameter styles from the SQL string
         sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
         validator = self.config.parameter_validator if self.config else ParameterValidator()
         param_infos = validator.extract_parameters(sql_str)
@@ -113,13 +111,10 @@ class AiosqliteDriver(
 
         target_style = self.default_parameter_style
 
-        # Check if any detected style is not supported
         unsupported_styles = detected_styles - set(self.supported_parameter_styles)
         if unsupported_styles:
-            # Convert to default style if we have unsupported styles
             target_style = self.default_parameter_style
         elif detected_styles:
-            # Use the first detected style if all are supported
             # Prefer the first supported style found
             for style in detected_styles:
                 if style in self.supported_parameter_styles:
@@ -129,14 +124,12 @@ class AiosqliteDriver(
         if statement.is_many:
             sql, params = statement.compile(placeholder_style=target_style)
 
-            # Process parameter list through type coercion
             params = self._process_parameters(params)
 
             return await self._execute_many(sql, params, connection=connection, **kwargs)
 
         sql, params = statement.compile(placeholder_style=target_style)
 
-        # Process parameters through type coercion
         params = self._process_parameters(params)
 
         return await self._execute(sql, params, statement, connection=connection, **kwargs)
@@ -145,7 +138,6 @@ class AiosqliteDriver(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         conn = self._connection(connection)
-        # Convert parameters to the format expected by the SQL
         # Note: SQL was already rendered with appropriate placeholder style in _execute_statement
         if ":param_" in sql or (parameters and isinstance(parameters, dict)):
             # SQL has named placeholders, ensure params are dict
@@ -163,7 +155,6 @@ class AiosqliteDriver(
             if self.returns_rows(statement.expression):
                 fetched_data = await cursor.fetchall()
                 column_names = [desc[0] for desc in cursor.description or []]
-                # Convert to list of dicts or tuples
                 data_list: list[Any] = list(fetched_data) if fetched_data else []
                 return SQLResult(
                     statement=statement,
@@ -189,7 +180,6 @@ class AiosqliteDriver(
         if param_list:
             logger.debug("Query parameters (batch): %s", param_list)
 
-        # Convert parameter list to proper format for executemany
         params_list: list[tuple[Any, ...]] = []
         if param_list and isinstance(param_list, Sequence):
             for param_set in param_list:

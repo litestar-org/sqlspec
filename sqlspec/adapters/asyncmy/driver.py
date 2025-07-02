@@ -77,11 +77,9 @@ class AsyncmyDriver(
         sql, params = statement.compile(placeholder_style=self.default_parameter_style)
 
         if statement.is_many:
-            # Process parameter list through type coercion
             params = self._process_parameters(params)
             return await self._execute_many(sql, params, connection=connection, **kwargs)
 
-        # Process parameters through type coercion
         params = self._process_parameters(params)
         return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
@@ -122,7 +120,6 @@ class AsyncmyDriver(
     ) -> SQLResult[RowT]:
         conn = self._connection(connection)
 
-        # Convert parameter list to proper format for executemany
         params_list: list[Union[list[Any], tuple[Any, ...]]] = []
         if param_list and isinstance(param_list, Sequence):
             for param_set in param_list:
@@ -148,7 +145,6 @@ class AsyncmyDriver(
     ) -> SQLResult[RowT]:
         conn = self._connection(connection)
         # AsyncMy may not support multi-statement scripts without CLIENT_MULTI_STATEMENTS flag
-        # Use the shared implementation to split and execute statements individually
         statements = self._split_script_statements(script)
         statements_executed = 0
 

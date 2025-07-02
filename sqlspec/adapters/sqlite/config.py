@@ -87,7 +87,6 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
             uri: Whether to interpret database as URI
             **kwargs: Additional parameters (stored in extras)
         """
-        # Validate required parameters
         if database is None:
             msg = "database parameter cannot be None"
             raise TypeError(msg)

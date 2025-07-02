@@ -23,7 +23,3 @@ class CachedProperty(Generic[T]):
             return self
         value = obj.__dict__[self.func.__name__] = self.func(obj)
         return value
-
-
-# Keep the old name as an alias for backward compatibility
-cached_property = CachedProperty

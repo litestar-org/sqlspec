@@ -138,7 +138,6 @@ class ParameterManager:
             if required_nums.issubset(digit_keys.keys()):
                 return digit_keys
 
-        # Check if the param_info already contains Oracle numeric parameters with specific numbers
         # This handles cases like :0, :1, :3 (with gaps) where we should preserve the actual numbers
         if param_info and all(
             hasattr(info, "style")
@@ -160,7 +159,6 @@ class ParameterManager:
             return result
 
         positional_list = self._convert_to_positional_format(params, param_info)
-        # Convert to dict with 1-based string keys
         return {str(i + 1): value for i, value in enumerate(positional_list)}
 
     def _convert_to_named_colon_format(self, params: dict[str, Any], param_info: list[Any]) -> dict[str, Any]:

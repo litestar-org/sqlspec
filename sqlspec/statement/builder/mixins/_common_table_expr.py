@@ -61,7 +61,6 @@ class CommonTableExpressionMixin:
             msg = f"Could not parse CTE query: {query}"
             raise SQLBuilderError(msg)
 
-        # Create a proper CTE with table alias
         if columns:
             # CTE with explicit column list: name(col1, col2, ...)
             cte_alias_expr = exp.alias_(cte_expr, name, table=[exp.to_identifier(col) for col in columns])

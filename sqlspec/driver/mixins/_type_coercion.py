@@ -68,13 +68,10 @@ class TypeCoercionMixin:
         Returns:
             Coerced parameter value suitable for the database
         """
-        # Check if it's a TypedParameter
         if hasattr(param, "__class__") and param.__class__.__name__ == "TypedParameter":
-            # Extract value and type hint
             value = param.value
             type_hint = param.type_hint
 
-            # Apply driver-specific coercion based on type hint
             return self._apply_type_coercion(value, type_hint)
         # Regular parameter - apply default coercion
         return self._apply_type_coercion(param, None)

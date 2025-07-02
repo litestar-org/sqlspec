@@ -111,7 +111,6 @@ class StorageRegistry:
         Raises:
             ImproperConfigurationError: If alias not found or invalid input
         """
-        # Handle None case - raise AttributeError for test compatibility
         if not uri_or_alias:
             msg = "URI or alias cannot be empty."
             raise ImproperConfigurationError(msg)

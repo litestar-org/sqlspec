@@ -165,7 +165,6 @@ class InsertBuilder(
         else:
             # This case should ideally not be reached if logic is correct:
             # means _values_added_count > 0 but expression is not exp.Values.
-            # Fallback to creating a new Values node, though this might indicate an issue.
             new_values_node = exp.Values(expressions=[exp.Tuple(expressions=list(value_placeholders))])
             insert_expr.set("expression", new_values_node)
 
@@ -191,14 +190,12 @@ class InsertBuilder(
             raise SQLBuilderError(ERR_MSG_TABLE_NOT_SET)
 
         if not self._columns:
-            # Set columns from dictionary keys if not already set
             self.columns(*data.keys())
         elif set(self._columns) != set(data.keys()):
             # Verify that dictionary keys match existing columns
             msg = f"Dictionary keys {set(data.keys())} do not match existing columns {set(self._columns)}."
             raise SQLBuilderError(msg)
 
-        # Add values in the same order as columns
         return self.values(*[data[col] for col in self._columns])
 
     def values_from_dicts(self, data: "Sequence[Mapping[str, Any]]") -> "Self":
@@ -219,12 +216,10 @@ class InsertBuilder(
         if not data:
             return self
 
-        # Use the first dictionary to establish columns
         first_dict = data[0]
         if not self._columns:
             self.columns(*first_dict.keys())
 
-        # Validate that all dictionaries have the same keys
         expected_keys = set(self._columns)
         for i, row_dict in enumerate(data):
             if set(row_dict.keys()) != expected_keys:
@@ -234,7 +229,6 @@ class InsertBuilder(
                 )
                 raise SQLBuilderError(msg)
 
-        # Add each row
         for row_dict in data:
             self.values(*[row_dict[col] for col in self._columns])
 

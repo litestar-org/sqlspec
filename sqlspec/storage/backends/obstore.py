@@ -58,14 +58,12 @@ class ObStoreBackend(ObjectStoreBase):
             self.store_options = store_options
             self.store: Any  # Will be set based on store_uri
 
-            # Initialize obstore instance
             if store_uri.startswith("memory://"):
                 # MemoryStore doesn't use from_url - create directly
                 from obstore.store import MemoryStore
 
                 self.store = MemoryStore()
             elif store_uri.startswith("file://"):
-                # For file:// URIs, use LocalStore with root directory
                 from obstore.store import LocalStore
 
                 # LocalStore works with directory paths, so we use root
@@ -86,15 +84,12 @@ class ObStoreBackend(ObjectStoreBase):
 
     def _resolve_path(self, path: str | Path) -> str:
         """Resolve path relative to base_path."""
-        # Convert Path to string
         path_str = str(path)
         # For file:// URIs, the path passed in is already absolute
         if self.store_uri.startswith("file://") and path_str.startswith("/"):
-            # Remove leading slash for LocalStore (it's relative to its root)
             return path_str.lstrip("/")
 
         if self.base_path:
-            # Ensure no double slashes by stripping trailing slash from base_path
             clean_base = self.base_path.rstrip("/")
             clean_path = path_str.lstrip("/")
             return f"{clean_base}/{clean_path}"
@@ -113,7 +108,6 @@ class ObStoreBackend(ObjectStoreBase):
             resolved_path = self._resolve_path(path)
             result = self.store.get(resolved_path)
             bytes_data = result.bytes()
-            # Handle obstore's Bytes type - it might have a method to get raw bytes
             if hasattr(bytes_data, "__bytes__"):
                 return bytes(bytes_data)
             if hasattr(bytes_data, "tobytes"):
@@ -210,17 +204,14 @@ class ObStoreBackend(ObjectStoreBase):
         resolved_pattern = self._resolve_path(pattern)
         all_objects = self.list_objects(recursive=True, **kwargs)
 
-        # For complex patterns with **, use PurePosixPath
         if "**" in pattern:
             matching_objects = []
 
             # Special case: **/*.ext should also match *.ext in root
             if pattern.startswith("**/"):
-                # Get the suffix pattern
                 suffix_pattern = pattern[3:]  # Remove **/
 
                 for obj in all_objects:
-                    # Check if object ends with the suffix pattern
                     obj_path = PurePosixPath(obj)
                     # Try both the full pattern and just the suffix
                     if obj_path.match(resolved_pattern) or obj_path.match(suffix_pattern):
@@ -271,7 +262,6 @@ class ObStoreBackend(ObjectStoreBase):
         if resolved_path.endswith("/"):
             return True
 
-        # Check if there are any objects with this prefix
         try:
             objects = self.list_objects(prefix=str(path), recursive=False)
             return len(objects) > 0
@@ -282,7 +272,6 @@ class ObStoreBackend(ObjectStoreBase):
         """Read Arrow table using obstore."""
         try:
             resolved_path = self._resolve_path(path)
-            # Check if the store has native Arrow support
             if hasattr(self.store, "read_arrow"):
                 return self.store.read_arrow(resolved_path, **kwargs)  # type: ignore[no-any-return]  # pyright: ignore[reportAttributeAccessIssue]
             # Fall back to reading as Parquet via bytes
@@ -301,7 +290,6 @@ class ObStoreBackend(ObjectStoreBase):
         """Write Arrow table using obstore."""
         try:
             resolved_path = self._resolve_path(path)
-            # Check if the store has native Arrow support
             if hasattr(self.store, "write_arrow"):
                 self.store.write_arrow(resolved_path, table, **kwargs)  # pyright: ignore[reportAttributeAccessIssue]
             else:
@@ -321,7 +309,6 @@ class ObStoreBackend(ObjectStoreBase):
 
                 for field in schema:
                     if str(field.type).startswith("decimal64"):
-                        # Convert decimal64 to decimal128
                         import re
 
                         match = re.match(r"decimal64\((\d+),\s*(\d+)\)", str(field.type))
@@ -367,7 +354,6 @@ class ObStoreBackend(ObjectStoreBase):
         resolved_path = self._resolve_path(path)
         result = await self.store.get_async(resolved_path)
         bytes_data = result.bytes()
-        # Handle obstore's Bytes type - it might have a method to get raw bytes
         if hasattr(bytes_data, "__bytes__"):
             return bytes(bytes_data)
         if hasattr(bytes_data, "tobytes"):
@@ -441,10 +427,8 @@ class ObStoreBackend(ObjectStoreBase):
         resolved_path = self._resolve_path(path)
         metadata = await self.store.head_async(resolved_path)
 
-        # Convert obstore ObjectMeta to dict
         result = {"path": resolved_path, "exists": True}
 
-        # Extract metadata attributes if available
         for attr in ["size", "last_modified", "e_tag", "version"]:
             if hasattr(metadata, attr):
                 result[attr] = getattr(metadata, attr)
@@ -465,7 +449,6 @@ class ObStoreBackend(ObjectStoreBase):
     async def write_arrow_async(self, path: str | Path, table: ArrowTable, **kwargs: Any) -> None:
         """Async write Arrow table using native obstore async."""
         resolved_path = self._resolve_path(path)
-        # Check if the store has native async Arrow support
         if hasattr(self.store, "write_arrow_async"):
             await self.store.write_arrow_async(resolved_path, table, **kwargs)  # pyright: ignore[reportAttributeAccessIssue]
         else:

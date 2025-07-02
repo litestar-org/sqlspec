@@ -16,7 +16,7 @@ from sqlspec.driver.mixins import (
     TypeCoercionMixin,
 )
 from sqlspec.exceptions import wrap_exceptions
-from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
+from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, RowT
@@ -174,14 +174,7 @@ class AdbcDriver(
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
-        # Determine if we need to convert parameter style
-        detected_styles = set()
-        # Extract parameter styles from the SQL string
-        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
-        validator = self.config.parameter_validator if self.config else ParameterValidator()
-        param_infos = validator.extract_parameters(sql_str)
-        if param_infos:
-            detected_styles = {p.style for p in param_infos}
+        detected_styles = {p.style for p in statement.parameter_info}
 
         target_style = self.default_parameter_style
         unsupported_styles = detected_styles - set(self.supported_parameter_styles)
@@ -224,11 +217,17 @@ class AdbcDriver(
             if self.returns_rows(statement.expression):
                 fetched_data = cursor.fetchall()
                 column_names = [col[0] for col in cursor.description or []]
+
+                if fetched_data and isinstance(fetched_data[0], tuple):
+                    dict_data: list[dict[Any, Any]] = [dict(zip(column_names, row)) for row in fetched_data]
+                else:
+                    dict_data = fetched_data  # type: ignore[assignment]
+
                 return SQLResult(
                     statement=statement,
-                    data=cast("list[RowT]", fetched_data),
+                    data=cast("list[RowT]", dict_data),
                     column_names=column_names,
-                    rows_affected=len(fetched_data),
+                    rows_affected=len(dict_data),
                     operation_type="SELECT",
                 )
 
@@ -268,7 +267,6 @@ class AdbcDriver(
     ) -> SQLResult[RowT]:
         conn = self._connection(connection)
         # ADBC drivers don't support multiple statements in a single execute
-        # Use the shared implementation to split the script
         statements = self._split_script_statements(script)
 
         executed_count = 0
@@ -352,7 +350,6 @@ class AdbcDriver(
 
         conn = self._connection(None)
         with self._get_cursor(conn) as cursor:
-            # Handle different modes
             if mode == "replace":
                 cursor.execute(SQL(f"TRUNCATE TABLE {table_name}").to_sql(placeholder_style=ParameterStyle.STATIC))
             elif mode == "create":

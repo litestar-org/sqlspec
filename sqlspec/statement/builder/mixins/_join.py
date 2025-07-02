@@ -32,13 +32,11 @@ class JoinClauseMixin:
         if isinstance(table, str):
             table_expr = parse_table_expression(table, alias)
         elif hasattr(table, "build"):
-            # Handle builder objects with build() method
             # Work directly with AST when possible to avoid string parsing
             if hasattr(table, "_expression") and getattr(table, "_expression", None) is not None:
                 subquery_exp = exp.paren(table._expression.copy())  # pyright: ignore
                 table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
             else:
-                # Fallback to string parsing
                 subquery = table.build()  # pyright: ignore
                 subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(builder, "dialect", None)))
                 table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
@@ -94,12 +92,10 @@ class JoinClauseMixin:
         if isinstance(table, str):
             table_expr = parse_table_expression(table, alias)
         elif hasattr(table, "build"):
-            # Handle builder objects with build() method
             if hasattr(table, "_expression") and getattr(table, "_expression", None) is not None:
                 subquery_exp = exp.paren(table._expression.copy())  # pyright: ignore
                 table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
             else:
-                # Fallback to string parsing
                 subquery = table.build()  # pyright: ignore
                 subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(builder, "dialect", None)))
                 table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp

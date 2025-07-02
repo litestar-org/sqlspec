@@ -207,11 +207,20 @@ def test_sql_validation_disabled() -> None:
     # The actual validation happens in the pipeline validators
 
 
-def test_sql_parse_errors_raise_by_default() -> None:
-    """Test SQL raises on parse errors by default."""
-    # Invalid SQL that can't be parsed
+def test_sql_parse_errors_warn_by_default() -> None:
+    """Test SQL warns on parse errors by default (new behavior for compatibility)."""
+    # Invalid SQL that can't be parsed - should return Anonymous expression instead of raising
+    stmt = SQL("INVALID SQL SYNTAX !@#$%^&*()")
+    result_sql = stmt.sql  # Should not raise
+    assert "INVALID SQL SYNTAX" in result_sql  # Should return original SQL
+
+
+def test_sql_parse_errors_can_raise_explicitly() -> None:
+    """Test SQL can still raise on parse errors when explicitly configured."""
+    # Invalid SQL that can't be parsed with explicit config
+    config = SQLConfig(parse_errors_as_warnings=False)
     with pytest.raises(SQLParsingError) as exc_info:
-        stmt = SQL("INVALID SQL SYNTAX !@#$%^&*()")
+        stmt = SQL("INVALID SQL SYNTAX !@#$%^&*()", config=config)
         _ = stmt.sql  # Trigger processing
 
     assert "parse" in str(exc_info.value).lower()

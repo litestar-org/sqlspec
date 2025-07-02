@@ -84,7 +84,6 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             return self.returns_rows(expression.expressions[-1])
         if isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):
             return bool(expression.find(exp.Returning))
-        # Handle Anonymous expressions (failed to parse) using a robust approach
         if isinstance(expression, exp.Anonymous):
             return self._check_anonymous_returns_rows(expression)
         return False
@@ -113,13 +112,11 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
 
         # Approach 1: Try to re-parse with placeholders replaced
         try:
-            # Replace placeholders with a dummy literal that sqlglot can parse
             sanitized_sql = placeholder_regex.sub("1", sql_text)
 
             # If we replaced any placeholders, try parsing again
             if sanitized_sql != sql_text:
                 parsed = sqlglot.parse_one(sanitized_sql, read=None)
-                # Check if it's a query type that returns rows
                 if isinstance(
                     parsed, (exp.Select, exp.Values, exp.Table, exp.Show, exp.Describe, exp.Pragma, exp.Command)
                 ):
@@ -193,15 +190,12 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         if parameters is None:
             return None
 
-        # Extract parameter info from the SQL
         validator = ParameterValidator()
         param_info_list = validator.extract_parameters(sql)
 
         if not param_info_list:
-            # No parameters in SQL, return None
             return None
 
-        # Determine the target style from the SQL if not provided
         if target_style is None:
             target_style = self.default_parameter_style
 
@@ -220,7 +214,6 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             ParameterStyle.NAMED_PYFORMAT,
         }
 
-        # Check if parameters are already in the correct format
         params_are_dict = isinstance(parameters, (dict, Mapping))
         params_are_sequence = isinstance(parameters, (list, tuple, Sequence)) and not isinstance(
             parameters, (str, bytes)
@@ -229,7 +222,6 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         # Single scalar parameter
         if len(param_info_list) == 1 and not params_are_dict and not params_are_sequence:
             if driver_expects_dict:
-                # Convert scalar to dict
                 param_info = param_info_list[0]
                 if param_info.name:
                     return {param_info.name: parameters}
@@ -242,7 +234,6 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             ):
                 # If all parameters are numeric but named, convert to dict
                 # SQL has numeric placeholders but params might have named keys
-                # Only convert if keys don't match
                 numeric_keys_expected = {p.name for p in param_info_list if p.name}
                 if not numeric_keys_expected.issubset(parameters.keys()):
                     # Need to convert named keys to numeric positions
@@ -255,7 +246,6 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
 
             # Special case: Auto-generated param_N style when SQL expects specific names
             if all(key.startswith("param_") and key[6:].isdigit() for key in parameters):
-                # Check if SQL has different parameter names
                 sql_param_names = {p.name for p in param_info_list if p.name}
                 if sql_param_names and not any(name.startswith("param_") for name in sql_param_names):
                     # SQL has specific names, not param_N style - don't use these params as-is
@@ -263,7 +253,6 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
                     # For now, pass through and let validation catch it
                     pass
 
-            # Otherwise, dict format matches - return as-is
             return parameters
 
         if not driver_expects_dict and params_are_sequence:
@@ -272,11 +261,9 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
 
         # Formats don't match - need conversion
         if driver_expects_dict and params_are_sequence:
-            # Convert positional to dict
             dict_result: dict[str, Any] = {}
             for i, (param_info, value) in enumerate(zip(param_info_list, parameters)):
                 if param_info.name:
-                    # Use the name from SQL
                     if param_info.style == ParameterStyle.POSITIONAL_COLON and param_info.name.isdigit():
                         # Oracle uses string keys even for numeric placeholders
                         dict_result[param_info.name] = value
@@ -288,10 +275,8 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             return dict_result
 
         if not driver_expects_dict and params_are_dict:
-            # Convert dict to positional
             # First check if it's already in param_N format
             if all(key.startswith("param_") and key[6:].isdigit() for key in parameters):
-                # Extract values in order
                 positional_result: list[Any] = []
                 for i in range(len(param_info_list)):
                     key = f"param_{i}"
@@ -299,7 +284,6 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
                         positional_result.append(parameters[key])
                 return positional_result
 
-            # Convert named dict to positional based on parameter order in SQL
             positional_params: list[Any] = []
             for param_info in param_info_list:
                 if param_info.name and param_info.name in parameters:

@@ -96,7 +96,6 @@ class PsqlpyDriver(
         conn = self._connection(connection)
         if self.returns_rows(statement.expression):
             query_result = await conn.fetch(sql, parameters=parameters)
-            # Convert query_result to list of dicts
             dict_rows: list[dict[str, Any]] = []
             if query_result:
                 # psqlpy QueryResult has a result() method that returns list of dicts
@@ -113,7 +112,6 @@ class PsqlpyDriver(
         query_result = await conn.execute(sql, parameters=parameters)
         # Note: psqlpy doesn't provide rows_affected for DML operations
         # The QueryResult object only has result(), as_class(), and row_factory() methods
-        # For accurate row counts, use RETURNING clause
         affected_count = -1  # Unknown, as psqlpy doesn't provide this info
         return SQLResult(
             statement=statement,

@@ -179,11 +179,9 @@ class CreateTableBuilder(DDLBuilder):
         if not dtype:
             self._raise_sql_builder_error("Column type must be a non-empty string")
 
-        # Check for duplicate column names
         if any(col.name == name for col in self._columns):
             self._raise_sql_builder_error(f"Column '{name}' already defined")
 
-        # Create column definition
         column_def = ColumnDefinition(
             name=name,
             dtype=dtype,
@@ -215,15 +213,12 @@ class CreateTableBuilder(DDLBuilder):
         if not col_list:
             self._raise_sql_builder_error("Primary key must include at least one column")
 
-        # Check if primary key already exists
         existing_pk = next((c for c in self._constraints if c.constraint_type == "PRIMARY KEY"), None)
         if existing_pk:
-            # Update existing primary key to include new columns
             for col in col_list:
                 if col not in existing_pk.columns:
                     existing_pk.columns.append(col)
         else:
-            # Create new primary key constraint
             constraint = ConstraintDefinition(constraint_type="PRIMARY KEY", name=name, columns=col_list)
             self._constraints.append(constraint)
 
@@ -250,7 +245,6 @@ class CreateTableBuilder(DDLBuilder):
         if len(col_list) != len(ref_col_list):
             self._raise_sql_builder_error("Foreign key columns and referenced columns must have same length")
 
-        # Validate actions
         valid_actions = {"CASCADE", "SET NULL", "SET DEFAULT", "RESTRICT", "NO ACTION", None}
         if on_delete and on_delete.upper() not in valid_actions:
             self._raise_sql_builder_error(f"Invalid ON DELETE action: {on_delete}")
@@ -325,19 +319,16 @@ class CreateTableBuilder(DDLBuilder):
         if not self._columns and not self._like_table:
             self._raise_sql_builder_error("Table must have at least one column or use LIKE clause")
 
-        # Build table identifier with schema if provided
         if self._schema:
             table = exp.Table(this=exp.to_identifier(self._table_name), db=exp.to_identifier(self._schema))
         else:
             table = exp.to_table(self._table_name)
 
-        # Build column expressions
         column_defs: list[exp.Expression] = []
         for col in self._columns:
             col_expr = build_column_expression(col)
             column_defs.append(col_expr)
 
-        # Build constraint expressions
         for constraint in self._constraints:
             # Skip PRIMARY KEY constraints that are already defined on columns
             if constraint.constraint_type == "PRIMARY KEY" and len(constraint.columns) == 1:
@@ -349,7 +340,6 @@ class CreateTableBuilder(DDLBuilder):
             if constraint_expr:
                 column_defs.append(constraint_expr)
 
-        # Build properties for table options
         props: list[exp.Property] = []
         if self._table_options.get("engine"):
             props.append(
@@ -364,7 +354,6 @@ class CreateTableBuilder(DDLBuilder):
                 exp.Property(this=exp.to_identifier("PARTITION BY"), value=exp.Literal.string(self._partition_by))
             )
 
-        # Add other table options
         for key, value in self._table_options.items():
             if key != "engine":  # Skip already handled options
                 if isinstance(value, str):
@@ -374,15 +363,12 @@ class CreateTableBuilder(DDLBuilder):
 
         properties_node = exp.Properties(expressions=props) if props else None
 
-        # Build schema expression
         schema_expr = exp.Schema(expressions=column_defs) if column_defs else None
 
-        # Handle LIKE clause
         like_expr = None
         if self._like_table:
             like_expr = exp.to_table(self._like_table)
 
-        # Create the CREATE expression
         return exp.Create(
             kind="TABLE",
             this=table,
@@ -759,7 +745,6 @@ class CreateTableAsSelectBuilder(DDLBuilder):
         if self._select_query is None:
             self._raise_sql_builder_error("SELECT query must be set for CREATE TABLE AS SELECT.")
 
-        # Determine the SELECT expression and parameters
         select_expr = None
         select_params = None
         from sqlspec.statement.builder.select import SelectBuilder
@@ -769,14 +754,11 @@ class CreateTableAsSelectBuilder(DDLBuilder):
             select_expr = self._select_query.expression
             select_params = getattr(self._select_query, "parameters", None)
         elif isinstance(self._select_query, SelectBuilder):
-            # Get the expression and parameters directly
             select_expr = getattr(self._select_query, "_expression", None)
             select_params = getattr(self._select_query, "_parameters", None)
 
-            # Apply CTEs if present
             with_ctes = getattr(self._select_query, "_with_ctes", {})
             if with_ctes and select_expr and isinstance(select_expr, exp.Select):
-                # Apply CTEs directly to the SELECT expression using sqlglot's with_ method
                 for alias, cte in with_ctes.items():
                     if hasattr(select_expr, "with_"):
                         select_expr = select_expr.with_(
@@ -799,7 +781,6 @@ class CreateTableAsSelectBuilder(DDLBuilder):
                 # The SELECT query already has unique parameter names
                 self._parameters[p_name] = p_value
 
-        # Build schema/column list if provided
         schema_expr = None
         if self._columns:
             schema_expr = exp.Schema(expressions=[exp.column(c) for c in self._columns])
@@ -881,7 +862,6 @@ class CreateMaterializedViewBuilder(DDLBuilder):
         if self._select_query is None:
             self._raise_sql_builder_error("SELECT query must be set for CREATE MATERIALIZED VIEW.")
 
-        # Determine the SELECT expression and parameters
         select_expr = None
         select_params = None
         from sqlspec.statement.builder.select import SelectBuilder
@@ -908,12 +888,10 @@ class CreateMaterializedViewBuilder(DDLBuilder):
                 # The SELECT query already has unique parameter names
                 self._parameters[p_name] = p_value
 
-        # Build schema/column list if provided
         schema_expr = None
         if self._columns:
             schema_expr = exp.Schema(expressions=[exp.column(c) for c in self._columns])
 
-        # Build properties for dialect-specific options
         props: list[exp.Property] = []
         if self._refresh_mode:
             props.append(
@@ -983,7 +961,6 @@ class CreateViewBuilder(DDLBuilder):
         if self._select_query is None:
             self._raise_sql_builder_error("SELECT query must be set for CREATE VIEW.")
 
-        # Determine the SELECT expression and parameters
         select_expr = None
         select_params = None
         from sqlspec.statement.builder.select import SelectBuilder
@@ -1010,12 +987,10 @@ class CreateViewBuilder(DDLBuilder):
                 # The SELECT query already has unique parameter names
                 self._parameters[p_name] = p_value
 
-        # Build schema/column list if provided
         schema_expr = None
         if self._columns:
             schema_expr = exp.Schema(expressions=[exp.column(c) for c in self._columns])
 
-        # Build properties for hints
         props: list[exp.Property] = [
             exp.Property(this=exp.to_identifier("HINT"), value=exp.Literal.string(h)) for h in self._hints
         ]
@@ -1293,10 +1268,8 @@ class AlterTableBuilder(DDLBuilder):
             if not op.column_definition or op.column_definition.default is None:
                 self._raise_sql_builder_error("Default value required for SET DEFAULT")
             default_val = op.column_definition.default
-            # Handle different default value types
             default_expr: Optional[exp.Expression]
             if isinstance(default_val, str):
-                # Check if it's a function/expression or a literal string
                 if default_val.upper() in {"CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME"} or "(" in default_val:
                     default_expr = exp.maybe_parse(default_val)
                 else:
@@ -1348,12 +1321,10 @@ class CommentOnBuilder(DDLBuilder):
 
     def _create_base_expression(self) -> exp.Expression:
         if self._target_type == "TABLE" and self._table and self._comment is not None:
-            # Create a proper Comment expression
             return exp.Comment(
                 this=exp.to_table(self._table), kind="TABLE", expression=exp.Literal.string(self._comment)
             )
         if self._target_type == "COLUMN" and self._table and self._column and self._comment is not None:
-            # Create a proper Comment expression for column
             return exp.Comment(
                 this=exp.Column(table=self._table, this=self._column),
                 kind="COLUMN",
@@ -1384,7 +1355,6 @@ class RenameTableBuilder(DDLBuilder):
     def _create_base_expression(self) -> exp.Expression:
         if not self._old_name or not self._new_name:
             self._raise_sql_builder_error("Both old and new table names must be set for RENAME TABLE.")
-        # Create ALTER TABLE with RENAME TO action
         return exp.Alter(
             this=exp.to_table(self._old_name),
             kind="TABLE",

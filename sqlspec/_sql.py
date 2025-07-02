@@ -100,7 +100,6 @@ class SQLFactory:
             if parsed_expr:
                 # Attempt to get the class name as a fallback, e.g., "Set", "Command"
                 command_type = type(parsed_expr).__name__.upper()
-                # Handle specific cases like "COMMAND" which might be too generic
                 if command_type == "COMMAND" and parsed_expr.this:
                     return str(parsed_expr.this).upper()  # e.g. "SET", "ALTER"
                 return command_type
@@ -163,14 +162,12 @@ class SQLFactory:
             "WITH": "WITH",
         }
         actual_type_str = expr_type_map.get(actual_type, actual_type)
-        # Only allow SELECT or WITH (if WITH wraps SELECT)
         if actual_type_str == "SELECT" or (
             actual_type_str == "WITH" and parsed_expr.this and isinstance(parsed_expr.this, exp.Select)
         ):
             builder = SelectBuilder(dialect=dialect or self.dialect)
             builder._expression = parsed_expr
             return builder
-        # If not SELECT, raise with helpful message
         msg = (
             f"sql(...) only supports SELECT statements. Detected type: {actual_type_str}. "
             f"Use sql.{actual_type_str.lower()}() instead."
@@ -184,9 +181,7 @@ class SQLFactory:
         builder_dialect = dialect or self.dialect
         if len(columns_or_sql) == 1 and isinstance(columns_or_sql[0], str):
             sql_candidate = columns_or_sql[0].strip()
-            # Check if it actually looks like SQL before parsing
             if self._looks_like_sql(sql_candidate):
-                # Validate type
                 detected = self.detect_sql_type(sql_candidate, dialect=builder_dialect)
                 if detected not in {"SELECT", "WITH"}:
                     msg = (
@@ -198,7 +193,6 @@ class SQLFactory:
                 if select_builder._expression is None:
                     select_builder.__post_init__()
                 return self._populate_select_from_sql(select_builder, sql_candidate)
-            # Otherwise treat as column name and fall through to normal column handling
         select_builder = SelectBuilder(dialect=builder_dialect)
         if select_builder._expression is None:
             select_builder.__post_init__()
@@ -288,7 +282,6 @@ class SQLFactory:
 
         candidate_upper = candidate.strip().upper()
 
-        # Check for SQL keywords at the beginning
         if expected_type:
             return candidate_upper.startswith(expected_type.upper())
 
@@ -311,12 +304,10 @@ class SQLFactory:
                 parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Insert):
-                # Set the internal expression to the parsed one
                 builder._expression = parsed_expr
                 return builder
 
             if isinstance(parsed_expr, exp.Select):
-                # Handle INSERT FROM SELECT case - just return builder for now
                 # The actual conversion logic can be handled by the builder itself
                 logger.info("Detected SELECT statement for INSERT - may need target table specification")
                 return builder
@@ -337,7 +328,6 @@ class SQLFactory:
                 parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Select):
-                # Set the internal expression to the parsed one
                 builder._expression = parsed_expr
                 return builder
 
@@ -356,7 +346,6 @@ class SQLFactory:
                 parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Update):
-                # Set the internal expression to the parsed one
                 builder._expression = parsed_expr
                 return builder
 
@@ -375,7 +364,6 @@ class SQLFactory:
                 parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Delete):
-                # Set the internal expression to the parsed one
                 builder._expression = parsed_expr
                 return builder
 
@@ -394,7 +382,6 @@ class SQLFactory:
                 parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Merge):
-                # Set the internal expression to the parsed one
                 builder._expression = parsed_expr
                 return builder
 
@@ -579,7 +566,6 @@ class SQLFactory:
         for column_set in column_sets:
             if isinstance(column_set, (tuple, list)):
                 if len(column_set) == 0:
-                    # Empty set for grand total
                     set_expressions.append(exp.Tuple(expressions=[]))
                 else:
                     columns = [exp.column(col) for col in column_set]
@@ -611,7 +597,6 @@ class SQLFactory:
             ```
         """
         if isinstance(values, list):
-            # Convert list to array literal
             literals = [exp.Literal.string(str(v)) if isinstance(v, str) else exp.Literal.number(v) for v in values]
             return exp.Any(this=exp.Array(expressions=literals))
         if isinstance(values, str):
@@ -734,11 +719,9 @@ class SQLFactory:
             msg = "DECODE requires at least one search/result pair"
             raise ValueError(msg)
 
-        # Build CASE expression
         conditions = []
         default = None
 
-        # Process search/result pairs
         for i in range(0, len(args) - 1, 2):
             if i + 1 >= len(args):
                 # Odd number of args means last one is default
@@ -748,7 +731,6 @@ class SQLFactory:
             search_val = args[i]
             result_val = args[i + 1]
 
-            # Create search expression
             if isinstance(search_val, str):
                 search_expr = exp.Literal.string(search_val)
             elif isinstance(search_val, (int, float)):
@@ -758,7 +740,6 @@ class SQLFactory:
             else:
                 search_expr = exp.Literal.string(str(search_val))
 
-            # Create result expression
             if isinstance(result_val, str):
                 result_expr = exp.Literal.string(result_val)
             elif isinstance(result_val, (int, float)):
@@ -768,7 +749,6 @@ class SQLFactory:
             else:
                 result_expr = exp.Literal.string(str(result_val))
 
-            # Create WHEN condition
             condition = exp.EQ(this=col_expr, expression=search_expr)
             conditions.append(exp.When(this=condition, then=result_expr))
 
@@ -1045,10 +1025,8 @@ class SQLFactory:
         Returns:
             Window function expression.
         """
-        # Create the function call
         func_expr = exp.Anonymous(this=func_name, expressions=func_args)
 
-        # Build OVER clause
         over_args: dict[str, Any] = {}
 
         if partition_by:

@@ -68,18 +68,15 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
         """
         from sqlspec.statement.sql import SQL
 
-        # Handle SelectBuilder
         if is_select_builder(statement):
             # SelectBuilder has its own parameters via build(), ignore external params
             safe_query = statement.build()
             return SQL(safe_query.sql, parameters=safe_query.parameters, config=config)
 
-        # Handle pre-built SQL objects
         if isinstance(statement, SQL):
             # SQL object is already complete, ignore external params
             return statement
 
-        # Handle str and sqlglot Expressions
         if isinstance(statement, (str, exp.Expression)):
             return SQL(statement, parameters=params, config=config)
 
@@ -368,12 +365,10 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
             msg = f"Expected exactly one row, found {len(data)}"
             raise ValueError(msg)
         row = data[0]
-        # Extract the first column value
         if is_dict_row(row):
             if not row:
                 msg = "Row has no columns"
                 raise ValueError(msg)
-            # Get the first value from the dict
             return next(iter(row.values()))
         if is_indexable_row(row):
             # Tuple or list-like row
@@ -411,11 +406,9 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
             msg = f"Expected at most one row, found {len(data)}"
             raise ValueError(msg)
         row = data[0]
-        # Extract the first column value
         if isinstance(row, dict):
             if not row:
                 return None
-            # Get the first value from the dict
             return next(iter(row.values()))
         if isinstance(row, (tuple, list)):
             # Tuple or list-like row
@@ -520,7 +513,6 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
             ...     schema_type=User,
             ... )
         """
-        # Import here to avoid circular imports
         from sqlspec.service.pagination import OffsetPagination
         from sqlspec.statement.sql import SQL
 
@@ -544,52 +536,41 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
             else:
                 other_filters.append(f)
 
-        # Get limit and offset from filter or kwargs
         if limit_offset_filter is not None:
             limit = limit_offset_filter.limit
             offset = limit_offset_filter.offset
         elif "limit" in kwargs and "offset" in kwargs:
-            # Fallback to kwargs if no LimitOffsetFilter provided
             limit = kwargs.pop("limit")
             offset = kwargs.pop("offset")
         else:
             msg = "Pagination requires either a LimitOffsetFilter in parameters or 'limit' and 'offset' in kwargs."
             raise ValueError(msg)
 
-        # Convert statement to SQL object if needed
         base_stmt = self._normalize_statement(statement, params, _config)
 
-        # Apply non-pagination filters
         filtered_stmt = base_stmt
         for filter_obj in other_filters:
             filtered_stmt = filter_obj.append_to_statement(filtered_stmt)
 
-        # Create count query using AST transformation
-        # Get the SQL string from the statement (now guaranteed to be SQL object)
         sql_str = filtered_stmt.to_sql()
 
         # Parse and transform the AST to create a count query
         parsed = parse_one(sql_str)
 
-        # Create a new SELECT COUNT(*) wrapping the original query as a subquery
         # Using exp.Subquery to properly wrap the parsed expression
         subquery = exp.Subquery(this=parsed, alias="_count_subquery")
         count_ast = exp.Select().select(exp.func("COUNT", exp.Star()).as_("total")).from_(subquery)
 
-        # Convert back to SQL object
         count_stmt = SQL(count_ast.sql(), _config=_config)
 
         # Execute count query
         total = self.select_value(count_stmt, _connection=_connection, _config=_config, **kwargs)
 
-        # Apply all filters including pagination to data query
         data_stmt = self._normalize_statement(statement, params, _config)
 
-        # Apply non-pagination filters
         for filter_obj in other_filters:
             data_stmt = filter_obj.append_to_statement(data_stmt)
 
-        # Apply limit/offset (data_stmt is now guaranteed to be SQL)
         data_stmt = data_stmt.limit(limit).offset(offset)
 
         # Execute data query
@@ -637,18 +618,15 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
         """
         from sqlspec.statement.sql import SQL
 
-        # Handle SelectBuilder
         if is_select_builder(statement):
             # SelectBuilder has its own parameters via build(), ignore external params
             safe_query = statement.build()
             return SQL(safe_query.sql, parameters=safe_query.parameters, config=config)
 
-        # Handle pre-built SQL objects
         if isinstance(statement, SQL):
             # SQL object is already complete, ignore external params
             return statement
 
-        # Handle str and sqlglot Expressions
         if isinstance(statement, (str, exp.Expression)):
             return SQL(statement, parameters=params, config=config)
 
@@ -941,12 +919,10 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
             msg = f"Expected exactly one row, found {len(data)}"
             raise ValueError(msg)
         row = data[0]
-        # Extract the first column value
         if is_dict_row(row):
             if not row:
                 msg = "Row has no columns"
                 raise ValueError(msg)
-            # Get the first value from the dict
             return next(iter(row.values()))
         if is_indexable_row(row):
             # Tuple or list-like row
@@ -984,11 +960,9 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
             msg = f"Expected at most one row, found {len(data)}"
             raise ValueError(msg)
         row = data[0]
-        # Extract the first column value
         if isinstance(row, dict):
             if not row:
                 return None
-            # Get the first value from the dict
             return next(iter(row.values()))
         if isinstance(row, (tuple, list)):
             # Tuple or list-like row
@@ -1089,7 +1063,6 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
             ...     schema_type=User,
             ... )
         """
-        # Import here to avoid circular imports
         from sqlspec.service.pagination import OffsetPagination
         from sqlspec.statement.sql import SQL
 
@@ -1113,52 +1086,41 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
             else:
                 other_filters.append(f)
 
-        # Get limit and offset from filter or kwargs
         if limit_offset_filter is not None:
             limit = limit_offset_filter.limit
             offset = limit_offset_filter.offset
         elif "limit" in kwargs and "offset" in kwargs:
-            # Fallback to kwargs if no LimitOffsetFilter provided
             limit = kwargs.pop("limit")
             offset = kwargs.pop("offset")
         else:
             msg = "Pagination requires either a LimitOffsetFilter in parameters or 'limit' and 'offset' in kwargs."
             raise ValueError(msg)
 
-        # Convert statement to SQL object if needed
         base_stmt = self._normalize_statement(statement, params, _config)
 
-        # Apply non-pagination filters
         filtered_stmt = base_stmt
         for filter_obj in other_filters:
             filtered_stmt = filter_obj.append_to_statement(filtered_stmt)
 
-        # Create count query using AST transformation
-        # Get the SQL string from the statement (now guaranteed to be SQL object)
         sql_str = filtered_stmt.to_sql()
 
         # Parse and transform the AST to create a count query
         parsed = parse_one(sql_str)
 
-        # Create a new SELECT COUNT(*) wrapping the original query as a subquery
         # Using exp.Subquery to properly wrap the parsed expression
         subquery = exp.Subquery(this=parsed, alias="_count_subquery")
         count_ast = exp.Select().select(exp.func("COUNT", exp.Star()).as_("total")).from_(subquery)
 
-        # Convert back to SQL object
         count_stmt = SQL(count_ast.sql(), _config=_config)
 
         # Execute count query
         total = await self.select_value(count_stmt, _connection=_connection, _config=_config, **kwargs)
 
-        # Apply all filters including pagination to data query
         data_stmt = self._normalize_statement(statement, params, _config)
 
-        # Apply non-pagination filters
         for filter_obj in other_filters:
             data_stmt = filter_obj.append_to_statement(data_stmt)
 
-        # Apply limit/offset (data_stmt is now guaranteed to be SQL)
         data_stmt = data_stmt.limit(limit).offset(offset)
 
         # Execute data query
