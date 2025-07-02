@@ -1,7 +1,7 @@
 """Replaces literals in SQL with placeholders and extracts them using SQLGlot AST."""
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from sqlglot import exp
 from sqlglot.expressions import Array, Binary, Boolean, DataType, Func, Literal, Null
@@ -104,20 +104,53 @@ class ParameterizeLiterals(ProcessorProtocol):
         self.extracted_parameters: list[Any] = []
         self._parameter_counter = 0
         self._parameter_metadata: list[dict[str, Any]] = []  # Track parameter types and context
+        self._preserve_dict_format = False  # Track whether to preserve dict format
 
     def process(self, expression: Optional[exp.Expression], context: SQLProcessingContext) -> Optional[exp.Expression]:
         """Advanced literal parameterization with context-aware AST analysis."""
-        if expression is None or context.current_expression is None or context.input_sql_had_placeholders:
+        if expression is None or context.current_expression is None:
             return expression
 
         self.extracted_parameters = []
-        self._parameter_counter = 0
         self._parameter_metadata = []
+
+        # When reordering is needed (SQL already has placeholders), we need to start
+        # our counter at the number of existing parameters to avoid conflicts
+        if context.config.input_sql_had_placeholders and context.parameter_info:
+            # Find the highest ordinal among existing parameters
+            max_ordinal = max(p.ordinal for p in context.parameter_info)
+            self._parameter_counter = max_ordinal + 1
+        else:
+            self._parameter_counter = 0
+
+        # Track original user parameters for proper merging
+        self._original_params = context.merged_parameters
+        self._user_param_index = 0
+        # If original params are dict and we have named placeholders, preserve dict format
+        if isinstance(context.merged_parameters, dict) and context.parameter_info:
+            # Check if we have named placeholders
+            has_named = any(p.name for p in context.parameter_info)
+            if has_named:
+                self._final_params: Union[dict[str, Any], list[Any]] = {}
+                self._preserve_dict_format = True
+            else:
+                self._final_params = []
+                self._preserve_dict_format = False
+        else:
+            self._final_params = []
+            self._preserve_dict_format = False
+        self._is_reordering_needed = context.config.input_sql_had_placeholders
 
         param_context = ParameterizationContext(parent_stack=[])
         transformed_expression = self._transform_with_context(context.current_expression.copy(), param_context)
         context.current_expression = transformed_expression
+
+        # Always add extracted parameters to the pipeline so they can be properly merged
         context.extracted_parameters_from_pipeline.extend(self.extracted_parameters)
+
+        # If we're reordering, also update the merged parameters with the reordered result
+        if self._is_reordering_needed and self._final_params:
+            context.merged_parameters = self._final_params
 
         context.metadata["parameter_metadata"] = self._parameter_metadata
 
@@ -125,8 +158,10 @@ class ParameterizeLiterals(ProcessorProtocol):
 
     def _transform_with_context(self, node: exp.Expression, context: ParameterizationContext) -> exp.Expression:
         """Transform expression tree with context tracking."""
+        # Update context based on node type
         self._update_context(node, context, entering=True)
 
+        # Process the node
         if isinstance(node, Literal):
             result = self._process_literal_with_context(node, context)
         elif isinstance(node, (Boolean, Null)):
@@ -136,6 +171,32 @@ class ParameterizeLiterals(ProcessorProtocol):
             result = self._process_array(node, context)
         elif isinstance(node, exp.In) and self.parameterize_in_lists:
             result = self._process_in_clause(node, context)
+        elif isinstance(node, exp.Placeholder) and self._is_reordering_needed:
+            # Handle existing placeholders when reordering is needed
+            result = self._process_existing_placeholder(node, context)
+        elif isinstance(node, exp.Parameter) and self._is_reordering_needed:
+            # Handle PostgreSQL-style parameters ($1, $2) when reordering is needed
+            result = self._process_existing_parameter(node, context)
+        elif isinstance(node, exp.Column) and self._is_reordering_needed:
+            # Check if this column looks like a PostgreSQL parameter ($1, $2, etc.)
+            column_name = str(node.this) if hasattr(node, "this") else ""
+            if column_name.startswith("$") and column_name[1:].isdigit():
+                # This is a PostgreSQL-style parameter parsed as a column
+                result = self._process_postgresql_column_parameter(node, context)
+            else:
+                # Regular column - process children
+                for key, value in node.args.items():
+                    if isinstance(value, exp.Expression):
+                        node.set(key, self._transform_with_context(value, context))
+                    elif isinstance(value, list):
+                        node.set(
+                            key,
+                            [
+                                self._transform_with_context(v, context) if isinstance(v, exp.Expression) else v
+                                for v in value
+                            ],
+                        )
+                result = node
         else:
             # Recursively process children
             for key, value in node.args.items():
@@ -151,6 +212,7 @@ class ParameterizeLiterals(ProcessorProtocol):
                     )
             result = node
 
+        # Update context when leaving
         self._update_context(node, context, entering=False)
 
         return result
@@ -162,6 +224,7 @@ class ParameterizeLiterals(ProcessorProtocol):
 
             if isinstance(node, Func):
                 context.function_depth += 1
+                # Get function name from class name or node.name
                 func_name = node.__class__.__name__.upper()
                 if func_name in self.preserve_in_functions or (
                     node.name and node.name.upper() in self.preserve_in_functions
@@ -175,6 +238,7 @@ class ParameterizeLiterals(ProcessorProtocol):
                 context.in_in_clause = True
             elif isinstance(node, exp.CTE):
                 context.cte_depth += 1
+                # Check if this CTE is recursive:
                 # 1. Parent WITH must be RECURSIVE
                 # 2. CTE must contain UNION (characteristic of recursive CTEs)
                 is_in_recursive_with = any(
@@ -206,12 +270,14 @@ class ParameterizeLiterals(ProcessorProtocol):
         self, literal: exp.Expression, context: ParameterizationContext
     ) -> exp.Expression:
         """Process a literal with awareness of its AST context."""
+        # Check if this literal should be preserved based on context
         if self._should_preserve_literal_in_context(literal, context):
             return literal
 
         # Use optimized extraction for single-pass processing
         value, type_hint, sqlglot_type, semantic_name = self._extract_literal_value_and_type_optimized(literal, context)
 
+        # Create TypedParameter object
         from sqlspec.statement.parameters import TypedParameter
 
         typed_param = TypedParameter(
@@ -221,26 +287,312 @@ class ParameterizeLiterals(ProcessorProtocol):
             semantic_name=semantic_name,
         )
 
+        # Always track extracted parameters for proper merging
         self.extracted_parameters.append(typed_param)
+
+        # If we're reordering, also add to final params directly
+        if self._is_reordering_needed:
+            if self._preserve_dict_format and isinstance(self._final_params, dict):
+                # For dict format, we need a key
+                param_key = semantic_name or f"param_{len(self._final_params)}"
+                self._final_params[param_key] = typed_param
+            elif isinstance(self._final_params, list):
+                self._final_params.append(typed_param)
+            else:
+                # Fallback - this shouldn't happen but handle gracefully
+                if not hasattr(self, "_fallback_params"):
+                    self._fallback_params = []
+                self._fallback_params.append(typed_param)
+
         self._parameter_metadata.append(
             {
-                "index": len(self.extracted_parameters) - 1,
+                "index": len(self._final_params if self._is_reordering_needed else self.extracted_parameters) - 1,
                 "type": type_hint,
                 "semantic_name": semantic_name,
                 "context": self._get_context_description(context),
             }
         )
 
+        # Create appropriate placeholder
         return self._create_placeholder(hint=semantic_name)
+
+    def _process_existing_placeholder(self, node: exp.Placeholder, context: ParameterizationContext) -> exp.Expression:
+        """Process an existing placeholder when reordering parameters."""
+        if self._original_params is None:
+            return node
+
+        if isinstance(self._original_params, (list, tuple)):
+            self._handle_list_params_for_placeholder(node)
+        elif isinstance(self._original_params, dict):
+            self._handle_dict_params_for_placeholder(node)
+        else:
+            # Single value parameter
+            self._handle_single_value_param_for_placeholder(node)
+
+        return node
+
+    def _handle_list_params_for_placeholder(self, node: exp.Placeholder) -> None:
+        """Handle list/tuple parameters for placeholder."""
+        if isinstance(self._original_params, (list, tuple)) and self._user_param_index < len(self._original_params):
+            value = self._original_params[self._user_param_index]
+            self._add_to_final_params(value, node)
+            self._user_param_index += 1
+        else:
+            # More placeholders than user parameters
+            self._add_to_final_params(None, node)
+
+    def _handle_dict_params_for_placeholder(self, node: exp.Placeholder) -> None:
+        """Handle dict parameters for placeholder."""
+        if not isinstance(self._original_params, dict):
+            self._add_to_final_params(None, node)
+            return
+
+        placeholder_name = node.this if hasattr(node, "this") else None
+
+        if placeholder_name and placeholder_name in self._original_params:
+            # Direct match for placeholder name
+            self._add_to_final_params(self._original_params[placeholder_name], node)
+        elif placeholder_name and placeholder_name.isdigit() and self._user_param_index == 0:
+            # Oracle-style numeric parameters
+            self._handle_oracle_numeric_params()
+            self._user_param_index += 1
+        elif placeholder_name and placeholder_name.isdigit() and self._user_param_index > 0:
+            # Already handled Oracle params
+            pass
+        elif self._user_param_index == 0 and len(self._original_params) > 0:
+            # Single dict parameter case
+            self._handle_single_dict_param()
+            self._user_param_index += 1
+        else:
+            # No match found
+            self._add_to_final_params(None, node)
+
+    def _handle_single_value_param_for_placeholder(self, node: exp.Placeholder) -> None:
+        """Handle single value parameter for placeholder."""
+        if self._user_param_index == 0:
+            self._add_to_final_params(self._original_params, node)
+            self._user_param_index += 1
+        else:
+            self._add_to_final_params(None, node)
+
+    def _handle_oracle_numeric_params(self) -> None:
+        """Handle Oracle-style numeric parameters."""
+        if not isinstance(self._original_params, dict):
+            return
+
+        if self._preserve_dict_format and isinstance(self._final_params, dict):
+            for k, v in self._original_params.items():
+                if k.isdigit():
+                    self._final_params[k] = v
+        else:
+            # Convert to positional list
+            numeric_keys = [k for k in self._original_params if k.isdigit()]
+            if numeric_keys:
+                max_index = max(int(k) for k in numeric_keys)
+                param_list = [None] * (max_index + 1)
+                for k, v in self._original_params.items():
+                    if k.isdigit():
+                        param_list[int(k)] = v
+                if isinstance(self._final_params, list):
+                    self._final_params.extend(param_list)
+                elif isinstance(self._final_params, dict):
+                    for i, val in enumerate(param_list):
+                        self._final_params[str(i)] = val
+
+    def _handle_single_dict_param(self) -> None:
+        """Handle single dict parameter case."""
+        if not isinstance(self._original_params, dict):
+            return
+
+        if self._preserve_dict_format and isinstance(self._final_params, dict):
+            for k, v in self._original_params.items():
+                self._final_params[k] = v
+        elif isinstance(self._final_params, list):
+            self._final_params.append(self._original_params)
+        elif isinstance(self._final_params, dict):
+            param_name = f"param_{len(self._final_params)}"
+            self._final_params[param_name] = self._original_params
+
+    def _add_to_final_params(self, value: Any, node: exp.Placeholder) -> None:
+        """Add a value to final params with proper type handling."""
+        if self._preserve_dict_format and isinstance(self._final_params, dict):
+            placeholder_name = node.this if hasattr(node, "this") else f"param_{self._user_param_index}"
+            self._final_params[placeholder_name] = value
+        elif isinstance(self._final_params, list):
+            self._final_params.append(value)
+        elif isinstance(self._final_params, dict):
+            param_name = f"param_{len(self._final_params)}"
+            self._final_params[param_name] = value
+
+    def _process_existing_parameter(self, node: exp.Parameter, context: ParameterizationContext) -> exp.Expression:
+        """Process PostgreSQL-style parameters ($1, $2) when reordering parameters."""
+        # PostgreSQL parameters use 1-based indexing
+        param_index = self._extract_parameter_index(node)
+
+        if self._original_params is None:
+            self._add_none_to_final_params()
+        elif isinstance(self._original_params, (list, tuple)):
+            self._handle_list_params_for_parameter_node(param_index)
+        elif isinstance(self._original_params, dict):
+            self._handle_dict_params_for_parameter_node(param_index)
+        elif param_index == 0:
+            # Single parameter case
+            self._add_param_value_to_finals(self._original_params)
+        else:
+            self._add_none_to_final_params()
+
+        # Return the parameter unchanged
+        return node
+
+    @staticmethod
+    def _extract_parameter_index(node: exp.Parameter) -> Optional[int]:
+        """Extract parameter index from a Parameter node."""
+        if hasattr(node, "this") and isinstance(node.this, Literal):
+            import contextlib
+
+            with contextlib.suppress(ValueError, TypeError):
+                return int(node.this.this) - 1  # Convert to 0-based index
+        return None
+
+    def _handle_list_params_for_parameter_node(self, param_index: Optional[int]) -> None:
+        """Handle list/tuple parameters for Parameter node."""
+        if (
+            isinstance(self._original_params, (list, tuple))
+            and param_index is not None
+            and 0 <= param_index < len(self._original_params)
+        ):
+            # Use the parameter at the specified index
+            self._add_param_value_to_finals(self._original_params[param_index])
+        else:
+            # More parameters than user provided
+            self._add_none_to_final_params()
+
+    def _handle_dict_params_for_parameter_node(self, param_index: Optional[int]) -> None:
+        """Handle dict parameters for Parameter node."""
+        if param_index is not None:
+            self._handle_dict_param_with_index(param_index)
+        else:
+            self._add_none_to_final_params()
+
+    def _handle_dict_param_with_index(self, param_index: int) -> None:
+        """Handle dict parameter when we have an index."""
+        if not isinstance(self._original_params, dict):
+            self._add_none_to_final_params()
+            return
+
+        # Try param_N key first
+        param_key = f"param_{param_index}"
+        if param_key in self._original_params:
+            self._add_dict_value_to_finals(param_key)
+            return
+
+        # Try direct numeric key (1-based)
+        numeric_key = str(param_index + 1)
+        if numeric_key in self._original_params:
+            self._add_dict_value_to_finals(numeric_key)
+        else:
+            self._add_none_to_final_params()
+
+    def _add_dict_value_to_finals(self, key: str) -> None:
+        """Add a value from dict params to final params."""
+        if isinstance(self._original_params, dict) and key in self._original_params:
+            value = self._original_params[key]
+            if isinstance(self._final_params, list):
+                self._final_params.append(value)
+            elif isinstance(self._final_params, dict):
+                self._final_params[key] = value
+
+    def _add_param_value_to_finals(self, value: Any) -> None:
+        """Add a parameter value to final params."""
+        if isinstance(self._final_params, list):
+            self._final_params.append(value)
+        elif isinstance(self._final_params, dict):
+            param_name = f"param_{len(self._final_params)}"
+            self._final_params[param_name] = value
+
+    def _add_none_to_final_params(self) -> None:
+        """Add None to final params."""
+        if isinstance(self._final_params, list):
+            self._final_params.append(None)
+        elif isinstance(self._final_params, dict):
+            param_name = f"param_{len(self._final_params)}"
+            self._final_params[param_name] = None
+
+    def _process_postgresql_column_parameter(
+        self, node: exp.Column, context: ParameterizationContext
+    ) -> exp.Expression:
+        """Process PostgreSQL-style parameters that were parsed as columns ($1, $2)."""
+        # Extract the numeric part from $1, $2, etc.
+        column_name = str(node.this) if hasattr(node, "this") else ""
+        param_index = None
+
+        if column_name.startswith("$") and column_name[1:].isdigit():
+            import contextlib
+
+            with contextlib.suppress(ValueError, TypeError):
+                param_index = int(column_name[1:]) - 1  # Convert to 0-based index
+
+        if self._original_params is None:
+            # No user parameters provided - don't add None
+            return node
+        if isinstance(self._original_params, (list, tuple)):
+            if param_index is not None and 0 <= param_index < len(self._original_params):
+                # Use the parameter at the specified index
+                if self._preserve_dict_format and isinstance(self._final_params, dict):
+                    param_key = f"param_{len(self._final_params)}"
+                    self._final_params[param_key] = self._original_params[param_index]
+                elif isinstance(self._final_params, list):
+                    self._final_params.append(self._original_params[param_index])
+                elif isinstance(self._final_params, dict):
+                    param_name = f"param_{len(self._final_params)}"
+                    self._final_params[param_name] = self._original_params[param_index]
+            # More parameters than user provided - don't add None
+        elif isinstance(self._original_params, dict):
+            # For dict parameters with numeric placeholders, try to map by index
+            if param_index is not None:
+                param_key = f"param_{param_index}"
+                if param_key in self._original_params:
+                    if self._preserve_dict_format and isinstance(self._final_params, dict):
+                        self._final_params[param_key] = self._original_params[param_key]
+                    elif isinstance(self._final_params, list):
+                        self._final_params.append(self._original_params[param_key])
+                    elif isinstance(self._final_params, dict):
+                        self._final_params[param_key] = self._original_params[param_key]
+                else:
+                    # Try direct numeric key
+                    numeric_key = str(param_index + 1)  # 1-based
+                    if numeric_key in self._original_params:
+                        if self._preserve_dict_format and isinstance(self._final_params, dict):
+                            self._final_params[numeric_key] = self._original_params[numeric_key]
+                        elif isinstance(self._final_params, list):
+                            self._final_params.append(self._original_params[numeric_key])
+                        elif isinstance(self._final_params, dict):
+                            self._final_params[numeric_key] = self._original_params[numeric_key]
+        # Single parameter case
+        elif param_index == 0:
+            if self._preserve_dict_format and isinstance(self._final_params, dict):
+                param_key = f"param_{len(self._final_params)}"
+                self._final_params[param_key] = self._original_params
+            elif isinstance(self._final_params, list):
+                self._final_params.append(self._original_params)
+            elif isinstance(self._final_params, dict):
+                param_name = f"param_{len(self._final_params)}"
+                self._final_params[param_name] = self._original_params
+
+        # Return the column unchanged - it represents the parameter placeholder
+        return node
 
     def _should_preserve_literal_in_context(self, literal: exp.Expression, context: ParameterizationContext) -> bool:
         """Context-aware decision on literal preservation."""
+        # Check for NULL values
         if self.preserve_null and isinstance(literal, Null):
             return True
 
+        # Check for boolean values
         if self.preserve_boolean and isinstance(literal, Boolean):
             return True
 
+        # Check if in preserved function arguments
         if context.in_function_args:
             return True
 
@@ -248,10 +600,13 @@ class ParameterizeLiterals(ProcessorProtocol):
         if self.preserve_in_recursive_cte and context.in_recursive_cte:
             return True
 
+        # Check if this literal is being used as an alias value in SELECT
         # e.g., 'computed' as process_status should be preserved
         if hasattr(literal, "parent") and literal.parent:
             parent = literal.parent
+            # Check if it's an Alias node and the literal is the expression (not the alias name)
             if isinstance(parent, exp.Alias) and parent.this == literal:
+                # Check if this alias is in a SELECT clause
                 for ancestor in context.parent_stack:
                     if isinstance(ancestor, exp.Select):
                         return True
@@ -273,8 +628,10 @@ class ParameterizeLiterals(ProcessorProtocol):
 
             # Preserve in CASE conditions for readability
             if isinstance(parent, exp.Case) and context.in_case_when:
+                # Only preserve simple comparisons
                 return not isinstance(literal.parent, Binary)
 
+        # Check string length
         if isinstance(literal, exp.Literal) and self._is_string_literal(literal):
             string_value = str(literal.this)
             if len(string_value) > self.max_string_length:
@@ -287,6 +644,7 @@ class ParameterizeLiterals(ProcessorProtocol):
         if isinstance(literal, Null) or literal.this is None:
             return None, "null"
 
+        # Ensure we have a Literal for type checking methods
         if not isinstance(literal, exp.Literal):
             return str(literal), "string"
 
@@ -302,6 +660,7 @@ class ParameterizeLiterals(ProcessorProtocol):
                 value_str = str(literal.this)
                 if "." in value_str or "e" in value_str.lower():
                     try:
+                        # Check if it's a decimal that needs precision
                         decimal_places = len(value_str.split(".")[1]) if "." in value_str else 0
                         if decimal_places > MAX_DECIMAL_PRECISION:  # Likely needs decimal precision
                             return value_str, "decimal"
@@ -314,6 +673,7 @@ class ParameterizeLiterals(ProcessorProtocol):
                     except ValueError:
                         return str(literal.this), "numeric_string"
                     else:
+                        # Check for bigint
                         if abs(value) > MAX_INT32_VALUE:  # Max 32-bit int
                             return value, "bigint"
                         return value, "integer"
@@ -326,6 +686,7 @@ class ParameterizeLiterals(ProcessorProtocol):
                 except ValueError:
                     return str(literal.this), "numeric_string"
 
+        # Handle date/time literals - these are DataType attributes not Literal attributes
         # Date/time values are typically string literals that need context-aware processing
         # We'll return them as strings and let the database handle type conversion
 
@@ -347,8 +708,10 @@ class ParameterizeLiterals(ProcessorProtocol):
         Returns:
             Tuple of (value, type_hint, sqlglot_type, semantic_name)
         """
+        # Extract value and basic type hint using existing logic
         value, type_hint = self._extract_literal_value_and_type(literal)
 
+        # Determine SQLGlot type based on the type hint without additional parsing
         sqlglot_type = self._infer_sqlglot_type(type_hint, value)
 
         # Generate semantic name from context if available
@@ -381,6 +744,7 @@ class ParameterizeLiterals(ProcessorProtocol):
 
         type_name = type_mapping.get(type_hint, "VARCHAR")
 
+        # Build DataType with appropriate parameters
         if type_hint == "decimal" and isinstance(value, str):
             # Try to infer precision and scale
             parts = value.split(".")
@@ -422,6 +786,7 @@ class ParameterizeLiterals(ProcessorProtocol):
                 if parent.this and isinstance(parent.this, exp.Column):
                     return f"{parent.this.name}_value"
 
+        # Check if we're in a specific SQL clause
         for parent in reversed(context.parent_stack):
             if isinstance(parent, exp.Where):
                 return "where_value"
@@ -436,6 +801,7 @@ class ParameterizeLiterals(ProcessorProtocol):
 
     def _is_string_literal(self, literal: exp.Literal) -> bool:
         """Check if a literal is a string."""
+        # Check if it's explicitly a string literal
         return (hasattr(literal, "is_string") and literal.is_string) or (
             isinstance(literal.this, str) and not self._is_number_literal(literal)
         )
@@ -443,6 +809,7 @@ class ParameterizeLiterals(ProcessorProtocol):
     @staticmethod
     def _is_number_literal(literal: exp.Literal) -> bool:
         """Check if a literal is a number."""
+        # Check if it's explicitly a number literal
         if hasattr(literal, "is_number") and literal.is_number:
             return True
         if literal.this is None:
@@ -458,20 +825,33 @@ class ParameterizeLiterals(ProcessorProtocol):
         """Create a placeholder expression with optional type hint."""
         # Import ParameterStyle for proper comparison
 
+        # Handle both style names and actual placeholder prefixes
         style = self.placeholder_style
-        if style is ParameterStyle.QMARK or style == "?":
+        if style in {"?", ParameterStyle.QMARK, "qmark"}:
             placeholder = exp.Placeholder()
-        elif style is ParameterStyle.NAMED_COLON or style == ":name" or style.startswith(":"):
+        elif style == ":name":
+            # Use hint in parameter name if available
             param_name = f"{hint}_{self._parameter_counter}" if hint else f"param_{self._parameter_counter}"
             placeholder = exp.Placeholder(this=param_name)
-        elif style is ParameterStyle.NUMERIC or style.startswith("$"):
+        elif style in {ParameterStyle.NAMED_COLON, "named_colon"} or style.startswith(":"):
+            param_name = f"param_{self._parameter_counter}"
+            placeholder = exp.Placeholder(this=param_name)
+        elif style in {ParameterStyle.NUMERIC, "numeric"} or style.startswith("$"):
+            # PostgreSQL style numbered parameters - use Var for consistent $N format
+            # Note: PostgreSQL uses 1-based indexing
             placeholder = exp.Var(this=f"${self._parameter_counter + 1}")  # type: ignore[assignment]
-        elif style is ParameterStyle.NAMED_AT:
-            param_name = f"{hint}_{self._parameter_counter}" if hint else f"param_{self._parameter_counter}"
+        elif style in {ParameterStyle.NAMED_AT, "named_at"}:
+            # BigQuery style @param - don't include @ in the placeholder name
+            # The @ will be added during SQL generation
+            # Use 0-based indexing for consistency with parameter arrays
+            param_name = f"param_{self._parameter_counter}"
             placeholder = exp.Placeholder(this=param_name)
-        elif style is ParameterStyle.POSITIONAL_PYFORMAT:
+        elif style in {ParameterStyle.POSITIONAL_PYFORMAT, "pyformat"}:
+            # Don't use pyformat directly in SQLGlot - use standard placeholder
+            # and let the compile method convert it later
             placeholder = exp.Placeholder()
         else:
+            # Default to question mark
             placeholder = exp.Placeholder()
 
         # Increment counter after creating placeholder
@@ -483,10 +863,12 @@ class ParameterizeLiterals(ProcessorProtocol):
         if not array_node.expressions:
             return array_node
 
+        # Check array size
         if len(array_node.expressions) > self.max_array_length:
             # Too large, preserve as-is
             return array_node
 
+        # Extract all array elements
         array_values = []
         element_types = []
         all_literals = True
@@ -501,11 +883,14 @@ class ParameterizeLiterals(ProcessorProtocol):
                 break
 
         if all_literals:
+            # Determine array element type from the first element
             element_type = element_types[0] if element_types else "unknown"
 
+            # Create SQLGlot array type
             element_sqlglot_type = self._infer_sqlglot_type(element_type, array_values[0] if array_values else None)
             array_sqlglot_type = exp.DataType.build("ARRAY", expressions=[element_sqlglot_type])
 
+            # Create TypedParameter for the entire array
             from sqlspec.statement.parameters import TypedParameter
 
             typed_param = TypedParameter(
@@ -515,6 +900,7 @@ class ParameterizeLiterals(ProcessorProtocol):
                 semantic_name="array_values",
             )
 
+            # Replace entire array with a single parameter
             self.extracted_parameters.append(typed_param)
             self._parameter_metadata.append(
                 {
@@ -525,6 +911,7 @@ class ParameterizeLiterals(ProcessorProtocol):
                 }
             )
             return self._create_placeholder("array")
+        # Process individual elements
         new_expressions = []
         for expr in array_node.expressions:
             if isinstance(expr, Literal):
@@ -536,19 +923,23 @@ class ParameterizeLiterals(ProcessorProtocol):
 
     def _process_in_clause(self, in_node: exp.In, context: ParameterizationContext) -> exp.Expression:
         """Process IN clause for intelligent parameterization."""
+        # Check if it's a subquery IN clause (has 'query' in args)
         if in_node.args.get("query"):
             # Don't parameterize subqueries, just process them recursively
             in_node.set("query", self._transform_with_context(in_node.args["query"], context))
             return in_node
 
+        # Check if it has literal expressions (the values on the right side)
         if "expressions" not in in_node.args or not in_node.args["expressions"]:
             return in_node
 
+        # Check if the IN list is too large
         expressions = in_node.args["expressions"]
         if len(expressions) > self.max_in_list_size:
             # Consider alternative strategies for large IN lists
             return in_node
 
+        # Process the expressions in the IN clause
         has_literals = any(isinstance(expr, Literal) for expr in expressions)
 
         if has_literals:
@@ -560,6 +951,7 @@ class ParameterizeLiterals(ProcessorProtocol):
                 else:
                     new_expressions.append(self._transform_with_context(expr, context))
 
+            # Update the IN node's expressions using set method
             in_node.set("expressions", new_expressions)
 
         return in_node

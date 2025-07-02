@@ -408,11 +408,11 @@ class ParameterValidator:
         provided_names = set(provided_params.keys())
 
         positional_count = sum(1 for p in parameters_info if p.name is None)
-        expected_positional_names = {f"_arg_{p.ordinal}" for p in parameters_info if p.name is None}
+        expected_positional_names = {f"arg_{p.ordinal}" for p in parameters_info if p.name is None}
 
         # For mixed parameters, we expect both named and generated positional names
         if positional_count > 0 and required_names:
-            # Mixed parameter style - accept both named params and _arg_N params
+            # Mixed parameter style - accept both named params and arg_N params
             all_expected_names = required_names | expected_positional_names
 
             missing = all_expected_names - provided_names
@@ -490,7 +490,7 @@ class ParameterConverter:
 
         Returns:
             A tuple containing:
-                - transformed_sql: SQL string with unique named placeholders (e.g., :__param_0).
+                - transformed_sql: SQL string with unique named placeholders (e.g., :param_0).
                 - placeholder_map: Dictionary mapping new unique names to original names or ordinal index.
         """
         transformed_sql_parts = []
@@ -501,8 +501,8 @@ class ParameterConverter:
         for i, p_info in enumerate(parameters_info):
             transformed_sql_parts.append(original_sql[current_pos : p_info.position])
 
-            unique_placeholder_name = f":__param_{i}"
-            map_key = f"__param_{i}"
+            unique_placeholder_name = f":param_{i}"
+            map_key = f"param_{i}"
 
             if p_info.name:  # For named parameters (e.g., :name, %(name)s, $name)
                 placeholder_map[map_key] = p_info.name
@@ -683,7 +683,7 @@ class ParameterConverter:
         for param_info in parameters_info:
             if param_info.name is None and positional_count < len(args):  # Positional parameter
                 # Generate a name for the positional parameter using its ordinal
-                param_name = f"_arg_{param_info.ordinal}"
+                param_name = f"arg_{param_info.ordinal}"
                 merged[param_name] = args[positional_count]
                 positional_count += 1
 
@@ -746,7 +746,7 @@ class ParameterConverter:
         """Internal method to convert SQL from canonical format to target style.
 
         Args:
-            rendered_sql: SQL with canonical placeholders (:__param_N)
+            rendered_sql: SQL with canonical placeholders (:param_N)
             final_parameter_info: Complete parameter info list
             target_style: Target parameter style
 
@@ -755,12 +755,18 @@ class ParameterConverter:
         """
         canonical_params = self.validator.extract_parameters(rendered_sql)
 
-        if len(canonical_params) != len(final_parameter_info):
+        # When we have more canonical parameters than final_parameter_info,
+        # it's likely because the ParameterizeLiterals transformer added extra parameters.
+        # In this case, we only denormalize the parameters that were in the original SQL.
+        if len(canonical_params) > len(final_parameter_info):
+            # Only denormalize up to the number of original parameters
+            canonical_params = canonical_params[: len(final_parameter_info)]
+        elif len(canonical_params) < len(final_parameter_info):
             from sqlspec.exceptions import SQLTransformationError
 
             msg = (
                 f"Parameter count mismatch during denormalization. "
-                f"Expected {len(final_parameter_info)} parameters, "
+                f"Expected at least {len(final_parameter_info)} parameters, "
                 f"found {len(canonical_params)} in SQL"
             )
             raise SQLTransformationError(msg)
@@ -796,16 +802,16 @@ class ParameterConverter:
         if target_style == ParameterStyle.NUMERIC:
             return f"${param_info.ordinal + 1}"
         if target_style == ParameterStyle.NAMED_COLON:
-            return f":{param_info.name}" if param_info.name else f":_arg_{param_info.ordinal}"
+            return f":{param_info.name}" if param_info.name else f":arg_{param_info.ordinal}"
         if target_style == ParameterStyle.POSITIONAL_COLON:
             # Oracle numeric uses :1, :2 format
             return f":{param_info.ordinal + 1}"
         if target_style == ParameterStyle.NAMED_AT:
-            return f"@{param_info.name}" if param_info.name else f"@_arg_{param_info.ordinal}"
+            return f"@{param_info.name}" if param_info.name else f"@arg_{param_info.ordinal}"
         if target_style == ParameterStyle.NAMED_DOLLAR:
-            return f"${param_info.name}" if param_info.name else f"$_arg_{param_info.ordinal}"
+            return f"${param_info.name}" if param_info.name else f"$arg_{param_info.ordinal}"
         if target_style == ParameterStyle.NAMED_PYFORMAT:
-            return f"%({param_info.name})s" if param_info.name else f"%(_arg_{param_info.ordinal})s"
+            return f"%({param_info.name})s" if param_info.name else f"%(arg_{param_info.ordinal})s"
         if target_style == ParameterStyle.POSITIONAL_PYFORMAT:
             return "%s"
         return param_info.placeholder_text

@@ -7,7 +7,7 @@ from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._parsing_utils import parse_table_expression
 
 if TYPE_CHECKING:
-    from sqlspec.statement.builder.protocols import BuilderProtocol
+    from sqlspec.protocols import SQLBuilderProtocol
 
 __all__ = ("JoinClauseMixin",)
 
@@ -22,7 +22,7 @@ class JoinClauseMixin:
         alias: Optional[str] = None,
         join_type: str = "INNER",
     ) -> Self:
-        builder = cast("BuilderProtocol", self)
+        builder = cast("SQLBuilderProtocol", self)
         if builder._expression is None:
             builder._expression = exp.Select()
         if not isinstance(builder._expression, exp.Select):
@@ -82,7 +82,7 @@ class JoinClauseMixin:
         return self.join(table, on, alias, "FULL")
 
     def cross_join(self, table: Union[str, exp.Expression, Any], alias: Optional[str] = None) -> Self:
-        builder = cast("BuilderProtocol", self)
+        builder = cast("SQLBuilderProtocol", self)
         if builder._expression is None:
             builder._expression = exp.Select()
         if not isinstance(builder._expression, exp.Select):

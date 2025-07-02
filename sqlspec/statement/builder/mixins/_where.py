@@ -8,7 +8,7 @@ from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._parsing_utils import parse_column_expression, parse_condition_expression
 
 if TYPE_CHECKING:
-    from sqlspec.statement.builder.protocols import BuilderProtocol
+    from sqlspec.protocols import SQLBuilderProtocol
 
 __all__ = ("WhereClauseMixin",)
 
@@ -41,7 +41,7 @@ class WhereClauseMixin:
         ):
             msg = "Cannot add WHERE clause to non-UPDATE expression"
             raise SQLBuilderError(msg)
-        builder = cast("BuilderProtocol", self)
+        builder = cast("SQLBuilderProtocol", self)
         if builder._expression is None:
             msg = "Cannot add WHERE clause: expression is not initialized."
             raise SQLBuilderError(msg)

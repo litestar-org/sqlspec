@@ -356,12 +356,12 @@ def test_transform_sql_for_parsing(converter: ParameterConverter) -> None:
     transformed_sql, placeholder_map = converter._transform_sql_for_parsing(sql, param_info)
 
     # Should have unique placeholder names
-    assert ":__param_0" in transformed_sql
-    assert ":__param_1" in transformed_sql
+    assert ":param_0" in transformed_sql
+    assert ":param_1" in transformed_sql
 
     # Should have mapping
-    assert "__param_0" in placeholder_map
-    assert "__param_1" in placeholder_map
+    assert "param_0" in placeholder_map
+    assert "param_1" in placeholder_map
 
 
 def test_merge_mixed_parameters(converter: ParameterConverter) -> None:
@@ -375,8 +375,8 @@ def test_merge_mixed_parameters(converter: ParameterConverter) -> None:
 
     assert isinstance(merged, dict)
     assert merged["name"] == "John"
-    assert "_arg_0" in merged
-    assert merged["_arg_0"] == 123
+    assert "arg_0" in merged
+    assert merged["arg_0"] == 123
 
 
 @pytest.mark.parametrize(

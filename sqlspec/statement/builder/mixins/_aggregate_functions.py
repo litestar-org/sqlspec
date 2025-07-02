@@ -4,7 +4,7 @@ from sqlglot import exp
 from typing_extensions import Self
 
 if TYPE_CHECKING:
-    from sqlspec.statement.builder.protocols import SelectBuilderProtocol
+    from sqlspec.protocols import SelectBuilderProtocol
 
 __all__ = ("AggregateFunctionsMixin",)
 

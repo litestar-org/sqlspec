@@ -60,7 +60,9 @@ def test_adbc_driver_initialization_with_config(mock_adbc_connection: Mock) -> N
 
     driver = AdbcDriver(connection=mock_adbc_connection, config=config)
 
-    assert driver.config == config
+    # The driver updates the config to include the dialect
+    assert driver.config.strict_mode == config.strict_mode
+    assert driver.config.dialect == "postgres"  # Added by driver
 
 
 def test_adbc_driver_get_dialect_postgresql() -> None:

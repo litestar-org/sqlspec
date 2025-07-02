@@ -21,6 +21,7 @@ from google.cloud.bigquery import (
 from google.cloud.bigquery.table import Row as BigQueryRow
 
 from sqlspec.driver import SyncDriverAdapterProtocol
+from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
     SyncPipelinedExecutionMixin,
@@ -28,6 +29,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
+from sqlspec.driver.parameters import normalize_parameter_sequence
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import ArrowResult, SQLResult
@@ -140,6 +142,10 @@ class BigQueryDriver(
         Raises:
             SQLSpecError: If value type is not supported.
         """
+        if value is None:
+            # BigQuery handles NULL values without explicit type
+            return ("STRING", None)  # Use STRING type for NULL values
+
         value_type = type(value)
         if value_type is datetime.datetime:
             return ("TIMESTAMP" if value.tzinfo else "DATETIME", None)
@@ -377,109 +383,128 @@ class BigQueryDriver(
     def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[BigQueryConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
-        # SQL should already be in correct format from compile()
-        converted_sql = sql
-        # Parameters are already in the correct format from compile()
-        converted_params = parameters
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
 
-        param_dict: dict[str, Any]
-        if converted_params is None:
-            param_dict = {}
-        elif isinstance(converted_params, dict):
-            # Filter out non-parameter keys (dialect, config, etc.)
-            # Real parameters start with 'param_' or are user-provided named parameters
-            param_dict = {
-                k: v
-                for k, v in converted_params.items()
-                if k.startswith("param_") or (not k.startswith("_") and k not in {"dialect", "config"})
-            }
-        elif isinstance(converted_params, (list, tuple)):
-            # Use param_N to match the compiled SQL placeholders
-            param_dict = {f"param_{i}": val for i, val in enumerate(converted_params)}
-        else:
-            # Single scalar parameter
-            param_dict = {"param_0": converted_params}
+        # BigQuery doesn't have traditional transactions, but we'll use the pattern for consistency
+        # The managed_transaction_sync will just pass through for BigQuery Client objects
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
+            # Normalize parameters using consolidated utility
+            normalized_params = normalize_parameter_sequence(parameters)
+            # Handle parameter conversion
+            converted_params = (
+                normalized_params[0] if normalized_params and len(normalized_params) == 1 else normalized_params
+            )
 
-        bq_params = self._prepare_bq_query_parameters(param_dict)
+            param_dict: dict[str, Any]
+            if converted_params is None:
+                param_dict = {}
+            elif isinstance(converted_params, dict):
+                # Filter out non-parameter keys (dialect, config, etc.)
+                # Real parameters start with 'param_' or are user-provided named parameters
+                param_dict = {
+                    k: v
+                    for k, v in converted_params.items()
+                    if k.startswith("param_") or (not k.startswith("_") and k not in {"dialect", "config"})
+                }
+            elif isinstance(converted_params, (list, tuple)):
+                # Use param_N to match the compiled SQL placeholders
+                param_dict = {f"param_{i}": val for i, val in enumerate(converted_params)}
+            else:
+                # Single scalar parameter
+                param_dict = {"param_0": converted_params}
 
-        query_job = self._run_query_job(converted_sql, bq_params, connection=connection)
+            bq_params = self._prepare_bq_query_parameters(param_dict)
 
-        if query_job.statement_type == "SELECT" or (
-            hasattr(query_job, "schema") and query_job.schema and len(query_job.schema) > 0
-        ):
-            return self._handle_select_job(query_job, statement)
-        return self._handle_dml_job(query_job, statement)
+            query_job = self._run_query_job(sql, bq_params, connection=txn_conn)
+
+            if query_job.statement_type == "SELECT" or (
+                hasattr(query_job, "schema") and query_job.schema and len(query_job.schema) > 0
+            ):
+                return self._handle_select_job(query_job, statement)
+            return self._handle_dml_job(query_job, statement)
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[BigQueryConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
-        # Use a multi-statement script for batch execution
-        script_parts = []
-        all_params: dict[str, Any] = {}
-        param_counter = 0
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
 
-        for params in param_list or []:
-            if isinstance(params, dict):
-                param_dict = params
-            elif isinstance(params, (list, tuple)):
-                param_dict = {f"param_{i}": val for i, val in enumerate(params)}
-            else:
-                # Single scalar parameter
-                param_dict = {"param_0": params}
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
+            # Normalize parameter list using consolidated utility
+            normalized_param_list = normalize_parameter_sequence(param_list)
 
-            # Remap parameters to be unique across the entire script
-            param_mapping = {}
-            current_sql = sql
-            for key, value in param_dict.items():
-                new_key = f"p_{param_counter}"
-                param_counter += 1
-                param_mapping[key] = new_key
-                all_params[new_key] = value
+            # Use a multi-statement script for batch execution
+            script_parts = []
+            all_params: dict[str, Any] = {}
+            param_counter = 0
 
-            for old_key, new_key in param_mapping.items():
-                current_sql = current_sql.replace(f"@{old_key}", f"@{new_key}")
+            for params in normalized_param_list or []:
+                if isinstance(params, dict):
+                    param_dict = params
+                elif isinstance(params, (list, tuple)):
+                    param_dict = {f"param_{i}": val for i, val in enumerate(params)}
+                else:
+                    # Single scalar parameter
+                    param_dict = {"param_0": params}
 
-            script_parts.append(current_sql)
+                # Remap parameters to be unique across the entire script
+                param_mapping = {}
+                current_sql = sql
+                for key, value in param_dict.items():
+                    new_key = f"p_{param_counter}"
+                    param_counter += 1
+                    param_mapping[key] = new_key
+                    all_params[new_key] = value
 
-        # Execute as a single script
-        full_script = ";\n".join(script_parts)
-        bq_params = self._prepare_bq_query_parameters(all_params)
-        # Filter out kwargs that _run_query_job doesn't expect
-        query_kwargs = {k: v for k, v in kwargs.items() if k not in {"parameters", "is_many"}}
-        query_job = self._run_query_job(full_script, bq_params, connection=connection, **query_kwargs)
+                for old_key, new_key in param_mapping.items():
+                    current_sql = current_sql.replace(f"@{old_key}", f"@{new_key}")
 
-        # Wait for the job to complete
-        query_job.result(timeout=kwargs.get("bq_job_timeout"))
-        total_rowcount = query_job.num_dml_affected_rows or 0
+                script_parts.append(current_sql)
 
-        return SQLResult(
-            statement=SQL(sql),
-            data=[],
-            rows_affected=total_rowcount,
-            operation_type="EXECUTE",
-            metadata={"status_message": f"OK - executed batch job {query_job.job_id}"},
-        )
+            # Execute as a single script
+            full_script = ";\n".join(script_parts)
+            bq_params = self._prepare_bq_query_parameters(all_params)
+            # Filter out kwargs that _run_query_job doesn't expect
+            query_kwargs = {k: v for k, v in kwargs.items() if k not in {"parameters", "is_many"}}
+            query_job = self._run_query_job(full_script, bq_params, connection=txn_conn, **query_kwargs)
+
+            # Wait for the job to complete
+            query_job.result(timeout=kwargs.get("bq_job_timeout"))
+            total_rowcount = query_job.num_dml_affected_rows or 0
+
+            return SQLResult(
+                statement=SQL(sql),
+                data=[],
+                rows_affected=total_rowcount,
+                operation_type="EXECUTE",
+                metadata={"status_message": f"OK - executed batch job {query_job.job_id}"},
+            )
 
     def _execute_script(
         self, script: str, connection: Optional[BigQueryConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
-        # BigQuery does not support multi-statement scripts in a single job
-        statements = self._split_script_statements(script)
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
 
-        for statement in statements:
-            if statement:
-                query_job = self._run_query_job(statement, [], connection=connection)
-                query_job.result(timeout=kwargs.get("bq_job_timeout"))
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
+            # BigQuery does not support multi-statement scripts in a single job
+            statements = self._split_script_statements(script)
 
-        return SQLResult(
-            statement=SQL(script),
-            data=[],
-            rows_affected=0,
-            operation_type="SCRIPT",
-            metadata={"status_message": "SCRIPT EXECUTED"},
-            total_statements=len(statements),
-            successful_statements=len(statements),
-        )
+            for statement in statements:
+                if statement:
+                    query_job = self._run_query_job(statement, [], connection=txn_conn)
+                    query_job.result(timeout=kwargs.get("bq_job_timeout"))
+
+            return SQLResult(
+                statement=SQL(script),
+                data=[],
+                rows_affected=0,
+                operation_type="SCRIPT",
+                metadata={"status_message": "SCRIPT EXECUTED"},
+                total_statements=len(statements),
+                successful_statements=len(statements),
+            )
 
     def _connection(self, connection: "Optional[Client]" = None) -> "Client":
         """Get the connection to use for the operation."""

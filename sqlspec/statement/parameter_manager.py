@@ -116,8 +116,8 @@ class ParameterManager:
                 result.append(params[f"pos_param_{i}"])
             elif f"kw_pos_param_{i}" in params:
                 result.append(params[f"kw_pos_param_{i}"])
-            elif f"_arg_{i}" in params:
-                result.append(params[f"_arg_{i}"])
+            elif f"arg_{i}" in params:
+                result.append(params[f"arg_{i}"])
             else:
                 result.append(None)
         return result
@@ -174,11 +174,11 @@ class ParameterManager:
                     result[info.name] = params[info.name]
                 else:
                     for key, value in params.items():
-                        if key.endswith(f"_{info.ordinal}") or key == f"_arg_{info.ordinal}":
+                        if key.endswith(f"_{info.ordinal}") or key == f"arg_{info.ordinal}":
                             result[info.name] = value
                             break
             else:
-                gen_name = f"_arg_{info.ordinal}"
+                gen_name = f"arg_{info.ordinal}"
                 if f"pos_param_{info.ordinal}" in params:
                     result[gen_name] = params[f"pos_param_{info.ordinal}"]
                 elif f"kw_pos_param_{info.ordinal}" in params:
@@ -186,7 +186,7 @@ class ParameterManager:
                 elif gen_name in params:
                     result[gen_name] = params[gen_name]
         for key, value in params.items():
-            if not key.startswith(("pos_param_", "kw_pos_param_", "_arg_")) and key not in result:
+            if not key.startswith(("pos_param_", "kw_pos_param_", "arg_")) and key not in result:
                 result[key] = value
 
         return result

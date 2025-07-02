@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Optional, cast
 from psqlpy import Connection
 
 from sqlspec.driver import AsyncDriverAdapterProtocol
+from sqlspec.driver.connection import managed_transaction_async
 from sqlspec.driver.mixins import (
     AsyncPipelinedExecutionMixin,
     AsyncStorageMixin,
@@ -93,64 +94,98 @@ class PsqlpyDriver(
     async def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
-        conn = self._connection(connection)
-        if self.returns_rows(statement.expression):
-            query_result = await conn.fetch(sql, parameters=parameters)
-            dict_rows: list[dict[str, Any]] = []
-            if query_result:
-                # psqlpy QueryResult has a result() method that returns list of dicts
-                dict_rows = query_result.result()
-            column_names = list(dict_rows[0].keys()) if dict_rows else []
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
+
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            # PSQLPy expects parameters as a list (for $1, $2, etc.) or dict
+            # Ensure we always pass a sequence or mapping, never a scalar
+            final_params: Any
+            if isinstance(parameters, (list, tuple)):
+                final_params = list(parameters)
+            elif isinstance(parameters, dict):
+                final_params = parameters
+            elif parameters is None:
+                final_params = []
+            else:
+                # Single parameter - wrap in list for NUMERIC style ($1)
+                final_params = [parameters]
+
+            if self.returns_rows(statement.expression):
+                query_result = await txn_conn.fetch(sql, parameters=final_params)
+                dict_rows: list[dict[str, Any]] = []
+                if query_result:
+                    # psqlpy QueryResult has a result() method that returns list of dicts
+                    dict_rows = query_result.result()
+                column_names = list(dict_rows[0].keys()) if dict_rows else []
+                return SQLResult(
+                    statement=statement,
+                    data=cast("list[RowT]", dict_rows),
+                    column_names=column_names,
+                    rows_affected=len(dict_rows),
+                    operation_type="SELECT",
+                )
+
+            query_result = await txn_conn.execute(sql, parameters=final_params)
+            # Note: psqlpy doesn't provide rows_affected for DML operations
+            # The QueryResult object only has result(), as_class(), and row_factory() methods
+            affected_count = -1  # Unknown, as psqlpy doesn't provide this info
             return SQLResult(
                 statement=statement,
-                data=cast("list[RowT]", dict_rows),
-                column_names=column_names,
-                rows_affected=len(dict_rows),
-                operation_type="SELECT",
+                data=[],
+                rows_affected=affected_count,
+                operation_type=self._determine_operation_type(statement),
+                metadata={"status_message": "OK"},
             )
-
-        query_result = await conn.execute(sql, parameters=parameters)
-        # Note: psqlpy doesn't provide rows_affected for DML operations
-        # The QueryResult object only has result(), as_class(), and row_factory() methods
-        affected_count = -1  # Unknown, as psqlpy doesn't provide this info
-        return SQLResult(
-            statement=statement,
-            data=[],
-            rows_affected=affected_count,
-            operation_type=self._determine_operation_type(statement),
-            metadata={"status_message": "OK"},
-        )
 
     async def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
-        conn = self._connection(connection)
-        await conn.execute_many(sql, param_list or [])
-        # execute_many doesn't return a value with rows_affected
-        affected_count = -1
-        return SQLResult(
-            statement=SQL(sql),
-            data=[],
-            rows_affected=affected_count,
-            operation_type="EXECUTE",
-            metadata={"status_message": "OK"},
-        )
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
+
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            # PSQLPy expects a list of parameter lists/tuples for execute_many
+            if param_list is None:
+                final_param_list = []
+            elif isinstance(param_list, (list, tuple)):
+                # Ensure each parameter set is a list/tuple
+                final_param_list = [
+                    list(params) if isinstance(params, (list, tuple)) else [params] for params in param_list
+                ]
+            else:
+                # Single parameter set - wrap it
+                final_param_list = [list(param_list) if isinstance(param_list, (list, tuple)) else [param_list]]
+
+            await txn_conn.execute_many(sql, final_param_list)
+            # execute_many doesn't return a value with rows_affected
+            affected_count = -1
+            return SQLResult(
+                statement=SQL(sql),
+                data=[],
+                rows_affected=affected_count,
+                operation_type="EXECUTE",
+                metadata={"status_message": "OK"},
+            )
 
     async def _execute_script(
         self, script: str, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
-        conn = self._connection(connection)
-        # psqlpy can execute multi-statement scripts directly
-        await conn.execute(script)
-        return SQLResult(
-            statement=SQL(script),
-            data=[],
-            rows_affected=0,
-            operation_type="SCRIPT",
-            metadata={"status_message": "SCRIPT EXECUTED"},
-            total_statements=-1,  # Not directly supported, but script is executed
-            successful_statements=-1,
-        )
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
+
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            # psqlpy can execute multi-statement scripts directly
+            await txn_conn.execute(script)
+            return SQLResult(
+                statement=SQL(script),
+                data=[],
+                rows_affected=0,
+                operation_type="SCRIPT",
+                metadata={"status_message": "SCRIPT EXECUTED"},
+                total_statements=-1,  # Not directly supported, but script is executed
+                successful_statements=-1,
+            )
 
     async def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
         self._ensure_pyarrow_installed()

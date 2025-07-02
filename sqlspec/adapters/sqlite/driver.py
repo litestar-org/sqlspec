@@ -4,11 +4,12 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from typing_extensions import TypeAlias
 
 from sqlspec.driver import SyncDriverAdapterProtocol
+from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
     SyncPipelinedExecutionMixin,
@@ -16,6 +17,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
+from sqlspec.driver.parameters import normalize_parameter_sequence
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -148,12 +150,23 @@ class SqliteDriver(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[SqliteConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         """Execute a single statement with parameters."""
-        conn = self._connection(connection)
-        with self._get_cursor(conn) as cursor:
-            # SQLite expects tuple or dict parameters
-            if parameters is not None and not isinstance(parameters, (tuple, list, dict)):
-                parameters = (parameters,)
-            cursor.execute(sql, parameters or ())
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
+            # Normalize parameters using consolidated utility
+            normalized_params_list = normalize_parameter_sequence(parameters)
+            params_for_execute: Any
+            if normalized_params_list and len(normalized_params_list) == 1:
+                # Single parameter should be tuple for SQLite
+                if not isinstance(normalized_params_list[0], (tuple, list, dict)):
+                    params_for_execute = (normalized_params_list[0],)
+                else:
+                    params_for_execute = normalized_params_list[0]
+            else:
+                # Multiple parameters
+                params_for_execute = tuple(normalized_params_list) if normalized_params_list else ()
+
+            cursor.execute(sql, params_for_execute)
             if self.returns_rows(statement.expression):
                 fetched_data: list[sqlite3.Row] = cursor.fetchall()
                 return SQLResult(
@@ -182,42 +195,44 @@ class SqliteDriver(
         **kwargs: Any,
     ) -> SQLResult[RowT]:
         """Execute a statement many times with a list of parameter tuples."""
-        conn = self._connection(connection)
-        if param_list:
-            param_list = self._process_parameters(param_list)
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
+            # Normalize parameter list using consolidated utility
+            normalized_param_list = normalize_parameter_sequence(param_list)
+            formatted_params: list[tuple[Any, ...]] = []
+            if normalized_param_list:
+                for param_set in normalized_param_list:
+                    if isinstance(param_set, (list, tuple)):
+                        formatted_params.append(tuple(param_set))
+                    elif param_set is None:
+                        formatted_params.append(())
+                    else:
+                        formatted_params.append((param_set,))
 
-        formatted_params: list[tuple[Any, ...]] = []
-        if param_list and isinstance(param_list, list):
-            for param_set in cast("list[Union[list, tuple]]", param_list):
-                if isinstance(param_set, (list, tuple)):
-                    formatted_params.append(tuple(param_set))
-                elif param_set is None:
-                    formatted_params.append(())
-                else:
-                    formatted_params.append((param_set,))
+            with self._get_cursor(txn_conn) as cursor:
+                cursor.executemany(sql, formatted_params)
 
-        with self._get_cursor(conn) as cursor:
-            cursor.executemany(sql, formatted_params)
+                if statement is None:
+                    statement = SQL(sql)
 
-            if statement is None:
-                statement = SQL(sql)
-
-            return SQLResult(
-                statement=statement,
-                data=[],
-                rows_affected=cursor.rowcount,
-                operation_type="EXECUTE",  # executemany is typically used for DML
-                metadata={"status_message": "OK"},
-            )
+                return SQLResult(
+                    statement=statement,
+                    data=[],
+                    rows_affected=cursor.rowcount,
+                    operation_type="EXECUTE",
+                    metadata={"status_message": "OK"},
+                )
 
     def _execute_script(
         self, script: str, connection: Optional[SqliteConnection] = None, statement: Optional[SQL] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         """Execute a script on the SQLite connection."""
-        conn = self._connection(connection)
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
         with self._get_cursor(conn) as cursor:
             cursor.executescript(script)
-        # executescript doesn't auto-commit in some cases
+        # executescript doesn't auto-commit in some cases - force commit
         conn.commit()
 
         if statement is None:

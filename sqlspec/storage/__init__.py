@@ -8,8 +8,8 @@ This module provides a flexible storage system with:
 - Capability-based backend selection
 """
 
+from sqlspec.protocols import ObjectStoreProtocol
 from sqlspec.storage.capabilities import HasStorageCapabilities, StorageCapabilities
-from sqlspec.storage.protocol import ObjectStoreProtocol
 from sqlspec.storage.registry import StorageRegistry
 
 storage_registry = StorageRegistry()

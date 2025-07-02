@@ -2,16 +2,19 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import replace
-from typing import Any, Optional, Union, overload
+from typing import TYPE_CHECKING, Any, Optional, Union, overload
 
 from sqlspec.driver._common import CommonDriverAttributesMixin
+from sqlspec.driver.parameters import process_execute_many_parameters
 from sqlspec.statement.builder import DeleteBuilder, InsertBuilder, QueryBuilder, SelectBuilder, UpdateBuilder
-from sqlspec.statement.filters import StatementFilter
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig, Statement
 from sqlspec.typing import ConnectionT, DictRow, ModelDTOT, RowT, StatementParameters
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import can_convert_to_schema
+
+if TYPE_CHECKING:
+    from sqlspec.statement.filters import StatementFilter
 
 logger = get_logger("sqlspec")
 
@@ -57,7 +60,26 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
                 new_config = _config
                 if self.dialect and not new_config.dialect:
                     new_config = replace(new_config, dialect=self.dialect)
-                return SQL(statement._statement, *parameters, config=new_config, **kwargs)
+                # Use raw SQL if available to ensure proper parsing with dialect
+                sql_source = statement._raw_sql or statement._statement
+                return SQL(sql_source, *parameters, config=new_config, **kwargs)
+            # Even without additional parameters, ensure dialect is set
+            if self.dialect and (not statement._config.dialect or statement._config.dialect != self.dialect):
+                new_config = replace(statement._config, dialect=self.dialect)
+                # Use raw SQL if available to ensure proper parsing with dialect
+                sql_source = statement._raw_sql or statement._statement
+                # Preserve parameters and state when creating new SQL object
+                # Use the public parameters property which always has the right value
+                existing_state = {
+                    "is_many": statement._is_many,
+                    "is_script": statement._is_script,
+                    "original_parameters": statement._original_parameters,
+                }
+                if statement.parameters:
+                    return SQL(
+                        sql_source, parameters=statement.parameters, config=new_config, _existing_state=existing_state
+                    )
+                return SQL(sql_source, config=new_config, _existing_state=existing_state)
             return statement
         new_config = _config
         if self.dialect and not new_config.dialect:
@@ -112,7 +134,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
     @overload
     def execute(
         self,
-        statement: "Statement",
+        statement: "Union[str, SQL]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
@@ -149,7 +171,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
         # If schema_type is provided and we have data, convert it
         if schema_type and result.data and can_convert_to_schema(self):
             converted_data = list(self.to_schema(data=result.data, schema_type=schema_type))
-            return SQLResult(
+            return SQLResult[ModelDTOT](
                 statement=result.statement,
                 data=converted_data,
                 column_names=result.column_names,
@@ -171,21 +193,8 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> "SQLResult[RowT]":
-        # Separate parameters from filters
-        param_sequences = []
-        filters = []
-        for param in parameters:
-            if isinstance(param, StatementFilter):
-                filters.append(param)
-            else:
-                param_sequences.append(param)
+        _filters, param_sequence = process_execute_many_parameters(parameters)
 
-        # Use first parameter as the sequence for execute_many
-        param_sequence = param_sequences[0] if param_sequences else None
-        if isinstance(param_sequence, tuple):
-            param_sequence = list(param_sequence)
-        if param_sequence is not None and not isinstance(param_sequence, list):
-            param_sequence = list(param_sequence) if hasattr(param_sequence, "__iter__") else None
         sql_statement = self._build_statement(statement, _config=_config or self.config, **kwargs).as_many(
             param_sequence
         )

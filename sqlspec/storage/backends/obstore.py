@@ -50,7 +50,7 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
         supports_multipart_upload=True,
         supports_compression=True,
         is_cloud_native=True,
-        has_low_latency=True,  # Native Rust implementation
+        has_low_latency=True,
     )
 
     def __init__(self, store_uri: str, base_path: str = "", **store_options: Any) -> None:

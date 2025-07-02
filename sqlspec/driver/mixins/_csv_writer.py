@@ -8,6 +8,8 @@ from sqlspec.typing import PYARROW_INSTALLED
 if TYPE_CHECKING:
     from sqlspec.statement.result import SQLResult
 
+__all__ = ("write_csv", "write_csv_default", "write_csv_optimized")
+
 
 def _raise_no_column_names_error() -> None:
     """Raise error when no column names are available."""

@@ -7,7 +7,7 @@ from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._parsing_utils import parse_order_expression
 
 if TYPE_CHECKING:
-    from sqlspec.statement.builder.protocols import BuilderProtocol
+    from sqlspec.protocols import SQLBuilderProtocol
 
 __all__ = ("OrderByClauseMixin",)
 
@@ -28,7 +28,7 @@ class OrderByClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        builder = cast("BuilderProtocol", self)
+        builder = cast("SQLBuilderProtocol", self)
         if not isinstance(builder._expression, exp.Select):
             msg = "ORDER BY is only supported for SELECT statements."
             raise SQLBuilderError(msg)

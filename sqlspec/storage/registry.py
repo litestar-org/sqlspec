@@ -8,14 +8,13 @@ This module provides a flexible, lazy-loading storage registry that supports:
 - Automatic instrumentation integration
 """
 
-# TODO: TRY300 - Review try-except patterns for else block opportunities
 import logging
 from pathlib import Path
 from typing import Any, Optional, TypeVar, Union, cast
 
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
+from sqlspec.protocols import ObjectStoreProtocol
 from sqlspec.storage.capabilities import StorageCapabilities
-from sqlspec.storage.protocol import ObjectStoreProtocol
 from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED
 
 __all__ = ("StorageRegistry", "storage_registry")

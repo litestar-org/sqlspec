@@ -18,8 +18,8 @@ class TestParameterNormalization:
         # Check that normalization occurred
         transformed_sql, _param_info, _merged_params, extra_info = result
         assert extra_info["was_normalized"] is True
-        assert ":__param_0" in transformed_sql
-        assert ":__param_1" in transformed_sql
+        assert ":param_0" in transformed_sql
+        assert ":param_1" in transformed_sql
         assert "%s" not in transformed_sql
 
     def test_pyformat_named_normalization(self) -> None:
@@ -32,8 +32,8 @@ class TestParameterNormalization:
 
         transformed_sql, _param_info, _merged_params, extra_info = result
         assert extra_info["was_normalized"] is True
-        assert ":__param_0" in transformed_sql
-        assert ":__param_1" in transformed_sql
+        assert ":param_0" in transformed_sql
+        assert ":param_1" in transformed_sql
         assert "%(name)s" not in transformed_sql
         assert "%(age)s" not in transformed_sql
 
@@ -66,7 +66,7 @@ class TestParameterNormalization:
 
         # Should have %s back
         assert "%s" in result_sql
-        assert ":__param_" not in result_sql
+        assert ":param_" not in result_sql
 
     def test_mixed_incompatible_styles(self) -> None:
         """Test error handling for mixed SQLGlot-incompatible styles."""
@@ -103,9 +103,9 @@ class TestParameterNormalization:
         transformed_sql, _param_info, merged_params, _extra_info = result
 
         # Check order is preserved
-        assert ":__param_0" in transformed_sql
-        assert ":__param_1" in transformed_sql
-        assert ":__param_2" in transformed_sql
+        assert ":param_0" in transformed_sql
+        assert ":param_1" in transformed_sql
+        assert ":param_2" in transformed_sql
 
         # Check values are in correct order
         assert merged_params == params
@@ -121,7 +121,7 @@ class TestParameterNormalization:
         transformed_sql, _param_info, _merged_params, extra_info = result
         # Oracle numeric is incompatible with SQLGlot, so it should be normalized
         assert extra_info["was_normalized"] is True
-        assert ":__param_0" in transformed_sql
-        assert ":__param_1" in transformed_sql
+        assert ":param_0" in transformed_sql
+        assert ":param_1" in transformed_sql
         assert ":1" not in transformed_sql
         assert ":2" not in transformed_sql

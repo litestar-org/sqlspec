@@ -9,7 +9,6 @@ and storage backend operations for optimal performance.
 """
 
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
-# Allow Any types for mixin compatibility
 import logging
 import tempfile
 from abc import ABC
@@ -19,6 +18,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 from urllib.parse import urlparse
 
 from sqlspec.driver.mixins._csv_writer import write_csv
+from sqlspec.driver.parameters import separate_filters_and_parameters
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.statement import SQL, ArrowResult, StatementFilter
 from sqlspec.storage import storage_registry
@@ -29,9 +29,9 @@ from sqlspec.utils.sync_tools import async_
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
+    from sqlspec.protocols import ObjectStoreProtocol
     from sqlspec.statement import SQLResult, Statement
     from sqlspec.statement.sql import SQLConfig
-    from sqlspec.storage.protocol import ObjectStoreProtocol
     from sqlspec.typing import ConnectionT
 
 __all__ = ("AsyncStorageMixin", "SyncStorageMixin")
@@ -41,33 +41,13 @@ logger = logging.getLogger(__name__)
 WINDOWS_PATH_MIN_LENGTH = 3
 
 
-def _separate_filters_from_parameters(
-    parameters: "tuple[Any, ...]",
-) -> "tuple[list[StatementFilter], Optional[StatementParameters]]":
-    """Separate filters from parameters in positional args."""
-    filters: list[StatementFilter] = []
-    params: list[Any] = []
-
-    for arg in parameters:
-        if isinstance(arg, StatementFilter):
-            filters.append(arg)
-        else:
-            params.append(arg)
-    if len(params) == 0:
-        return filters, None
-    if len(params) == 1:
-        return filters, params[0]
-    return filters, params
-
-
 class StorageMixinBase(ABC):
     """Base class with common storage functionality."""
 
     __slots__ = ()
 
-    # These attributes are expected to be provided by the driver class
-    config: Any  # Driver config - drivers use 'config' not '_config'
-    _connection: Any  # Database connection
+    config: Any
+    _connection: Any
     dialect: "DialectType"
     supports_native_parquet_export: "ClassVar[bool]"
     supports_native_parquet_import: "ClassVar[bool]"
@@ -291,7 +271,7 @@ class SyncStorageMixin(StorageMixinBase):
         Returns:
             Number of rows exported
         """
-        filters, params = _separate_filters_from_parameters(parameters)
+        filters, params = separate_filters_and_parameters(parameters)
 
         # For storage operations, disable transformations that might add unwanted parameters
         if _config is None:
@@ -682,7 +662,22 @@ class AsyncStorageMixin(StorageMixinBase):
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> int:
-        sql = self._build_statement(statement, *parameters, _config=_config or self.config, **kwargs)  # type: ignore[attr-defined]
+        filters, params = separate_filters_and_parameters(parameters)
+
+        # For storage operations, disable transformations that might add unwanted parameters
+        if _config is None:
+            _config = self.config
+            if _config and not _config.dialect:
+                _config = replace(_config, dialect=self.dialect)
+        if _config and _config.enable_transformations:
+            _config = replace(_config, enable_transformations=False)
+
+        sql = (
+            SQL(statement, parameters=params, config=_config) if params is not None else SQL(statement, config=_config)
+        )
+        for filter_ in filters:
+            sql = sql.filter(filter_)
+
         return await self._export_to_storage(sql, destination_uri, format, connection=_connection, **kwargs)
 
     async def _export_to_storage(

@@ -7,7 +7,7 @@ from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._parsing_utils import parse_column_expression
 
 if TYPE_CHECKING:
-    from sqlspec.statement.builder.protocols import BuilderProtocol
+    from sqlspec.protocols import SQLBuilderProtocol
 
 __all__ = ("SelectColumnsMixin",)
 
@@ -24,7 +24,7 @@ class SelectColumnsMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        builder = cast("BuilderProtocol", self)
+        builder = cast("SQLBuilderProtocol", self)
         if builder._expression is None:
             builder._expression = exp.Select()
         if not isinstance(builder._expression, exp.Select):
@@ -46,7 +46,7 @@ class SelectColumnsMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        builder = cast("BuilderProtocol", self)
+        builder = cast("SQLBuilderProtocol", self)
         if builder._expression is None:
             builder._expression = exp.Select()
         if not isinstance(builder._expression, exp.Select):

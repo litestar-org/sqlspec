@@ -16,6 +16,12 @@ from sqlspec.statement.filters import StatementFilter
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.type_guards import (
+    is_async_pipeline_capable_driver,
+    is_async_transaction_state_capable,
+    is_sync_pipeline_capable_driver,
+    is_sync_transaction_state_capable,
+)
 
 if TYPE_CHECKING:
     from typing import Literal
@@ -210,8 +216,8 @@ class Pipeline:
         if filters:
             self._apply_global_filters(filters)
 
-        if hasattr(self.driver, "_execute_pipeline_native"):
-            results = self.driver._execute_pipeline_native(self._operations, **self.options)  # pyright: ignore
+        if is_sync_pipeline_capable_driver(self.driver):
+            results = self.driver._execute_pipeline_native(self._operations, **self.options)
         else:
             results = self._execute_pipeline_simulated()
 
@@ -236,24 +242,19 @@ class Pipeline:
         try:
             connection = self.driver._connection()
 
-            # Start transaction if not already in one
-            if self.isolation_level:
-                pass  # Driver-specific implementation
-
-            if hasattr(connection, "in_transaction") and not connection.in_transaction():
-                if hasattr(connection, "begin"):
-                    connection.begin()
+            if is_sync_transaction_state_capable(connection) and not connection.in_transaction():
+                connection.begin()
                 auto_transaction = True
 
             for i, op in enumerate(self._operations):
                 self._execute_single_operation(i, op, results, connection, auto_transaction)
 
             # Commit if we started the transaction
-            if auto_transaction and hasattr(connection, "commit"):
+            if auto_transaction and is_sync_transaction_state_capable(connection):
                 connection.commit()
 
         except Exception as e:
-            if connection and auto_transaction and hasattr(connection, "rollback"):
+            if connection and auto_transaction and is_sync_transaction_state_capable(connection):
                 connection.rollback()
             if not isinstance(e, PipelineExecutionError):
                 msg = f"Pipeline execution failed: {e}"
@@ -287,7 +288,7 @@ class Pipeline:
                 )
                 results.append(error_result)
             else:
-                if auto_transaction and hasattr(connection, "rollback"):
+                if auto_transaction and is_sync_transaction_state_capable(connection):
                     connection.rollback()
                 msg = f"Pipeline failed at operation {i}: {e}"
                 raise PipelineExecutionError(
@@ -305,13 +306,12 @@ class Pipeline:
         """Apply filters to a SQL object."""
         result = sql
         for filter_obj in filters:
-            if hasattr(filter_obj, "apply"):
-                result = cast("Any", filter_obj).apply(result)
+            result = filter_obj.append_to_statement(result)
         return result
 
     def _has_native_support(self) -> bool:
         """Check if driver has native pipeline support."""
-        return hasattr(self.driver, "_execute_pipeline_native")
+        return is_sync_pipeline_capable_driver(self.driver)
 
     def _process_parameters(self, params: tuple[Any, ...]) -> tuple["list[StatementFilter]", "Optional[Any]"]:
         """Extract filters and parameters from mixed args.
@@ -425,7 +425,7 @@ class AsyncPipeline:
         if not self._operations:
             return []
 
-        if hasattr(self.driver, "_execute_pipeline_native"):
+        if is_async_pipeline_capable_driver(self.driver):
             results = await cast("Any", self.driver)._execute_pipeline_native(self._operations, **self.options)
         else:
             results = await self._execute_pipeline_simulated()
@@ -451,19 +451,18 @@ class AsyncPipeline:
         try:
             connection = self.driver._connection()
 
-            if hasattr(connection, "in_transaction") and not connection.in_transaction():
-                if hasattr(connection, "begin"):
-                    await connection.begin()
+            if is_async_transaction_state_capable(connection) and not connection.in_transaction():
+                await connection.begin()
                 auto_transaction = True
 
             for i, op in enumerate(self._operations):
                 await self._execute_single_operation_async(i, op, results, connection, auto_transaction)
 
-            if auto_transaction and hasattr(connection, "commit"):
+            if auto_transaction and is_async_transaction_state_capable(connection):
                 await connection.commit()
 
         except Exception as e:
-            if connection and auto_transaction and hasattr(connection, "rollback"):
+            if connection and auto_transaction and is_async_transaction_state_capable(connection):
                 await connection.rollback()
             if not isinstance(e, PipelineExecutionError):
                 msg = f"Async pipeline execution failed: {e}"
@@ -496,7 +495,7 @@ class AsyncPipeline:
                 )
                 results.append(error_result)
             else:
-                if auto_transaction and hasattr(connection, "rollback"):
+                if auto_transaction and is_async_transaction_state_capable(connection):
                     await connection.rollback()
                 msg = f"Async pipeline failed at operation {i}: {e}"
                 raise PipelineExecutionError(
@@ -505,7 +504,7 @@ class AsyncPipeline:
 
     def _has_native_support(self) -> bool:
         """Check if driver has native pipeline support."""
-        return hasattr(self.driver, "_execute_pipeline_native")
+        return is_async_pipeline_capable_driver(self.driver)
 
     @property
     def operations(self) -> "list[PipelineOperation]":

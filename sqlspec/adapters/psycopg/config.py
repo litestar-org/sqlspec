@@ -284,8 +284,14 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 "num_workers": all_config.pop("num_workers", 3),
             }
 
+            # Capture autocommit setting before configuring the pool
+            autocommit_setting = all_config.get("autocommit")
+
             def configure_connection(conn: "PsycopgSyncConnection") -> None:
                 conn.row_factory = dict_row
+                # Apply autocommit setting if specified
+                if autocommit_setting is not None:
+                    conn.autocommit = autocommit_setting
 
             pool_params["configure"] = all_config.pop("configure", configure_connection)
 
@@ -614,8 +620,14 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             "num_workers": all_config.pop("num_workers", 3),
         }
 
+        # Capture autocommit setting before configuring the pool
+        autocommit_setting = all_config.get("autocommit")
+
         async def configure_connection(conn: "PsycopgAsyncConnection") -> None:
             conn.row_factory = dict_row
+            # Apply autocommit setting if specified (async version requires await)
+            if autocommit_setting is not None:
+                await conn.set_autocommit(autocommit_setting)
 
         pool_params["configure"] = all_config.pop("configure", configure_connection)
 

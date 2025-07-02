@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Optional
 import aiosqlite
 
 from sqlspec.driver import AsyncDriverAdapterProtocol
+from sqlspec.driver.connection import managed_transaction_async
 from sqlspec.driver.mixins import (
     AsyncPipelinedExecutionMixin,
     AsyncStorageMixin,
@@ -15,6 +16,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
+from sqlspec.driver.parameters import normalize_parameter_sequence
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -138,81 +140,97 @@ class AiosqliteDriver(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         conn = self._connection(connection)
-        # Note: SQL was already rendered with appropriate placeholder style in _execute_statement
-        if ":param_" in sql or (parameters and isinstance(parameters, dict)):
-            # SQL has named placeholders, ensure params are dict
-            converted_params = self._convert_parameters_to_driver_format(
-                sql, parameters, target_style=ParameterStyle.NAMED_COLON
-            )
-        else:
-            # SQL has positional placeholders, ensure params are list/tuple
-            converted_params = self._convert_parameters_to_driver_format(
-                sql, parameters, target_style=ParameterStyle.QMARK
-            )
-        async with self._get_cursor(conn) as cursor:
-            # Aiosqlite handles both dict and tuple parameters
-            await cursor.execute(sql, converted_params or ())
-            if self.returns_rows(statement.expression):
-                fetched_data = await cursor.fetchall()
-                column_names = [desc[0] for desc in cursor.description or []]
-                data_list: list[Any] = list(fetched_data) if fetched_data else []
-                return SQLResult(
-                    statement=statement,
-                    data=data_list,
-                    column_names=column_names,
-                    rows_affected=len(data_list),
-                    operation_type="SELECT",
+
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            normalized_params = normalize_parameter_sequence(parameters)
+
+            # Extract the actual parameters from the normalized list
+            if normalized_params and len(normalized_params) == 1:
+                actual_params = normalized_params[0]
+            else:
+                actual_params = normalized_params
+
+            # AIOSQLite expects tuple or dict - handle parameter conversion
+            if ":param_" in sql or (isinstance(actual_params, dict)):
+                # SQL has named placeholders, ensure params are dict
+                converted_params = self._convert_parameters_to_driver_format(
+                    sql, actual_params, target_style=ParameterStyle.NAMED_COLON
+                )
+            else:
+                # SQL has positional placeholders, ensure params are list/tuple
+                converted_params = self._convert_parameters_to_driver_format(
+                    sql, actual_params, target_style=ParameterStyle.QMARK
                 )
 
-            return SQLResult(
-                statement=statement,
-                data=[],
-                rows_affected=cursor.rowcount,
-                operation_type=self._determine_operation_type(statement),
-                metadata={"status_message": "OK"},
-            )
+            async with self._get_cursor(txn_conn) as cursor:
+                # Aiosqlite handles both dict and tuple parameters
+                await cursor.execute(sql, converted_params or ())
+                if self.returns_rows(statement.expression):
+                    fetched_data = await cursor.fetchall()
+                    column_names = [desc[0] for desc in cursor.description or []]
+                    data_list: list[Any] = list(fetched_data) if fetched_data else []
+                    return SQLResult(
+                        statement=statement,
+                        data=data_list,
+                        column_names=column_names,
+                        rows_affected=len(data_list),
+                        operation_type="SELECT",
+                    )
+
+                return SQLResult(
+                    statement=statement,
+                    data=[],
+                    rows_affected=cursor.rowcount,
+                    operation_type=self._determine_operation_type(statement),
+                    metadata={"status_message": "OK"},
+                )
 
     async def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
-        conn = self._connection(connection)
-        logger.debug("Executing SQL (executemany): %s", sql)
-        if param_list:
-            logger.debug("Query parameters (batch): %s", param_list)
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
 
-        params_list: list[tuple[Any, ...]] = []
-        if param_list and isinstance(param_list, Sequence):
-            for param_set in param_list:
-                if isinstance(param_set, (list, tuple)):
-                    params_list.append(tuple(param_set))
-                elif param_set is None:
-                    params_list.append(())
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            # Normalize parameter list using consolidated utility
+            normalized_param_list = normalize_parameter_sequence(param_list)
 
-        async with self._get_cursor(conn) as cursor:
-            await cursor.executemany(sql, params_list)
-            return SQLResult(
-                statement=SQL(sql),
-                data=[],
-                rows_affected=cursor.rowcount,
-                operation_type="EXECUTE",
-                metadata={"status_message": "OK"},
-            )
+            params_list: list[tuple[Any, ...]] = []
+            if normalized_param_list and isinstance(normalized_param_list, Sequence):
+                for param_set in normalized_param_list:
+                    if isinstance(param_set, (list, tuple)):
+                        params_list.append(tuple(param_set))
+                    elif param_set is None:
+                        params_list.append(())
+
+            async with self._get_cursor(txn_conn) as cursor:
+                await cursor.executemany(sql, params_list)
+                return SQLResult(
+                    statement=SQL(sql),
+                    data=[],
+                    rows_affected=cursor.rowcount,
+                    operation_type="EXECUTE",
+                    metadata={"status_message": "OK"},
+                )
 
     async def _execute_script(
         self, script: str, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
-        conn = self._connection(connection)
-        async with self._get_cursor(conn) as cursor:
-            await cursor.executescript(script)
-        return SQLResult(
-            statement=SQL(script),
-            data=[],
-            rows_affected=0,
-            operation_type="SCRIPT",
-            metadata={"status_message": "SCRIPT EXECUTED"},
-            total_statements=-1,  # AIOSQLite doesn't provide this info
-            successful_statements=-1,
-        )
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
+
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            async with self._get_cursor(txn_conn) as cursor:
+                await cursor.executescript(script)
+            return SQLResult(
+                statement=SQL(script),
+                data=[],
+                rows_affected=0,
+                operation_type="SCRIPT",
+                metadata={"status_message": "SCRIPT EXECUTED"},
+                total_statements=-1,  # AIOSQLite doesn't provide this info
+                successful_statements=-1,
+            )
 
     async def _bulk_load_file(self, file_path: Path, table_name: str, format: str, mode: str, **options: Any) -> int:
         """Database-specific bulk load implementation using storage backend."""

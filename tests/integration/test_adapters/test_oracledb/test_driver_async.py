@@ -368,8 +368,8 @@ async def test_async_to_parquet(oracle_async_session: OracleAsyncConfig) -> None
         """
         await driver.execute_script(sql)
         # Insert test records
-        await driver.execute("INSERT INTO test_table (id, name) VALUES (1, :1)", ("pq1",))
-        await driver.execute("INSERT INTO test_table (id, name) VALUES (2, :1)", ("pq2",))
+        await driver.execute("INSERT INTO test_table (id, name) VALUES (1, :name)", {"name": "pq1"})
+        await driver.execute("INSERT INTO test_table (id, name) VALUES (2, :name)", {"name": "pq2"})
         statement = "SELECT name, id FROM test_table ORDER BY name"
         import tempfile
 

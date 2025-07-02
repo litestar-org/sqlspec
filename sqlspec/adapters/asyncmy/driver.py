@@ -7,6 +7,7 @@ from asyncmy import Connection
 from typing_extensions import TypeAlias
 
 from sqlspec.driver import AsyncDriverAdapterProtocol
+from sqlspec.driver.connection import managed_transaction_async
 from sqlspec.driver.mixins import (
     AsyncPipelinedExecutionMixin,
     AsyncStorageMixin,
@@ -14,6 +15,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
+from sqlspec.driver.parameters import normalize_parameter_sequence
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -86,83 +88,100 @@ class AsyncmyDriver(
     async def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: "Optional[AsyncmyConnection]" = None, **kwargs: Any
     ) -> SQLResult[RowT]:
-        conn = self._connection(connection)
-        # AsyncMy doesn't like empty lists/tuples, convert to None
-        if not parameters:
-            parameters = None
-        async with self._get_cursor(conn) as cursor:
-            # AsyncMy expects list/tuple parameters or dict for named params
-            await cursor.execute(sql, parameters)
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
 
-            if self.returns_rows(statement.expression):
-                # For SELECT queries, fetch data and return SQLResult
-                data = await cursor.fetchall()
-                column_names = [desc[0] for desc in cursor.description or []]
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            # Normalize parameters using consolidated utility
+            normalized_params = normalize_parameter_sequence(parameters)
+            # AsyncMy doesn't like empty lists/tuples, convert to None
+            final_params = (
+                normalized_params[0] if normalized_params and len(normalized_params) == 1 else normalized_params
+            )
+            if not final_params:
+                final_params = None
+
+            async with self._get_cursor(txn_conn) as cursor:
+                # AsyncMy expects list/tuple parameters or dict for named params
+                await cursor.execute(sql, final_params)
+
+                if self.returns_rows(statement.expression):
+                    # For SELECT queries, fetch data and return SQLResult
+                    data = await cursor.fetchall()
+                    column_names = [desc[0] for desc in cursor.description or []]
+                    return SQLResult(
+                        statement=statement,
+                        data=data,
+                        column_names=column_names,
+                        rows_affected=len(data),
+                        operation_type="SELECT",
+                    )
+
+                # For DML/DDL queries
                 return SQLResult(
                     statement=statement,
-                    data=data,
-                    column_names=column_names,
-                    rows_affected=len(data),
-                    operation_type="SELECT",
+                    data=[],
+                    rows_affected=cursor.rowcount if cursor.rowcount is not None else -1,
+                    operation_type=self._determine_operation_type(statement),
+                    metadata={"status_message": "OK"},
                 )
-
-            # For DML/DDL queries
-            return SQLResult(
-                statement=statement,
-                data=[],
-                rows_affected=cursor.rowcount if cursor.rowcount is not None else -1,
-                operation_type=self._determine_operation_type(statement),
-                metadata={"status_message": "OK"},
-            )
 
     async def _execute_many(
         self, sql: str, param_list: Any, connection: "Optional[AsyncmyConnection]" = None, **kwargs: Any
     ) -> SQLResult[RowT]:
-        conn = self._connection(connection)
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
 
-        params_list: list[Union[list[Any], tuple[Any, ...]]] = []
-        if param_list and isinstance(param_list, Sequence):
-            for param_set in param_list:
-                if isinstance(param_set, (list, tuple)):
-                    params_list.append(param_set)
-                elif param_set is None:
-                    params_list.append([])
-                else:
-                    params_list.append([param_set])
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            # Normalize parameter list using consolidated utility
+            normalized_param_list = normalize_parameter_sequence(param_list)
 
-        async with self._get_cursor(conn) as cursor:
-            await cursor.executemany(sql, params_list)
-            return SQLResult(
-                statement=SQL(sql),
-                data=[],
-                rows_affected=cursor.rowcount if cursor.rowcount != -1 else len(params_list),
-                operation_type="EXECUTE",
-                metadata={"status_message": "OK"},
-            )
+            params_list: list[Union[list[Any], tuple[Any, ...]]] = []
+            if normalized_param_list and isinstance(normalized_param_list, Sequence):
+                for param_set in normalized_param_list:
+                    if isinstance(param_set, (list, tuple)):
+                        params_list.append(param_set)
+                    elif param_set is None:
+                        params_list.append([])
+                    else:
+                        params_list.append([param_set])
+
+            async with self._get_cursor(txn_conn) as cursor:
+                await cursor.executemany(sql, params_list)
+                return SQLResult(
+                    statement=SQL(sql),
+                    data=[],
+                    rows_affected=cursor.rowcount if cursor.rowcount != -1 else len(params_list),
+                    operation_type="EXECUTE",
+                    metadata={"status_message": "OK"},
+                )
 
     async def _execute_script(
         self, script: str, connection: "Optional[AsyncmyConnection]" = None, **kwargs: Any
     ) -> SQLResult[RowT]:
-        conn = self._connection(connection)
-        # AsyncMy may not support multi-statement scripts without CLIENT_MULTI_STATEMENTS flag
-        statements = self._split_script_statements(script)
-        statements_executed = 0
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
 
-        async with self._get_cursor(conn) as cursor:
-            for statement_str in statements:
-                if statement_str:
-                    await cursor.execute(statement_str)
-                    statements_executed += 1
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            # AsyncMy may not support multi-statement scripts without CLIENT_MULTI_STATEMENTS flag
+            statements = self._split_script_statements(script)
+            statements_executed = 0
 
-        return SQLResult(
-            statement=SQL(script),
-            data=[],
-            rows_affected=0,
-            operation_type="SCRIPT",
-            metadata={"status_message": "SCRIPT EXECUTED"},
-            total_statements=statements_executed,
-            successful_statements=statements_executed,
-        )
+            async with self._get_cursor(txn_conn) as cursor:
+                for statement_str in statements:
+                    if statement_str:
+                        await cursor.execute(statement_str)
+                        statements_executed += 1
+
+            return SQLResult(
+                statement=SQL(script),
+                data=[],
+                rows_affected=0,
+                operation_type="SCRIPT",
+                metadata={"status_message": "SCRIPT EXECUTED"},
+                total_statements=statements_executed,
+                successful_statements=statements_executed,
+            )
 
     async def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
         self._ensure_pyarrow_installed()

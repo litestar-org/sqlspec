@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sqlspec.storage.protocol import ObjectStoreProtocol
+from sqlspec.protocols import ObjectStoreProtocol
 from sqlspec.storage.registry import StorageRegistry
 
 

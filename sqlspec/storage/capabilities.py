@@ -6,6 +6,8 @@ This module provides a centralized way to track and query storage backend capabi
 from dataclasses import dataclass
 from typing import ClassVar
 
+__all__ = ("HasStorageCapabilities", "StorageCapabilities")
+
 
 @dataclass
 class StorageCapabilities:

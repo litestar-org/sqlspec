@@ -247,7 +247,7 @@ class FSSpecBackend(ObjectStoreBase, HasStorageCapabilities):
         return await async_(self.read_bytes)(path, **kwargs)
 
     async def write_bytes_async(self, path: Union[str, Path], data: bytes, **kwargs: Any) -> None:
-        """Async write bytes. Wras the sync implementation."""
+        """Async write bytes. Wraps the sync implementation."""
         return await async_(self.write_bytes)(path, data, **kwargs)
 
     async def _stream_file_batches_async(self, obj_path: Union[str, Path]) -> "AsyncIterator[ArrowRecordBatch]":

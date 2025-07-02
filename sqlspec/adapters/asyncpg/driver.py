@@ -1,5 +1,4 @@
 import re
-from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from asyncpg import Connection as AsyncpgNativeConnection
@@ -7,6 +6,7 @@ from asyncpg import Record
 from typing_extensions import TypeAlias
 
 from sqlspec.driver import AsyncDriverAdapterProtocol
+from sqlspec.driver.connection import managed_transaction_async
 from sqlspec.driver.mixins import (
     AsyncPipelinedExecutionMixin,
     AsyncStorageMixin,
@@ -14,6 +14,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
+from sqlspec.driver.parameters import normalize_parameter_sequence
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -120,96 +121,102 @@ class AsyncpgDriver(
     async def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
-        conn = self._connection(connection)
-        parameters = self._process_parameters(parameters)
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
 
         if statement.is_many:
             # This should have gone to _execute_many, redirect it
             return await self._execute_many(sql, parameters, connection=connection, **kwargs)
 
-        # AsyncPG expects parameters as *args, not a single list
-        args_for_driver: list[Any] = []
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            # Normalize parameters using consolidated utility
+            normalized_params = normalize_parameter_sequence(parameters)
+            # AsyncPG expects parameters as *args, not a single list
+            args_for_driver: list[Any] = []
+            if normalized_params:
+                # normalized_params is already a list, just use it directly
+                args_for_driver = normalized_params
 
-        if parameters is not None:
-            if isinstance(parameters, (list, tuple)):
-                args_for_driver.extend(parameters)
-            else:
-                args_for_driver.append(parameters)
+            if self.returns_rows(statement.expression):
+                records = await txn_conn.fetch(sql, *args_for_driver)
+                data = [dict(record) for record in records]
+                column_names = list(records[0].keys()) if records else []
+                return SQLResult(
+                    statement=statement,
+                    data=cast("list[RowT]", data),
+                    column_names=column_names,
+                    rows_affected=len(records),
+                    operation_type="SELECT",
+                )
 
-        if self.returns_rows(statement.expression):
-            records = await conn.fetch(sql, *args_for_driver)
-            data = [dict(record) for record in records]
-            column_names = list(records[0].keys()) if records else []
+            status = await txn_conn.execute(sql, *args_for_driver)
+            # Parse row count from status string
+            rows_affected = 0
+            if status and isinstance(status, str):
+                match = ASYNC_PG_STATUS_REGEX.match(status)
+                if match and len(match.groups()) >= EXPECTED_REGEX_GROUPS:
+                    rows_affected = int(match.group(3))
+
+            operation_type = self._determine_operation_type(statement)
             return SQLResult(
                 statement=statement,
-                data=cast("list[RowT]", data),
-                column_names=column_names,
-                rows_affected=len(records),
-                operation_type="SELECT",
+                data=cast("list[RowT]", []),
+                rows_affected=rows_affected,
+                operation_type=operation_type,
+                metadata={"status_message": status or "OK"},
             )
-
-        status = await conn.execute(sql, *args_for_driver)
-        # Parse row count from status string
-        rows_affected = 0
-        if status and isinstance(status, str):
-            match = ASYNC_PG_STATUS_REGEX.match(status)
-            if match and len(match.groups()) >= EXPECTED_REGEX_GROUPS:
-                rows_affected = int(match.group(3))
-
-        operation_type = self._determine_operation_type(statement)
-        return SQLResult(
-            statement=statement,
-            data=cast("list[RowT]", []),
-            rows_affected=rows_affected,
-            operation_type=operation_type,
-            metadata={"status_message": status or "OK"},
-        )
 
     async def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
-        conn = self._connection(connection)
-        param_list = self._process_parameters(param_list)
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
 
-        params_list: list[tuple[Any, ...]] = []
-        rows_affected = 0
-        if param_list and isinstance(param_list, Sequence):
-            for param_set in param_list:
-                if isinstance(param_set, (list, tuple)):
-                    params_list.append(tuple(param_set))
-                elif param_set is None:
-                    params_list.append(())
-                else:
-                    params_list.append((param_set,))
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            # Normalize parameter list using consolidated utility
+            normalized_param_list = normalize_parameter_sequence(param_list)
 
-            await conn.executemany(sql, params_list)
-            # AsyncPG's executemany returns None, not a status string
-            # We need to use the number of parameter sets as the row count
-            rows_affected = len(params_list)
+            params_list: list[tuple[Any, ...]] = []
+            rows_affected = 0
+            if normalized_param_list:
+                for param_set in normalized_param_list:
+                    if isinstance(param_set, (list, tuple)):
+                        params_list.append(tuple(param_set))
+                    elif param_set is None:
+                        params_list.append(())
+                    else:
+                        params_list.append((param_set,))
 
-        return SQLResult(
-            statement=SQL(sql),
-            data=[],
-            rows_affected=rows_affected,
-            operation_type="EXECUTE",
-            metadata={"status_message": "OK"},
-        )
+                await txn_conn.executemany(sql, params_list)
+                # AsyncPG's executemany returns None, not a status string
+                # We need to use the number of parameter sets as the row count
+                rows_affected = len(params_list)
+
+            return SQLResult(
+                statement=SQL(sql),
+                data=[],
+                rows_affected=rows_affected,
+                operation_type="EXECUTE",
+                metadata={"status_message": "OK"},
+            )
 
     async def _execute_script(
         self, script: str, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
-        conn = self._connection(connection)
-        status = await conn.execute(script)
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            status = await txn_conn.execute(script)
 
-        return SQLResult(
-            statement=SQL(script),
-            data=[],
-            rows_affected=0,
-            operation_type="SCRIPT",
-            metadata={"status_message": status or "SCRIPT EXECUTED"},
-            total_statements=1,
-            successful_statements=1,
-        )
+            return SQLResult(
+                statement=SQL(script),
+                data=[],
+                rows_affected=0,
+                operation_type="SCRIPT",
+                metadata={"status_message": status or "SCRIPT EXECUTED"},
+                total_statements=1,
+                successful_statements=1,
+            )
 
     def _connection(self, connection: Optional[AsyncpgConnection] = None) -> AsyncpgConnection:
         """Get the connection to use for the operation."""
