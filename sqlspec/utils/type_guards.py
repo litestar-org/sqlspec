@@ -38,10 +38,12 @@ if TYPE_CHECKING:
         DictProtocol,
         FilterAppenderProtocol,
         FilterParameterProtocol,
+        HasExpressionsProtocol,
         HasLimitProtocol,
         HasOffsetProtocol,
         HasOrderByProtocol,
         HasRiskLevelProtocol,
+        HasSQLMethodProtocol,
         HasWhereProtocol,
         IndexableRow,
         ObjectStoreItemProtocol,
@@ -66,8 +68,10 @@ __all__ = (
     "extract_dataclass_items",
     "has_bytes_conversion",
     "has_dict_attribute",
+    "has_expressions",
     "has_parameter_value",
     "has_risk_level",
+    "has_sql_method",
     "has_with_method",
     "is_async_closeable_connection",
     "is_async_copy_capable",
@@ -856,6 +860,20 @@ def has_bytes_conversion(obj: Any) -> "TypeGuard[BytesConvertibleProtocol]":
     from sqlspec.protocols import BytesConvertibleProtocol
 
     return isinstance(obj, BytesConvertibleProtocol)
+
+
+def has_expressions(obj: Any) -> "TypeGuard[HasExpressionsProtocol]":
+    """Check if an object has an expressions attribute."""
+    from sqlspec.protocols import HasExpressionsProtocol
+
+    return isinstance(obj, HasExpressionsProtocol)
+
+
+def has_sql_method(obj: Any) -> "TypeGuard[HasSQLMethodProtocol]":
+    """Check if an object has a sql() method for rendering SQL."""
+    from sqlspec.protocols import HasSQLMethodProtocol
+
+    return isinstance(obj, HasSQLMethodProtocol)
 
 
 def is_object_store_item(obj: Any) -> "TypeGuard[ObjectStoreItemProtocol]":

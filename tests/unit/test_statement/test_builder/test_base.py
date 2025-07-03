@@ -371,10 +371,16 @@ def test_query_builder_build_expression_not_initialized() -> None:
 @patch("sqlspec.statement.builder.base.logger")
 def test_query_builder_build_sql_generation_error(mock_logger: Mock, test_builder: MockQueryBuilder) -> None:
     """Test build method handles SQL generation errors."""
-    # Mock the expression to raise an error during SQL generation
-    test_builder._expression = Mock()
-    test_builder._expression.copy.return_value = test_builder._expression
-    test_builder._expression.sql.side_effect = Exception("SQL generation failed")
+
+    # Create a mock expression that implements HasSQLMethodProtocol
+    class MockExpression:
+        def sql(self, *args, **kwargs):
+            raise Exception("SQL generation failed")
+
+        def copy(self):
+            return self
+
+    test_builder._expression = MockExpression()
 
     with pytest.raises(SQLBuilderError, match="Error generating SQL"):
         test_builder.build()

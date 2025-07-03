@@ -20,7 +20,7 @@ from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import RowT
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.type_guards import has_with_method
+from sqlspec.utils.type_guards import has_sql_method, has_with_method
 
 if TYPE_CHECKING:
     from sqlspec.statement.result import SQLResult
@@ -269,7 +269,7 @@ class QueryBuilder(ABC, Generic[RowT]):
             final_expression = self._optimize_expression(final_expression)
 
         try:
-            if hasattr(final_expression, "sql") and callable(getattr(final_expression, "sql", None)):
+            if has_sql_method(final_expression):
                 sql_string = final_expression.sql(dialect=self.dialect_name, pretty=True)  # pyright: ignore[reportAttributeAccessIssue]
             else:
                 sql_string = str(final_expression)

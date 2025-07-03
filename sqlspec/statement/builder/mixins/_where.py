@@ -6,6 +6,7 @@ from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._parsing_utils import parse_column_expression, parse_condition_expression
+from sqlspec.utils.type_guards import is_iterable_parameters
 
 if TYPE_CHECKING:
     from sqlspec.protocols import SQLBuilderProtocol
@@ -252,7 +253,7 @@ class WhereClauseMixin:
             condition = col_expr.isin(subquery_exp)
             return self.where(condition)
         # Iterable of values
-        if not hasattr(values, "__iter__") or isinstance(values, (str, bytes)):
+        if not is_iterable_parameters(values) or isinstance(values, (str, bytes)):
             msg = "Unsupported type for 'values' in WHERE IN"
             raise SQLBuilderError(msg)
         params = []
@@ -273,7 +274,7 @@ class WhereClauseMixin:
                 subquery_exp = values
             condition = exp.Not(this=col_expr.isin(subquery_exp))
             return self.where(condition)
-        if not hasattr(values, "__iter__") or isinstance(values, (str, bytes)):
+        if not is_iterable_parameters(values) or isinstance(values, (str, bytes)):
             msg = "Values for where_not_in must be a non-string iterable or subquery."
             raise SQLBuilderError(msg)
         params = []
@@ -322,7 +323,7 @@ class WhereClauseMixin:
             # If parsing fails, fall through to error
             msg = "Unsupported type for 'values' in WHERE ANY"
             raise SQLBuilderError(msg)
-        if not hasattr(values, "__iter__") or isinstance(values, bytes):
+        if not is_iterable_parameters(values) or isinstance(values, bytes):
             msg = "Unsupported type for 'values' in WHERE ANY"
             raise SQLBuilderError(msg)
         params = []
@@ -367,7 +368,7 @@ class WhereClauseMixin:
             # If parsing fails, fall through to error
             msg = "Unsupported type for 'values' in WHERE NOT ANY"
             raise SQLBuilderError(msg)
-        if not hasattr(values, "__iter__") or isinstance(values, bytes):
+        if not is_iterable_parameters(values) or isinstance(values, bytes):
             msg = "Unsupported type for 'values' in WHERE NOT ANY"
             raise SQLBuilderError(msg)
         params = []

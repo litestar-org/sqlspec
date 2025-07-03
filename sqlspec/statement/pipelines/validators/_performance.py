@@ -20,6 +20,7 @@ from sqlglot.optimizer import (
 from sqlspec.exceptions import RiskLevel
 from sqlspec.protocols import ProcessorProtocol
 from sqlspec.statement.pipelines.context import ValidationError
+from sqlspec.utils.type_guards import has_expressions
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
@@ -304,10 +305,10 @@ class PerformanceValidator(ProcessorProtocol):
             analysis.where_conditions += len(list(expr.find_all(exp.Predicate)))
 
         elif isinstance(expr, exp.Group):
-            analysis.group_by_columns += len(expr.expressions) if hasattr(expr, "expressions") else 0
+            analysis.group_by_columns += len(expr.expressions) if has_expressions(expr) else 0
 
         elif isinstance(expr, exp.Order):
-            analysis.order_by_columns += len(expr.expressions) if hasattr(expr, "expressions") else 0
+            analysis.order_by_columns += len(expr.expressions) if has_expressions(expr) else 0
 
         elif isinstance(expr, exp.Distinct):
             analysis.distinct_operations += 1

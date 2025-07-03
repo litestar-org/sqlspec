@@ -9,6 +9,8 @@ from typing import Any, Optional
 
 from sqlglot import exp
 
+from sqlspec.utils.type_guards import has_sql_method
+
 __all__ = ("Column", "ColumnExpression", "FunctionColumn")
 
 
@@ -278,4 +280,4 @@ class FunctionColumn:
 
     def __hash__(self) -> int:
         """Hash based on the SQL expression."""
-        return hash(self._expr.sql() if hasattr(self._expr, "sql") else str(self._expr))
+        return hash(self._expr.sql() if has_sql_method(self._expr) else str(self._expr))

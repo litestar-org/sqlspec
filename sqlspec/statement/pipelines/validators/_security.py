@@ -13,6 +13,7 @@ from sqlglot.expressions import EQ, Binary, Func, Literal, Or, Subquery, Union
 from sqlspec.exceptions import RiskLevel
 from sqlspec.protocols import ProcessorProtocol
 from sqlspec.statement.pipelines.context import ValidationError
+from sqlspec.utils.type_guards import has_expressions, has_sql_method
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
@@ -397,7 +398,7 @@ class SecurityValidator(ProcessorProtocol):
                 )
             )
 
-        if hasattr(union_node, "right") and isinstance(union_node.right, exp.Select):
+        if isinstance(union_node, exp.Union) and isinstance(union_node.right, exp.Select):
             select_expr = union_node.right
             if select_expr.expressions:
                 null_count = sum(1 for expr in select_expr.expressions if isinstance(expr, exp.Null))
@@ -581,7 +582,7 @@ class SecurityValidator(ProcessorProtocol):
                     )
                 )
 
-        if hasattr(node, "sql"):
+        if has_sql_method(node):
             sql_text = node.sql()
 
             # File operations
@@ -724,7 +725,7 @@ class SecurityValidator(ProcessorProtocol):
                     issue_type=SecurityIssueType.AST_ANOMALY,
                     risk_level=self.config.ast_anomaly_risk_level,
                     description=f"Excessive query nesting detected (depth: {nesting_depth})",
-                    location=node.sql()[:100] if hasattr(node, "sql") else str(node)[:100],
+                    location=node.sql()[:100] if has_sql_method(node) else str(node)[:100],
                     pattern_matched="excessive_nesting",
                     recommendation="Review query structure for potential injection",
                     ast_node_type=type(node).__name__,
@@ -798,7 +799,7 @@ class SecurityValidator(ProcessorProtocol):
                         issue_type=SecurityIssueType.AST_ANOMALY,
                         risk_level=RiskLevel.MEDIUM,
                         description=f"Nested suspicious function call: {nested_func.name.lower()} inside {func_name}",
-                        location=func_node.sql()[:100],
+                        location=func_node.sql()[:100] if has_sql_method(func_node) else str(func_node)[:100],
                         pattern_matched="nested_suspicious_function",
                         recommendation="Review nested function calls for evasion attempts",
                         ast_node_type="Func",
@@ -807,7 +808,7 @@ class SecurityValidator(ProcessorProtocol):
                     )
                 )
 
-        if hasattr(func_node, "expressions") and func_node.expressions:
+        if has_expressions(func_node) and func_node.expressions:
             arg_count = len(func_node.expressions)
             if func_name in {"concat", "concat_ws"} and arg_count > MAX_FUNCTION_ARGS:
                 issues.append(
@@ -815,7 +816,7 @@ class SecurityValidator(ProcessorProtocol):
                         issue_type=SecurityIssueType.AST_ANOMALY,
                         risk_level=RiskLevel.MEDIUM,
                         description=f"Excessive arguments to {func_name} function ({arg_count} args)",
-                        location=func_node.sql()[:100],
+                        location=func_node.sql()[:100] if has_sql_method(func_node) else str(func_node)[:100],
                         pattern_matched="excessive_function_args",
                         recommendation="Review function arguments for potential injection",
                         ast_node_type="Func",
@@ -853,7 +854,7 @@ class SecurityValidator(ProcessorProtocol):
         """Analyze UNION structure for injection patterns."""
         issues: list[SecurityIssue] = []
 
-        if hasattr(union_node, "left") and hasattr(union_node, "right"):
+        if isinstance(union_node, exp.Union):
             left_cols = self._count_select_columns(union_node.left)
             right_cols = self._count_select_columns(union_node.right)
 
@@ -882,7 +883,7 @@ class SecurityValidator(ProcessorProtocol):
         if hasattr(subquery_node, "this") and isinstance(subquery_node.this, exp.Select):
             select_expr = subquery_node.this
 
-            if hasattr(select_expr, "expressions") and select_expr.expressions:
+            if has_expressions(select_expr) and select_expr.expressions:
                 literal_count = sum(1 for expr in select_expr.expressions if isinstance(expr, Literal))
                 total_expressions = len(select_expr.expressions)
 
@@ -907,10 +908,8 @@ class SecurityValidator(ProcessorProtocol):
         """Analyze OR conditions for tautology patterns."""
         issues: list[SecurityIssue] = []
 
-        if (
-            hasattr(or_node, "left")
-            and hasattr(or_node, "right")
-            and (self._is_always_true_condition(or_node.left) or self._is_always_true_condition(or_node.right))
+        if isinstance(or_node, exp.Binary) and (
+            self._is_always_true_condition(or_node.left) or self._is_always_true_condition(or_node.right)
         ):
             issues.append(
                 SecurityIssue(
@@ -935,10 +934,10 @@ class SecurityValidator(ProcessorProtocol):
         """Calculate the depth of nested binary operations."""
         max_depth = depth
 
-        if hasattr(node, "left") and isinstance(node.left, Binary):
+        if isinstance(node, exp.Binary) and isinstance(node.left, Binary):
             max_depth = max(max_depth, self._calculate_binary_depth(node.left, depth + 1))
 
-        if hasattr(node, "right") and isinstance(node.right, Binary):
+        if isinstance(node, exp.Binary) and isinstance(node.right, Binary):
             max_depth = max(max_depth, self._calculate_binary_depth(node.right, depth + 1))
 
         return max_depth
@@ -946,7 +945,7 @@ class SecurityValidator(ProcessorProtocol):
     @staticmethod
     def _count_select_columns(node: "exp.Expression") -> int:
         """Count the number of columns in a SELECT statement."""
-        if isinstance(node, exp.Select) and hasattr(node, "expressions"):
+        if isinstance(node, exp.Select) and has_expressions(node):
             return len(node.expressions) if node.expressions else 0
         return 0
 
@@ -959,8 +958,7 @@ class SecurityValidator(ProcessorProtocol):
         # Check for 1=1 or similar tautologies
         return bool(
             isinstance(node, EQ)
-            and hasattr(node, "left")
-            and hasattr(node, "right")
+            and isinstance(node, exp.Binary)
             and (
                 isinstance(node.left, Literal)
                 and isinstance(node.right, Literal)

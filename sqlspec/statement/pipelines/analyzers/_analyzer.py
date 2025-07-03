@@ -11,6 +11,7 @@ from sqlspec.protocols import ProcessorProtocol
 from sqlspec.statement.pipelines.context import AnalysisFinding
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.type_guards import has_expressions
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -288,7 +289,7 @@ class StatementAnalyzer(ProcessorProtocol):
 
         for select in expression.find_all(exp.Select):
             from_clause = select.args.get("from")
-            if from_clause and hasattr(from_clause, "expressions") and len(from_clause.expressions) > 1:
+            if from_clause and has_expressions(from_clause) and len(from_clause.expressions) > 1:
                 # This logic checks for multiple tables in FROM without explicit JOINs
                 # It's a simplified check for potential cartesian products
                 cartesian_products += 1
@@ -490,7 +491,7 @@ class StatementAnalyzer(ProcessorProtocol):
         """Extract column names from an expression."""
         columns: list[str] = []
         if isinstance(expr, exp.Insert):
-            if expr.this and hasattr(expr.this, "expressions"):
+            if expr.this and has_expressions(expr.this):
                 columns.extend(str(col_expr.name) for col_expr in expr.this.expressions if hasattr(col_expr, "name"))
         elif isinstance(expr, exp.Select):
             for projection in expr.expressions:

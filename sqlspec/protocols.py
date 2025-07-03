@@ -30,10 +30,12 @@ __all__ = (
     "DictProtocol",
     "FilterAppenderProtocol",
     "FilterParameterProtocol",
+    "HasExpressionsProtocol",
     "HasLimitProtocol",
     "HasOffsetProtocol",
     "HasOrderByProtocol",
     "HasRiskLevelProtocol",
+    "HasSQLMethodProtocol",
     "HasWhereProtocol",
     "IndexableRow",
     "IterableParameters",
@@ -120,6 +122,22 @@ class HasOrderByProtocol(Protocol):
 
     def order_by(self, *args: Any, **kwargs: Any) -> Any:
         """Add ORDER BY clause to expression."""
+        ...
+
+
+@runtime_checkable
+class HasExpressionsProtocol(Protocol):
+    """Protocol for SQL expressions that have an expressions attribute."""
+
+    expressions: Any
+
+
+@runtime_checkable
+class HasSQLMethodProtocol(Protocol):
+    """Protocol for objects that have a sql() method for rendering SQL."""
+
+    def sql(self, *args: Any, **kwargs: Any) -> str:
+        """Render object to SQL string."""
         ...
 
 
