@@ -13,7 +13,7 @@ from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder import DeleteBuilder, InsertBuilder, MergeBuilder, SelectBuilder, UpdateBuilder
+from sqlspec.statement.builder import Delete, Insert, MergeBuilder, Select, Update
 
 __all__ = ("SQLFactory",)
 
@@ -165,7 +165,7 @@ class SQLFactory:
         if actual_type_str == "SELECT" or (
             actual_type_str == "WITH" and parsed_expr.this and isinstance(parsed_expr.this, exp.Select)
         ):
-            builder = SelectBuilder(dialect=dialect or self.dialect)
+            builder = Select(dialect=dialect or self.dialect)
             builder._expression = parsed_expr
             return builder
         msg = (
@@ -177,7 +177,7 @@ class SQLFactory:
     # ===================
     # Statement Builders
     # ===================
-    def select(self, *columns_or_sql: Union[str, exp.Expression], dialect: DialectType = None) -> "SelectBuilder":
+    def select(self, *columns_or_sql: Union[str, exp.Expression], dialect: DialectType = None) -> "Select":
         builder_dialect = dialect or self.dialect
         if len(columns_or_sql) == 1 and isinstance(columns_or_sql[0], str):
             sql_candidate = columns_or_sql[0].strip()
@@ -189,20 +189,20 @@ class SQLFactory:
                         f"Use sql.{detected.lower()}() if a dedicated builder exists, or ensure the SQL is SELECT/WITH."
                     )
                     raise SQLBuilderError(msg)
-                select_builder = SelectBuilder(dialect=builder_dialect)
+                select_builder = Select(dialect=builder_dialect)
                 if select_builder._expression is None:
                     select_builder.__post_init__()
                 return self._populate_select_from_sql(select_builder, sql_candidate)
-        select_builder = SelectBuilder(dialect=builder_dialect)
+        select_builder = Select(dialect=builder_dialect)
         if select_builder._expression is None:
             select_builder.__post_init__()
         if columns_or_sql:
             select_builder.select(*columns_or_sql)
         return select_builder
 
-    def insert(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "InsertBuilder":
+    def insert(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "Insert":
         builder_dialect = dialect or self.dialect
-        builder = InsertBuilder(dialect=builder_dialect)
+        builder = Insert(dialect=builder_dialect)
         if builder._expression is None:
             builder.__post_init__()
         if table_or_sql:
@@ -219,9 +219,9 @@ class SQLFactory:
             return builder.into(table_or_sql)
         return builder
 
-    def update(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "UpdateBuilder":
+    def update(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "Update":
         builder_dialect = dialect or self.dialect
-        builder = UpdateBuilder(dialect=builder_dialect)
+        builder = Update(dialect=builder_dialect)
         if builder._expression is None:
             builder.__post_init__()
         if table_or_sql:
@@ -234,9 +234,9 @@ class SQLFactory:
             return builder.table(table_or_sql)
         return builder
 
-    def delete(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "DeleteBuilder":
+    def delete(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "Delete":
         builder_dialect = dialect or self.dialect
-        builder = DeleteBuilder(dialect=builder_dialect)
+        builder = Delete(dialect=builder_dialect)
         if builder._expression is None:
             builder.__post_init__()
         if table_or_sql and self._looks_like_sql(table_or_sql):
@@ -295,7 +295,7 @@ class SQLFactory:
 
         return False
 
-    def _populate_insert_from_sql(self, builder: "InsertBuilder", sql_string: str) -> "InsertBuilder":
+    def _populate_insert_from_sql(self, builder: "Insert", sql_string: str) -> "Insert":
         """Parse SQL string and populate INSERT builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here
@@ -319,7 +319,7 @@ class SQLFactory:
             logger.warning("Failed to parse INSERT SQL, falling back to traditional mode: %s", e)
         return builder
 
-    def _populate_select_from_sql(self, builder: "SelectBuilder", sql_string: str) -> "SelectBuilder":
+    def _populate_select_from_sql(self, builder: "Select", sql_string: str) -> "Select":
         """Parse SQL string and populate SELECT builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here
@@ -337,7 +337,7 @@ class SQLFactory:
             logger.warning("Failed to parse SELECT SQL, falling back to traditional mode: %s", e)
         return builder
 
-    def _populate_update_from_sql(self, builder: "UpdateBuilder", sql_string: str) -> "UpdateBuilder":
+    def _populate_update_from_sql(self, builder: "Update", sql_string: str) -> "Update":
         """Parse SQL string and populate UPDATE builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here
@@ -355,7 +355,7 @@ class SQLFactory:
             logger.warning("Failed to parse UPDATE SQL, falling back to traditional mode: %s", e)
         return builder
 
-    def _populate_delete_from_sql(self, builder: "DeleteBuilder", sql_string: str) -> "DeleteBuilder":
+    def _populate_delete_from_sql(self, builder: "Delete", sql_string: str) -> "Delete":
         """Parse SQL string and populate DELETE builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here

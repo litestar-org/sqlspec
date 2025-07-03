@@ -5,13 +5,13 @@ from sqlglot import exp
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.statement.builder.select import SelectBuilder
+    from sqlspec.statement.builder.select import Select
 
 __all__ = ("PivotClauseMixin",)
 
 
 class PivotClauseMixin:
-    """Mixin class to add PIVOT functionality to a SelectBuilder."""
+    """Mixin class to add PIVOT functionality to a Select."""
 
     _expression: "Optional[exp.Expression]" = None
     dialect: "DialectType" = None
@@ -23,7 +23,7 @@ class PivotClauseMixin:
         pivot_column: Union[str, exp.Expression],
         pivot_values: list[Union[str, int, float, exp.Expression]],
         alias: Optional[str] = None,
-    ) -> "SelectBuilder":
+    ) -> "Select":
         """Adds a PIVOT clause to the SELECT statement.
 
         Example:
@@ -76,4 +76,4 @@ class PivotClauseMixin:
                 existing_pivots.append(pivot_node)
                 table.set("pivots", existing_pivots)
 
-        return cast("SelectBuilder", self)
+        return cast("Select", self)

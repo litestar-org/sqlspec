@@ -6,7 +6,7 @@ with automatic parameter binding and validation.
 
 import re
 from dataclasses import dataclass, field
-from typing import Optional, Union, cast
+from typing import Any, Optional, Union, cast
 
 from sqlglot import exp
 from typing_extensions import Self
@@ -32,11 +32,11 @@ from sqlspec.statement.builder.mixins import (
 from sqlspec.statement.result import SQLResult
 from sqlspec.typing import RowT
 
-__all__ = ("SelectBuilder",)
+__all__ = ("Select",)
 
 
 @dataclass
-class SelectBuilder(
+class Select(
     QueryBuilder[RowT],
     WhereClauseMixin,
     OrderByClauseMixin,
@@ -77,15 +77,36 @@ class SelectBuilder(
         _schema: The schema/model class for row typing, if set via as_schema().
     """
 
-    _with_parts: "dict[str, Union[exp.CTE, SelectBuilder]]" = field(default_factory=dict, init=False)
+    _with_parts: "dict[str, Union[exp.CTE, Select]]" = field(default_factory=dict, init=False)
     _expression: Optional[exp.Expression] = field(default=None, init=False, repr=False, compare=False, hash=False)
     _schema: Optional[type[RowT]] = None
     _hints: "list[dict[str, object]]" = field(default_factory=list, init=False, repr=False)
 
-    def __post_init__(self) -> "None":
-        super().__post_init__()
+    def __init__(self, *columns: str, **kwargs: Any) -> None:
+        """Initialize SELECT with optional columns.
+
+        Args:
+            *columns: Column names to select (e.g., "id", "name", "u.email")
+            **kwargs: Additional QueryBuilder arguments (dialect, schema, etc.)
+
+        Examples:
+            Select("id", "name")  # Shorthand for Select().select("id", "name")
+            Select()              # Same as SelectBuilder() - start empty
+        """
+        super().__init__(**kwargs)
+
+        # Initialize fields from dataclass
+        self._with_parts = {}
+        self._expression = None
+        self._schema = None
+        self._hints = []
+
         if self._expression is None:
             self._create_base_expression()
+
+        # Add columns if provided - just a shorthand for .select()
+        if columns:
+            self.select(*columns)
 
     @property
     def _expected_result_type(self) -> "type[SQLResult[RowT]]":
@@ -102,8 +123,8 @@ class SelectBuilder(
         # At this point, self._expression is exp.Select
         return self._expression
 
-    def as_schema(self, schema: "type[RowT]") -> "SelectBuilder[RowT]":
-        """Return a new SelectBuilder instance parameterized with the given schema/model type.
+    def as_schema(self, schema: "type[RowT]") -> "Select[RowT]":
+        """Return a new Select instance parameterized with the given schema/model type.
 
         This enables type-safe result mapping: the returned builder will carry the schema type
         for static analysis and IDE autocompletion. The schema should be a class such as a Pydantic
@@ -113,15 +134,15 @@ class SelectBuilder(
             schema: The schema/model class to use for row typing (e.g., a Pydantic model, dataclass, or msgspec.Struct).
 
         Returns:
-            SelectBuilder[RowT]: A new SelectBuilder instance with RowT set to the provided schema/model type.
+            Select[RowT]: A new Select instance with RowT set to the provided schema/model type.
         """
-        new_builder = SelectBuilder()
+        new_builder = Select()
         new_builder._expression = self._expression.copy() if self._expression is not None else None
         new_builder._parameters = self._parameters.copy()
         new_builder._parameter_counter = self._parameter_counter
         new_builder.dialect = self.dialect
         new_builder._schema = schema  # type: ignore[assignment]
-        return cast("SelectBuilder[RowT]", new_builder)
+        return cast("Select[RowT]", new_builder)
 
     def with_hint(
         self,

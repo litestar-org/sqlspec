@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union, overload
 
 from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.driver.parameters import process_execute_many_parameters
-from sqlspec.statement.builder import DeleteBuilder, InsertBuilder, QueryBuilder, SelectBuilder, UpdateBuilder
+from sqlspec.statement.builder import Delete, Insert, QueryBuilder, Select, Update
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig, Statement
 from sqlspec.typing import ConnectionT, DictRow, ModelDTOT, RowT, StatementParameters
@@ -99,7 +99,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
     @overload
     def execute(
         self,
-        statement: "SelectBuilder",
+        statement: "Select",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
@@ -111,7 +111,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
     @overload
     def execute(
         self,
-        statement: "SelectBuilder",
+        statement: "Select",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
@@ -123,7 +123,7 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
     @overload
     def execute(
         self,
-        statement: "Union[InsertBuilder, UpdateBuilder, DeleteBuilder]",
+        statement: "Union[Insert, Update, Delete]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         _connection: "Optional[ConnectionT]" = None,

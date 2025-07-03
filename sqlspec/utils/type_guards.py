@@ -53,7 +53,7 @@ if TYPE_CHECKING:
         SyncTransactionStateConnectionProtocol,
         WithMethodProtocol,
     )
-    from sqlspec.statement.builder import SelectBuilder
+    from sqlspec.statement.builder import Select
     from sqlspec.statement.filters import LimitOffsetFilter, StatementFilter
     from sqlspec.typing import SupportedSchemaModel
 
@@ -143,18 +143,18 @@ def is_limit_offset_filter(obj: Any) -> "TypeGuard[LimitOffsetFilter]":
     return isinstance(obj, LimitOffsetFilter)
 
 
-def is_select_builder(obj: Any) -> "TypeGuard[SelectBuilder]":
-    """Check if an object is a SelectBuilder.
+def is_select_builder(obj: Any) -> "TypeGuard[Select]":
+    """Check if an object is a Select.
 
     Args:
         obj: The object to check
 
     Returns:
-        True if the object is a SelectBuilder, False otherwise
+        True if the object is a Select, False otherwise
     """
-    from sqlspec.statement.builder import SelectBuilder
+    from sqlspec.statement.builder import Select
 
-    return isinstance(obj, SelectBuilder)
+    return isinstance(obj, Select)
 
 
 def is_dict_row(row: Any) -> "TypeGuard[dict[str, Any]]":

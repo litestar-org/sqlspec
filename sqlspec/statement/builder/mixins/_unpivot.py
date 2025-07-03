@@ -5,13 +5,13 @@ from sqlglot import exp
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.statement.builder.select import SelectBuilder
+    from sqlspec.statement.builder.select import Select
 
 __all__ = ("UnpivotClauseMixin",)
 
 
 class UnpivotClauseMixin:
-    """Mixin class to add UNPIVOT functionality to a SelectBuilder."""
+    """Mixin class to add UNPIVOT functionality to a Select."""
 
     _expression: "Optional[exp.Expression]" = None
     dialect: "DialectType" = None
@@ -22,7 +22,7 @@ class UnpivotClauseMixin:
         name_column_name: str,
         columns_to_unpivot: list[Union[str, exp.Expression]],
         alias: Optional[str] = None,
-    ) -> "SelectBuilder":
+    ) -> "Select":
         """Adds an UNPIVOT clause to the SELECT statement.
 
         Example:
@@ -38,12 +38,12 @@ class UnpivotClauseMixin:
             TypeError: If the current expression is not a Select expression.
 
         Returns:
-            The SelectBuilder instance for chaining.
+            The Select instance for chaining.
         """
         current_expr = self._expression
         if not isinstance(current_expr, exp.Select):
             # SelectBuilder's __init__ ensures _expression is exp.Select.
-            msg = "Unpivot can only be applied to a Select expression managed by SelectBuilder."
+            msg = "Unpivot can only be applied to a Select expression managed by Select."
             raise TypeError(msg)
 
         value_col_ident = exp.to_identifier(value_column_name)
@@ -74,4 +74,4 @@ class UnpivotClauseMixin:
                 existing_pivots.append(unpivot_node)
                 table.set("pivots", existing_pivots)
 
-        return cast("SelectBuilder", self)
+        return cast("Select", self)

@@ -125,6 +125,32 @@ class QueryBuilder(ABC, Generic[RowT]):
         self._parameters[param_name] = value
         return param_name
 
+    def _parameterize_expression(self, expression: exp.Expression) -> exp.Expression:
+        """Replace literal values in an expression with bound parameters.
+
+        This method traverses a SQLGlot expression tree and replaces literal
+        values with parameter placeholders, adding the values to the builder's
+        parameter collection.
+
+        Args:
+            expression: The SQLGlot expression to parameterize
+
+        Returns:
+            A new expression with literals replaced by parameter placeholders
+        """
+
+        def replacer(node: exp.Expression) -> exp.Expression:
+            if isinstance(node, exp.Literal):
+                # Skip boolean literals (TRUE/FALSE) and NULL
+                if node.this in (True, False, None):
+                    return node
+                # Convert other literals to parameters
+                param_name = self._add_parameter(node.this, context="where")
+                return exp.Placeholder(this=param_name)
+            return node
+
+        return expression.transform(replacer, copy=True)
+
     def add_parameter(self: Self, value: Any, name: Optional[str] = None) -> tuple[Self, str]:
         """Explicitly adds a parameter to the query.
 

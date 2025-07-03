@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
     from sqlspec.service.pagination import OffsetPagination
     from sqlspec.statement import SQLConfig, Statement, StatementFilter
-    from sqlspec.statement.builder import DeleteBuilder, InsertBuilder, QueryBuilder, SelectBuilder, UpdateBuilder
+    from sqlspec.statement.builder import Delete, Insert, QueryBuilder, Select, Update
     from sqlspec.statement.sql import SQL
     from sqlspec.typing import ModelDTOT, RowT, StatementParameters
 
@@ -52,15 +52,15 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
 
     def _normalize_statement(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         params: "Optional[dict[str, Any]]" = None,
         config: "Optional[SQLConfig]" = None,
     ) -> "SQL":
         """Normalize a statement of any supported type into a SQL object.
 
         Args:
-            statement: The statement to normalize (str, Expression, SQL, or SelectBuilder)
-            params: Optional parameters (ignored for SelectBuilder and SQL objects)
+            statement: The statement to normalize (str, Expression, SQL, or Select)
+            params: Optional parameters (ignored for Select and SQL objects)
             config: Optional SQL configuration
 
         Returns:
@@ -69,7 +69,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
         from sqlspec.statement.sql import SQL
 
         if is_select_builder(statement):
-            # SelectBuilder has its own parameters via build(), ignore external params
+            # Select has its own parameters via build(), ignore external params
             safe_query = statement.build()
             return SQL(safe_query.sql, parameters=safe_query.parameters, config=config)
 
@@ -87,7 +87,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
     @overload
     def execute(
         self,
-        statement: "SelectBuilder",
+        statement: "Select",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
@@ -99,7 +99,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
     @overload
     def execute(
         self,
-        statement: "SelectBuilder",
+        statement: "Select",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
@@ -111,7 +111,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
     @overload
     def execute(
         self,
-        statement: "Union[InsertBuilder, UpdateBuilder, DeleteBuilder]",
+        statement: "Union[Insert, Update, Delete]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         _connection: "Optional[ConnectionT]" = None,
@@ -188,7 +188,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
     @overload
     def select_one(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
@@ -200,7 +200,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
     @overload
     def select_one(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
@@ -211,7 +211,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
 
     def select_one(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -242,7 +242,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
     @overload
     def select_one_or_none(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
@@ -254,7 +254,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
     @overload
     def select_one_or_none(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
@@ -265,7 +265,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
 
     def select_one_or_none(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -296,7 +296,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
     @overload
     def select(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
@@ -308,7 +308,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
     @overload
     def select(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
@@ -319,7 +319,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
 
     def select(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -340,7 +340,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
 
     def select_value(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         _connection: "Optional[ConnectionT]" = None,
@@ -381,7 +381,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
 
     def select_value_or_none(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         _connection: "Optional[ConnectionT]" = None,
@@ -422,7 +422,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
     @overload
     def paginate(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
@@ -434,7 +434,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
     @overload
     def paginate(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
@@ -445,7 +445,7 @@ class SQLSpecSyncService(Generic[SyncDriverT, ConnectionT]):
 
     def paginate(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -602,15 +602,15 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
 
     def _normalize_statement(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         params: "Optional[dict[str, Any]]" = None,
         config: "Optional[SQLConfig]" = None,
     ) -> "SQL":
         """Normalize a statement of any supported type into a SQL object.
 
         Args:
-            statement: The statement to normalize (str, Expression, SQL, or SelectBuilder)
-            params: Optional parameters (ignored for SelectBuilder and SQL objects)
+            statement: The statement to normalize (str, Expression, SQL, or Select)
+            params: Optional parameters (ignored for Select and SQL objects)
             config: Optional SQL configuration
 
         Returns:
@@ -619,7 +619,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
         from sqlspec.statement.sql import SQL
 
         if is_select_builder(statement):
-            # SelectBuilder has its own parameters via build(), ignore external params
+            # Select has its own parameters via build(), ignore external params
             safe_query = statement.build()
             return SQL(safe_query.sql, parameters=safe_query.parameters, config=config)
 
@@ -637,7 +637,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
     @overload
     async def execute(
         self,
-        statement: "SelectBuilder",
+        statement: "Select",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
@@ -649,7 +649,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
     @overload
     async def execute(
         self,
-        statement: "SelectBuilder",
+        statement: "Select",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
@@ -661,7 +661,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
     @overload
     async def execute(
         self,
-        statement: "Union[InsertBuilder, UpdateBuilder, DeleteBuilder]",
+        statement: "Union[Insert, Update, Delete]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         _connection: "Optional[ConnectionT]" = None,
@@ -742,7 +742,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
     @overload
     async def select_one(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
@@ -754,7 +754,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
     @overload
     async def select_one(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
@@ -765,7 +765,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
 
     async def select_one(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -796,7 +796,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
     @overload
     async def select_one_or_none(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
@@ -808,7 +808,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
     @overload
     async def select_one_or_none(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
@@ -819,7 +819,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
 
     async def select_one_or_none(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -850,7 +850,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
     @overload
     async def select(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
@@ -862,7 +862,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
     @overload
     async def select(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
@@ -873,7 +873,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
 
     async def select(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,
@@ -894,7 +894,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
 
     async def select_value(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         _connection: "Optional[ConnectionT]" = None,
@@ -935,7 +935,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
 
     async def select_value_or_none(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         _connection: "Optional[ConnectionT]" = None,
@@ -977,7 +977,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
     @overload
     async def paginate(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
@@ -989,7 +989,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
     @overload
     async def paginate(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
@@ -1000,7 +1000,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT, ConnectionT]):
 
     async def paginate(
         self,
-        statement: "Union[Statement, SelectBuilder]",
+        statement: "Union[Statement, Select]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,

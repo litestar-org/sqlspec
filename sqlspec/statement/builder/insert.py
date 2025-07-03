@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 
-__all__ = ("InsertBuilder",)
+__all__ = ("Insert",)
 
 ERR_MSG_TABLE_NOT_SET = "The target table must be set using .into() before adding values."
 ERR_MSG_VALUES_COLUMNS_MISMATCH = (
@@ -36,9 +36,7 @@ ERR_MSG_EXPRESSION_NOT_INITIALIZED = "Internal error: base expression not initia
 
 
 @dataclass(unsafe_hash=True)
-class InsertBuilder(
-    QueryBuilder[RowT], ReturningClauseMixin, InsertValuesMixin, InsertFromSelectMixin, InsertIntoClauseMixin
-):
+class Insert(QueryBuilder[RowT], ReturningClauseMixin, InsertValuesMixin, InsertFromSelectMixin, InsertIntoClauseMixin):
     """Builder for INSERT statements.
 
     This builder facilitates the construction of SQL INSERT queries
@@ -48,15 +46,20 @@ class InsertBuilder(
         ```python
         # Basic INSERT with values
         insert_query = (
-            InsertBuilder()
+            Insert()
             .into("users")
             .columns("name", "email", "age")
             .values("John Doe", "john@example.com", 30)
         )
 
+        # Even more concise with constructor
+        insert_query = Insert("users").values(
+            {"name": "John", "age": 30}
+        )
+
         # Multi-row INSERT
         insert_query = (
-            InsertBuilder()
+            Insert()
             .into("users")
             .columns("name", "email")
             .values("John", "john@example.com")
@@ -65,7 +68,7 @@ class InsertBuilder(
 
         # INSERT from dictionary
         insert_query = (
-            InsertBuilder()
+            Insert()
             .into("users")
             .values_from_dict(
                 {"name": "John", "email": "john@example.com"}
@@ -74,10 +77,10 @@ class InsertBuilder(
 
         # INSERT from SELECT
         insert_query = (
-            InsertBuilder()
+            Insert()
             .into("users_backup")
             .from_select(
-                SelectBuilder()
+                Select()
                 .select("name", "email")
                 .from_("users")
                 .where("active = true")
@@ -89,6 +92,23 @@ class InsertBuilder(
     _table: "Optional[str]" = field(default=None, init=False)
     _columns: list[str] = field(default_factory=list, init=False)
     _values_added_count: int = field(default=0, init=False)
+
+    def __init__(self, table: Optional[str] = None, **kwargs: Any) -> None:
+        """Initialize INSERT with optional table.
+
+        Args:
+            table: Target table name
+            **kwargs: Additional QueryBuilder arguments
+        """
+        super().__init__(**kwargs)
+
+        # Initialize fields from dataclass
+        self._table = None
+        self._columns = []
+        self._values_added_count = 0
+
+        if table:
+            self.into(table)
 
     def _create_base_expression(self) -> exp.Insert:
         """Create a base INSERT expression.

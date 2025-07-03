@@ -9,6 +9,7 @@ from sqlspec.statement.builder._parsing_utils import parse_column_expression, pa
 
 if TYPE_CHECKING:
     from sqlspec.protocols import SQLBuilderProtocol
+    from sqlspec.statement.builder.column import ColumnExpression
 
 __all__ = ("WhereClauseMixin",)
 
@@ -17,7 +18,8 @@ class WhereClauseMixin:
     """Mixin providing WHERE clause methods for SELECT, UPDATE, and DELETE builders."""
 
     def where(
-        self, condition: Union[str, exp.Expression, exp.Condition, tuple[str, Any], tuple[str, str, Any]]
+        self,
+        condition: Union[str, exp.Expression, exp.Condition, tuple[str, Any], tuple[str, str, Any], "ColumnExpression"],
     ) -> Self:
         """Add a WHERE clause to the statement.
 
@@ -101,7 +103,13 @@ class WhereClauseMixin:
             else:
                 msg = f"WHERE tuple must have 2 or 3 elements, got {len(condition)}"
                 raise SQLBuilderError(msg)
+        # Handle ColumnExpression objects
+        elif hasattr(condition, "sqlglot_expression"):
+            # This is a ColumnExpression from our new Column syntax
+            raw_expr = condition.sqlglot_expression
+            condition_expr = builder._parameterize_expression(raw_expr)
         else:
+            # Existing logic for strings and raw SQLGlot expressions
             condition_expr = parse_condition_expression(condition)
 
         # Use dialect if available for Delete

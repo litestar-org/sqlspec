@@ -5,7 +5,7 @@ with automatic parameter binding and validation.
 """
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from sqlglot import exp
 from typing_extensions import Self
@@ -23,13 +23,13 @@ from sqlspec.statement.result import SQLResult
 from sqlspec.typing import RowT
 
 if TYPE_CHECKING:
-    from sqlspec.statement.builder.select import SelectBuilder
+    from sqlspec.statement.builder.select import Select
 
-__all__ = ("UpdateBuilder",)
+__all__ = ("Update",)
 
 
 @dataclass(unsafe_hash=True)
-class UpdateBuilder(
+class Update(
     QueryBuilder[RowT],
     WhereClauseMixin,
     ReturningClauseMixin,
@@ -46,16 +46,21 @@ class UpdateBuilder(
         ```python
         # Basic UPDATE
         update_query = (
-            UpdateBuilder()
+            Update()
             .table("users")
             .set(name="John Doe")
             .set(email="john@example.com")
             .where("id = 1")
         )
 
+        # Even more concise with constructor
+        update_query = (
+            Update("users").set(name="John Doe").where("id = 1")
+        )
+
         # UPDATE with parameterized conditions
         update_query = (
-            UpdateBuilder()
+            Update()
             .table("users")
             .set(status="active")
             .where_eq("id", 123)
@@ -63,7 +68,7 @@ class UpdateBuilder(
 
         # UPDATE with FROM clause (PostgreSQL style)
         update_query = (
-            UpdateBuilder()
+            Update()
             .table("users", "u")
             .set(name="Updated Name")
             .from_("profiles", "p")
@@ -71,6 +76,18 @@ class UpdateBuilder(
         )
         ```
     """
+
+    def __init__(self, table: Optional[str] = None, **kwargs: Any) -> None:
+        """Initialize UPDATE with optional table.
+
+        Args:
+            table: Target table name
+            **kwargs: Additional QueryBuilder arguments
+        """
+        super().__init__(**kwargs)
+
+        if table:
+            self.table(table)
 
     @property
     def _expected_result_type(self) -> "type[SQLResult[RowT]]":
@@ -87,7 +104,7 @@ class UpdateBuilder(
 
     def join(
         self,
-        table: "Union[str, exp.Expression, SelectBuilder[RowT]]",
+        table: "Union[str, exp.Expression, Select[RowT]]",
         on: "Union[str, exp.Expression]",
         alias: "Optional[str]" = None,
         join_type: str = "INNER",
