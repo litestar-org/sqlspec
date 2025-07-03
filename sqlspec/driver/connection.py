@@ -164,14 +164,16 @@ def get_connection_info(connection: Any) -> dict[str, Any]:
 
     # Try to get database name
     for attr in ("database", "dbname", "db", "catalog"):
-        if hasattr(connection, attr):
-            info["database"] = getattr(connection, attr)
+        value = getattr(connection, attr, None)
+        if value is not None:
+            info["database"] = value
             break
 
     # Try to get host information
     for attr in ("host", "hostname", "server"):
-        if hasattr(connection, attr):
-            info["host"] = getattr(connection, attr)
+        value = getattr(connection, attr, None)
+        if value is not None:
+            info["host"] = value
             break
 
     return info

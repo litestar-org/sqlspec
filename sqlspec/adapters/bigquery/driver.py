@@ -197,7 +197,7 @@ class BigQueryDriver(
             for name, value in params_dict.items():
                 param_name_for_bq = name.lstrip("@")
 
-                actual_value = value.value if hasattr(value, "value") else value
+                actual_value = getattr(value, "value", value)
 
                 param_type, array_element_type = self._get_bq_param_type(actual_value)
 
@@ -419,7 +419,7 @@ class BigQueryDriver(
             query_job = self._run_query_job(sql, bq_params, connection=txn_conn)
 
             if query_job.statement_type == "SELECT" or (
-                hasattr(query_job, "schema") and query_job.schema and len(query_job.schema) > 0
+                getattr(query_job, "schema", None) is not None and len(query_job.schema) > 0
             ):
                 return self._handle_select_job(query_job, statement)
             return self._handle_dml_job(query_job, statement)

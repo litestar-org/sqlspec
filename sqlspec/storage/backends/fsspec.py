@@ -74,6 +74,10 @@ class FSSpecBackend(ObjectStoreBase, HasStorageCapabilities):
             self.fs = fs
             self.protocol = getattr(fs, "protocol", "unknown")
             self._fs_uri = f"{self.protocol}://"
+        
+        # Set instance-level capabilities based on detected protocol
+        self._instance_capabilities = self._detect_capabilities()
+        
         super().__init__()
 
     @classmethod
@@ -96,6 +100,33 @@ class FSSpecBackend(ObjectStoreBase, HasStorageCapabilities):
             clean_path = path_str.lstrip("/")
             return f"{clean_base}/{clean_path}"
         return path_str
+
+    def _detect_capabilities(self) -> StorageCapabilities:
+        """Detect capabilities based on underlying filesystem protocol."""
+        protocol = self.protocol.lower()
+        
+        if protocol in ('s3', 's3a', 's3n'):
+            return StorageCapabilities.s3_compatible()
+        elif protocol in ('gcs', 'gs'):
+            return StorageCapabilities.gcs()
+        elif protocol in ('abfs', 'az', 'azure'):
+            return StorageCapabilities.azure_blob()
+        elif protocol in ('file', 'local'):
+            return StorageCapabilities.local_filesystem()
+        else:
+            return StorageCapabilities(
+                supports_arrow=PYARROW_INSTALLED,
+                supports_streaming=PYARROW_INSTALLED,
+                supports_async=True,
+                supports_compression=True,
+                is_remote=True,
+                is_cloud_native=False
+            )
+    
+    @property
+    def capabilities(self) -> StorageCapabilities:
+        """Return instance-specific capabilities based on detected protocol."""
+        return getattr(self, '_instance_capabilities', self.__class__.capabilities)
 
     @property
     def backend_type(self) -> str:

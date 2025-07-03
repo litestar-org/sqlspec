@@ -85,8 +85,13 @@ def normalize_parameter_sequence(params: Any) -> Optional[list[Any]]:
         return list(params)
 
     # Check if it's iterable (but not string or dict)
-    if hasattr(params, "__iter__") and not isinstance(params, (str, dict)):
-        return list(params)
+    # Use duck typing to check for iterable protocol
+    try:
+        iter(params)
+        if not isinstance(params, (str, dict)):
+            return list(params)
+    except TypeError:
+        pass
 
     # Single parameter, wrap in list
     return [params]
@@ -110,7 +115,8 @@ def convert_parameters_to_positional(params: "dict[str, Any]", parameter_info: "
         return [params[f"param_{i}"] for i in range(len(params))]
 
     # Convert based on parameter info order
-    return [params.get(getattr(info, "name", ""), None) for info in parameter_info if hasattr(info, "name")]
+    # Check for name attribute using getattr with default
+    return [params.get(getattr(info, "name", None), None) for info in parameter_info if getattr(info, "name", None) is not None]
 
 
 def should_use_transaction(connection: Any, auto_commit: bool = True) -> bool:
@@ -126,5 +132,6 @@ def should_use_transaction(connection: Any, auto_commit: bool = True) -> bool:
     if auto_commit:
         return False
 
-    # Check for transaction capabilities
-    return hasattr(connection, "commit") and hasattr(connection, "rollback")
+    # Check for transaction capabilities using type guard
+    from sqlspec.utils.type_guards import is_sync_transaction_capable
+    return is_sync_transaction_capable(connection)

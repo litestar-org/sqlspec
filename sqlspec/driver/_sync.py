@@ -195,7 +195,14 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
     ) -> "SQLResult[RowT]":
         _filters, param_sequence = process_execute_many_parameters(parameters)
 
-        sql_statement = self._build_statement(statement, _config=_config or self.config, **kwargs).as_many(
+        # For execute_many, disable transformations to prevent literal extraction
+        # since the SQL already has placeholders for bulk operations
+        many_config = _config or self.config
+        if many_config.enable_transformations:
+            from dataclasses import replace
+            many_config = replace(many_config, enable_transformations=False)
+
+        sql_statement = self._build_statement(statement, _config=many_config, **kwargs).as_many(
             param_sequence
         )
 
