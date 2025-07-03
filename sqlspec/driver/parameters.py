@@ -7,6 +7,7 @@ across sync and async driver implementations.
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from sqlspec.statement.filters import StatementFilter
+from sqlspec.utils.type_guards import is_sync_transaction_capable
 
 if TYPE_CHECKING:
     from sqlspec.typing import StatementParameters
@@ -134,10 +135,4 @@ def should_use_transaction(connection: Any, auto_commit: bool = True) -> bool:
     Returns:
         True if transaction capabilities are available and should be used
     """
-    if auto_commit:
-        return False
-
-    # Check for transaction capabilities using type guard
-    from sqlspec.utils.type_guards import is_sync_transaction_capable
-
-    return is_sync_transaction_capable(connection)
+    return False if auto_commit else is_sync_transaction_capable(connection)

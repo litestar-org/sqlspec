@@ -15,7 +15,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, RowT
@@ -82,8 +82,31 @@ class PsqlpyDriver(
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
-        # Let the SQL object handle parameter style conversion based on dialect support
-        sql, params = statement.compile(placeholder_style=self.default_parameter_style)
+        # Detect parameter styles in the SQL
+        detected_styles = set()
+        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
+        validator = self.config.parameter_validator if self.config else ParameterValidator()
+        param_infos = validator.extract_parameters(sql_str)
+        if param_infos:
+            detected_styles = {p.style for p in param_infos}
+
+        # Determine target style based on what's in the SQL
+        target_style = self.default_parameter_style
+
+        # Check if there are unsupported styles
+        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
+        if unsupported_styles:
+            # Force conversion to default style
+            target_style = self.default_parameter_style
+        elif detected_styles:
+            # Prefer the first supported style found
+            for style in detected_styles:
+                if style in self.supported_parameter_styles:
+                    target_style = style
+                    break
+
+        # Compile with the determined style
+        sql, params = statement.compile(placeholder_style=target_style)
         params = self._process_parameters(params)
 
         if statement.is_many:

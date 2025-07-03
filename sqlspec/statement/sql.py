@@ -467,12 +467,12 @@ class SQL:
         )
 
         if ParameterStyle.POSITIONAL_PYFORMAT in target_styles:
-            processed_sql = self._config.parameter_converter._denormalize_sql(
+            processed_sql = self._config.parameter_converter._convert_sql_placeholders(
                 processed_sql, param_info, ParameterStyle.POSITIONAL_PYFORMAT
             )
             logger.debug("Denormalized SQL to: '%s'", processed_sql)
         elif ParameterStyle.NAMED_PYFORMAT in target_styles:
-            processed_sql = self._config.parameter_converter._denormalize_sql(
+            processed_sql = self._config.parameter_converter._convert_sql_placeholders(
                 processed_sql, param_info, ParameterStyle.NAMED_PYFORMAT
             )
             logger.debug("Denormalized SQL to: '%s'", processed_sql)
@@ -490,7 +490,7 @@ class SQL:
             if has_param_placeholders:
                 logger.debug("Skipping denormalization for param_N placeholders")
             else:
-                processed_sql = self._config.parameter_converter._denormalize_sql(
+                processed_sql = self._config.parameter_converter._convert_sql_placeholders(
                     processed_sql, param_info, ParameterStyle.POSITIONAL_COLON
                 )
                 logger.debug("Denormalized SQL to: '%s'", processed_sql)
@@ -961,7 +961,7 @@ class SQL:
                 target_style = norm_state.original_styles[0]
                 if target_style in SQLGLOT_INCOMPATIBLE_STYLES:
                     # Denormalize SQL back to original style
-                    sql = self._config.parameter_converter._denormalize_sql(
+                    sql = self._config.parameter_converter._convert_sql_placeholders(
                         sql, norm_state.original_param_info, target_style
                     )
                     # Also denormalize parameters if needed

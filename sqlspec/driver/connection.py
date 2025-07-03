@@ -10,16 +10,9 @@ from typing import TYPE_CHECKING, Any, Optional, TypeVar, cast
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
 
-from sqlspec.utils.type_guards import (
-    is_async_closeable_connection,
-    is_async_transaction_capable,
-    is_sync_closeable_connection,
-    is_sync_transaction_capable,
-)
+from sqlspec.utils.type_guards import is_async_transaction_capable, is_sync_transaction_capable
 
 __all__ = (
-    "AsyncConnectionContextBase",
-    "SyncConnectionContextBase",
     "get_connection_info",
     "managed_connection_async",
     "managed_connection_sync",
@@ -212,77 +205,3 @@ def validate_pool_config(
     if max_lifetime is not None and max_lifetime < 0:
         msg = f"max_lifetime must be >= 0, got {max_lifetime}"
         raise ValueError(msg)
-
-
-class SyncConnectionContextBase:
-    """Base class for connection context managers."""
-
-    def __init__(
-        self,
-        connection: "ConnectionT",  # pyright: ignore
-        *,
-        close_on_exit: bool = True,
-        commit_on_exit: bool = False,
-    ) -> None:
-        """Initialize connection context.
-
-        Args:
-            connection: Database connection
-            close_on_exit: Whether to close connection on exit
-            commit_on_exit: Whether to commit on successful exit
-        """
-        self.connection = connection
-        self.close_on_exit = close_on_exit
-        self.commit_on_exit = commit_on_exit
-
-    def _handle_exit(self, exc_type: Any) -> None:
-        """Handle context exit.
-
-        Args:
-            exc_type: Exception type if an error occurred
-        """
-        if exc_type is None and self.commit_on_exit:
-            if is_sync_transaction_capable(self.connection):
-                self.connection.commit()
-        elif exc_type is not None and is_sync_transaction_capable(self.connection):
-            self.connection.rollback()
-
-        if self.close_on_exit and is_sync_closeable_connection(self.connection):
-            self.connection.close()
-
-
-class AsyncConnectionContextBase:
-    """Base class for async connection context managers."""
-
-    def __init__(
-        self,
-        connection: "ConnectionT",  # pyright: ignore
-        *,
-        close_on_exit: bool = True,
-        commit_on_exit: bool = False,
-    ) -> None:
-        """Initialize async connection context.
-
-        Args:
-            connection: Database connection
-            close_on_exit: Whether to close connection on exit
-            commit_on_exit: Whether to commit on successful exit
-        """
-        self.connection = connection
-        self.close_on_exit = close_on_exit
-        self.commit_on_exit = commit_on_exit
-
-    async def _handle_exit(self, exc_type: Any) -> None:
-        """Handle async context exit.
-
-        Args:
-            exc_type: Exception type if an error occurred
-        """
-        if exc_type is None and self.commit_on_exit:
-            if is_async_transaction_capable(self.connection):
-                await self.connection.commit()
-        elif exc_type is not None and is_async_transaction_capable(self.connection):
-            await self.connection.rollback()
-
-        if self.close_on_exit and is_async_closeable_connection(self.connection):
-            await self.connection.close()

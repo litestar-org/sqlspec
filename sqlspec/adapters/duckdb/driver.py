@@ -89,12 +89,30 @@ class DuckDBDriver(
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
+        # Detect parameter styles used in the SQL
+        detected_styles = {p.style for p in statement.parameter_info}
+
+        # Determine the target style based on what's supported and what's detected
+        target_style = self.default_parameter_style
+        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
+
+        if unsupported_styles:
+            # If there are unsupported styles, convert to default
+            target_style = self.default_parameter_style
+        elif detected_styles:
+            # Use the first supported style found
+            for style in detected_styles:
+                if style in self.supported_parameter_styles:
+                    target_style = style
+                    break
+
+        # Normal case - single parameter style
         if statement.is_many:
-            sql, params = statement.compile(placeholder_style=self.default_parameter_style)
+            sql, params = statement.compile(placeholder_style=target_style)
             params = self._process_parameters(params)
             return self._execute_many(sql, params, connection=connection, **kwargs)
 
-        sql, params = statement.compile(placeholder_style=self.default_parameter_style)
+        sql, params = statement.compile(placeholder_style=target_style)
         params = self._process_parameters(params)
         return self._execute(sql, params, statement, connection=connection, **kwargs)
 
