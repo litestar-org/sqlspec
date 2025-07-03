@@ -374,10 +374,10 @@ def test_query_builder_build_sql_generation_error(mock_logger: Mock, test_builde
 
     # Create a mock expression that implements HasSQLMethodProtocol
     class MockExpression:
-        def sql(self, *args, **kwargs):
+        def sql(self, *args: Any, **kwargs: Any) -> str:
             raise Exception("SQL generation failed")
 
-        def copy(self):
+        def copy(self) -> "MockExpression":
             return self
 
     test_builder._expression = MockExpression()
@@ -508,26 +508,26 @@ def test_where_mixin_where_exists_with_builder(where_mixin: WhereClauseMixinHelp
 
     # Create a concrete mock that implements the necessary interface
     class MockQueryBuilder:
-        def __init__(self):
-            self._expression = None
-            self._parameters = {"status": "active"}
-            self._parameter_counter = 0
-            self.dialect = None
-            self.dialect_name = None
+        def __init__(self) -> None:
+            self._expression: Optional[Any] = None
+            self._parameters: dict[str, Any] = {"status": "active"}
+            self._parameter_counter: int = 0
+            self.dialect: Optional[Any] = None
+            self.dialect_name: Optional[str] = None
 
         @property
-        def parameters(self):
+        def parameters(self) -> dict[str, Any]:
             return self._parameters
 
-        def build(self):
+        def build(self) -> Any:
             mock_result = Mock()
             mock_result.sql = "SELECT 1 FROM orders"
             return mock_result
 
-        def add_parameter(self, value, name=None):
+        def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
             return value, name or f"param_{len(self._parameters)}"
 
-        def _parameterize_expression(self, expression):
+        def _parameterize_expression(self, expression: Any) -> Any:
             return expression
 
     mock_builder = MockQueryBuilder()

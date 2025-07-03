@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 import sqlglot
 import sqlglot.expressions as exp
 from sqlglot.errors import ParseError
+from typing_extensions import TypeAlias
 
 from sqlspec.exceptions import RiskLevel, SQLParsingError, SQLValidationError
 from sqlspec.statement.filters import StatementFilter
@@ -36,7 +37,7 @@ __all__ = ("SQL", "SQLConfig", "Statement")
 
 logger = get_logger("sqlspec.statement")
 
-Statement = "Union[str, exp.Expression, SQL]"
+Statement: TypeAlias = Union[str, exp.Expression, "SQL"]
 
 # Parameter naming constants
 PARAM_PREFIX = "param_"

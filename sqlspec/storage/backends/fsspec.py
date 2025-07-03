@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Union
 
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.storage.backends.base import ObjectStoreBase
-from sqlspec.storage.capabilities import HasStorageCapabilities, StorageCapabilities
+from sqlspec.storage.capabilities import StorageCapabilities
 from sqlspec.typing import FSSPEC_INSTALLED, PYARROW_INSTALLED
 from sqlspec.utils.sync_tools import async_
 
@@ -40,7 +40,7 @@ def _join_path(prefix: str, path: str) -> str:
     return f"{prefix}/{path}"
 
 
-class FSSpecBackend(ObjectStoreBase, HasStorageCapabilities):
+class FSSpecBackend(ObjectStoreBase):
     """Extended protocol support via fsspec.
 
     This backend implements the ObjectStoreProtocol using fsspec,
@@ -49,7 +49,7 @@ class FSSpecBackend(ObjectStoreBase, HasStorageCapabilities):
     """
 
     # FSSpec supports most operations but varies by underlying filesystem
-    capabilities: ClassVar[StorageCapabilities] = StorageCapabilities(
+    _default_capabilities: ClassVar[StorageCapabilities] = StorageCapabilities(
         supports_arrow=PYARROW_INSTALLED,
         supports_streaming=PYARROW_INSTALLED,
         supports_async=True,
@@ -74,10 +74,10 @@ class FSSpecBackend(ObjectStoreBase, HasStorageCapabilities):
             self.fs = fs
             self.protocol = getattr(fs, "protocol", "unknown")
             self._fs_uri = f"{self.protocol}://"
-        
+
         # Set instance-level capabilities based on detected protocol
         self._instance_capabilities = self._detect_capabilities()
-        
+
         super().__init__()
 
     @classmethod
@@ -104,29 +104,38 @@ class FSSpecBackend(ObjectStoreBase, HasStorageCapabilities):
     def _detect_capabilities(self) -> StorageCapabilities:
         """Detect capabilities based on underlying filesystem protocol."""
         protocol = self.protocol.lower()
-        
-        if protocol in ('s3', 's3a', 's3n'):
+
+        if protocol in {"s3", "s3a", "s3n"}:
             return StorageCapabilities.s3_compatible()
-        elif protocol in ('gcs', 'gs'):
+        if protocol in {"gcs", "gs"}:
             return StorageCapabilities.gcs()
-        elif protocol in ('abfs', 'az', 'azure'):
+        if protocol in {"abfs", "az", "azure"}:
             return StorageCapabilities.azure_blob()
-        elif protocol in ('file', 'local'):
+        if protocol in {"file", "local"}:
             return StorageCapabilities.local_filesystem()
-        else:
-            return StorageCapabilities(
-                supports_arrow=PYARROW_INSTALLED,
-                supports_streaming=PYARROW_INSTALLED,
-                supports_async=True,
-                supports_compression=True,
-                is_remote=True,
-                is_cloud_native=False
-            )
-    
+        return StorageCapabilities(
+            supports_arrow=PYARROW_INSTALLED,
+            supports_streaming=PYARROW_INSTALLED,
+            supports_async=True,
+            supports_compression=True,
+            is_remote=True,
+            is_cloud_native=False,
+        )
+
     @property
     def capabilities(self) -> StorageCapabilities:
         """Return instance-specific capabilities based on detected protocol."""
-        return getattr(self, '_instance_capabilities', self.__class__.capabilities)
+        return getattr(self, "_instance_capabilities", self.__class__._default_capabilities)
+
+    @classmethod
+    def has_capability(cls, capability: str) -> bool:
+        """Check if backend has a specific capability."""
+        return getattr(cls._default_capabilities, capability, False)
+
+    @classmethod
+    def get_capabilities(cls) -> StorageCapabilities:
+        """Get all capabilities for this backend."""
+        return cls._default_capabilities
 
     @property
     def backend_type(self) -> str:

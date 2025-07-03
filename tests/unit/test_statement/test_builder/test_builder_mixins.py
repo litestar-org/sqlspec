@@ -61,26 +61,29 @@ def create_mock_query_builder() -> Any:
     from unittest.mock import Mock
 
     # Create a mock that implements the SQLBuilderProtocol properly
-    mock = Mock()
-    mock._parameters = {}
-    mock._parameter_counter = 0
-    mock.dialect = None
-    mock.dialect_name = None
-    mock._expression = None
+    class MockQueryBuilder:
+        def __init__(self) -> None:
+            self._parameters: dict[str, Any] = {}
+            self._parameter_counter: int = 0
+            self.dialect: Optional[Any] = None
+            self.dialect_name: Optional[str] = None
+            self._expression: Optional[Any] = None
 
-    # Add the parameters property
-    type(mock).parameters = property(lambda self: self._parameters)
+        @property
+        def parameters(self) -> dict[str, Any]:
+            return self._parameters
 
-    # Add build method that returns sql result
-    mock.build.return_value = Mock(sql="SELECT id FROM users")
+        def build(self) -> Any:
+            return Mock(sql="SELECT id FROM users")
 
-    # Add add_parameter method
-    mock.add_parameter = Mock(return_value=(mock, "param_1"))
+        def add_parameter(self, value: Any) -> tuple[Any, str]:
+            return (self, "param_1")
 
-    # Add _parameterize_expression method
-    mock._parameterize_expression = Mock(return_value=Mock())
+        def _parameterize_expression(self, expr: Any) -> Any:
+            return Mock()
 
-    return mock
+    # Return an instance of the mock query builder
+    return MockQueryBuilder()
 
 
 # Helper Classes

@@ -116,7 +116,12 @@ def convert_parameters_to_positional(params: "dict[str, Any]", parameter_info: "
 
     # Convert based on parameter info order
     # Check for name attribute using getattr with default
-    return [params.get(getattr(info, "name", None), None) for info in parameter_info if getattr(info, "name", None) is not None]
+    result = []
+    for info in parameter_info:
+        param_name = getattr(info, "name", None)
+        if param_name is not None:
+            result.append(params.get(param_name, None))
+    return result
 
 
 def should_use_transaction(connection: Any, auto_commit: bool = True) -> bool:
@@ -134,4 +139,5 @@ def should_use_transaction(connection: Any, auto_commit: bool = True) -> bool:
 
     # Check for transaction capabilities using type guard
     from sqlspec.utils.type_guards import is_sync_transaction_capable
+
     return is_sync_transaction_capable(connection)

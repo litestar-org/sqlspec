@@ -54,7 +54,8 @@ class UpdateSetClauseMixin:
                 # It's a builder (like SelectBuilder), convert to subquery
                 subquery = val.build()
                 # Parse the SQL and use as expression
-                value_expr = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(self, "dialect", None)))
+                sql_str = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
+                value_expr = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(self, "dialect", None)))
                 # Merge parameters from subquery
                 if has_query_builder_parameters(val):
                     for p_name, p_value in val.parameters.items():
@@ -74,7 +75,8 @@ class UpdateSetClauseMixin:
                     # It's a builder (like SelectBuilder), convert to subquery
                     subquery = val.build()
                     # Parse the SQL and use as expression
-                    value_expr = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(self, "dialect", None)))
+                    sql_str = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
+                    value_expr = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(self, "dialect", None)))
                     # Merge parameters from subquery
                     if has_query_builder_parameters(val):
                         for p_name, p_value in val.parameters.items():

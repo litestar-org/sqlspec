@@ -529,6 +529,10 @@ class SQLBuilderProtocol(Protocol):
         """Replace literal values in an expression with bound parameters."""
         ...
 
+    def build(self) -> "Union[exp.Expression, Any]":
+        """Build and return the final expression."""
+        ...
+
 
 class SelectBuilderProtocol(SQLBuilderProtocol, Protocol):
     """Protocol for SELECT query builders."""

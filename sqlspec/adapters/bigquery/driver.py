@@ -418,9 +418,8 @@ class BigQueryDriver(
 
             query_job = self._run_query_job(sql, bq_params, connection=txn_conn)
 
-            if query_job.statement_type == "SELECT" or (
-                getattr(query_job, "schema", None) is not None and len(query_job.schema) > 0
-            ):
+            query_schema = getattr(query_job, "schema", None)
+            if query_job.statement_type == "SELECT" or (query_schema is not None and len(query_schema) > 0):
                 return self._handle_select_job(query_job, statement)
             return self._handle_dml_job(query_job, statement)
 

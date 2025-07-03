@@ -320,13 +320,14 @@ class PerformanceValidator(ProcessorProtocol):
             analysis.select_star_count += 1
 
         # Recursive traversal
-        for child in expr.args.values():
-            if isinstance(child, exp.Expression):
-                self._analyze_expression(child, analysis, depth)
-            elif isinstance(child, list):
-                for item in child:
-                    if isinstance(item, exp.Expression):
-                        self._analyze_expression(item, analysis, depth)
+        if hasattr(expr, "args") and isinstance(expr.args, dict):
+            for child in expr.args.values():
+                if isinstance(child, exp.Expression):
+                    self._analyze_expression(child, analysis, depth)
+                elif isinstance(child, list):
+                    for item in child:
+                        if isinstance(item, exp.Expression):
+                            self._analyze_expression(item, analysis, depth)
 
     def _check_cartesian_products(self, analysis: PerformanceAnalysis) -> "list[PerformanceIssue]":
         """Detect potential cartesian products from join analysis.

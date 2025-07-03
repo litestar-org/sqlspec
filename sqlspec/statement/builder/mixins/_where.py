@@ -107,8 +107,12 @@ class WhereClauseMixin:
         # Handle ColumnExpression objects
         elif hasattr(condition, "sqlglot_expression"):
             # This is a ColumnExpression from our new Column syntax
-            raw_expr = condition.sqlglot_expression
-            condition_expr = builder._parameterize_expression(raw_expr)
+            raw_expr = getattr(condition, "sqlglot_expression", None)
+            if raw_expr is not None:
+                condition_expr = builder._parameterize_expression(raw_expr)
+            else:
+                # Fallback if attribute exists but is None
+                condition_expr = parse_condition_expression(str(condition))
         else:
             # Existing logic for strings and raw SQLGlot expressions
             condition_expr = parse_condition_expression(condition)
@@ -206,7 +210,10 @@ class WhereClauseMixin:
                 for p_name, p_value in subquery_builder_params.items():
                     self.add_parameter(p_value, name=p_name)  # type: ignore[attr-defined]
             sub_sql_obj = subquery.build()  # pyright: ignore
-            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=getattr(self, "dialect_name", None))
+            sql_str = (
+                sub_sql_obj.sql if hasattr(sub_sql_obj, "sql") and not callable(sub_sql_obj.sql) else str(sub_sql_obj)
+            )
+            sub_expr = exp.maybe_parse(sql_str, dialect=getattr(self, "dialect_name", None))
         else:
             sub_expr = exp.maybe_parse(str(subquery), dialect=getattr(self, "dialect_name", None))
 
@@ -225,7 +232,10 @@ class WhereClauseMixin:
                 for p_name, p_value in subquery_builder_params.items():
                     self.add_parameter(p_value, name=p_name)  # type: ignore[attr-defined]
             sub_sql_obj = subquery.build()  # pyright: ignore
-            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=getattr(self, "dialect_name", None))
+            sql_str = (
+                sub_sql_obj.sql if hasattr(sub_sql_obj, "sql") and not callable(sub_sql_obj.sql) else str(sub_sql_obj)
+            )
+            sub_expr = exp.maybe_parse(sql_str, dialect=getattr(self, "dialect_name", None))
         else:
             sub_expr = exp.maybe_parse(str(subquery), dialect=getattr(self, "dialect_name", None))
 
@@ -245,11 +255,13 @@ class WhereClauseMixin:
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         # Subquery support
         if has_query_builder_parameters(values) or isinstance(values, exp.Expression):
+            subquery_exp: exp.Expression
             if has_query_builder_parameters(values):
                 subquery = values.build()  # pyright: ignore
-                subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(self, "dialect_name", None)))
+                sql_str = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
+                subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(self, "dialect_name", None)))
             else:
-                subquery_exp = values
+                subquery_exp = values  # type: ignore[assignment]
             condition = col_expr.isin(subquery_exp)
             return self.where(condition)
         # Iterable of values
@@ -267,11 +279,13 @@ class WhereClauseMixin:
         """Add a WHERE ... NOT IN (...) clause. Supports subqueries and iterables."""
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         if has_query_builder_parameters(values) or isinstance(values, exp.Expression):
+            subquery_exp: exp.Expression
             if has_query_builder_parameters(values):
                 subquery = values.build()  # pyright: ignore
-                subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(self, "dialect_name", None)))
+                sql_str = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
+                subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(self, "dialect_name", None)))
             else:
-                subquery_exp = values
+                subquery_exp = values  # type: ignore[assignment]
             condition = exp.Not(this=col_expr.isin(subquery_exp))
             return self.where(condition)
         if not is_iterable_parameters(values) or isinstance(values, (str, bytes)):
@@ -301,11 +315,13 @@ class WhereClauseMixin:
         """
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         if has_query_builder_parameters(values) or isinstance(values, exp.Expression):
+            subquery_exp: exp.Expression
             if has_query_builder_parameters(values):
                 subquery = values.build()  # pyright: ignore
-                subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(self, "dialect_name", None)))
+                sql_str = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
+                subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(self, "dialect_name", None)))
             else:
-                subquery_exp = values
+                subquery_exp = values  # type: ignore[assignment]
             condition = exp.EQ(this=col_expr, expression=exp.Any(this=subquery_exp))
             return self.where(condition)
         if isinstance(values, str):
@@ -346,11 +362,13 @@ class WhereClauseMixin:
         """
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         if has_query_builder_parameters(values) or isinstance(values, exp.Expression):
+            subquery_exp: exp.Expression
             if has_query_builder_parameters(values):
                 subquery = values.build()  # pyright: ignore
-                subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(self, "dialect_name", None)))
+                sql_str = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
+                subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(self, "dialect_name", None)))
             else:
-                subquery_exp = values
+                subquery_exp = values  # type: ignore[assignment]
             condition = exp.NEQ(this=col_expr, expression=exp.Any(this=subquery_exp))
             return self.where(condition)
         if isinstance(values, str):

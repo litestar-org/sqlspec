@@ -202,11 +202,10 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
         many_config = _config or self.config
         if many_config.enable_transformations:
             from dataclasses import replace
+
             many_config = replace(many_config, enable_transformations=False)
 
-        sql_statement = self._build_statement(statement, _config=many_config, **kwargs).as_many(
-            param_sequence
-        )
+        sql_statement = self._build_statement(statement, _config=many_config, **kwargs).as_many(param_sequence)
 
         return await self._execute_statement(
             statement=sql_statement, connection=self._connection(_connection), **kwargs

@@ -43,12 +43,13 @@ class FromClauseMixin:
             from_expr = exp.alias_(table, alias) if alias else table
         elif has_query_builder_parameters(table):
             # Query builder with build() method
-            subquery = table.build()  # type: ignore[attr-defined]
-            subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(builder, "dialect", None)))
+            subquery = table.build()
+            sql_str = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
+            subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(builder, "dialect", None)))
             from_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
             current_params = getattr(builder, "_parameters", None)
             merged_params = getattr(type(builder), "ParameterConverter", None)
-            if merged_params:
+            if merged_params and hasattr(subquery, "parameters"):
                 merged_params = merged_params.merge_parameters(
                     parameters=subquery.parameters,
                     args=current_params if isinstance(current_params, list) else None,

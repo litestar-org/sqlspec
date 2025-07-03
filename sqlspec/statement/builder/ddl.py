@@ -290,10 +290,11 @@ class CreateTable(DDLBuilder):
         condition_str: str
         if hasattr(condition, "sqlglot_expression"):
             # This is a ColumnExpression - render as raw SQL for DDL (no parameters)
-            condition_str = condition.sqlglot_expression.sql(dialect=self.dialect)
+            sqlglot_expr = getattr(condition, "sqlglot_expression", None)
+            condition_str = sqlglot_expr.sql(dialect=self.dialect) if sqlglot_expr else str(condition)
         else:
             # String condition - use as-is
-            condition_str = condition
+            condition_str = str(condition)
 
         constraint = ConstraintDefinition(constraint_type="CHECK", name=name, condition=condition_str)
 
@@ -1187,12 +1188,13 @@ class AlterTable(DDLBuilder):
             ref_col_list = [references_columns] if isinstance(references_columns, str) else list(references_columns)
 
         # Handle ColumnExpression for CHECK constraints
-        condition_str = None
+        condition_str: Optional[str] = None
         if condition is not None:
             if hasattr(condition, "sqlglot_expression"):
-                condition_str = condition.sqlglot_expression.sql(dialect=self.dialect)
+                sqlglot_expr = getattr(condition, "sqlglot_expression", None)
+                condition_str = sqlglot_expr.sql(dialect=self.dialect) if sqlglot_expr else str(condition)
             else:
-                condition_str = condition
+                condition_str = str(condition)
 
         constraint_def = ConstraintDefinition(
             constraint_type=constraint_type.upper(),

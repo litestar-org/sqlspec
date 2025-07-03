@@ -31,8 +31,10 @@ def parse_column_expression(column_input: Union[str, exp.Expression, Any]) -> ex
         return column_input
 
     # Handle our custom Column objects
-    if hasattr(column_input, "_expr") and isinstance(column_input._expr, exp.Expression):
-        return column_input._expr
+    if hasattr(column_input, "_expr"):
+        attr_value = getattr(column_input, "_expr", None)
+        if isinstance(attr_value, exp.Expression):
+            return attr_value
 
     return exp.maybe_parse(column_input) or exp.column(str(column_input))
 
