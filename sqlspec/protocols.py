@@ -501,6 +501,10 @@ class SQLBuilderProtocol(Protocol):
         """Add a parameter to the builder."""
         ...
 
+    def _parameterize_expression(self, expression: "exp.Expression") -> "exp.Expression":
+        """Replace literal values in an expression with bound parameters."""
+        ...
+
 
 class SelectBuilderProtocol(SQLBuilderProtocol, Protocol):
     """Protocol for SELECT query builders."""

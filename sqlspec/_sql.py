@@ -13,7 +13,7 @@ from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder import Delete, Insert, MergeBuilder, Select, Update
+from sqlspec.statement.builder import Column, Delete, Insert, Merge, Select, Update
 
 __all__ = ("SQLFactory",)
 
@@ -177,7 +177,7 @@ class SQLFactory:
     # ===================
     # Statement Builders
     # ===================
-    def select(self, *columns_or_sql: Union[str, exp.Expression], dialect: DialectType = None) -> "Select":
+    def select(self, *columns_or_sql: Union[str, exp.Expression, Column], dialect: DialectType = None) -> "Select":
         builder_dialect = dialect or self.dialect
         if len(columns_or_sql) == 1 and isinstance(columns_or_sql[0], str):
             sql_candidate = columns_or_sql[0].strip()
@@ -247,9 +247,9 @@ class SQLFactory:
             return self._populate_delete_from_sql(builder, table_or_sql)
         return builder
 
-    def merge(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "MergeBuilder":
+    def merge(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "Merge":
         builder_dialect = dialect or self.dialect
-        builder = MergeBuilder(dialect=builder_dialect)
+        builder = Merge(dialect=builder_dialect)
         if builder._expression is None:
             builder.__post_init__()
         if table_or_sql:
@@ -373,7 +373,7 @@ class SQLFactory:
             logger.warning("Failed to parse DELETE SQL, falling back to traditional mode: %s", e)
         return builder
 
-    def _populate_merge_from_sql(self, builder: "MergeBuilder", sql_string: str) -> "MergeBuilder":
+    def _populate_merge_from_sql(self, builder: "Merge", sql_string: str) -> "Merge":
         """Parse SQL string and populate MERGE builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here
@@ -395,16 +395,16 @@ class SQLFactory:
     # Column References
     # ===================
 
-    def __getattr__(self, name: str) -> exp.Column:
+    def __getattr__(self, name: str) -> Column:
         """Dynamically create column references.
 
         Args:
             name: Column name.
 
         Returns:
-            Column expression for the specified column name.
+            Column object that supports method chaining and operator overloading.
         """
-        return exp.column(name)
+        return Column(name)
 
     # ===================
     # Aggregate Functions

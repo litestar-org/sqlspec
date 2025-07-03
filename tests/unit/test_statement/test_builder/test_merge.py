@@ -1,6 +1,6 @@
-"""Unit tests for MergeBuilder functionality.
+"""Unit tests for Merge functionality.
 
-This module tests the MergeBuilder including:
+This module tests the Merge including:
 - Basic MERGE statement construction (ANSI SQL:2003 MERGE)
 - MERGE INTO target table with USING source
 - ON conditions for matching rows
@@ -19,7 +19,7 @@ import pytest
 from sqlglot import exp
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder import MergeBuilder, SelectBuilder
+from sqlspec.statement.builder import Merge, Select
 from sqlspec.statement.builder.base import SafeQuery
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL
@@ -30,10 +30,10 @@ if TYPE_CHECKING:
 
 # Test basic MERGE construction
 def test_merge_builder_initialization() -> None:
-    """Test MergeBuilder initialization."""
-    builder = MergeBuilder()
-    assert isinstance(builder, MergeBuilder)
-    # MergeBuilder uses _expression to store the MERGE statement
+    """Test Merge initialization."""
+    builder = Merge()
+    assert isinstance(builder, Merge)
+    # Merge uses _expression to store the MERGE statement
     assert isinstance(builder._expression, exp.Merge)
     assert builder._expression.args.get("this") is None  # target table
     assert builder._expression.args.get("using") is None  # source table
@@ -42,7 +42,7 @@ def test_merge_builder_initialization() -> None:
 
 def test_merge_into_method() -> None:
     """Test setting target table with into()."""
-    builder = MergeBuilder().into("users")
+    builder = Merge().into("users")
     # Check the target table is set in the expression
     assert builder._expression is not None
     assert builder._expression.args.get("this") is not None
@@ -52,7 +52,7 @@ def test_merge_into_method() -> None:
 
 def test_merge_into_with_alias() -> None:
     """Test setting target table with alias."""
-    builder = MergeBuilder().into("users", "u")
+    builder = Merge().into("users", "u")
     assert builder._expression is not None
     target = builder._expression.args.get("this")
     assert target is not None
@@ -63,7 +63,7 @@ def test_merge_into_with_alias() -> None:
 
 def test_merge_into_returns_self() -> None:
     """Test that into() returns builder for chaining."""
-    builder = MergeBuilder()
+    builder = Merge()
     result = builder.into("users")
     assert result is builder
 
@@ -75,13 +75,13 @@ def test_merge_into_returns_self() -> None:
         ("source_table", None, False),
         ("source_table", "src", True),
         ("staging_users", "s", True),
-        (SelectBuilder().select("*").from_("temp_data"), "tmp", True),
+        (Select().select("*").from_("temp_data"), "tmp", True),
     ],
     ids=["no_alias", "with_alias", "staging_alias", "subquery_source"],
 )
 def test_merge_using_clause(source: Any, alias: Any, expected_has_alias: bool) -> None:
     """Test USING clause with various source types."""
-    builder = MergeBuilder().into("users").using(source, alias)
+    builder = Merge().into("users").using(source, alias)
 
     assert builder._expression is not None
     using_expr = builder._expression.args.get("using")
@@ -100,7 +100,7 @@ def test_merge_using_clause(source: Any, alias: Any, expected_has_alias: bool) -
 
 def test_merge_using_returns_self() -> None:
     """Test that using() returns builder for chaining."""
-    builder = MergeBuilder().into("users")
+    builder = Merge().into("users")
     result = builder.using("source_table", "src")
     assert result is builder
 
@@ -117,7 +117,7 @@ def test_merge_using_returns_self() -> None:
 )
 def test_merge_on_condition(condition: str, expected_in_sql: list[str]) -> None:
     """Test ON condition for MERGE."""
-    builder = MergeBuilder().into("users").using("staging_users", "src").on(condition)
+    builder = Merge().into("users").using("staging_users", "src").on(condition)
 
     # Check the ON condition is set in the expression
     assert builder._expression is not None
@@ -134,7 +134,7 @@ def test_merge_on_condition(condition: str, expected_in_sql: list[str]) -> None:
 
 def test_merge_on_returns_self() -> None:
     """Test that on() returns builder for chaining."""
-    builder = MergeBuilder().into("users").using("source", "src")
+    builder = Merge().into("users").using("source", "src")
     result = builder.on("users.id = src.id")
     assert result is builder
 
@@ -153,7 +153,7 @@ def test_merge_on_returns_self() -> None:
 def test_merge_when_matched_update(updates: dict[str, Any], condition: Any, expected_params: list[Any]) -> None:
     """Test WHEN MATCHED THEN UPDATE with various scenarios."""
     builder = (
-        MergeBuilder()
+        Merge()
         .into("users")
         .using("updates", "src")
         .on("users.id = src.id")
@@ -186,7 +186,7 @@ def test_merge_when_matched_update(updates: dict[str, Any], condition: Any, expe
 def test_merge_when_matched_delete(condition: Any, description: str) -> None:
     """Test WHEN MATCHED THEN DELETE with various conditions."""
     builder = (
-        MergeBuilder()
+        Merge()
         .into("users")
         .using("cleanup_list", "src")
         .on("users.id = src.id")
@@ -212,7 +212,7 @@ def test_merge_when_matched_delete(condition: Any, description: str) -> None:
 )
 def test_merge_when_not_matched_insert(columns: Any, values: Any, expected_type: str) -> None:
     """Test WHEN NOT MATCHED THEN INSERT variations."""
-    builder = MergeBuilder().into("users").using("new_users", "src").on("users.id = src.id")
+    builder = Merge().into("users").using("new_users", "src").on("users.id = src.id")
 
     if columns is None and values is None:
         builder = builder.when_not_matched_then_insert()
@@ -234,7 +234,7 @@ def test_merge_when_not_matched_insert(columns: Any, values: Any, expected_type:
 def test_merge_when_not_matched_by_source_update() -> None:
     """Test WHEN NOT MATCHED BY SOURCE THEN UPDATE."""
     builder = (
-        MergeBuilder()
+        Merge()
         .into("users")
         .using("active_users", "src")
         .on("users.id = src.id")
@@ -251,7 +251,7 @@ def test_merge_when_not_matched_by_source_update() -> None:
 def test_merge_when_not_matched_by_source_delete() -> None:
     """Test WHEN NOT MATCHED BY SOURCE THEN DELETE."""
     builder = (
-        MergeBuilder()
+        Merge()
         .into("users")
         .using("active_users", "src")
         .on("users.id = src.id")
@@ -268,7 +268,7 @@ def test_merge_when_not_matched_by_source_delete() -> None:
 def test_merge_multiple_when_clauses() -> None:
     """Test MERGE with multiple WHEN clauses."""
     builder = (
-        MergeBuilder()
+        Merge()
         .into("inventory")
         .using("daily_changes", "chg")
         .on("inventory.product_id = chg.product_id")
@@ -311,7 +311,7 @@ def test_merge_multiple_when_clauses() -> None:
 def test_merge_sql_injection_prevention(malicious_value: str) -> None:
     """Test that malicious values are properly parameterized."""
     builder = (
-        MergeBuilder()
+        Merge()
         .into("users")
         .using("updates", "src")
         .on("users.id = src.id")
@@ -333,14 +333,14 @@ def test_merge_sql_injection_prevention(malicious_value: str) -> None:
 # Test error conditions
 def test_merge_without_target_raises_error() -> None:
     """Test that MERGE without target table raises error."""
-    builder = MergeBuilder()
+    builder = Merge()
     with pytest.raises(SQLBuilderError, match="Error generating SQL from expression"):
         builder.using("source", "src").build()
 
 
 def test_merge_without_source_raises_error() -> None:
     """Test that MERGE without source still builds."""
-    builder = MergeBuilder().into("users")
+    builder = Merge().into("users")
     # The ON condition can be set even without USING clause
     builder.on("users.id = source.id")
     query = builder.when_matched_then_update({"status": "updated"}).build()
@@ -349,7 +349,7 @@ def test_merge_without_source_raises_error() -> None:
 
 def test_merge_without_on_condition_raises_error() -> None:
     """Test that MERGE without ON condition raises error."""
-    builder = MergeBuilder().into("users").using("source", "src")
+    builder = Merge().into("users").using("source", "src")
     # Without ON condition, sqlglot might still generate SQL but it would be invalid
     # Let's just build it and check that MERGE is in the output
     query = builder.when_matched_then_update({"status": "updated"}).build()
@@ -358,7 +358,7 @@ def test_merge_without_on_condition_raises_error() -> None:
 
 def test_merge_without_when_clauses_raises_error() -> None:
     """Test that MERGE without any WHEN clauses builds successfully."""
-    builder = MergeBuilder().into("users").using("source", "src").on("users.id = src.id")
+    builder = Merge().into("users").using("source", "src").on("users.id = src.id")
     # MERGE without WHEN clauses is actually valid SQL (though not very useful)
     query = builder.build()
     assert "MERGE" in query.sql
@@ -368,7 +368,7 @@ def test_merge_without_when_clauses_raises_error() -> None:
 
 def test_merge_insert_columns_values_mismatch() -> None:
     """Test that mismatched columns and values raise error."""
-    builder = MergeBuilder().into("users").using("source", "src").on("users.id = src.id")
+    builder = Merge().into("users").using("source", "src").on("users.id = src.id")
 
     with pytest.raises(SQLBuilderError, match="Number of columns must match number of values"):
         builder.when_not_matched_then_insert(
@@ -379,7 +379,7 @@ def test_merge_insert_columns_values_mismatch() -> None:
 
 def test_merge_insert_columns_without_values() -> None:
     """Test that columns without values raises error."""
-    builder = MergeBuilder().into("users").using("source", "src").on("users.id = src.id")
+    builder = Merge().into("users").using("source", "src").on("users.id = src.id")
 
     with pytest.raises(SQLBuilderError, match="Specifying columns without values"):
         builder.when_not_matched_then_insert(columns=["id", "name"])
@@ -387,7 +387,7 @@ def test_merge_insert_columns_without_values() -> None:
 
 def test_merge_insert_values_without_columns() -> None:
     """Test that values without columns raises error."""
-    builder = MergeBuilder().into("users").using("source", "src").on("users.id = src.id")
+    builder = Merge().into("users").using("source", "src").on("users.id = src.id")
 
     with pytest.raises(SQLBuilderError, match="Cannot specify values without columns"):
         builder.when_not_matched_then_insert(values=[1, "test"])
@@ -397,9 +397,9 @@ def test_merge_insert_values_without_columns() -> None:
 def test_merge_upsert_pattern() -> None:
     """Test common UPSERT pattern with MERGE."""
     builder = (
-        MergeBuilder()
+        Merge()
         .into("users", "u")
-        .using(SelectBuilder().select("id", "name", "email", "updated_at").from_("staging_users"), "s")
+        .using(Select().select("id", "name", "email", "updated_at").from_("staging_users"), "s")
         .on("u.id = s.id")
         .when_matched_then_update({"name": "s.name", "email": "s.email", "updated_at": "s.updated_at"})
         .when_not_matched_then_insert(
@@ -418,7 +418,7 @@ def test_merge_upsert_pattern() -> None:
 def test_merge_sync_tables_pattern() -> None:
     """Test table synchronization pattern with MERGE."""
     builder = (
-        MergeBuilder()
+        Merge()
         .into("production_inventory", "prod")
         .using("warehouse_inventory", "wh")
         .on("prod.sku = wh.sku AND prod.location = wh.location")
@@ -447,7 +447,7 @@ def test_merge_sync_tables_pattern() -> None:
 # Test type information
 def test_merge_expected_result_type() -> None:
     """Test that _expected_result_type returns correct type."""
-    builder = MergeBuilder()
+    builder = Merge()
     import typing
 
     result_type = builder._expected_result_type
@@ -457,7 +457,7 @@ def test_merge_expected_result_type() -> None:
 
 def test_merge_create_base_expression() -> None:
     """Test that _create_base_expression returns Merge expression."""
-    builder = MergeBuilder()
+    builder = Merge()
     expression = builder._create_base_expression()
     assert isinstance(expression, exp.Merge)
 
@@ -466,7 +466,7 @@ def test_merge_create_base_expression() -> None:
 def test_merge_build_returns_safe_query() -> None:
     """Test that build() returns SafeQuery object."""
     builder = (
-        MergeBuilder()
+        Merge()
         .into("users")
         .using("updates", "src")
         .on("users.id = src.id")
@@ -482,7 +482,7 @@ def test_merge_build_returns_safe_query() -> None:
 def test_merge_to_statement_conversion() -> None:
     """Test conversion to SQL statement object."""
     builder = (
-        MergeBuilder()
+        Merge()
         .into("users")
         .using("updates", "src")
         .on("users.id = src.id")
@@ -511,7 +511,7 @@ def test_merge_to_statement_conversion() -> None:
 def test_merge_fluent_interface_chaining() -> None:
     """Test that all methods return builder for fluent chaining."""
     builder = (
-        MergeBuilder()
+        Merge()
         .into("target_table", "t")
         .using("source_table", "s")
         .on("t.id = s.id")
@@ -531,7 +531,7 @@ def test_merge_fluent_interface_chaining() -> None:
 # Test edge cases
 def test_merge_empty_update_dict() -> None:
     """Test MERGE with empty update dictionary."""
-    builder = MergeBuilder().into("users").using("source", "src").on("users.id = src.id")
+    builder = Merge().into("users").using("source", "src").on("users.id = src.id")
 
     # Empty update dict is allowed, it creates an UPDATE with no SET expressions
     result = builder.when_matched_then_update({})
@@ -543,16 +543,14 @@ def test_merge_complex_source_expressions() -> None:
     """Test MERGE with complex source expressions."""
     # CTE as source
     cte_source = (
-        SelectBuilder()
-        .with_(
-            "recent_changes", SelectBuilder().select("*").from_("change_log").where(("change_date", ">", "2024-01-01"))
-        )
+        Select()
+        .with_("recent_changes", Select().select("*").from_("change_log").where(("change_date", ">", "2024-01-01")))
         .select("*")
         .from_("recent_changes")
     )
 
     builder = (
-        MergeBuilder()
+        Merge()
         .into("master_data")
         .using(cte_source, "chg")
         .on("master_data.id = chg.record_id")
@@ -566,7 +564,7 @@ def test_merge_complex_source_expressions() -> None:
 
 def test_merge_dialect_specific_behavior() -> None:
     """Test MERGE with dialect-specific SQL generation."""
-    builder = MergeBuilder(dialect="snowflake")
+    builder = Merge(dialect="snowflake")
     query = (
         builder.into("users")
         .using("updates", "src")

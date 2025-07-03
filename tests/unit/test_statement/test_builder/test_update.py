@@ -1,6 +1,6 @@
-"""Unit tests for UpdateBuilder functionality.
+"""Unit tests for Update functionality.
 
-This module tests the UpdateBuilder including:
+This module tests the Update including:
 - Basic UPDATE statement construction
 - SET clause with single and multiple columns
 - WHERE conditions and helpers (LIKE, BETWEEN, IN, EXISTS, NULL)
@@ -19,7 +19,7 @@ import pytest
 from sqlglot import exp
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder import SelectBuilder, UpdateBuilder
+from sqlspec.statement.builder import Select, Update
 from sqlspec.statement.builder.base import SafeQuery
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL
@@ -27,10 +27,10 @@ from sqlspec.statement.sql import SQL
 
 # Test basic UPDATE construction
 def test_update_builder_initialization() -> None:
-    """Test UpdateBuilder initialization."""
-    builder = UpdateBuilder()
-    assert isinstance(builder, UpdateBuilder)
-    # UpdateBuilder uses _expression to store the UPDATE statement
+    """Test Update initialization."""
+    builder = Update()
+    assert isinstance(builder, Update)
+    # Update uses _expression to store the UPDATE statement
     assert isinstance(builder._expression, exp.Update)
     assert builder._expression.args.get("this") is None  # target table
     assert builder._parameters == {}
@@ -38,7 +38,7 @@ def test_update_builder_initialization() -> None:
 
 def test_update_table_method() -> None:
     """Test setting target table with table()."""
-    builder = UpdateBuilder().table("users")
+    builder = Update().table("users")
     # Check the target table is set in the expression
     assert builder._expression is not None
     assert builder._expression.args.get("this") is not None
@@ -48,7 +48,7 @@ def test_update_table_method() -> None:
 
 def test_update_table_returns_self() -> None:
     """Test that table() returns builder for chaining."""
-    builder = UpdateBuilder()
+    builder = Update()
     result = builder.table("users")
     assert result is builder
 
@@ -69,7 +69,7 @@ def test_update_table_returns_self() -> None:
 )
 def test_update_set_single_column(column: str, value: Any, expected_param_count: int) -> None:
     """Test SET clause with single column and various value types."""
-    builder = UpdateBuilder().table("users").set(column, value)
+    builder = Update().table("users").set(column, value)
     query = builder.build()
 
     assert 'UPDATE "users"' in query.sql or "UPDATE users" in query.sql
@@ -81,7 +81,7 @@ def test_update_set_single_column(column: str, value: Any, expected_param_count:
 def test_update_set_multiple_columns() -> None:
     """Test SET clause with multiple columns."""
     builder = (
-        UpdateBuilder()
+        Update()
         .table("users")
         .set("name", "John Doe")
         .set("email", "john@example.com")
@@ -98,14 +98,14 @@ def test_update_set_multiple_columns() -> None:
 
 def test_update_set_returns_self() -> None:
     """Test that set() returns builder for chaining."""
-    builder = UpdateBuilder().table("users")
+    builder = Update().table("users")
     result = builder.set("name", "John")
     assert result is builder
 
 
 def test_update_set_with_expression_column() -> None:
     """Test SET with sqlglot expression as column."""
-    builder = UpdateBuilder().table("users")
+    builder = Update().table("users")
     col_expr = exp.column("name")
     query = builder.set(col_expr, "John").build()
 
@@ -116,7 +116,7 @@ def test_update_set_with_expression_column() -> None:
 
 def test_update_set_with_expression_value() -> None:
     """Test SET with sqlglot expression as value (e.g., column = column + 1)."""
-    builder = UpdateBuilder().table("accounts")
+    builder = Update().table("accounts")
     # Create expression for balance = balance + 100
     value_expr = exp.Add(this=exp.column("balance"), expression=exp.Literal.number(100))
     query = builder.set("balance", value_expr).build()
@@ -146,7 +146,7 @@ def test_update_set_with_expression_value() -> None:
 )
 def test_update_where_conditions(method: str, args: tuple, expected_sql_parts: list[str]) -> None:
     """Test various WHERE condition helper methods."""
-    builder = UpdateBuilder(enable_optimization=False).table("users").set("status", "updated")
+    builder = Update(enable_optimization=False).table("users").set("status", "updated")
     where_method = getattr(builder, method)
     builder = where_method(*args)
 
@@ -159,8 +159,8 @@ def test_update_where_conditions(method: str, args: tuple, expected_sql_parts: l
 def test_update_where_exists_with_subquery() -> None:
     """Test WHERE EXISTS with subquery."""
     # Use a literal instead of parameter for the subquery to avoid parameter name conflicts
-    subquery = SelectBuilder().select("1").from_("orders").where("user_id = users.id")
-    builder = UpdateBuilder(enable_optimization=False).table("users").set("has_orders", True).where_exists(subquery)
+    subquery = Select().select("1").from_("orders").where("user_id = users.id")
+    builder = Update(enable_optimization=False).table("users").set("has_orders", True).where_exists(subquery)
 
     query = builder.build()
     assert 'UPDATE "users"' in query.sql or "UPDATE users" in query.sql
@@ -171,7 +171,7 @@ def test_update_where_exists_with_subquery() -> None:
 def test_update_multiple_where_conditions() -> None:
     """Test multiple WHERE conditions (AND logic)."""
     builder = (
-        UpdateBuilder()
+        Update()
         .table("users")
         .set("status", "inactive")
         .where(("age", ">", 65))
@@ -189,7 +189,7 @@ def test_update_multiple_where_conditions() -> None:
 def test_update_with_from_clause() -> None:
     """Test UPDATE with FROM clause (PostgreSQL style)."""
     builder = (
-        UpdateBuilder()
+        Update()
         .table("users")
         .set("total_orders", exp.column("o.order_count"))
         .from_("(SELECT user_id, COUNT(*) as order_count FROM orders GROUP BY user_id) o")
@@ -204,12 +204,12 @@ def test_update_with_from_clause() -> None:
 
 def test_update_from_returns_self() -> None:
     """Test that from() returns builder for chaining."""
-    builder = UpdateBuilder().table("users").set("name", "John")
+    builder = Update().table("users").set("name", "John")
     result = builder.from_("other_table")
     assert result is builder
 
 
-# Note: UPDATE with JOIN is not supported by UpdateBuilder
+# Note: UPDATE with JOIN is not supported by Update
 # This is intentional - use UPDATE ... FROM pattern instead which is more portable
 # The FROM clause method is shown in test_update_with_from_clause above
 
@@ -218,11 +218,7 @@ def test_update_from_returns_self() -> None:
 def test_update_with_returning() -> None:
     """Test UPDATE with RETURNING clause."""
     builder = (
-        UpdateBuilder()
-        .table("users")
-        .set("last_updated", "NOW()")
-        .where(("id", 123))
-        .returning("id", "name", "last_updated")
+        Update().table("users").set("last_updated", "NOW()").where(("id", 123)).returning("id", "name", "last_updated")
     )
 
     query = builder.build()
@@ -232,7 +228,7 @@ def test_update_with_returning() -> None:
 
 def test_update_returning_star() -> None:
     """Test UPDATE RETURNING *."""
-    builder = UpdateBuilder().table("users").set("active", False).where(("status", "deleted")).returning("*")
+    builder = Update().table("users").set("active", False).where(("status", "deleted")).returning("*")
 
     query = builder.build()
     assert 'UPDATE "users"' in query.sql or "UPDATE users" in query.sql
@@ -254,7 +250,7 @@ def test_update_returning_star() -> None:
 )
 def test_update_sql_injection_prevention(malicious_value: str) -> None:
     """Test that malicious values are properly parameterized."""
-    builder = UpdateBuilder().table("users").set("name", malicious_value).where(("id", 1))
+    builder = Update().table("users").set("name", malicious_value).where(("id", 1))
     query = builder.build()
 
     # Malicious SQL should not appear in query
@@ -270,7 +266,7 @@ def test_update_sql_injection_prevention(malicious_value: str) -> None:
 # Test error conditions
 def test_update_without_table_raises_error() -> None:
     """Test that UPDATE without table raises error."""
-    builder = UpdateBuilder()
+    builder = Update()
     builder.set("name", "John")  # set() works without table
     with pytest.raises(SQLBuilderError, match="No table specified for UPDATE statement"):
         builder.build()  # but build() fails
@@ -278,7 +274,7 @@ def test_update_without_table_raises_error() -> None:
 
 def test_update_without_set_raises_error() -> None:
     """Test that UPDATE without SET clause raises error."""
-    builder = UpdateBuilder().table("users")
+    builder = Update().table("users")
     with pytest.raises(SQLBuilderError, match="At least one SET clause must be specified"):
         builder.build()
 
@@ -290,7 +286,7 @@ def test_update_without_set_raises_error() -> None:
 def test_update_complex_query() -> None:
     """Test complex UPDATE with multiple features."""
     builder = (
-        UpdateBuilder()
+        Update()
         .table("users")
         .set("status", "reviewed")
         .set("review_date", "2024-01-15")
@@ -331,7 +327,7 @@ def test_update_complex_query() -> None:
 
 def test_update_with_case_expression() -> None:
     """Test UPDATE with CASE expression in SET."""
-    builder = UpdateBuilder().table("products")
+    builder = Update().table("products")
 
     # Build a CASE expression for price adjustment
     case_expr = exp.Case()
@@ -356,7 +352,7 @@ def test_update_with_case_expression() -> None:
 # Test edge cases
 def test_update_empty_where_in_list() -> None:
     """Test WHERE IN with empty list."""
-    builder = UpdateBuilder().table("users").set("status", "unknown").where_in("id", [])
+    builder = Update().table("users").set("status", "unknown").where_in("id", [])
     query = builder.build()
     assert 'UPDATE "users"' in query.sql or "UPDATE users" in query.sql
     assert "SET" in query.sql
@@ -365,7 +361,7 @@ def test_update_empty_where_in_list() -> None:
 def test_update_parameter_naming_consistency() -> None:
     """Test that parameter naming is consistent across multiple conditions."""
     builder = (
-        UpdateBuilder()
+        Update()
         .table("users")
         .set("name", "Updated Name")
         .set("email", "new@example.com")
@@ -394,7 +390,7 @@ def test_update_parameter_naming_consistency() -> None:
 
 def test_update_table_method_replaces_expression() -> None:
     """Test that table() replaces existing expression if wrong type."""
-    builder = UpdateBuilder()
+    builder = Update()
     builder._expression = exp.Select()  # Wrong type
 
     builder.table("users")
@@ -404,7 +400,7 @@ def test_update_table_method_replaces_expression() -> None:
 # Test type information
 def test_update_expected_result_type() -> None:
     """Test that _expected_result_type returns correct type."""
-    builder = UpdateBuilder()
+    builder = Update()
     import typing
 
     result_type = builder._expected_result_type
@@ -414,7 +410,7 @@ def test_update_expected_result_type() -> None:
 
 def test_update_create_base_expression() -> None:
     """Test that _create_base_expression returns Update expression."""
-    builder = UpdateBuilder()
+    builder = Update()
     expression = builder._create_base_expression()
     assert isinstance(expression, exp.Update)
 
@@ -422,7 +418,7 @@ def test_update_create_base_expression() -> None:
 # Test build output
 def test_update_build_returns_safe_query() -> None:
     """Test that build() returns SafeQuery object."""
-    builder = UpdateBuilder().table("users").set("name", "John").where(("id", 1))
+    builder = Update().table("users").set("name", "John").where(("id", 1))
     query = builder.build()
 
     assert isinstance(query, SafeQuery)
@@ -432,7 +428,7 @@ def test_update_build_returns_safe_query() -> None:
 
 def test_update_to_statement_conversion() -> None:
     """Test conversion to SQL statement object."""
-    builder = UpdateBuilder().table("users").set("name", "John").where(("id", 1))
+    builder = Update().table("users").set("name", "John").where(("id", 1))
     statement = builder.to_statement()
 
     assert isinstance(statement, SQL)
@@ -455,7 +451,7 @@ def test_update_to_statement_conversion() -> None:
 def test_update_fluent_interface_chaining() -> None:
     """Test that all methods return builder for fluent chaining."""
     builder = (
-        UpdateBuilder()
+        Update()
         .table("users")
         .set("name", "John Doe")
         .set("email", "john@example.com")
@@ -470,7 +466,7 @@ def test_update_fluent_interface_chaining() -> None:
     )
 
     query = builder.build()
-    # Verify the query has all components (JOIN not supported in UpdateBuilder)
+    # Verify the query has all components (JOIN not supported in Update)
     assert all(keyword in query.sql for keyword in ["UPDATE", "SET", "FROM", "WHERE", "RETURNING"])
 
 
@@ -495,7 +491,7 @@ def test_update_fluent_interface_chaining() -> None:
 )
 def test_update_special_values(special_value: Any, description: str) -> None:
     """Test UPDATE with special values."""
-    builder = UpdateBuilder().table("data").set("value", special_value).where(("id", 1))
+    builder = Update().table("data").set("value", special_value).where(("id", 1))
     query = builder.build()
 
     assert 'UPDATE "data"' in query.sql or "UPDATE data" in query.sql
@@ -505,7 +501,7 @@ def test_update_special_values(special_value: Any, description: str) -> None:
 def test_update_batch_operations() -> None:
     """Test UPDATE affecting multiple rows."""
     builder = (
-        UpdateBuilder()
+        Update()
         .table("orders")
         .set("status", "shipped")
         .set("shipped_date", "2024-01-15")
@@ -519,9 +515,9 @@ def test_update_batch_operations() -> None:
 
 def test_update_with_subquery_in_set() -> None:
     """Test UPDATE with subquery in SET clause."""
-    subquery = SelectBuilder().select("AVG(salary)").from_("employees").where(("department", "sales"))
+    subquery = Select().select("AVG(salary)").from_("employees").where(("department", "sales"))
 
-    builder = UpdateBuilder().table("departments").set("avg_salary", subquery).where(("name", "sales"))
+    builder = Update().table("departments").set("avg_salary", subquery).where(("name", "sales"))
 
     query = builder.build()
     assert 'UPDATE "departments"' in query.sql or "UPDATE departments" in query.sql

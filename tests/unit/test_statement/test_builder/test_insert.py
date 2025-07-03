@@ -1,6 +1,6 @@
-"""Unit tests for InsertBuilder functionality.
+"""Unit tests for Insert functionality.
 
-This module tests all InsertBuilder functionality including:
+This module tests all Insert functionality including:
 - Basic INSERT statement construction
 - Column specification and value insertion
 - Multi-row inserts
@@ -18,7 +18,7 @@ import pytest
 from sqlglot import exp
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder import InsertBuilder, SelectBuilder
+from sqlspec.statement.builder import Insert, Select
 from sqlspec.statement.builder.base import SafeQuery
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL
@@ -29,9 +29,9 @@ if TYPE_CHECKING:
 
 # Test basic INSERT construction
 def test_insert_builder_initialization() -> None:
-    """Test InsertBuilder initialization."""
-    builder = InsertBuilder()
-    assert isinstance(builder, InsertBuilder)
+    """Test Insert initialization."""
+    builder = Insert()
+    assert isinstance(builder, Insert)
     assert builder._table is None
     assert builder._columns == []
     assert builder._values_added_count == 0
@@ -39,13 +39,13 @@ def test_insert_builder_initialization() -> None:
 
 def test_insert_into_table() -> None:
     """Test setting target table with into()."""
-    builder = InsertBuilder().into("users")
+    builder = Insert().into("users")
     assert builder._table == "users"
 
 
 def test_insert_into_returns_self() -> None:
     """Test that into() returns builder for chaining."""
-    builder = InsertBuilder()
+    builder = Insert()
     result = builder.into("users")
     assert result is builder
 
@@ -63,13 +63,13 @@ def test_insert_into_returns_self() -> None:
 )
 def test_insert_columns_specification(columns: list[str], expected: list[str]) -> None:
     """Test column specification with various inputs."""
-    builder = InsertBuilder().columns(*columns)
+    builder = Insert().columns(*columns)
     assert builder._columns == expected
 
 
 def test_insert_columns_returns_self() -> None:
     """Test that columns() returns builder for chaining."""
-    builder = InsertBuilder()
+    builder = Insert()
     result = builder.columns("name", "email")
     assert result is builder
 
@@ -89,7 +89,7 @@ def test_insert_columns_returns_self() -> None:
 )
 def test_insert_values_basic(values: list[Any], expected_param_count: int) -> None:
     """Test basic value insertion with various types."""
-    builder = InsertBuilder().into("users").values(*values)
+    builder = Insert().into("users").values(*values)
     query = builder.build()
 
     assert 'INSERT INTO "users"' in query.sql or "INSERT INTO users" in query.sql
@@ -101,7 +101,7 @@ def test_insert_values_basic(values: list[Any], expected_param_count: int) -> No
 
 def test_insert_values_increments_counter() -> None:
     """Test that values() increments the row counter."""
-    builder = InsertBuilder().into("users")
+    builder = Insert().into("users")
 
     builder.values("John", "john@example.com")
     assert builder._values_added_count == 1
@@ -112,7 +112,7 @@ def test_insert_values_increments_counter() -> None:
 
 def test_insert_values_returns_self() -> None:
     """Test that values() returns builder for chaining."""
-    builder = InsertBuilder().into("users")
+    builder = Insert().into("users")
     result = builder.values("John", "john@example.com")
     assert result is builder
 
@@ -121,7 +121,7 @@ def test_insert_values_returns_self() -> None:
 def test_insert_multiple_rows() -> None:
     """Test inserting multiple rows with multiple values() calls."""
     builder = (
-        InsertBuilder()
+        Insert()
         .into("users")
         .columns("name", "email")
         .values("John", "john@example.com")
@@ -138,7 +138,7 @@ def test_insert_multiple_rows() -> None:
 # Test value validation
 def test_insert_values_requires_table() -> None:
     """Test that values() requires table to be set."""
-    builder = InsertBuilder()
+    builder = Insert()
     with pytest.raises(SQLBuilderError, match="target table must be set"):
         builder.values("John")
 
@@ -157,7 +157,7 @@ def test_insert_values_requires_table() -> None:
 )
 def test_insert_values_column_validation(columns: list[str], values: list[str], should_succeed: bool) -> None:
     """Test column count validation in values()."""
-    builder = InsertBuilder().into("users")
+    builder = Insert().into("users")
     if columns:
         builder.columns(*columns)
 
@@ -172,7 +172,7 @@ def test_insert_values_column_validation(columns: list[str], values: list[str], 
 def test_insert_values_from_dict_basic() -> None:
     """Test basic dictionary value insertion."""
     data = {"name": "John Doe", "email": "john@example.com", "age": 30}
-    builder = InsertBuilder().into("users").values_from_dict(data)
+    builder = Insert().into("users").values_from_dict(data)
     query = builder.build()
 
     assert 'INSERT INTO "users"' in query.sql or "INSERT INTO users" in query.sql
@@ -184,13 +184,13 @@ def test_insert_values_from_dict_basic() -> None:
 def test_insert_values_from_dict_sets_columns() -> None:
     """Test that values_from_dict() automatically sets columns."""
     data = {"name": "John", "email": "john@example.com"}
-    builder = InsertBuilder().into("users").values_from_dict(data)
+    builder = Insert().into("users").values_from_dict(data)
     assert set(builder._columns) == set(data.keys())
 
 
 def test_insert_values_from_dict_validates_columns() -> None:
     """Test that values_from_dict() validates against existing columns."""
-    builder = InsertBuilder().into("users").columns("name", "email")
+    builder = Insert().into("users").columns("name", "email")
     data = {"name": "John", "age": 30}  # Wrong keys
 
     with pytest.raises(SQLBuilderError, match="Dictionary keys.*do not match.*columns"):
@@ -199,7 +199,7 @@ def test_insert_values_from_dict_validates_columns() -> None:
 
 def test_insert_values_from_dict_returns_self() -> None:
     """Test that values_from_dict() returns builder for chaining."""
-    builder = InsertBuilder().into("users")
+    builder = Insert().into("users")
     result = builder.values_from_dict({"name": "John"})
     assert result is builder
 
@@ -212,7 +212,7 @@ def test_insert_values_from_dicts_basic() -> None:
         {"name": "Jane", "email": "jane@example.com"},
         {"name": "Bob", "email": "bob@example.com"},
     ]
-    builder = InsertBuilder().into("users").values_from_dicts(data)
+    builder = Insert().into("users").values_from_dicts(data)
     query = builder.build()
 
     assert 'INSERT INTO "users"' in query.sql or "INSERT INTO users" in query.sql
@@ -221,7 +221,7 @@ def test_insert_values_from_dicts_basic() -> None:
 
 def test_insert_values_from_dicts_empty_list() -> None:
     """Test values_from_dicts() with empty list."""
-    builder = InsertBuilder().into("users")
+    builder = Insert().into("users")
     result = builder.values_from_dicts([])
     assert result is builder
     assert builder._values_added_count == 0
@@ -233,7 +233,7 @@ def test_insert_values_from_dicts_validates_consistency() -> None:
         {"name": "John", "email": "john@example.com"},
         {"name": "Jane", "age": 25},  # Different keys
     ]
-    builder = InsertBuilder().into("users")
+    builder = Insert().into("users")
 
     with pytest.raises(SQLBuilderError, match="Dictionary at index.*do not match"):
         builder.values_from_dicts(inconsistent_data)  # type: ignore[arg-type]
@@ -242,9 +242,9 @@ def test_insert_values_from_dicts_validates_consistency() -> None:
 # Test INSERT from SELECT
 def test_insert_from_select_basic() -> None:
     """Test INSERT from SELECT statement."""
-    select_builder = SelectBuilder().select("id", "name").from_("temp_users").where(("active", True))
+    select_builder = Select().select("id", "name").from_("temp_users").where(("active", True))
 
-    builder = InsertBuilder().into("users_backup").from_select(select_builder)
+    builder = Insert().into("users_backup").from_select(select_builder)
     query = builder.build()
 
     assert 'INSERT INTO "users_backup"' in query.sql
@@ -255,16 +255,16 @@ def test_insert_from_select_basic() -> None:
 
 def test_insert_from_select_merges_parameters() -> None:
     """Test that from_select() merges SELECT parameters."""
-    select_builder = SelectBuilder().select("*").from_("users").where(("status", "active"))
+    select_builder = Select().select("*").from_("users").where(("status", "active"))
 
-    builder = InsertBuilder().into("users_backup").from_select(select_builder)
+    builder = Insert().into("users_backup").from_select(select_builder)
     assert "active" in builder._parameters.values()
 
 
 def test_insert_from_select_requires_table() -> None:
     """Test that from_select() requires table to be set."""
-    builder = InsertBuilder()
-    select_builder = SelectBuilder().select("*").from_("users")
+    builder = Insert()
+    select_builder = Select().select("*").from_("users")
 
     with pytest.raises(SQLBuilderError, match="target table must be set"):
         builder.from_select(select_builder)
@@ -272,8 +272,8 @@ def test_insert_from_select_requires_table() -> None:
 
 def test_insert_from_select_validates_expression() -> None:
     """Test that from_select() validates SELECT has expression."""
-    builder = InsertBuilder().into("users_backup")
-    invalid_select = Mock(spec=SelectBuilder)
+    builder = Insert().into("users_backup")
+    invalid_select = Mock(spec=Select)
     invalid_select._parameters = {}
     invalid_select._expression = None
 
@@ -284,14 +284,14 @@ def test_insert_from_select_validates_expression() -> None:
 # Test conflict resolution
 def test_insert_on_conflict_do_nothing() -> None:
     """Test ON CONFLICT DO NOTHING clause."""
-    builder = InsertBuilder().into("users").values("John", "john@example.com").on_conflict_do_nothing()
-    assert isinstance(builder, InsertBuilder)
+    builder = Insert().into("users").values("John", "john@example.com").on_conflict_do_nothing()
+    assert isinstance(builder, Insert)
 
 
 def test_insert_on_duplicate_key_update() -> None:
     """Test ON DUPLICATE KEY UPDATE clause."""
-    builder = InsertBuilder().into("users").on_duplicate_key_update(status="updated", modified_at="NOW()")
-    assert isinstance(builder, InsertBuilder)
+    builder = Insert().into("users").on_duplicate_key_update(status="updated", modified_at="NOW()")
+    assert isinstance(builder, Insert)
 
 
 # Test SQL injection prevention
@@ -308,7 +308,7 @@ def test_insert_on_duplicate_key_update() -> None:
 )
 def test_insert_sql_injection_prevention(malicious_value: str) -> None:
     """Test that malicious values are properly parameterized."""
-    builder = InsertBuilder().into("users").columns("name").values(malicious_value)
+    builder = Insert().into("users").columns("name").values(malicious_value)
     query = builder.build()
 
     # Malicious SQL should not appear in query
@@ -328,7 +328,7 @@ def test_insert_sql_injection_in_dict() -> None:
         "email": "test@example.com",
         "comment": "1=1; DELETE FROM users WHERE 1=1",
     }
-    builder = InsertBuilder().into("users").values_from_dict(malicious_data)
+    builder = Insert().into("users").values_from_dict(malicious_data)
     query = builder.build()
 
     assert "DROP TABLE" not in query.sql
@@ -358,7 +358,7 @@ def test_insert_sql_injection_in_dict() -> None:
 )
 def test_insert_special_values(special_value: Any, description: str) -> None:
     """Test INSERT with special values."""
-    builder = InsertBuilder().into("data").columns("value").values(special_value)
+    builder = Insert().into("data").columns("value").values(special_value)
     query = builder.build()
 
     assert 'INSERT INTO "data"' in query.sql
@@ -368,7 +368,7 @@ def test_insert_special_values(special_value: Any, description: str) -> None:
 # Test error handling
 def test_insert_expression_not_initialized() -> None:
     """Test error when expression not initialized."""
-    builder = InsertBuilder()
+    builder = Insert()
     builder._expression = None
 
     with pytest.raises(SQLBuilderError, match="expression not initialized"):
@@ -377,7 +377,7 @@ def test_insert_expression_not_initialized() -> None:
 
 def test_insert_wrong_expression_type() -> None:
     """Test error when expression is wrong type."""
-    builder = InsertBuilder()
+    builder = Insert()
     builder._expression = Mock(spec=exp.Select)  # Wrong type
 
     with pytest.raises(SQLBuilderError, match="not an Insert instance"):
@@ -388,7 +388,7 @@ def test_insert_wrong_expression_type() -> None:
 def test_insert_large_batch() -> None:
     """Test INSERT with large number of rows."""
     large_data = [{"id": i, "name": f"user_{i}", "value": i * 10} for i in range(100)]
-    builder = InsertBuilder().into("users").values_from_dicts(large_data)
+    builder = Insert().into("users").values_from_dicts(large_data)
     query = builder.build()
 
     assert 'INSERT INTO "users"' in query.sql
@@ -399,7 +399,7 @@ def test_insert_large_batch() -> None:
 def test_insert_full_method_chain() -> None:
     """Test complete method chaining workflow."""
     query = (
-        InsertBuilder()
+        Insert()
         .into("users")
         .columns("name", "email", "status")
         .values("John", "john@example.com", "active")
@@ -417,7 +417,7 @@ def test_insert_full_method_chain() -> None:
 def test_insert_mixed_value_methods() -> None:
     """Test mixing different value insertion methods."""
     builder = (
-        InsertBuilder()
+        Insert()
         .into("users")
         .columns("name", "email")
         .values("John", "john@example.com")
@@ -432,7 +432,7 @@ def test_insert_mixed_value_methods() -> None:
 # Test type information
 def test_insert_expected_result_type() -> None:
     """Test that _expected_result_type returns correct type."""
-    builder = InsertBuilder()
+    builder = Insert()
     import typing
 
     result_type = builder._expected_result_type
@@ -442,7 +442,7 @@ def test_insert_expected_result_type() -> None:
 
 def test_insert_create_base_expression() -> None:
     """Test that _create_base_expression returns Insert expression."""
-    builder = InsertBuilder()
+    builder = Insert()
     expression = builder._create_base_expression()
     assert isinstance(expression, exp.Insert)
 
@@ -450,7 +450,7 @@ def test_insert_create_base_expression() -> None:
 # Test build output
 def test_insert_build_returns_safe_query() -> None:
     """Test that build() returns SafeQuery object."""
-    builder = InsertBuilder().into("users").values("John", "john@example.com")
+    builder = Insert().into("users").values("John", "john@example.com")
     query = builder.build()
 
     assert isinstance(query, SafeQuery)
@@ -460,7 +460,7 @@ def test_insert_build_returns_safe_query() -> None:
 
 def test_insert_to_statement_conversion() -> None:
     """Test conversion to SQL statement object."""
-    builder = InsertBuilder().into("users").values("John", "john@example.com")
+    builder = Insert().into("users").values("John", "john@example.com")
     statement = builder.to_statement()
 
     assert isinstance(statement, SQL)

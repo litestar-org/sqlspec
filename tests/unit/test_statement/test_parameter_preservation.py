@@ -2,21 +2,21 @@
 
 import pytest
 
-from sqlspec.statement.builder.ddl import CreateTableAsSelectBuilder
-from sqlspec.statement.builder.select import SelectBuilder
+from sqlspec.statement.builder.ddl import CreateTableAsSelect
+from sqlspec.statement.builder.select import Select
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
 def test_ctas_preserves_parameter_names() -> None:
     """Test that CTAS preserves original parameter names without _1 suffix."""
     # Create a SELECT query with parameters
-    select_builder = SelectBuilder()
+    select_builder = Select()
     select_builder.from_("users").where("active = :active AND status = :status")
     select_builder.add_parameter(True, name="active")
     select_builder.add_parameter("enabled", name="status")
 
     # Create CTAS from the SELECT
-    ctas_builder = CreateTableAsSelectBuilder()
+    ctas_builder = CreateTableAsSelect()
     ctas_builder.name("new_table").as_select(select_builder)
 
     # Build and check
@@ -42,12 +42,12 @@ def test_ctas_preserves_parameter_names() -> None:
 def test_ctas_handles_parameter_collision() -> None:
     """Test that CTAS handles parameter name collisions by using the later value."""
     # Create a CTAS with a parameter
-    ctas_builder = CreateTableAsSelectBuilder()
+    ctas_builder = CreateTableAsSelect()
     ctas_builder.name("new_table")
     ctas_builder.add_parameter("initial_value", name="test_param")
 
     # Add SELECT with same parameter name - this should override the previous value
-    select_builder = SelectBuilder()
+    select_builder = Select()
     select_builder.from_("users").where("name = :test_param")
     select_builder.add_parameter("select_value", name="test_param")
 
@@ -87,18 +87,18 @@ def test_mixed_parameter_style_normalization() -> None:
 def test_complex_ctas_with_ctes() -> None:
     """Test CTAS with CTEs preserves all parameter names."""
     # Create CTE with parameters
-    cte_builder = SelectBuilder()
+    cte_builder = Select()
     cte_builder.select("*").from_("orders").where("created_at > :start_date")
     cte_builder.add_parameter("2024-01-01", name="start_date")
 
     # Create main query with different parameters
-    main_builder = SelectBuilder()
+    main_builder = Select()
     main_builder.with_cte("recent_orders", cte_builder)
     main_builder.select("*").from_("recent_orders").where("amount > :min_amount")
     main_builder.add_parameter(100, name="min_amount")
 
     # Create CTAS
-    ctas_builder = CreateTableAsSelectBuilder()
+    ctas_builder = CreateTableAsSelect()
     ctas_builder.name("summary_table").as_select(main_builder)
 
     safe_query = ctas_builder.build()
@@ -119,7 +119,7 @@ def test_complex_ctas_with_ctes() -> None:
 
 def test_builder_parameter_collision_resolution() -> None:
     """Test that builders handle parameter collisions gracefully."""
-    builder = SelectBuilder()
+    builder = Select()
 
     # Add first parameter
     builder.add_parameter("value1", name="param")

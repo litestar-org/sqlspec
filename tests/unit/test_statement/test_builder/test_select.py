@@ -1,6 +1,6 @@
-"""Unit tests for SelectBuilder functionality.
+"""Unit tests for Select functionality.
 
-This module tests the SelectBuilder including:
+This module tests the Select including:
 - Basic SELECT operations
 - DISTINCT support
 - JOIN operations (INNER, LEFT, RIGHT, CROSS)
@@ -23,7 +23,7 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder import SelectBuilder
+from sqlspec.statement.builder import Select
 from sqlspec.statement.builder.mixins._case_builder import CaseBuilder
 
 if TYPE_CHECKING:
@@ -46,7 +46,7 @@ def test_as_schema_with_pydantic_model() -> None:
         id: int
         name: str
 
-    builder = SelectBuilder().select("id", "name").from_("users")
+    builder = Select().select("id", "name").from_("users")
     new_builder = builder.as_schema(UserModel)
 
     assert getattr(new_builder, "_schema", None) is UserModel
@@ -63,7 +63,7 @@ def test_as_schema_with_dataclass() -> None:
         id: int
         name: str
 
-    builder = SelectBuilder().select("id", "name").from_("users")
+    builder = Select().select("id", "name").from_("users")
     new_builder = builder.as_schema(User)  # type: ignore[arg-type]
 
     assert getattr(new_builder, "_schema", None) is User
@@ -73,7 +73,7 @@ def test_as_schema_with_dataclass() -> None:
 
 def test_as_schema_with_dict_type() -> None:
     """Test as_schema with dict type."""
-    builder = SelectBuilder().select("id", "name").from_("users")
+    builder = Select().select("id", "name").from_("users")
     new_builder = builder.as_schema(dict)
 
     assert getattr(new_builder, "_schema", None) is dict
@@ -82,7 +82,7 @@ def test_as_schema_with_dict_type() -> None:
 
 def test_as_schema_preserves_parameters() -> None:
     """Test that as_schema preserves query parameters."""
-    builder = SelectBuilder().select("id").from_("users").where(("name", "John"))
+    builder = Select().select("id").from_("users").where(("name", "John"))
     new_builder = builder.as_schema(dict)
 
     assert new_builder.build().parameters == builder.build().parameters
@@ -102,7 +102,7 @@ def test_as_schema_preserves_parameters() -> None:
 )
 def test_select_columns(columns: list[str], expected_count: int) -> None:
     """Test selecting various column combinations."""
-    builder = SelectBuilder()
+    builder = Select()
     if columns:
         builder = builder.select(*columns)
     builder = builder.from_("users")
@@ -125,7 +125,7 @@ def test_select_columns(columns: list[str], expected_count: int) -> None:
 )
 def test_distinct_variations(distinct_cols: list[str], all_cols: list[str]) -> None:
     """Test DISTINCT with various column specifications."""
-    builder = SelectBuilder().select(*all_cols)
+    builder = Select().select(*all_cols)
     if distinct_cols:
         builder = builder.distinct(*distinct_cols)
     else:
@@ -146,7 +146,7 @@ def test_distinct_variations(distinct_cols: list[str], all_cols: list[str]) -> N
 )
 def test_join_types(join_type: str, method_name: str) -> None:
     """Test different JOIN types."""
-    builder = SelectBuilder().select("*").from_("users")
+    builder = Select().select("*").from_("users")
 
     # Get the join method dynamically
     join_method = getattr(builder, method_name)
@@ -196,7 +196,7 @@ def test_join_types(join_type: str, method_name: str) -> None:
 def test_where_condition_helpers(method: str, args: tuple, expected_sql_parts: list[str]) -> None:
     """Test various WHERE condition helper methods."""
     # Disable optimization for BETWEEN to preserve the clause
-    builder = SelectBuilder(enable_optimization=False).select("*").from_("users")
+    builder = Select(enable_optimization=False).select("*").from_("users")
     where_method = getattr(builder, method)
     builder = where_method(*args)
 
@@ -207,8 +207,8 @@ def test_where_condition_helpers(method: str, args: tuple, expected_sql_parts: l
 
 def test_where_exists_with_subquery() -> None:
     """Test WHERE EXISTS with subquery."""
-    subquery = SelectBuilder().select("1").from_("orders").where(("user_id", "users.id"))
-    builder = SelectBuilder(enable_optimization=False).select("*").from_("users").where_exists(subquery)
+    subquery = Select().select("1").from_("orders").where(("user_id", "users.id"))
+    builder = Select(enable_optimization=False).select("*").from_("users").where_exists(subquery)
 
     query = builder.build()
     assert "EXISTS" in query.sql
@@ -217,8 +217,8 @@ def test_where_exists_with_subquery() -> None:
 
 def test_where_not_exists() -> None:
     """Test WHERE NOT EXISTS."""
-    subquery = SelectBuilder().select("1").from_("orders").where(("user_id", "users.id"))
-    builder = SelectBuilder(enable_optimization=False).select("*").from_("users").where_not_exists(subquery)
+    subquery = Select().select("1").from_("orders").where(("user_id", "users.id"))
+    builder = Select(enable_optimization=False).select("*").from_("users").where_not_exists(subquery)
 
     query = builder.build()
     assert "NOT EXISTS" in query.sql or ("NOT" in query.sql and "EXISTS" in query.sql)
@@ -240,7 +240,7 @@ def test_where_not_exists() -> None:
 )
 def test_aggregate_functions(method: str, args: tuple, expected_sql: str) -> None:
     """Test aggregate function helpers."""
-    builder = SelectBuilder()
+    builder = Select()
     agg_method = getattr(builder, method)
     builder = agg_method(*args).from_("test_table")
 
@@ -270,7 +270,7 @@ def test_window_functions(
 ) -> None:
     """Test window function variations."""
     builder = (
-        SelectBuilder()
+        Select()
         .window(window_func, partition_by=partition_by, order_by=order_by, frame=frame, alias="window_result")
         .from_("test_table")
     )
@@ -284,7 +284,7 @@ def test_window_functions(
 def test_case_when_else_basic() -> None:
     """Test basic CASE WHEN ELSE expression."""
     builder = (
-        SelectBuilder()
+        Select()
         .case_("status_text")
         .when("status = 1", "Active")
         .when("status = 2", "Inactive")
@@ -307,12 +307,7 @@ def test_case_when_else_basic() -> None:
 def test_case_without_else() -> None:
     """Test CASE expression without ELSE clause."""
     builder = (
-        SelectBuilder()
-        .case_("priority_text")
-        .when("priority = 1", "High")
-        .when("priority = 2", "Medium")
-        .end()
-        .from_("tasks")  # type: ignore[attr-defined]
+        Select().case_("priority_text").when("priority = 1", "High").when("priority = 2", "Medium").end().from_("tasks")  # type: ignore[attr-defined]
     )
 
     query = builder.build()
@@ -325,7 +320,7 @@ def test_case_without_else() -> None:
 def test_case_with_expression_conditions() -> None:
     """Test CASE with sqlglot expression conditions."""
     condition_expr = exp.GT(this=exp.column("age"), expression=exp.Literal.number(18))
-    builder = SelectBuilder().case_("age_group").when(condition_expr, "Adult").else_("Minor").end().from_("people")  # type: ignore[attr-defined]
+    builder = Select().case_("age_group").when(condition_expr, "Adult").else_("Minor").end().from_("people")  # type: ignore[attr-defined]
 
     query = builder.build()
     assert "CASE" in query.sql
@@ -347,8 +342,8 @@ def test_case_with_expression_conditions() -> None:
 )
 def test_set_operations(method: str, all_flag: bool, expected_sql: str) -> None:
     """Test set operations between queries."""
-    builder1 = SelectBuilder().select("id").from_("users")
-    builder2 = SelectBuilder().select("id").from_("customers")
+    builder1 = Select().select("id").from_("users")
+    builder2 = Select().select("id").from_("customers")
 
     set_method = getattr(builder1, method)
     if method == "union" and all_flag:
@@ -366,7 +361,7 @@ def test_set_operations(method: str, all_flag: bool, expected_sql: str) -> None:
 def test_pivot_basic() -> None:
     """Test basic PIVOT functionality."""
     builder = (
-        SelectBuilder()
+        Select()
         .select("product", "Q1", "Q2", "Q3", "Q4")
         .from_("sales_data")
         .pivot("SUM", "sales", "quarter", ["Q1", "Q2", "Q3", "Q4"])
@@ -379,7 +374,7 @@ def test_pivot_basic() -> None:
 def test_unpivot_basic() -> None:
     """Test basic UNPIVOT functionality."""
     builder = (
-        SelectBuilder()
+        Select()
         .select("product", "quarter", "sales")
         .from_("pivot_data")
         .unpivot("sales", "quarter", ["Q1", "Q2", "Q3", "Q4"])
@@ -392,10 +387,7 @@ def test_unpivot_basic() -> None:
 def test_group_by_rollup() -> None:
     """Test GROUP BY ROLLUP functionality."""
     builder = (
-        SelectBuilder()
-        .select("product", "region", "SUM(sales)")
-        .from_("sales_data")
-        .group_by_rollup("product", "region")
+        Select().select("product", "region", "SUM(sales)").from_("sales_data").group_by_rollup("product", "region")
     )
 
     query = builder.build()
@@ -417,7 +409,7 @@ def test_query_hints(
     hint: str, location: Optional[str], table: Optional[str], dialect: Optional[str], expected_in_sql: bool
 ) -> None:
     """Test query hint functionality."""
-    builder = SelectBuilder().select("id").from_("users")
+    builder = Select().select("id").from_("users")
     if location and table:
         builder = builder.with_hint(hint, location=location, table=table, dialect=dialect)
     else:
@@ -445,7 +437,7 @@ def test_query_hints(
 )
 def test_sql_injection_prevention(malicious_input: Any, context: str) -> None:
     """Test that malicious inputs are properly parameterized."""
-    builder = SelectBuilder().select("*").from_("users")
+    builder = Select().select("*").from_("users")
 
     if context == "where":
         builder = builder.where(("name", malicious_input))
@@ -481,7 +473,7 @@ def test_sql_injection_prevention(malicious_input: Any, context: str) -> None:
 )
 def test_error_conditions(error_scenario: str, expected_exception: Any) -> None:
     """Test various error conditions."""
-    builder = SelectBuilder().select("*").from_("users")
+    builder = Select().select("*").from_("users")
 
     with pytest.raises(expected_exception):
         if error_scenario == "invalid_where_in_type":
@@ -497,12 +489,10 @@ def test_error_conditions(error_scenario: str, expected_exception: Any) -> None:
 # Test complex queries
 def test_complex_analytics_query() -> None:
     """Test complex analytics query with multiple features."""
-    subquery = (
-        SelectBuilder().select("department").avg_("salary", "dept_avg_salary").from_("employees").group_by("department")
-    )
+    subquery = Select().select("department").avg_("salary", "dept_avg_salary").from_("employees").group_by("department")
 
     builder = (
-        SelectBuilder()
+        Select()
         .select("e.id", "e.name", "e.department", "e.salary")
         .case_("performance_tier")
         .when("e.salary > dept_avg.dept_avg_salary * 1.2", "High Performer")
@@ -538,21 +528,21 @@ def test_complex_analytics_query() -> None:
 def test_complex_set_operations_query() -> None:
     """Test complex query with multiple UNION operations."""
     current = (
-        SelectBuilder()
+        Select()
         .select("'current'", "customer_id", "total")
         .from_("orders")
         .where_between("order_date", "2024-01-01", "2024-12-31")
     )
 
     archived = (
-        SelectBuilder()
+        Select()
         .select("'archived'", "customer_id", "total")
         .from_("archived_orders")
         .where_between("order_date", "2024-01-01", "2024-12-31")
     )
 
     pending = (
-        SelectBuilder()
+        Select()
         .select("'pending'", "customer_id", "estimated_total")
         .from_("pending_orders")
         .where_not_null("estimated_date")
@@ -570,7 +560,7 @@ def test_complex_set_operations_query() -> None:
 # Test edge cases
 def test_empty_where_in_list() -> None:
     """Test WHERE IN with empty list."""
-    builder = SelectBuilder().select("*").from_("users").where_in("id", [])
+    builder = Select().select("*").from_("users").where_in("id", [])
     query = builder.build()
     assert "SELECT" in query.sql
     assert 'FROM "users"' in query.sql or "FROM users" in query.sql
@@ -579,7 +569,7 @@ def test_empty_where_in_list() -> None:
 def test_parameter_naming_consistency() -> None:
     """Test that parameter naming is consistent across multiple conditions."""
     builder = (
-        SelectBuilder()
+        Select()
         .select("*")
         .from_("users")
         .where_like("name", "%test%")
@@ -606,7 +596,7 @@ def test_parameter_naming_consistency() -> None:
 def test_large_in_clause() -> None:
     """Test handling of large IN clause with many parameters."""
     large_list = list(range(1000))
-    builder = SelectBuilder().select("*").from_("users").where_in("id", large_list)
+    builder = Select().select("*").from_("users").where_in("id", large_list)
 
     query = builder.build()
     assert "IN" in query.sql
@@ -622,7 +612,7 @@ def test_large_in_clause() -> None:
 )
 def test_dialect_specific_queries(dialect: str, expected_behavior: str) -> None:
     """Test dialect-specific SQL generation."""
-    builder = SelectBuilder(dialect=dialect).select("id", "name").from_("users").where(("active", True)).limit(10)
+    builder = Select(dialect=dialect).select("id", "name").from_("users").where(("active", True)).limit(10)
 
     query = builder.build()
     assert "SELECT" in query.sql
@@ -634,7 +624,7 @@ def test_dialect_specific_queries(dialect: str, expected_behavior: str) -> None:
 def test_fluent_interface_chaining() -> None:
     """Test that all methods return builder for fluent chaining."""
     builder = (
-        SelectBuilder()
+        Select()
         .select("id", "name")
         .distinct()
         .from_("users")
@@ -660,7 +650,7 @@ def test_fluent_interface_chaining() -> None:
 # Test CaseBuilder integration
 def test_case_builder_initialization() -> None:
     """Test CaseBuilder basic initialization."""
-    select_builder = SelectBuilder()
+    select_builder = Select()
     case_builder = CaseBuilder(select_builder, "test_alias")
 
     assert case_builder._alias == "test_alias"
@@ -670,13 +660,13 @@ def test_case_builder_initialization() -> None:
 # Test pivot/unpivot without FROM clause
 def test_pivot_without_from() -> None:
     """Test PIVOT without FROM clause should not include PIVOT in SQL."""
-    builder = SelectBuilder().select("*").pivot("SUM", "sales", "quarter", ["Q1", "Q2"])
+    builder = Select().select("*").pivot("SUM", "sales", "quarter", ["Q1", "Q2"])
     query = builder.build()
     assert "PIVOT" not in query.sql
 
 
 def test_unpivot_without_from() -> None:
     """Test UNPIVOT without FROM clause should not include UNPIVOT in SQL."""
-    builder = SelectBuilder().select("*").unpivot("sales", "quarter", ["Q1", "Q2"])
+    builder = Select().select("*").unpivot("sales", "quarter", ["Q1", "Q2"])
     query = builder.build()
     assert "UNPIVOT" not in query.sql and "PIVOT" not in query.sql

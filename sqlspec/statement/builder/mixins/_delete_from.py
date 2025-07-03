@@ -26,7 +26,7 @@ class DeleteFromClauseMixin:
             self._expression = exp.Delete()
         if not isinstance(self._expression, exp.Delete):
             current_expr_type = type(self._expression).__name__
-            msg = f"Base expression for DeleteBuilder is {current_expr_type}, expected Delete."
+            msg = f"Base expression for Delete is {current_expr_type}, expected Delete."
             raise SQLBuilderError(msg)
 
         setattr(self, "_table", table)

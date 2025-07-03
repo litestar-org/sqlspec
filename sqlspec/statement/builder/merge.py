@@ -20,11 +20,11 @@ from sqlspec.statement.builder.mixins import (
 from sqlspec.statement.result import SQLResult
 from sqlspec.typing import RowT
 
-__all__ = ("MergeBuilder",)
+__all__ = ("Merge",)
 
 
 @dataclass(unsafe_hash=True)
-class MergeBuilder(
+class Merge(
     QueryBuilder[RowT],
     MergeUsingClauseMixin,
     MergeOnClauseMixin,
@@ -42,7 +42,7 @@ class MergeBuilder(
         ```python
         # Basic MERGE statement
         merge_query = (
-            MergeBuilder()
+            Merge()
             .into("target_table")
             .using("source_table", "src")
             .on("target_table.id = src.id")
@@ -64,7 +64,7 @@ class MergeBuilder(
         )
 
         merge_query = (
-            MergeBuilder()
+            Merge()
             .into("users")
             .using(source_query, "src")
             .on("users.email = src.email")

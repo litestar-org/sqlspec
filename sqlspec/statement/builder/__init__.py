@@ -8,7 +8,7 @@ parameter binding and validation.
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder.base import QueryBuilder, SafeQuery
-from sqlspec.statement.builder.column import Column, ColumnExpression
+from sqlspec.statement.builder.column import Column, ColumnExpression, FunctionColumn
 from sqlspec.statement.builder.ddl import (
     AlterTable,
     CommentOn,
@@ -28,7 +28,7 @@ from sqlspec.statement.builder.ddl import (
 )
 from sqlspec.statement.builder.delete import Delete
 from sqlspec.statement.builder.insert import Insert
-from sqlspec.statement.builder.merge import MergeBuilder
+from sqlspec.statement.builder.merge import Merge
 from sqlspec.statement.builder.mixins import WhereClauseMixin
 from sqlspec.statement.builder.select import Select
 from sqlspec.statement.builder.update import Update
@@ -50,8 +50,9 @@ __all__ = (
     "DropSchema",
     "DropTable",
     "DropView",
+    "FunctionColumn",
     "Insert",
-    "MergeBuilder",
+    "Merge",
     "QueryBuilder",
     "RenameTable",
     "SQLBuilderError",

@@ -36,9 +36,9 @@ class WhereClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        # Special case: if this is an UpdateBuilder and _expression is not exp.Update, raise the expected error for test coverage
+        # Special case: if this is an Update and _expression is not exp.Update, raise the expected error for test coverage
 
-        if self.__class__.__name__ == "UpdateBuilder" and not (
+        if self.__class__.__name__ == "Update" and not (
             hasattr(self, "_expression") and isinstance(getattr(self, "_expression", None), exp.Update)
         ):
             msg = "Cannot add WHERE clause to non-UPDATE expression"

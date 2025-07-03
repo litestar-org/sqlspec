@@ -12,7 +12,7 @@ from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.driver.mixins import SQLTranslatorMixin
-from sqlspec.statement.builder import SelectBuilder
+from sqlspec.statement.builder import Select
 from sqlspec.statement.pipelines.context import SQLProcessingContext
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -20,7 +20,7 @@ from tests.integration.test_adapters.test_adbc.conftest import PostgresService
 
 
 # Sync dialect propagation tests
-def test_sqlitedialect_propagation_through_execute() -> None:
+def test_sqlite_dialect_propagation_through_execute() -> None:
     """Test that SQLite dialect propagates through execute calls."""
     config = SqliteConfig(database=":memory:")
 
@@ -60,7 +60,7 @@ def test_sqlitedialect_propagation_through_execute() -> None:
     connection.close()
 
 
-def test_duckdbdialect_propagation_with_query_builder() -> None:
+def test_duckdb_dialect_propagation_with_query_builder() -> None:
     """Test that DuckDB dialect propagates through query builder."""
     config = DuckDBConfig(connection_config={"database": ":memory:"})
 
@@ -80,7 +80,7 @@ def test_duckdbdialect_propagation_with_query_builder() -> None:
     driver = DuckDBDriver(connection=connection, config=SQLConfig())
 
     # Create a query builder
-    query = SelectBuilder(dialect="duckdb").select("id", "name").from_("users").where("id = 1")
+    query = Select(dialect="duckdb").select("id", "name").from_("users").where("id = 1")
 
     # Execute and verify dialect is preserved
     result = driver.execute(query)
@@ -92,7 +92,7 @@ def test_duckdbdialect_propagation_with_query_builder() -> None:
     assert result.data[0]["name"] == "test"
 
     # Verify the dialect propagated correctly - driver uses its own dialect for execution
-    # The SelectBuilder had duckdb dialect, but the driver itself is DuckDB so this should work
+    # The Select had duckdb dialect, but the driver itself is DuckDB so this should work
     # We expect the driver to process the query with its dialect
     assert result.statement.dialect == "duckdb" or result.statement.dialect is None
 
@@ -221,7 +221,7 @@ def test_sql_processing_context_with_dialect() -> None:
 def test_query_builder_dialect_inheritance() -> None:
     """Test that query builders inherit dialect correctly."""
     # Test with explicit dialect
-    select_builder = SelectBuilder(dialect="sqlite")
+    select_builder = Select(dialect="sqlite")
     assert select_builder.dialect == "sqlite"
 
     # Build SQL and check dialect
@@ -230,7 +230,7 @@ def test_query_builder_dialect_inheritance() -> None:
 
     # Test with different dialects
     for dialect in ["postgres", "mysql", "duckdb"]:
-        builder = SelectBuilder(dialect=dialect)
+        builder = Select(dialect=dialect)
         assert builder.dialect == dialect
 
         sql = builder.from_("test_table").to_statement()

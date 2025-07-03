@@ -10,7 +10,7 @@ from typing import Any, Optional, Union, cast
 from sqlglot import exp, maybe_parse, parse_one
 
 
-def parse_column_expression(column_input: Union[str, exp.Expression]) -> exp.Expression:
+def parse_column_expression(column_input: Union[str, exp.Expression, Any]) -> exp.Expression:
     """Parse a column input that might be a complex expression.
 
     Handles cases like:
@@ -19,15 +19,21 @@ def parse_column_expression(column_input: Union[str, exp.Expression]) -> exp.Exp
     - Aliased columns: "name AS user_name" -> Alias(this=Column(name), alias=user_name)
     - Function calls: "MAX(price)" -> Max(this=Column(price))
     - Complex expressions: "CASE WHEN ... END" -> Case(...)
+    - Custom Column objects from our builder
 
     Args:
-        column_input: String or SQLGlot expression representing a column/expression
+        column_input: String, SQLGlot expression, or Column object
 
     Returns:
         exp.Expression: Parsed SQLGlot expression
     """
     if isinstance(column_input, exp.Expression):
         return column_input
+
+    # Handle our custom Column objects
+    if hasattr(column_input, "_expr") and isinstance(column_input._expr, exp.Expression):
+        return column_input._expr
+
     return exp.maybe_parse(column_input) or exp.column(str(column_input))
 
 
