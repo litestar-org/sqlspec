@@ -380,7 +380,7 @@ def test_query_builder_build_sql_generation_error(mock_logger: Mock, test_builde
         def copy(self) -> "MockExpression":
             return self
 
-    test_builder._expression = MockExpression()
+    test_builder._expression = MockExpression()  # type: ignore[assignment]
 
     with pytest.raises(SQLBuilderError, match="Error generating SQL"):
         test_builder.build()

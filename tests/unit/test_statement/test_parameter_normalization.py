@@ -1,6 +1,11 @@
 """Tests for conditional parameter normalization for SQLGlot compatibility."""
 
-from sqlspec.statement.parameters import SQLGLOT_INCOMPATIBLE_STYLES, ParameterConverter, ParameterStyle
+from sqlspec.statement.parameters import (
+    SQLGLOT_INCOMPATIBLE_STYLES,
+    ParameterConverter,
+    ParameterStyle,
+    SQLParameterType,
+)
 from sqlspec.statement.sql import SQL
 
 
@@ -16,11 +21,10 @@ class TestParameterNormalization:
         result = converter.convert_parameters(sql, params)
 
         # Check that normalization occurred
-        transformed_sql, _param_info, _merged_params, extra_info = result
-        assert extra_info["was_normalized"] is True
-        assert ":param_0" in transformed_sql
-        assert ":param_1" in transformed_sql
-        assert "%s" not in transformed_sql
+        assert result.normalization_state.was_normalized is True
+        assert ":param_0" in result.transformed_sql
+        assert ":param_1" in result.transformed_sql
+        assert "%s" not in result.transformed_sql
 
     def test_pyformat_named_normalization(self) -> None:
         """Test that named pyformat parameters are normalized."""
@@ -30,12 +34,11 @@ class TestParameterNormalization:
         converter = ParameterConverter()
         result = converter.convert_parameters(sql, params)
 
-        transformed_sql, _param_info, _merged_params, extra_info = result
-        assert extra_info["was_normalized"] is True
-        assert ":param_0" in transformed_sql
-        assert ":param_1" in transformed_sql
-        assert "%(name)s" not in transformed_sql
-        assert "%(age)s" not in transformed_sql
+        assert result.normalization_state.was_normalized is True
+        assert ":param_0" in result.transformed_sql
+        assert ":param_1" in result.transformed_sql
+        assert "%(name)s" not in result.transformed_sql
+        assert "%(age)s" not in result.transformed_sql
 
     def test_no_normalization_for_compatible_styles(self) -> None:
         """Test that SQLGlot-compatible styles are not normalized."""
@@ -49,12 +52,10 @@ class TestParameterNormalization:
         converter = ParameterConverter()
         for sql, params, expected_style in test_cases:
             result = converter.convert_parameters(sql, params)
-            transformed_sql, param_info, _merged_params, extra_info = result
-
             # Should not be normalized
-            assert extra_info["was_normalized"] is False
-            assert transformed_sql == sql
-            assert param_info[0].style == expected_style
+            assert result.normalization_state.was_normalized is False
+            assert result.transformed_sql == sql
+            assert result.parameter_info[0].style == expected_style
 
     def test_denormalization(self) -> None:
         """Test denormalization back to original style."""
@@ -77,8 +78,7 @@ class TestParameterNormalization:
         converter = ParameterConverter()
         result = converter.convert_parameters(sql, params)
 
-        _transformed_sql, _param_info, _merged_params, extra_info = result
-        assert extra_info["was_normalized"] is True
+        assert result.normalization_state.was_normalized is True
 
     def test_sqlglot_incompatible_styles_constant(self) -> None:
         """Test that SQLGLOT_INCOMPATIBLE_STYLES contains the correct styles."""
@@ -95,20 +95,16 @@ class TestParameterNormalization:
     def test_normalization_preserves_parameter_order(self) -> None:
         """Test that normalization preserves parameter order."""
         sql = "INSERT INTO users (name, age, email) VALUES (%s, %s, %s)"
-        params = ["john", 25, "john@example.com"]
+        params: SQLParameterType = ["john", 25, "john@example.com"]
 
         converter = ParameterConverter()
         result = converter.convert_parameters(sql, params)
-
-        transformed_sql, _param_info, merged_params, _extra_info = result
-
-        # Check order is preserved
-        assert ":param_0" in transformed_sql
-        assert ":param_1" in transformed_sql
-        assert ":param_2" in transformed_sql
+        assert ":param_0" in result.transformed_sql
+        assert ":param_1" in result.transformed_sql
+        assert ":param_2" in result.transformed_sql
 
         # Check values are in correct order
-        assert merged_params == params
+        assert result.merged_parameters == params
 
     def test_positional_colon_normalized(self) -> None:
         """Test that Oracle numeric style is normalized for SQLGlot."""
@@ -118,10 +114,9 @@ class TestParameterNormalization:
         converter = ParameterConverter()
         result = converter.convert_parameters(sql, params)
 
-        transformed_sql, _param_info, _merged_params, extra_info = result
         # Oracle numeric is incompatible with SQLGlot, so it should be normalized
-        assert extra_info["was_normalized"] is True
-        assert ":param_0" in transformed_sql
-        assert ":param_1" in transformed_sql
-        assert ":1" not in transformed_sql
-        assert ":2" not in transformed_sql
+        assert result.normalization_state.was_normalized is True
+        assert ":param_0" in result.transformed_sql
+        assert ":param_1" in result.transformed_sql
+        assert ":1" not in result.transformed_sql
+        assert ":2" not in result.transformed_sql

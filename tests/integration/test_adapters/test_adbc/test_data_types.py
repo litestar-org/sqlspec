@@ -173,9 +173,20 @@ def test_postgresql_date_time_types(adbc_postgresql_types_session: AdbcDriver) -
 
 @pytest.mark.xdist_group("postgres")
 @xfail_if_driver_missing
-@pytest.mark.xfail(reason="ADBC PostgreSQL driver has issues with null parameter handling")
+@pytest.mark.xfail(
+    reason="ADBC PostgreSQL driver has issues with null parameter handling - Known limitation: https://github.com/apache/arrow-adbc/issues/81"
+)
 def test_postgresql_null_values(adbc_postgresql_types_session: AdbcDriver) -> None:
-    """Test NULL value handling with PostgreSQL."""
+    """Test NULL value handling with PostgreSQL.
+
+    This test is marked as xfail due to a known limitation in the ADBC PostgreSQL driver.
+    The driver currently has incomplete support for null values in bind parameters,
+    especially for parameterized INSERT queries. This is tracked upstream in:
+    https://github.com/apache/arrow-adbc/issues/81
+
+    The test represents a reasonable user case (inserting NULL values into various column types),
+    and should pass once the upstream driver is fixed.
+    """
     # Insert row with NULL values
     result = adbc_postgresql_types_session.execute(
         """

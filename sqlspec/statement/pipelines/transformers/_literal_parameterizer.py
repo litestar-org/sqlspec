@@ -7,7 +7,7 @@ from sqlglot import exp
 from sqlglot.expressions import Array, Binary, Boolean, DataType, Func, Literal, Null
 
 from sqlspec.protocols import ProcessorProtocol
-from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.statement.parameters import ParameterStyle, TypedParameter
 from sqlspec.statement.pipelines.context import SQLProcessingContext
 
 __all__ = ("ParameterizationContext", "ParameterizeLiterals")
@@ -24,6 +24,12 @@ DEFAULT_MAX_ARRAY_LENGTH = 100
 DEFAULT_MAX_IN_LIST_SIZE = 50
 """Default maximum IN clause list size before parameterization."""
 
+MAX_ENUM_LENGTH = 50
+"""Maximum length for enum-like string values."""
+
+MIN_ENUM_LENGTH = 2
+"""Minimum length for enum-like string values to be meaningful."""
+
 
 @dataclass
 class ParameterizationContext:
@@ -35,8 +41,12 @@ class ParameterizationContext:
     in_array: bool = False
     in_in_clause: bool = False
     in_recursive_cte: bool = False
+    in_subquery: bool = False
+    in_select_list: bool = False
+    in_join_condition: bool = False
     function_depth: int = 0
     cte_depth: int = 0
+    subquery_depth: int = 0
 
 
 class ParameterizeLiterals(ProcessorProtocol):
@@ -220,51 +230,136 @@ class ParameterizeLiterals(ProcessorProtocol):
     def _update_context(self, node: exp.Expression, context: ParameterizationContext, entering: bool) -> None:
         """Update parameterization context based on current AST node."""
         if entering:
-            context.parent_stack.append(node)
-
-            if isinstance(node, Func):
-                context.function_depth += 1
-                # Get function name from class name or node.name
-                func_name = node.__class__.__name__.upper()
-                if func_name in self.preserve_in_functions or (
-                    node.name and node.name.upper() in self.preserve_in_functions
-                ):
-                    context.in_function_args = True
-            elif isinstance(node, exp.Case):
-                context.in_case_when = True
-            elif isinstance(node, Array):
-                context.in_array = True
-            elif isinstance(node, exp.In):
-                context.in_in_clause = True
-            elif isinstance(node, exp.CTE):
-                context.cte_depth += 1
-                # Check if this CTE is recursive:
-                # 1. Parent WITH must be RECURSIVE
-                # 2. CTE must contain UNION (characteristic of recursive CTEs)
-                is_in_recursive_with = any(
-                    isinstance(parent, exp.With) and parent.args.get("recursive", False)
-                    for parent in reversed(context.parent_stack)
-                )
-                if is_in_recursive_with and self._contains_union(node):
-                    context.in_recursive_cte = True
+            self._update_context_entering(node, context)
         else:
-            if context.parent_stack:
-                context.parent_stack.pop()
+            self._update_context_leaving(node, context)
 
-            if isinstance(node, Func):
-                context.function_depth -= 1
-                if context.function_depth == 0:
-                    context.in_function_args = False
-            elif isinstance(node, exp.Case):
-                context.in_case_when = False
-            elif isinstance(node, Array):
-                context.in_array = False
-            elif isinstance(node, exp.In):
-                context.in_in_clause = False
-            elif isinstance(node, exp.CTE):
-                context.cte_depth -= 1
-                if context.cte_depth == 0:
-                    context.in_recursive_cte = False
+    def _update_context_entering(self, node: exp.Expression, context: ParameterizationContext) -> None:
+        """Update context when entering a node."""
+        context.parent_stack.append(node)
+
+        if isinstance(node, Func):
+            self._update_context_entering_func(node, context)
+        elif isinstance(node, exp.Case):
+            context.in_case_when = True
+        elif isinstance(node, Array):
+            context.in_array = True
+        elif isinstance(node, exp.In):
+            context.in_in_clause = True
+        elif isinstance(node, exp.CTE):
+            self._update_context_entering_cte(node, context)
+        elif isinstance(node, exp.Subquery):
+            context.subquery_depth += 1
+            context.in_subquery = True
+        elif isinstance(node, exp.Select):
+            self._update_context_entering_select(node, context)
+        elif isinstance(node, exp.Join):
+            context.in_join_condition = True
+
+    def _update_context_entering_func(self, node: Func, context: ParameterizationContext) -> None:
+        """Update context when entering a function node."""
+        context.function_depth += 1
+        # Get function name from class name or node.name
+        func_name = node.__class__.__name__.upper()
+        if func_name in self.preserve_in_functions or (node.name and node.name.upper() in self.preserve_in_functions):
+            context.in_function_args = True
+
+    def _update_context_entering_cte(self, node: exp.CTE, context: ParameterizationContext) -> None:
+        """Update context when entering a CTE node."""
+        context.cte_depth += 1
+        # Check if this CTE is recursive:
+        # 1. Parent WITH must be RECURSIVE
+        # 2. CTE must contain UNION (characteristic of recursive CTEs)
+        is_in_recursive_with = any(
+            isinstance(parent, exp.With) and parent.args.get("recursive", False)
+            for parent in reversed(context.parent_stack)
+        )
+        if is_in_recursive_with and self._contains_union(node):
+            context.in_recursive_cte = True
+
+    def _update_context_entering_select(self, node: exp.Select, context: ParameterizationContext) -> None:
+        """Update context when entering a SELECT node."""
+        # Only track nested SELECT statements as subqueries if they're not part of a recursive CTE
+        is_in_recursive_cte = any(
+            isinstance(parent, exp.CTE)
+            and any(
+                isinstance(grandparent, exp.With) and grandparent.args.get("recursive", False)
+                for grandparent in context.parent_stack
+            )
+            for parent in context.parent_stack[:-1]
+        )
+
+        if not is_in_recursive_cte and any(
+            isinstance(parent, (exp.Select, exp.Subquery, exp.CTE))
+            for parent in context.parent_stack[:-1]  # Exclude the current node
+        ):
+            context.subquery_depth += 1
+            context.in_subquery = True
+        # Check if we're in a SELECT clause expressions list
+        if hasattr(node, "expressions"):
+            # We'll handle this specifically when processing individual expressions
+            context.in_select_list = False  # Will be detected by _is_in_select_expressions
+
+    def _update_context_leaving(self, node: exp.Expression, context: ParameterizationContext) -> None:
+        """Update context when leaving a node."""
+        if context.parent_stack:
+            context.parent_stack.pop()
+
+        if isinstance(node, Func):
+            self._update_context_leaving_func(node, context)
+        elif isinstance(node, exp.Case):
+            context.in_case_when = False
+        elif isinstance(node, Array):
+            context.in_array = False
+        elif isinstance(node, exp.In):
+            context.in_in_clause = False
+        elif isinstance(node, exp.CTE):
+            self._update_context_leaving_cte(node, context)
+        elif isinstance(node, exp.Subquery):
+            self._update_context_leaving_subquery(node, context)
+        elif isinstance(node, exp.Select):
+            self._update_context_leaving_select(node, context)
+        elif isinstance(node, exp.Join):
+            context.in_join_condition = False
+
+    def _update_context_leaving_func(self, node: Func, context: ParameterizationContext) -> None:
+        """Update context when leaving a function node."""
+        context.function_depth -= 1
+        if context.function_depth == 0:
+            context.in_function_args = False
+
+    def _update_context_leaving_cte(self, node: exp.CTE, context: ParameterizationContext) -> None:
+        """Update context when leaving a CTE node."""
+        context.cte_depth -= 1
+        if context.cte_depth == 0:
+            context.in_recursive_cte = False
+
+    def _update_context_leaving_subquery(self, node: exp.Subquery, context: ParameterizationContext) -> None:
+        """Update context when leaving a subquery node."""
+        context.subquery_depth -= 1
+        if context.subquery_depth == 0:
+            context.in_subquery = False
+
+    def _update_context_leaving_select(self, node: exp.Select, context: ParameterizationContext) -> None:
+        """Update context when leaving a SELECT node."""
+        # Only decrement if this was a nested SELECT (not part of recursive CTE)
+        is_in_recursive_cte = any(
+            isinstance(parent, exp.CTE)
+            and any(
+                isinstance(grandparent, exp.With) and grandparent.args.get("recursive", False)
+                for grandparent in context.parent_stack
+            )
+            for parent in context.parent_stack[:-1]
+        )
+
+        if not is_in_recursive_cte and any(
+            isinstance(parent, (exp.Select, exp.Subquery, exp.CTE))
+            for parent in context.parent_stack[:-1]  # Exclude current node
+        ):
+            context.subquery_depth -= 1
+            if context.subquery_depth == 0:
+                context.in_subquery = False
+        context.in_select_list = False
 
     def _process_literal_with_context(
         self, literal: exp.Expression, context: ParameterizationContext
@@ -304,14 +399,12 @@ class ParameterizeLiterals(ProcessorProtocol):
                     self._fallback_params = []
                 self._fallback_params.append(typed_param)
 
-        self._parameter_metadata.append(
-            {
-                "index": len(self._final_params if self._is_reordering_needed else self.extracted_parameters) - 1,
-                "type": type_hint,
-                "semantic_name": semantic_name,
-                "context": self._get_context_description(context),
-            }
-        )
+        self._parameter_metadata.append({
+            "index": len(self._final_params if self._is_reordering_needed else self.extracted_parameters) - 1,
+            "type": type_hint,
+            "semantic_name": semantic_name,
+            "context": self._get_context_description(context),
+        })
 
         # Create appropriate placeholder
         return self._create_placeholder(hint=semantic_name)
@@ -583,22 +676,29 @@ class ParameterizeLiterals(ProcessorProtocol):
         return node
 
     def _should_preserve_literal_in_context(self, literal: exp.Expression, context: ParameterizationContext) -> bool:
-        """Context-aware decision on literal preservation."""
-        # Check for NULL values
+        """Enhanced context-aware decision on literal preservation."""
+        # Existing preservation rules (maintain compatibility)
         if self.preserve_null and isinstance(literal, Null):
             return True
 
-        # Check for boolean values
         if self.preserve_boolean and isinstance(literal, Boolean):
             return True
+
+        # NEW: Context-based preservation rules
+
+        # Rule 4: Preserve enum-like literals in subquery lookups (the main fix we need)
+        if context.in_subquery and self._is_scalar_lookup_pattern(literal, context):
+            return self._is_enum_like_literal(literal)
+
+        # Existing preservation rules continue...
 
         # Check if in preserved function arguments
         if context.in_function_args:
             return True
 
-        # Preserve literals in recursive CTEs to avoid type inference issues
+        # ENHANCED: Intelligent recursive CTE literal preservation
         if self.preserve_in_recursive_cte and context.in_recursive_cte:
-            return True
+            return self._should_preserve_literal_in_recursive_cte(literal, context)
 
         # Check if this literal is being used as an alias value in SELECT
         # e.g., 'computed' as process_status should be preserved
@@ -638,6 +738,76 @@ class ParameterizeLiterals(ProcessorProtocol):
                 return True
 
         return False
+
+    def _is_in_select_expressions(self, literal: exp.Expression, context: ParameterizationContext) -> bool:
+        """Check if literal is in SELECT clause expressions (critical for type inference)."""
+        for parent in reversed(context.parent_stack):
+            if isinstance(parent, exp.Select):
+                if hasattr(parent, "expressions") and parent.expressions:
+                    return any(self._literal_is_in_expression_tree(literal, expr) for expr in parent.expressions)
+            elif isinstance(parent, (exp.Where, exp.Having, exp.Join)):
+                return False
+        return False
+
+    def _is_recursive_computation(self, literal: exp.Expression, context: ParameterizationContext) -> bool:
+        """Check if literal is part of recursive computation logic."""
+        # Look for arithmetic operations that are part of recursive logic
+        for parent in reversed(context.parent_stack):
+            if isinstance(parent, exp.Binary) and parent.key in ("ADD", "SUB", "MUL", "DIV"):
+                # Check if this arithmetic is in a SELECT clause of a recursive part
+                return self._is_in_select_expressions(literal, context)
+        return False
+
+    def _should_preserve_literal_in_recursive_cte(
+        self, literal: exp.Expression, context: ParameterizationContext
+    ) -> bool:
+        """Intelligent recursive CTE literal preservation based on semantic role."""
+        # Preserve SELECT clause literals (type inference critical)
+        if self._is_in_select_expressions(literal, context):
+            return True
+
+        # Preserve recursive computation literals (core logic)
+        return self._is_recursive_computation(literal, context)
+
+    def _literal_is_in_expression_tree(self, target_literal: exp.Expression, expr: exp.Expression) -> bool:
+        """Check if target literal is within the given expression tree."""
+        if expr == target_literal:
+            return True
+        # Recursively check child expressions
+        return any(child == target_literal for child in expr.iter_expressions())
+
+    def _is_scalar_lookup_pattern(self, literal: exp.Expression, context: ParameterizationContext) -> bool:
+        """Detect if literal is part of a scalar subquery lookup pattern."""
+        # Must be in a subquery for this pattern to apply
+        if context.subquery_depth == 0:
+            return False
+
+        # Check if we're in a WHERE clause of a subquery that returns a single column
+        # and the literal is being compared against a column
+        for parent in reversed(context.parent_stack):
+            if isinstance(parent, exp.Where):
+                # Look for pattern: WHERE column = 'literal'
+                if isinstance(parent.this, exp.Binary) and parent.this.right == literal:
+                    return isinstance(parent.this.left, exp.Column)
+                # Also check for literal on the left side: WHERE 'literal' = column
+                if isinstance(parent.this, exp.Binary) and parent.this.left == literal:
+                    return isinstance(parent.this.right, exp.Column)
+        return False
+
+    def _is_enum_like_literal(self, literal: exp.Expression) -> bool:
+        """Detect if literal looks like an enum/identifier constant."""
+        if not isinstance(literal, exp.Literal) or not self._is_string_literal(literal):
+            return False
+
+        value = str(literal.this)
+
+        # Conservative heuristics for enum-like values
+        return (
+            len(value) <= MAX_ENUM_LENGTH  # Reasonable length limit
+            and value.replace("_", "").isalnum()  # Only alphanumeric + underscores
+            and not value.isdigit()  # Not a pure number
+            and len(value) > MIN_ENUM_LENGTH  # Not too short to be meaningful
+        )
 
     def _extract_literal_value_and_type(self, literal: exp.Expression) -> tuple[Any, str]:
         """Extract the Python value and type info from a SQLGlot literal."""
@@ -891,7 +1061,6 @@ class ParameterizeLiterals(ProcessorProtocol):
             array_sqlglot_type = exp.DataType.build("ARRAY", expressions=[element_sqlglot_type])
 
             # Create TypedParameter for the entire array
-            from sqlspec.statement.parameters import TypedParameter
 
             typed_param = TypedParameter(
                 value=array_values,
@@ -902,14 +1071,12 @@ class ParameterizeLiterals(ProcessorProtocol):
 
             # Replace entire array with a single parameter
             self.extracted_parameters.append(typed_param)
-            self._parameter_metadata.append(
-                {
-                    "index": len(self.extracted_parameters) - 1,
-                    "type": f"array<{element_type}>",
-                    "length": len(array_values),
-                    "context": "array_literal",
-                }
-            )
+            self._parameter_metadata.append({
+                "index": len(self.extracted_parameters) - 1,
+                "type": f"array<{element_type}>",
+                "length": len(array_values),
+                "context": "array_literal",
+            })
             return self._create_placeholder("array")
         # Process individual elements
         new_expressions = []

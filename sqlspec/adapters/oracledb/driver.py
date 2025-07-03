@@ -243,14 +243,33 @@ class OracleSyncDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(connection)
 
-        # For fetch_arrow_table, we need to use POSITIONAL_COLON style since the SQL has :1 placeholders
-        sql_str, params = sql.compile(placeholder_style=ParameterStyle.POSITIONAL_COLON)
-        if params is None:
-            params = []
+        # Use the exact same parameter style detection logic as _execute_statement
+        detected_styles = set()
+        sql_str = sql.to_sql(placeholder_style=None)  # Get raw SQL
+        validator = self.config.parameter_validator if self.config else ParameterValidator()
+        param_infos = validator.extract_parameters(sql_str)
+        if param_infos:
+            detected_styles = {p.style for p in param_infos}
 
-        processed_params = self._process_parameters(params) if params else []
+        target_style = self.default_parameter_style
 
-        oracle_df = conn.fetch_df_all(sql_str, processed_params)
+        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
+        if unsupported_styles:
+            target_style = self.default_parameter_style
+        elif detected_styles:
+            # Prefer the first supported style found
+            for style in detected_styles:
+                if style in self.supported_parameter_styles:
+                    target_style = style
+                    break
+
+        sql_str, params = sql.compile(placeholder_style=target_style)
+        processed_params = self._process_parameters(params) if params is not None else []
+
+        # Use proper transaction management like other methods
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
+            oracle_df = txn_conn.fetch_df_all(sql_str, processed_params)
+
         from pyarrow.interchange.from_dataframe import from_dataframe
 
         arrow_table = from_dataframe(oracle_df)
@@ -261,7 +280,8 @@ class OracleSyncDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(None)
 
-        with self._get_cursor(conn) as cursor:
+        # Use proper transaction management like other methods
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
             if mode == "replace":
                 cursor.execute(f"TRUNCATE TABLE {table_name}")
             elif mode == "create":
@@ -486,12 +506,28 @@ class OracleAsyncDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(connection)
 
-        # For fetch_arrow_table, we need to use POSITIONAL_COLON style since the SQL has :1 placeholders
-        sql_str, params = sql.compile(placeholder_style=ParameterStyle.POSITIONAL_COLON)
-        if params is None:
-            params = []
+        # Use the exact same parameter style detection logic as _execute_statement
+        detected_styles = set()
+        sql_str = sql.to_sql(placeholder_style=None)  # Get raw SQL
+        validator = self.config.parameter_validator if self.config else ParameterValidator()
+        param_infos = validator.extract_parameters(sql_str)
+        if param_infos:
+            detected_styles = {p.style for p in param_infos}
 
-        processed_params = self._process_parameters(params) if params else []
+        target_style = self.default_parameter_style
+
+        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
+        if unsupported_styles:
+            target_style = self.default_parameter_style
+        elif detected_styles:
+            # Prefer the first supported style found
+            for style in detected_styles:
+                if style in self.supported_parameter_styles:
+                    target_style = style
+                    break
+
+        sql_str, params = sql.compile(placeholder_style=target_style)
+        processed_params = self._process_parameters(params) if params is not None else []
 
         oracle_df = await conn.fetch_df_all(sql_str, processed_params)
         from pyarrow.interchange.from_dataframe import from_dataframe
@@ -504,7 +540,8 @@ class OracleAsyncDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(None)
 
-        async with self._get_cursor(conn) as cursor:
+        # Use proper transaction management like other methods
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
             if mode == "replace":
                 await cursor.execute(f"TRUNCATE TABLE {table_name}")
             elif mode == "create":

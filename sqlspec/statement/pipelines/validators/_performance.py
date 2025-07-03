@@ -320,8 +320,9 @@ class PerformanceValidator(ProcessorProtocol):
             analysis.select_star_count += 1
 
         # Recursive traversal
-        if hasattr(expr, "args") and isinstance(expr.args, dict):
-            for child in expr.args.values():
+        expr_args = getattr(expr, "args", None)
+        if expr_args is not None and isinstance(expr_args, dict):
+            for child in expr_args.values():
                 if isinstance(child, exp.Expression):
                     self._analyze_expression(child, analysis, depth)
                 elif isinstance(child, list):

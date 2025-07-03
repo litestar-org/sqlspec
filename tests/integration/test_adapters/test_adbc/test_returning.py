@@ -93,7 +93,6 @@ def test_postgresql_update_returning(adbc_postgresql_session_returning: AdbcDriv
 
 @pytest.mark.xdist_group("adbc_sqlite")
 @xfail_if_driver_missing
-@pytest.mark.xfail(reason="SQLite RETURNING clause support varies by version")
 def test_sqlite_insert_returning(adbc_sqlite_session_returning: AdbcDriver) -> None:
     """Test INSERT with RETURNING clause on SQLite (requires SQLite 3.35.0+)."""
     result = adbc_sqlite_session_returning.execute(

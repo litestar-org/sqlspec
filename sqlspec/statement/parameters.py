@@ -21,8 +21,10 @@ if TYPE_CHECKING:
     from sqlglot import exp
 
 __all__ = (
+    "ConvertedParameters",
     "ParameterConverter",
     "ParameterInfo",
+    "ParameterNormalizationState",
     "ParameterStyle",
     "ParameterValidator",
     "SQLParameterType",
@@ -145,6 +147,55 @@ class NormalizationInfo(TypedDict, total=False):
     was_normalized: bool
     placeholder_map: dict[str, Union[str, int]]
     original_styles: list[ParameterStyle]
+
+
+@dataclass
+class ParameterNormalizationState:
+    """Encapsulates all information about parameter normalization.
+
+    This class provides a single source of truth for parameter style conversions,
+    making it easier to track and reverse normalizations applied for SQLGlot compatibility.
+    """
+
+    was_normalized: bool = False
+    """Whether parameter normalization was applied."""
+
+    original_styles: list[ParameterStyle] = field(default_factory=list)
+    """Original parameter style(s) detected in the SQL."""
+
+    normalized_style: Optional[ParameterStyle] = None
+    """Target style used for normalization (if normalized)."""
+
+    placeholder_map: dict[str, Union[str, int]] = field(default_factory=dict)
+    """Mapping from normalized names to original names/positions."""
+
+    reverse_map: dict[Union[str, int], str] = field(default_factory=dict)
+    """Reverse mapping for quick lookups."""
+
+    original_param_info: list["ParameterInfo"] = field(default_factory=list)
+    """Original parameter info before normalization."""
+
+    def __post_init__(self) -> None:
+        """Build reverse map if not provided."""
+        if self.placeholder_map and not self.reverse_map:
+            self.reverse_map = {v: k for k, v in self.placeholder_map.items()}
+
+
+@dataclass
+class ConvertedParameters:
+    """Result of parameter conversion with clear structure."""
+
+    transformed_sql: str
+    """SQL after any necessary transformations."""
+
+    parameter_info: list["ParameterInfo"]
+    """Information about parameters found in the SQL."""
+
+    merged_parameters: "SQLParameterType"
+    """Parameters after merging from various sources."""
+
+    normalization_state: ParameterNormalizationState
+    """Complete normalization state for tracking conversions."""
 
 
 @dataclass
@@ -613,7 +664,7 @@ class ParameterConverter:
         args: "Optional[Sequence[Any]]" = None,
         kwargs: "Optional[Mapping[str, Any]]" = None,
         validate: bool = True,
-    ) -> tuple[str, "list[ParameterInfo]", "SQLParameterType", "dict[str, Any]"]:
+    ) -> ConvertedParameters:
         """Convert and merge parameters, and transform SQL for parsing.
 
         Args:
@@ -624,8 +675,7 @@ class ParameterConverter:
             validate: Whether to validate parameters
 
         Returns:
-            Tuple of (transformed_sql, parameter_info_list, merged_parameters, extra_info)
-            where extra_info contains 'was_normalized' flag and other metadata
+            ConvertedParameters object with all conversion information
         """
         parameters_info = self.validator.extract_parameters(sql)
 
@@ -646,20 +696,27 @@ class ParameterConverter:
         # Conditional normalization
         if needs_normalization:
             transformed_sql, placeholder_map = self._transform_sql_for_parsing(sql, parameters_info)
-            extra_info: dict[str, Any] = {
-                "was_normalized": True,
-                "placeholder_map": placeholder_map,
-                "original_styles": list({p.style for p in parameters_info}),
-            }
+            normalization_state = ParameterNormalizationState(
+                was_normalized=True,
+                original_styles=list({p.style for p in parameters_info}),
+                normalized_style=ParameterStyle.NAMED_COLON,
+                placeholder_map=placeholder_map,
+                original_param_info=parameters_info,
+            )
         else:
             transformed_sql = sql
-            extra_info = {
-                "was_normalized": False,
-                "placeholder_map": {},
-                "original_styles": list({p.style for p in parameters_info}),
-            }
+            normalization_state = ParameterNormalizationState(
+                was_normalized=False,
+                original_styles=list({p.style for p in parameters_info}),
+                original_param_info=parameters_info,
+            )
 
-        return transformed_sql, parameters_info, merged_params, extra_info
+        return ConvertedParameters(
+            transformed_sql=transformed_sql,
+            parameter_info=parameters_info,
+            merged_parameters=merged_params,
+            normalization_state=normalization_state,
+        )
 
     @staticmethod
     def _merge_mixed_parameters(
@@ -757,10 +814,18 @@ class ParameterConverter:
 
         # When we have more canonical parameters than final_parameter_info,
         # it's likely because the ParameterizeLiterals transformer added extra parameters.
-        # In this case, we only denormalize the parameters that were in the original SQL.
+        # We need to denormalize ALL parameters to ensure proper placeholder conversion.
+        # The final_parameter_info only contains the original parameters, but we need
+        # to handle all placeholders in the SQL (including those added by transformers).
         if len(canonical_params) > len(final_parameter_info):
-            # Only denormalize up to the number of original parameters
-            canonical_params = canonical_params[: len(final_parameter_info)]
+            # Extend final_parameter_info to match canonical_params
+            # Use the canonical param info for the extra parameters
+            final_parameter_info = list(final_parameter_info)
+            for i in range(len(final_parameter_info), len(canonical_params)):
+                # Create a synthetic ParameterInfo for the extra parameter
+                canonical = canonical_params[i]
+                # Use the ordinal from the canonical parameter
+                final_parameter_info.append(canonical)
         elif len(canonical_params) < len(final_parameter_info):
             from sqlspec.exceptions import SQLTransformationError
 

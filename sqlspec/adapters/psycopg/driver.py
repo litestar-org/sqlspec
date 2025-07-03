@@ -98,10 +98,14 @@ class PsycopgSyncDriver(
                     break
 
         if statement.is_many:
-            sql, params = statement.compile(placeholder_style=target_style)
+            # Check if parameters were provided in kwargs first
             kwargs_params = kwargs.get("parameters")
             if kwargs_params is not None:
+                # Use the SQL string directly if parameters come from kwargs
+                sql = statement.to_sql(placeholder_style=target_style)
                 params = kwargs_params
+            else:
+                sql, params = statement.compile(placeholder_style=target_style)
             if params is not None:
                 processed_params = [self._process_parameters(param_set) for param_set in params]
                 params = processed_params
@@ -109,11 +113,14 @@ class PsycopgSyncDriver(
             exec_kwargs = {k: v for k, v in kwargs.items() if k != "parameters"}
             return self._execute_many(sql, params, connection=connection, **exec_kwargs)
 
-        sql, params = statement.compile(placeholder_style=target_style)
         # Check if parameters were provided in kwargs (user-provided parameters)
         kwargs_params = kwargs.get("parameters")
         if kwargs_params is not None:
+            # Use the SQL string directly if parameters come from kwargs
+            sql = statement.to_sql(placeholder_style=target_style)
             params = kwargs_params
+        else:
+            sql, params = statement.compile(placeholder_style=target_style)
         params = self._process_parameters(params)
 
         # Fix over-nested parameters for Psycopg
@@ -191,7 +198,11 @@ class PsycopgSyncDriver(
             with cursor.copy(cast("Query", sql)) as copy:
                 if data:
                     # If data is provided, write it to the copy stream
-                    if isinstance(data, (str, bytes)):
+                    if isinstance(data, str):
+                        # Strip trailing newline for text format to avoid "extra data" error
+                        clean_data = data.rstrip("\n")
+                        copy.write(clean_data)
+                    elif isinstance(data, bytes):
                         copy.write(data)
                     elif isinstance(data, (list, tuple)):
                         # If data is a list/tuple of rows, write each row
@@ -515,8 +526,15 @@ class PsycopgAsyncDriver(
                     break
 
         if statement.is_many:
-            sql, _ = statement.compile(placeholder_style=target_style)
-            params = kwargs.get("parameters")
+            # Check if parameters were provided in kwargs first
+            kwargs_params = kwargs.get("parameters")
+            if kwargs_params is not None:
+                # Use the SQL string directly if parameters come from kwargs
+                sql = statement.to_sql(placeholder_style=target_style)
+                params = kwargs_params
+            else:
+                sql, _ = statement.compile(placeholder_style=target_style)
+                params = statement.parameters
             if params is not None:
                 processed_params = [self._process_parameters(param_set) for param_set in params]
                 params = processed_params
@@ -533,11 +551,14 @@ class PsycopgAsyncDriver(
             exec_kwargs = {k: v for k, v in kwargs.items() if k != "parameters"}
             return await self._execute_many(sql, params, connection=connection, **exec_kwargs)
 
-        sql, params = statement.compile(placeholder_style=target_style)
         # Check if parameters were provided in kwargs (user-provided parameters)
         kwargs_params = kwargs.get("parameters")
         if kwargs_params is not None:
+            # Use the SQL string directly if parameters come from kwargs
+            sql = statement.to_sql(placeholder_style=target_style)
             params = kwargs_params
+        else:
+            sql, params = statement.compile(placeholder_style=target_style)
         params = self._process_parameters(params)
 
         # Fix over-nested parameters for Psycopg
@@ -627,7 +648,11 @@ class PsycopgAsyncDriver(
             async with cursor.copy(cast("Query", sql)) as copy:
                 if data:
                     # If data is provided, write it to the copy stream
-                    if isinstance(data, (str, bytes)):
+                    if isinstance(data, str):
+                        # Strip trailing newline for text format to avoid "extra data" error
+                        clean_data = data.rstrip("\n")
+                        await copy.write(clean_data)
+                    elif isinstance(data, bytes):
                         await copy.write(data)
                     elif isinstance(data, (list, tuple)):
                         # If data is a list/tuple of rows, write each row

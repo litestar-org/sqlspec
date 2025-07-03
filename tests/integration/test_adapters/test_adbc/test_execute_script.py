@@ -121,7 +121,6 @@ def test_sqlite_execute_script_ddl(adbc_sqlite_script_session: AdbcDriver) -> No
 
 @pytest.mark.xdist_group("postgres")
 @xfail_if_driver_missing
-@pytest.mark.xfail(reason="ADBC PostgreSQL driver may not support multiple statements in execute")
 def test_postgresql_execute_script_mixed(adbc_postgresql_script_session: AdbcDriver) -> None:
     """Test execute_script with mixed DDL and DML statements on PostgreSQL."""
     script = """

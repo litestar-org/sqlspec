@@ -50,8 +50,9 @@ class FromClauseMixin:
             current_params = getattr(builder, "_parameters", None)
             merged_params = getattr(type(builder), "ParameterConverter", None)
             if merged_params and hasattr(subquery, "parameters"):
+                subquery_params = getattr(subquery, "parameters", {})
                 merged_params = merged_params.merge_parameters(
-                    parameters=subquery.parameters,
+                    parameters=subquery_params,
                     args=current_params if isinstance(current_params, list) else None,
                     kwargs=current_params if isinstance(current_params, dict) else {},
                 )

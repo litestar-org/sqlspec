@@ -11,7 +11,12 @@ from typing_extensions import TypeAlias
 
 from sqlspec.exceptions import RiskLevel, SQLParsingError, SQLValidationError
 from sqlspec.statement.filters import StatementFilter
-from sqlspec.statement.parameters import ParameterConverter, ParameterStyle, ParameterValidator
+from sqlspec.statement.parameters import (
+    SQLGLOT_INCOMPATIBLE_STYLES,
+    ParameterConverter,
+    ParameterStyle,
+    ParameterValidator,
+)
 from sqlspec.statement.pipelines import SQLProcessingContext, StatementPipeline
 from sqlspec.statement.pipelines.transformers import CommentAndHintRemover, ParameterizeLiterals
 from sqlspec.statement.pipelines.validators import DMLSafetyValidator, ParameterStyleValidator
@@ -32,6 +37,8 @@ from sqlspec.utils.type_guards import (
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
+
+    from sqlspec.statement.parameters import ParameterNormalizationState
 
 __all__ = ("SQL", "SQLConfig", "Statement")
 
@@ -178,6 +185,7 @@ class SQL:
         "_named_params",
         "_original_parameters",
         "_original_sql",
+        "_parameter_normalization_state",
         "_placeholder_mapping",
         "_positional_params",
         "_processed_state",
@@ -212,6 +220,7 @@ class SQL:
         self._original_parameters: Any = None
         self._original_sql: str = ""
         self._placeholder_mapping: dict[str, Union[str, int]] = {}
+        self._parameter_normalization_state: Optional[ParameterNormalizationState] = None
         self._is_many: bool = False
         self._is_script: bool = False
 
@@ -246,6 +255,7 @@ class SQL:
         self._original_parameters = statement._original_parameters
         self._original_sql = statement._original_sql
         self._placeholder_mapping = statement._placeholder_mapping.copy()
+        self._parameter_normalization_state = statement._parameter_normalization_state
         self._positional_params.extend(statement._positional_params)
         self._named_params.update(statement._named_params)
         self._filters.extend(statement._filters)
@@ -410,6 +420,10 @@ class SQL:
         if self._placeholder_mapping:
             context.extra_info["placeholder_map"] = self._placeholder_mapping
 
+        # Set normalization state if available
+        if self._parameter_normalization_state:
+            context.parameter_normalization = self._parameter_normalization_state
+
         validator = self._config.parameter_validator
         context.parameter_info = validator.extract_parameters(context.initial_sql_string)
 
@@ -462,6 +476,13 @@ class SQL:
                 processed_sql, param_info, ParameterStyle.NAMED_PYFORMAT
             )
             logger.debug("Denormalized SQL to: '%s'", processed_sql)
+            # Also denormalize the parameters back to their original names
+            if (
+                self._placeholder_mapping
+                and result.context.merged_parameters
+                and is_dict(result.context.merged_parameters)
+            ):
+                result.context.merged_parameters = self._denormalize_pyformat_params(result.context.merged_parameters)
         elif ParameterStyle.POSITIONAL_COLON in target_styles:
             processed_param_info = self._config.parameter_validator.extract_parameters(processed_sql)
             has_param_placeholders = any(p.name and p.name.startswith(PARAM_PREFIX) for p in processed_param_info)
@@ -490,10 +511,25 @@ class SQL:
 
     def _denormalize_colon_params(self, params: "dict[str, Any]") -> "dict[str, Any]":
         """Denormalize colon-style parameters back to numeric format."""
+        # For positional colon style, all params should have numeric keys
+        # Just return the params as-is if they already have the right format
+        if all(key.isdigit() for key in params):
+            return params
+
+        # For positional colon, we need ALL parameters in the final result
+        # This includes both user parameters and extracted literals
+        # We should NOT filter out extracted parameters (param_0, param_1, etc)
+        # because they need to be included in the final parameter conversion
+        return params
+
+    def _denormalize_pyformat_params(self, params: "dict[str, Any]") -> "dict[str, Any]":
+        """Denormalize pyformat parameters back to their original names."""
         denormalized_params = {}
         for placeholder_key, original_name in self._placeholder_mapping.items():
             if placeholder_key in params:
+                # For pyformat, the original_name is the actual parameter name (e.g., 'max_value')
                 denormalized_params[str(original_name)] = params[placeholder_key]
+        # Include any parameters that weren't normalized
         non_normalized_params = {key: value for key, value in params.items() if not key.startswith(PARAM_PREFIX)}
         denormalized_params.update(non_normalized_params)
         return denormalized_params
@@ -509,11 +545,16 @@ class SQL:
                     for i, param in enumerate(result.context.extracted_parameters_from_pipeline):
                         param_name = f"{PARAM_PREFIX}{i}"
                         merged_params[param_name] = param
-                elif isinstance(merged_params, list):
+                elif isinstance(merged_params, (list, tuple)):
+                    # For list/tuple parameters, we need to be careful about merging
+                    # Convert to list and extend with extracted parameters
+                    if isinstance(merged_params, tuple):
+                        merged_params = list(merged_params)
                     merged_params.extend(result.context.extracted_parameters_from_pipeline)
                 elif merged_params is None:
                     merged_params = result.context.extracted_parameters_from_pipeline
                 else:
+                    # Single parameter case - convert to list with original + extracted
                     merged_params = [merged_params, *list(result.context.extracted_parameters_from_pipeline)]
 
         return merged_params
@@ -555,19 +596,30 @@ class SQL:
         validator = self._config.parameter_validator
         param_info = validator.extract_parameters(statement)
 
-        has_pyformat = any(
-            p.style in {ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT} for p in param_info
-        )
-        has_oracle = any(p.style == ParameterStyle.POSITIONAL_COLON for p in param_info)
+        # Check if normalization is needed
+        needs_normalization = any(p.style in SQLGLOT_INCOMPATIBLE_STYLES for p in param_info)
 
         normalized_sql = statement
         placeholder_mapping: dict[str, Any] = {}
 
-        if has_pyformat or has_oracle:
+        if needs_normalization:
             converter = self._config.parameter_converter
             normalized_sql, placeholder_mapping = converter._transform_sql_for_parsing(statement, param_info)
             self._original_sql = statement
             self._placeholder_mapping = placeholder_mapping
+
+            # Create normalization state
+            from sqlspec.statement.parameters import ParameterNormalizationState
+
+            self._parameter_normalization_state = ParameterNormalizationState(
+                was_normalized=True,
+                original_styles=list({p.style for p in param_info}),
+                normalized_style=ParameterStyle.NAMED_COLON,
+                placeholder_map=placeholder_mapping,
+                original_param_info=param_info,
+            )
+        else:
+            self._parameter_normalization_state = None
 
         try:
             expressions = sqlglot.parse(normalized_sql, dialect=self._dialect)  # pyright: ignore
@@ -898,6 +950,24 @@ class SQL:
             if parameter_mapping:
                 params = self._reorder_parameters(params, parameter_mapping)
 
+        # Handle denormalization if needed
+        if self._processing_context and self._processing_context.parameter_normalization:
+            norm_state = self._processing_context.parameter_normalization
+
+            # If original SQL had incompatible styles and no specific style requested
+            # denormalize back to the original style
+            if norm_state.was_normalized and placeholder_style is None and norm_state.original_styles:
+                # Use the dominant original style
+                target_style = norm_state.original_styles[0]
+                if target_style in SQLGLOT_INCOMPATIBLE_STYLES:
+                    # Denormalize SQL back to original style
+                    sql = self._config.parameter_converter._denormalize_sql(
+                        sql, norm_state.original_param_info, target_style
+                    )
+                    # Also denormalize parameters if needed
+                    if target_style == ParameterStyle.POSITIONAL_COLON and is_dict(params):
+                        params = self._denormalize_colon_params(params)
+
         params = self._unwrap_typed_parameters(params)
 
         if placeholder_style is None:
@@ -910,12 +980,8 @@ class SQL:
 
     def _apply_placeholder_style(self, sql: "str", params: Any, placeholder_style: "str") -> "tuple[str, Any]":
         """Apply placeholder style conversion to SQL and parameters."""
-        if placeholder_style == "positional_colon" and self._processed_state:
-            original_params = self._processed_state.merged_parameters
-            sql, params = self._convert_placeholder_style(sql, original_params, placeholder_style)
-            params = self._unwrap_typed_parameters(params)
-        else:
-            sql, params = self._convert_placeholder_style(sql, params, placeholder_style)
+        # Just use the params passed in - they've already been processed
+        sql, params = self._convert_placeholder_style(sql, params, placeholder_style)
         return sql, params
 
     @staticmethod
@@ -1207,6 +1273,12 @@ class SQL:
         """Process mixed colon-style numeric and normalized parameters."""
         result_dict: dict[str, Any] = {}
 
+        # When we have mixed parameters (extracted literals + user oracle params),
+        # we need to be careful about the ordering. The extracted literals should
+        # fill positions based on where they appear in the SQL, not based on
+        # matching parameter names.
+
+        # Separate extracted parameters and user oracle parameters
         extracted_params = []
         user_oracle_params = {}
         extracted_keys_sorted = []
@@ -1228,41 +1300,25 @@ class SQL:
         for _, key, value in extracted_keys_sorted:
             extracted_params.append((key, value))
 
-        used_extracted = set()
-
-        for p in sorted(param_info, key=lambda x: x.ordinal):
-            oracle_key = str(p.ordinal + 1)
-
-            if p.name is None:
-                for key, value in extracted_params:
-                    if key not in used_extracted:
-                        used_extracted.add(key)
-                        if has_parameter_value(value):
-                            result_dict[oracle_key] = value.value
-                        else:
-                            result_dict[oracle_key] = value
-                        break
-            elif p.name == oracle_key:
-                if oracle_key in user_oracle_params:
-                    result_dict[oracle_key] = user_oracle_params[oracle_key]
-                else:
-                    for key, value in extracted_params:
-                        if key not in used_extracted:
-                            used_extracted.add(key)
-                            if has_parameter_value(value):
-                                result_dict[oracle_key] = value.value
-                            else:
-                                result_dict[oracle_key] = value
-                            break
+        # Build lists of parameter values in order
+        extracted_values = []
+        for _, value in extracted_params:
+            if has_parameter_value(value):
+                extracted_values.append(value.value)
             else:
-                for key, value in extracted_params:
-                    if key == p.name and key not in used_extracted:
-                        used_extracted.add(key)
-                        if has_parameter_value(value):
-                            result_dict[oracle_key] = value.value
-                        else:
-                            result_dict[oracle_key] = value
-                        break
+                extracted_values.append(value)
+
+        user_values = [user_oracle_params[key] for key in sorted(user_oracle_params.keys(), key=int)]
+
+        # Now assign parameters based on position
+        # Extracted parameters go first (they were literals in original positions)
+        # User parameters follow
+        all_values = extracted_values + user_values
+
+        for i, p in enumerate(sorted(param_info, key=lambda x: x.ordinal)):
+            oracle_key = str(p.ordinal + 1)
+            if i < len(all_values):
+                result_dict[oracle_key] = all_values[i]
 
         return result_dict
 

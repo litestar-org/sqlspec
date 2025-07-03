@@ -115,6 +115,9 @@ class WhereClauseMixin:
                 condition_expr = parse_condition_expression(str(condition))
         else:
             # Existing logic for strings and raw SQLGlot expressions
+            # Convert to string if it's not a recognized type
+            if not isinstance(condition, (str, exp.Expression, tuple)):
+                condition = str(condition)
             condition_expr = parse_condition_expression(condition)
 
         # Use dialect if available for Delete
