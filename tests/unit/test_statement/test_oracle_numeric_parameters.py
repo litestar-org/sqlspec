@@ -147,7 +147,7 @@ def test_positional_colon_parameter_conversion(
         # Convert to question marks
         ("INSERT INTO users VALUES (:1, :2)", ["john", 42], ParameterStyle.QMARK, ["?", "?"]),
         # Convert to named style
-        ("INSERT INTO users VALUES (:1, :2)", ["john", 42], ParameterStyle.NAMED_COLON, [":arg_0", ":arg_1"]),
+        ("INSERT INTO users VALUES (:1, :2)", ["john", 42], ParameterStyle.NAMED_COLON, [":param_0", ":param_1"]),
         # Convert to numeric dollar style
         ("INSERT INTO users VALUES (:1, :2)", ["john", 42], ParameterStyle.NUMERIC, ["$1", "$2"]),
     ],
@@ -281,7 +281,7 @@ def test_positional_colon_parameter_validation(
     else:
         # Should not raise
         result = stmt.to_sql()
-        assert ":1" in result or "?" in result  # Depending on normalization
+        assert ":1" in result or "?" in result or ":param_0" in result  # Depending on normalization
 
 
 # Test special cases

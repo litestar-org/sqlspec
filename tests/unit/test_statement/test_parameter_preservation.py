@@ -117,15 +117,6 @@ def test_complex_ctas_with_ctes() -> None:
     assert ":min_amount_1" not in sql_str
 
 
-def test_get_unique_parameter_name_with_namespace() -> None:
-    """Test the enhanced get_unique_parameter_name method."""
-    # This test was for an internal method that no longer exists on SQL
-    # The method was moved to ParameterManager as part of the refactoring
-    # Since this tests internal implementation details that have changed,
-    # we'll skip this test
-    pytest.skip("Method moved to ParameterManager in refactoring")
-
-
 def test_builder_parameter_collision_resolution() -> None:
     """Test that builders handle parameter collisions gracefully."""
     builder = SelectBuilder()
