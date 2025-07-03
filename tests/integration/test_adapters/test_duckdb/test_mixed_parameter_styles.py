@@ -25,7 +25,7 @@ def duckdb_session() -> Generator[DuckDBDriver, None, None]:
         # Insert test data
         session.execute_many(
             "INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)",
-            [(1, "test1", 100), (2, "test2", 200), (3, "test3", 300)]
+            [(1, "test1", 100), (2, "test2", 200), (3, "test3", 300)],
         )
         yield session
 
@@ -71,7 +71,7 @@ def test_complex_mixed_styles(duckdb_session: DuckDBDriver) -> None:
     # Insert more test data
     duckdb_session.execute_many(
         "INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)",
-        [(4, "test4", 400), (5, "test5", 500), (6, "test6", 600)]
+        [(4, "test4", 400), (5, "test5", 500), (6, "test6", 600)],
     )
 
     # Complex query with mixed styles
@@ -82,7 +82,7 @@ def test_complex_mixed_styles(duckdb_session: DuckDBDriver) -> None:
         AND value BETWEEN $2 AND ?
         ORDER BY value
         """,
-        parameters=["test%", "special", 250, 550]
+        parameters=["test%", "special", 250, 550],
     )
 
     result = duckdb_session.execute(sql)
@@ -133,7 +133,11 @@ def test_execute_many_with_numeric_style(duckdb_session: DuckDBDriver) -> None:
     """)
 
     # Use numeric style for execute_many
-    sql = SQL("INSERT INTO test_many (id, data) VALUES ($1, $2)", is_many=True, parameters=[(7, "seven"), (8, "eight"), (9, "nine")])
+    sql = SQL(
+        "INSERT INTO test_many (id, data) VALUES ($1, $2)",
+        is_many=True,
+        parameters=[(7, "seven"), (8, "eight"), (9, "nine")],
+    )
 
     result = duckdb_session.execute(sql)
     assert result.rows_affected == 3

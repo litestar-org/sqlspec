@@ -965,52 +965,13 @@ class AggregateTestBuilder(MockBuilder, AggregateFunctionsMixin):
     "method,column,expected_function",
     [
         ("count_", "*", "COUNT"),
-        pytest.param(
-            "count_distinct", "user_id", "COUNT", marks=pytest.mark.skip(reason="count_distinct not implemented")
-        ),
         ("sum_", "amount", "SUM"),
         ("avg_", "score", "AVG"),
         ("min_", "price", "MIN"),
         ("max_", "price", "MAX"),
-        pytest.param("stddev", "value", "STDDEV", marks=pytest.mark.skip(reason="stddev not implemented")),
-        pytest.param("stddev_pop", "value", "STDDEV_POP", marks=pytest.mark.skip(reason="stddev_pop not implemented")),
-        pytest.param(
-            "stddev_samp", "value", "STDDEV_SAMP", marks=pytest.mark.skip(reason="stddev_samp not implemented")
-        ),
-        pytest.param("variance", "value", "VARIANCE", marks=pytest.mark.skip(reason="variance not implemented")),
-        pytest.param("var_pop", "value", "VAR_POP", marks=pytest.mark.skip(reason="var_pop not implemented")),
-        pytest.param("var_samp", "value", "VAR_SAMP", marks=pytest.mark.skip(reason="var_samp not implemented")),
         ("array_agg", "tags", "ARRAY_AGG"),
-        pytest.param("string_agg", "name", "STRING_AGG", marks=pytest.mark.skip(reason="string_agg not implemented")),
-        pytest.param("json_agg", "data", "JSON_AGG", marks=pytest.mark.skip(reason="json_agg not implemented")),
-        pytest.param("jsonb_agg", "data", "JSONB_AGG", marks=pytest.mark.skip(reason="jsonb_agg not implemented")),
-        ("bool_and", "active", "BOOL_AND"),
-        ("bool_or", "verified", "BOOL_OR"),
-        pytest.param("bit_and", "flags", "BIT_AND", marks=pytest.mark.skip(reason="bit_and not implemented")),
-        pytest.param("bit_or", "flags", "BIT_OR", marks=pytest.mark.skip(reason="bit_or not implemented")),
     ],
-    ids=[
-        "count",
-        "count_distinct",
-        "sum",
-        "avg",
-        "min",
-        "max",
-        "stddev",
-        "stddev_pop",
-        "stddev_samp",
-        "variance",
-        "var_pop",
-        "var_samp",
-        "array_agg",
-        "string_agg",
-        "json_agg",
-        "jsonb_agg",
-        "bool_and",
-        "bool_or",
-        "bit_and",
-        "bit_or",
-    ],
+    ids=["count", "sum", "avg", "min", "max", "array_agg"],
 )
 def test_aggregate_functions(method: str, column: str, expected_function: str) -> None:
     """Test aggregate function methods."""

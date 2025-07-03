@@ -395,11 +395,12 @@ def test_revenue_analytics_workflow(analytics_database: SqliteDriver, temp_direc
         "SELECT product_type, SUM(amount) as revenue FROM revenue GROUP BY product_type ORDER BY revenue DESC LIMIT 1"
     )
 
+    top_product_data = top_product_result.data[0] if top_product_result.data else None
     insights = {
         "analysis_period": "2024-01",
         "total_revenue": total_revenue_result.data[0]["total"] if total_revenue_result.data else 0,
         "average_transaction": avg_transaction_result.data[0]["avg"] if avg_transaction_result.data else 0,
-        "top_product": top_product_result.data[0] if top_product_result.data else None,
+        "top_product": dict(top_product_data) if top_product_data else None,
         "files_generated": [str(monthly_revenue_file.name), str(user_revenue_file.name)],
     }
 

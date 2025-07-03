@@ -112,40 +112,139 @@ class AggregateFunctionsMixin:
         select_expr = exp.alias_(array_agg_expr, alias) if alias else array_agg_expr
         return cast("Self", builder.select(select_expr))
 
-    def bool_and(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
-        """Add BOOL_AND aggregate function to SELECT clause (PostgreSQL, DuckDB, etc).
+    def count_distinct(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+        """Add COUNT(DISTINCT column) to SELECT clause.
 
         Args:
-            column: The boolean column to aggregate.
-            alias: Optional alias for the result.
+            column: The column to count distinct values of.
+            alias: Optional alias for the count.
 
         Returns:
             The current builder instance for method chaining.
-
-        Note:
-            Uses exp.Anonymous for BOOL_AND. Not all dialects support this function.
         """
         builder = cast("SelectBuilderProtocol", self)
         col_expr = exp.column(column) if isinstance(column, str) else column
-        bool_and_expr = exp.Anonymous(this="BOOL_AND", expressions=[col_expr])
-        select_expr = exp.alias_(bool_and_expr, alias) if alias else bool_and_expr
+        count_expr = exp.Count(this=exp.Distinct(expressions=[col_expr]))
+        select_expr = exp.alias_(count_expr, alias) if alias else count_expr
         return cast("Self", builder.select(select_expr))
 
-    def bool_or(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
-        """Add BOOL_OR aggregate function to SELECT clause (PostgreSQL, DuckDB, etc).
+    def stddev(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+        """Add STDDEV aggregate function to SELECT clause.
 
         Args:
-            column: The boolean column to aggregate.
+            column: The column to calculate standard deviation of.
+            alias: Optional alias for the result.
+
+        Returns:
+            The current builder instance for method chaining.
+        """
+        builder = cast("SelectBuilderProtocol", self)
+        col_expr = exp.column(column) if isinstance(column, str) else column
+        stddev_expr = exp.Stddev(this=col_expr)
+        select_expr = exp.alias_(stddev_expr, alias) if alias else stddev_expr
+        return cast("Self", builder.select(select_expr))
+
+    def stddev_pop(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+        """Add STDDEV_POP aggregate function to SELECT clause.
+
+        Args:
+            column: The column to calculate population standard deviation of.
+            alias: Optional alias for the result.
+
+        Returns:
+            The current builder instance for method chaining.
+        """
+        builder = cast("SelectBuilderProtocol", self)
+        col_expr = exp.column(column) if isinstance(column, str) else column
+        stddev_pop_expr = exp.StddevPop(this=col_expr)
+        select_expr = exp.alias_(stddev_pop_expr, alias) if alias else stddev_pop_expr
+        return cast("Self", builder.select(select_expr))
+
+    def stddev_samp(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+        """Add STDDEV_SAMP aggregate function to SELECT clause.
+
+        Args:
+            column: The column to calculate sample standard deviation of.
+            alias: Optional alias for the result.
+
+        Returns:
+            The current builder instance for method chaining.
+        """
+        builder = cast("SelectBuilderProtocol", self)
+        col_expr = exp.column(column) if isinstance(column, str) else column
+        stddev_samp_expr = exp.StddevSamp(this=col_expr)
+        select_expr = exp.alias_(stddev_samp_expr, alias) if alias else stddev_samp_expr
+        return cast("Self", builder.select(select_expr))
+
+    def variance(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+        """Add VARIANCE aggregate function to SELECT clause.
+
+        Args:
+            column: The column to calculate variance of.
+            alias: Optional alias for the result.
+
+        Returns:
+            The current builder instance for method chaining.
+        """
+        builder = cast("SelectBuilderProtocol", self)
+        col_expr = exp.column(column) if isinstance(column, str) else column
+        variance_expr = exp.Variance(this=col_expr)
+        select_expr = exp.alias_(variance_expr, alias) if alias else variance_expr
+        return cast("Self", builder.select(select_expr))
+
+    def var_pop(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+        """Add VAR_POP aggregate function to SELECT clause.
+
+        Args:
+            column: The column to calculate population variance of.
+            alias: Optional alias for the result.
+
+        Returns:
+            The current builder instance for method chaining.
+        """
+        builder = cast("SelectBuilderProtocol", self)
+        col_expr = exp.column(column) if isinstance(column, str) else column
+        var_pop_expr = exp.VariancePop(this=col_expr)
+        select_expr = exp.alias_(var_pop_expr, alias) if alias else var_pop_expr
+        return cast("Self", builder.select(select_expr))
+
+    def string_agg(self, column: Union[str, exp.Expression], separator: str = ",", alias: Optional[str] = None) -> Self:
+        """Add STRING_AGG aggregate function to SELECT clause.
+
+        Args:
+            column: The column to aggregate into a string.
+            separator: The separator between values (default is comma).
             alias: Optional alias for the result.
 
         Returns:
             The current builder instance for method chaining.
 
         Note:
-            Uses exp.Anonymous for BOOL_OR. Not all dialects support this function.
+            Different databases have different names for this function:
+            - PostgreSQL: STRING_AGG
+            - MySQL: GROUP_CONCAT
+            - SQLite: GROUP_CONCAT
+            SQLGlot will handle the translation.
         """
         builder = cast("SelectBuilderProtocol", self)
         col_expr = exp.column(column) if isinstance(column, str) else column
-        bool_or_expr = exp.Anonymous(this="BOOL_OR", expressions=[col_expr])
-        select_expr = exp.alias_(bool_or_expr, alias) if alias else bool_or_expr
+        # Use GroupConcat which SQLGlot can translate to STRING_AGG for Postgres
+        string_agg_expr = exp.GroupConcat(this=col_expr, separator=exp.Literal.string(separator))
+        select_expr = exp.alias_(string_agg_expr, alias) if alias else string_agg_expr
+        return cast("Self", builder.select(select_expr))
+
+    def json_agg(self, column: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+        """Add JSON_AGG aggregate function to SELECT clause.
+
+        Args:
+            column: The column to aggregate into a JSON array.
+            alias: Optional alias for the result.
+
+        Returns:
+            The current builder instance for method chaining.
+        """
+        builder = cast("SelectBuilderProtocol", self)
+        col_expr = exp.column(column) if isinstance(column, str) else column
+        json_agg_expr = exp.JSONArrayAgg(this=col_expr)
+        select_expr = exp.alias_(json_agg_expr, alias) if alias else json_agg_expr
         return cast("Self", builder.select(select_expr))

@@ -189,8 +189,8 @@ async def test_asyncmy_dialect_propagation_with_filters(mysql_service: MySQLServ
         driver = AsyncmyDriver(connection=connection, config=SQLConfig())
 
         # Create temp table and execute a query with filter
-        await connection.execute("CREATE TEMPORARY TABLE test_users (id INT, name VARCHAR(100))")
-        await connection.execute("INSERT INTO test_users VALUES (1, 'test'), (2, 'another')")
+        await driver.execute_script("CREATE TEMPORARY TABLE test_users (id INT, name VARCHAR(100))")
+        await driver.execute_script("INSERT INTO test_users VALUES (1, 'test'), (2, 'another')")
 
         # Create SQL with filter
         from sqlspec.statement.filters import LimitOffsetFilter
