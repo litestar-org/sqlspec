@@ -5,6 +5,7 @@ from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
+from sqlspec.utils.type_guards import has_query_builder_parameters
 
 __all__ = ("UpdateSetClauseMixin",)
 
@@ -49,14 +50,14 @@ class UpdateSetClauseMixin:
             # If value is an expression, use it directly
             if isinstance(val, exp.Expression):
                 value_expr = val
-            elif hasattr(val, "_expression") and hasattr(val, "build"):
+            elif has_query_builder_parameters(val):
                 # It's a builder (like SelectBuilder), convert to subquery
                 subquery = val.build()
                 # Parse the SQL and use as expression
                 value_expr = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(self, "dialect", None)))
                 # Merge parameters from subquery
-                if hasattr(val, "_parameters"):
-                    for p_name, p_value in val._parameters.items():
+                if has_query_builder_parameters(val):
+                    for p_name, p_value in val.parameters.items():
                         self.add_parameter(p_value, name=p_name)  # type: ignore[attr-defined]
             else:
                 param_name = self.add_parameter(val)[1]  # type: ignore[attr-defined]
@@ -69,14 +70,14 @@ class UpdateSetClauseMixin:
                 # If value is an expression, use it directly
                 if isinstance(val, exp.Expression):
                     value_expr = val
-                elif hasattr(val, "_expression") and hasattr(val, "build"):
+                elif has_query_builder_parameters(val):
                     # It's a builder (like SelectBuilder), convert to subquery
                     subquery = val.build()
                     # Parse the SQL and use as expression
                     value_expr = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(self, "dialect", None)))
                     # Merge parameters from subquery
-                    if hasattr(val, "_parameters"):
-                        for p_name, p_value in val._parameters.items():
+                    if has_query_builder_parameters(val):
+                        for p_name, p_value in val.parameters.items():
                             self.add_parameter(p_value, name=p_name)  # type: ignore[attr-defined]
                 else:
                     param_name = self.add_parameter(val)[1]  # type: ignore[attr-defined]

@@ -247,8 +247,10 @@ class DMLSafetyValidator(ProcessorProtocol):
             return False
         # Look for common indexed column patterns
         for condition in where.find_all(exp.Predicate):
-            if hasattr(condition, "left") and isinstance(condition.left, exp.Column):  # pyright: ignore
-                col_name = condition.left.name.lower()  # pyright: ignore
+            if isinstance(condition, (exp.EQ, exp.GT, exp.GTE, exp.LT, exp.LTE, exp.NEQ)) and isinstance(
+                condition.left, exp.Column
+            ):
+                col_name = condition.left.name.lower()
                 # Common indexed columns
                 if col_name in {"created_at", "updated_at", "email", "username", "status", "type"}:
                     return True
@@ -268,20 +270,16 @@ class DMLSafetyValidator(ProcessorProtocol):
 
         # For DML statements
         if isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):
-            if hasattr(expression, "this") and expression.this:
+            if expression.this:
                 table_expr = expression.this
                 if isinstance(table_expr, exp.Table):
                     tables.append(table_expr.name)
 
         # For DDL statements
-        elif (
-            isinstance(expression, (exp.Create, exp.Drop, exp.Alter))
-            and hasattr(expression, "this")
-            and expression.this
-        ):
+        elif isinstance(expression, (exp.Create, exp.Drop, exp.Alter)) and expression.this:
             # For CREATE TABLE, the table is in expression.this.this
             if isinstance(expression, exp.Create) and isinstance(expression.this, exp.Schema):
-                if hasattr(expression.this, "this") and expression.this.this:
+                if expression.this.this:
                     table_expr = expression.this.this
                     if isinstance(table_expr, exp.Table):
                         tables.append(table_expr.name)

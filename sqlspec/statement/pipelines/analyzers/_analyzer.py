@@ -473,17 +473,21 @@ class StatementAnalyzer(ProcessorProtocol):
     def _extract_primary_table_name(expr: exp.Expression) -> "Optional[str]":
         """Extract the primary table name from an expression."""
         if isinstance(expr, exp.Insert):
-            if expr.this and hasattr(expr.this, "this"):
+            if expr.this:
                 table = expr.this
                 if isinstance(table, exp.Table):
                     return table.name
-                if hasattr(table, "name"):
+                if isinstance(table, (exp.Identifier, exp.Var)):
                     return str(table.name)
         elif isinstance(expr, (exp.Update, exp.Delete)):
             if expr.this:
-                return str(expr.this.name) if hasattr(expr.this, "name") else str(expr.this)
+                if isinstance(expr.this, (exp.Table, exp.Identifier, exp.Var)):
+                    return str(expr.this.name)
+                return str(expr.this)
         elif isinstance(expr, exp.Select) and (from_clause := expr.find(exp.From)) and from_clause.this:
-            return str(from_clause.this.name) if hasattr(from_clause.this, "name") else str(from_clause.this)
+            if isinstance(from_clause.this, (exp.Table, exp.Identifier, exp.Var)):
+                return str(from_clause.this.name)
+            return str(from_clause.this)
         return None
 
     @staticmethod
@@ -492,14 +496,18 @@ class StatementAnalyzer(ProcessorProtocol):
         columns: list[str] = []
         if isinstance(expr, exp.Insert):
             if expr.this and has_expressions(expr.this):
-                columns.extend(str(col_expr.name) for col_expr in expr.this.expressions if hasattr(col_expr, "name"))
+                columns.extend(
+                    str(col_expr.name)
+                    for col_expr in expr.this.expressions
+                    if isinstance(col_expr, (exp.Column, exp.Identifier, exp.Var))
+                )
         elif isinstance(expr, exp.Select):
             for projection in expr.expressions:
                 if isinstance(projection, exp.Column):
                     columns.append(str(projection.name))
-                elif hasattr(projection, "alias") and projection.alias:
+                elif isinstance(projection, exp.Alias) and projection.alias:
                     columns.append(str(projection.alias))
-                elif hasattr(projection, "name"):
+                elif isinstance(projection, (exp.Identifier, exp.Var)):
                     columns.append(str(projection.name))
 
         return columns
@@ -509,7 +517,7 @@ class StatementAnalyzer(ProcessorProtocol):
         """Extract all table names referenced in the expression."""
         tables: list[str] = []
         for table in expr.find_all(exp.Table):
-            if hasattr(table, "name"):
+            if isinstance(table, exp.Table):
                 table_name = str(table.name)
                 if table_name not in tables:
                     tables.append(table_name)

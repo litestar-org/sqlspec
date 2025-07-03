@@ -218,7 +218,7 @@ class QueryBuilder(ABC, Generic[RowT]):
                 msg = f"CTE query builder expression must be a Select, got {type(query._expression).__name__}."
                 self._raise_sql_builder_error(msg)
             cte_select_expression = query._expression.copy()
-            for p_name, p_value in query._parameters.items():
+            for p_name, p_value in query.parameters.items():
                 # Try to preserve original parameter name, only rename if collision
                 unique_name = self._generate_unique_parameter_name(p_name)
                 self.add_parameter(p_value, unique_name)
@@ -368,3 +368,8 @@ class QueryBuilder(ABC, Generic[RowT]):
             if hasattr(self.dialect, "__name__"):
                 return self.dialect.__name__.lower()
         return None
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        """Public access to query parameters."""
+        return self._parameters

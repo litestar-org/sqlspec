@@ -56,6 +56,33 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
 
+def create_mock_query_builder() -> Any:
+    """Create a mock query builder that implements SQLBuilderProtocol."""
+    from unittest.mock import Mock
+
+    # Create a mock that implements the SQLBuilderProtocol properly
+    mock = Mock()
+    mock._parameters = {}
+    mock._parameter_counter = 0
+    mock.dialect = None
+    mock.dialect_name = None
+    mock._expression = None
+
+    # Add the parameters property
+    type(mock).parameters = property(lambda self: self._parameters)
+
+    # Add build method that returns sql result
+    mock.build.return_value = Mock(sql="SELECT id FROM users")
+
+    # Add add_parameter method
+    mock.add_parameter = Mock(return_value=(mock, "param_1"))
+
+    # Add _parameterize_expression method
+    mock._parameterize_expression = Mock(return_value=Mock())
+
+    return mock
+
+
 # Helper Classes
 class MockQueryResult:
     """Mock query result for testing."""
@@ -181,7 +208,7 @@ def test_where_null_checks(column: Any) -> None:
     [
         ([1, 2, 3], exp.Tuple),
         ((4, 5, 6), exp.Tuple),
-        (Mock(build=lambda: Mock(sql="SELECT id FROM users")), type(None)),  # Subquery
+        (create_mock_query_builder(), type(None)),  # Subquery
     ],
     ids=["list_values", "tuple_values", "subquery"],
 )

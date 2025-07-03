@@ -505,10 +505,32 @@ def test_where_mixin_where_exists_with_string(where_mixin: WhereClauseMixinHelpe
 
 def test_where_mixin_where_exists_with_builder(where_mixin: WhereClauseMixinHelper) -> None:
     """Test where_exists with QueryBuilder subquery."""
-    mock_builder = Mock()
-    mock_builder._parameters = {"status": "active"}
-    mock_builder.build.return_value = Mock()
-    mock_builder.build.return_value.sql = "SELECT 1 FROM orders"
+
+    # Create a concrete mock that implements the necessary interface
+    class MockQueryBuilder:
+        def __init__(self):
+            self._expression = None
+            self._parameters = {"status": "active"}
+            self._parameter_counter = 0
+            self.dialect = None
+            self.dialect_name = None
+
+        @property
+        def parameters(self):
+            return self._parameters
+
+        def build(self):
+            mock_result = Mock()
+            mock_result.sql = "SELECT 1 FROM orders"
+            return mock_result
+
+        def add_parameter(self, value, name=None):
+            return value, name or f"param_{len(self._parameters)}"
+
+        def _parameterize_expression(self, expression):
+            return expression
+
+    mock_builder = MockQueryBuilder()
 
     result = where_mixin.where_exists(mock_builder)
 

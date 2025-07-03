@@ -48,6 +48,7 @@ if TYPE_CHECKING:
         IndexableRow,
         ObjectStoreItemProtocol,
         ParameterValueProtocol,
+        SQLBuilderProtocol,
         SyncCloseableConnectionProtocol,
         SyncCopyCapableConnectionProtocol,
         SyncPipelineCapableDriverProtocol,
@@ -70,6 +71,7 @@ __all__ = (
     "has_dict_attribute",
     "has_expressions",
     "has_parameter_value",
+    "has_query_builder_parameters",
     "has_risk_level",
     "has_sql_method",
     "has_with_method",
@@ -874,6 +876,13 @@ def has_sql_method(obj: Any) -> "TypeGuard[HasSQLMethodProtocol]":
     from sqlspec.protocols import HasSQLMethodProtocol
 
     return isinstance(obj, HasSQLMethodProtocol)
+
+
+def has_query_builder_parameters(obj: Any) -> "TypeGuard[SQLBuilderProtocol]":
+    """Check if an object is a query builder with parameters property."""
+    from sqlspec.protocols import SQLBuilderProtocol
+
+    return isinstance(obj, SQLBuilderProtocol)
 
 
 def is_object_store_item(obj: Any) -> "TypeGuard[ObjectStoreItemProtocol]":

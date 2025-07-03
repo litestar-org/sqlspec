@@ -587,6 +587,9 @@ class CreateIndex(DDLBuilder):
         """
         super().__init__(**kwargs)
         self._index_name = index_name
+        # Initialize dataclass fields that may not be set by super().__init__
+        if not hasattr(self, "_columns"):
+            self._columns = []
 
     def name(self, index_name: str) -> Self:
         self._index_name = index_name

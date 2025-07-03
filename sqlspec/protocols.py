@@ -506,6 +506,7 @@ class ObjectStoreProtocol(Protocol):
 # =============================================================================
 
 
+@runtime_checkable
 class SQLBuilderProtocol(Protocol):
     """Protocol for SQL query builders."""
 
@@ -514,6 +515,11 @@ class SQLBuilderProtocol(Protocol):
     _parameter_counter: int
     dialect: Any
     dialect_name: "Optional[str]"
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        """Public access to query parameters."""
+        ...
 
     def add_parameter(self, value: Any, name: "Optional[str]" = None) -> tuple[Any, str]:
         """Add a parameter to the builder."""

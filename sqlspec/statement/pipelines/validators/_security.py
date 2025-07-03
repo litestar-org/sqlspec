@@ -791,7 +791,7 @@ class SecurityValidator(ProcessorProtocol):
 
         func_name = func_node.name.lower()
 
-        if hasattr(func_node, "this") and isinstance(func_node.this, Func):
+        if func_node.this and isinstance(func_node.this, Func):
             nested_func = func_node.this
             if nested_func.name and nested_func.name.lower() in SUSPICIOUS_FUNCTIONS:
                 issues.append(
@@ -880,7 +880,7 @@ class SecurityValidator(ProcessorProtocol):
         """Analyze subquery structure for injection patterns."""
         issues: list[SecurityIssue] = []
 
-        if hasattr(subquery_node, "this") and isinstance(subquery_node.this, exp.Select):
+        if subquery_node.this and isinstance(subquery_node.this, exp.Select):
             select_expr = subquery_node.this
 
             if has_expressions(select_expr) and select_expr.expressions:

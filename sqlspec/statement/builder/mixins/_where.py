@@ -6,7 +6,7 @@ from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._parsing_utils import parse_column_expression, parse_condition_expression
-from sqlspec.utils.type_guards import is_iterable_parameters
+from sqlspec.utils.type_guards import has_query_builder_parameters, is_iterable_parameters
 
 if TYPE_CHECKING:
     from sqlspec.protocols import SQLBuilderProtocol
@@ -200,8 +200,8 @@ class WhereClauseMixin:
 
     def where_exists(self, subquery: "Union[str, Any]") -> "Self":
         sub_expr: exp.Expression
-        if hasattr(subquery, "_parameters") and hasattr(subquery, "build"):
-            subquery_builder_params: dict[str, Any] = subquery._parameters  # pyright: ignore
+        if has_query_builder_parameters(subquery):
+            subquery_builder_params: dict[str, Any] = subquery.parameters
             if subquery_builder_params:
                 for p_name, p_value in subquery_builder_params.items():
                     self.add_parameter(p_value, name=p_name)  # type: ignore[attr-defined]
@@ -219,8 +219,8 @@ class WhereClauseMixin:
 
     def where_not_exists(self, subquery: "Union[str, Any]") -> "Self":
         sub_expr: exp.Expression
-        if hasattr(subquery, "_parameters") and hasattr(subquery, "build"):
-            subquery_builder_params: dict[str, Any] = subquery._parameters  # pyright: ignore
+        if has_query_builder_parameters(subquery):
+            subquery_builder_params: dict[str, Any] = subquery.parameters
             if subquery_builder_params:
                 for p_name, p_value in subquery_builder_params.items():
                     self.add_parameter(p_value, name=p_name)  # type: ignore[attr-defined]
@@ -244,8 +244,8 @@ class WhereClauseMixin:
         """Add a WHERE ... IN (...) clause. Supports subqueries and iterables."""
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         # Subquery support
-        if hasattr(values, "build") or isinstance(values, exp.Expression):
-            if hasattr(values, "build"):
+        if has_query_builder_parameters(values) or isinstance(values, exp.Expression):
+            if has_query_builder_parameters(values):
                 subquery = values.build()  # pyright: ignore
                 subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(self, "dialect_name", None)))
             else:
@@ -266,8 +266,8 @@ class WhereClauseMixin:
     def where_not_in(self, column: "Union[str, exp.Column]", values: Any) -> "Self":
         """Add a WHERE ... NOT IN (...) clause. Supports subqueries and iterables."""
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        if hasattr(values, "build") or isinstance(values, exp.Expression):
-            if hasattr(values, "build"):
+        if has_query_builder_parameters(values) or isinstance(values, exp.Expression):
+            if has_query_builder_parameters(values):
                 subquery = values.build()  # pyright: ignore
                 subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(self, "dialect_name", None)))
             else:
@@ -300,8 +300,8 @@ class WhereClauseMixin:
             The current builder instance for method chaining.
         """
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        if hasattr(values, "build") or isinstance(values, exp.Expression):
-            if hasattr(values, "build"):
+        if has_query_builder_parameters(values) or isinstance(values, exp.Expression):
+            if has_query_builder_parameters(values):
                 subquery = values.build()  # pyright: ignore
                 subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(self, "dialect_name", None)))
             else:
@@ -345,8 +345,8 @@ class WhereClauseMixin:
             The current builder instance for method chaining.
         """
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
-        if hasattr(values, "build") or isinstance(values, exp.Expression):
-            if hasattr(values, "build"):
+        if has_query_builder_parameters(values) or isinstance(values, exp.Expression):
+            if has_query_builder_parameters(values):
                 subquery = values.build()  # pyright: ignore
                 subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(self, "dialect_name", None)))
             else:

@@ -122,7 +122,7 @@ class SQLConfig:
         Returns:
             True if the style is allowed, False otherwise
         """
-        if not self.allowed_parameter_styles:
+        if self.allowed_parameter_styles is None:
             return True
         style_str = str(style)
         return style_str in self.allowed_parameter_styles

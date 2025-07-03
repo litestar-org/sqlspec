@@ -5,6 +5,7 @@ from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._parsing_utils import parse_table_expression
+from sqlspec.utils.type_guards import has_query_builder_parameters
 
 if TYPE_CHECKING:
     from sqlspec.protocols import SQLBuilderProtocol
@@ -31,7 +32,7 @@ class JoinClauseMixin:
         table_expr: exp.Expression
         if isinstance(table, str):
             table_expr = parse_table_expression(table, alias)
-        elif hasattr(table, "build"):
+        elif has_query_builder_parameters(table):
             # Work directly with AST when possible to avoid string parsing
             if hasattr(table, "_expression") and getattr(table, "_expression", None) is not None:
                 subquery_exp = exp.paren(table._expression.copy())  # pyright: ignore
@@ -91,7 +92,7 @@ class JoinClauseMixin:
         table_expr: exp.Expression
         if isinstance(table, str):
             table_expr = parse_table_expression(table, alias)
-        elif hasattr(table, "build"):
+        elif has_query_builder_parameters(table):
             if hasattr(table, "_expression") and getattr(table, "_expression", None) is not None:
                 subquery_exp = exp.paren(table._expression.copy())  # pyright: ignore
                 table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp

@@ -5,7 +5,7 @@ from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._parsing_utils import parse_table_expression
-from sqlspec.utils.type_guards import is_expression
+from sqlspec.utils.type_guards import has_query_builder_parameters, is_expression
 
 if TYPE_CHECKING:
     from sqlspec.protocols import SQLBuilderProtocol
@@ -41,9 +41,9 @@ class FromClauseMixin:
         elif is_expression(table):
             # Direct sqlglot expression - use as is
             from_expr = exp.alias_(table, alias) if alias else table
-        elif hasattr(table, "build"):
+        elif has_query_builder_parameters(table):
             # Query builder with build() method
-            subquery = table.build()  # pyright: ignore
+            subquery = table.build()  # type: ignore[attr-defined]
             subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(builder, "dialect", None)))
             from_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
             current_params = getattr(builder, "_parameters", None)

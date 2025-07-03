@@ -4,6 +4,7 @@ from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
+from sqlspec.utils.type_guards import has_query_builder_parameters
 
 __all__ = ("UpdateFromClauseMixin",)
 
@@ -30,7 +31,7 @@ class UpdateFromClauseMixin:
         table_expr: exp.Expression
         if isinstance(table, str):
             table_expr = exp.to_table(table, alias=alias)
-        elif hasattr(table, "build"):
+        elif has_query_builder_parameters(table):
             subquery_builder_params = getattr(table, "_parameters", None)
             if subquery_builder_params:
                 for p_name, p_value in subquery_builder_params.items():
