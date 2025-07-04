@@ -847,6 +847,8 @@ class ParameterConverter:
         if target_style == ParameterStyle.NAMED_COLON:
             return f":{param_info.name}" if param_info.name else f":arg_{param_info.ordinal}"
         if target_style == ParameterStyle.POSITIONAL_COLON:
+            if param_info.style == ParameterStyle.POSITIONAL_COLON and param_info.name and param_info.name.isdigit():
+                return f":{param_info.name}"
             return f":{param_info.ordinal + 1}"
         if target_style == ParameterStyle.NAMED_AT:
             return f"@{param_info.name}" if param_info.name else f"@arg_{param_info.ordinal}"

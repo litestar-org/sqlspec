@@ -962,18 +962,21 @@ class SQL:
         if self._processing_context and self._processing_context.parameter_normalization:
             norm_state = self._processing_context.parameter_normalization
 
-            # If original SQL had incompatible styles and no specific style requested
-            # denormalize back to the original style
-            if norm_state.was_normalized and placeholder_style is None and norm_state.original_styles:
-                # Use the dominant original style
-                target_style = norm_state.original_styles[0]
-                if target_style in SQLGLOT_INCOMPATIBLE_STYLES:
+            # If original SQL had incompatible styles, denormalize back to the original style
+            # when no specific style requested OR when the requested style matches the original
+            if norm_state.was_normalized and norm_state.original_styles:
+                original_style = norm_state.original_styles[0]
+                should_denormalize = placeholder_style is None or (
+                    placeholder_style and ParameterStyle(placeholder_style) == original_style
+                )
+
+                if should_denormalize and original_style in SQLGLOT_INCOMPATIBLE_STYLES:
                     # Denormalize SQL back to original style
                     sql = self._config.parameter_converter._convert_sql_placeholders(
-                        sql, norm_state.original_param_info, target_style
+                        sql, norm_state.original_param_info, original_style
                     )
                     # Also denormalize parameters if needed
-                    if target_style == ParameterStyle.POSITIONAL_COLON and is_dict(params):
+                    if original_style == ParameterStyle.POSITIONAL_COLON and is_dict(params):
                         params = self._denormalize_colon_params(params)
 
         params = self._unwrap_typed_parameters(params)
@@ -1094,12 +1097,21 @@ class SQL:
             return sql, params
 
         converter = self._config.parameter_converter
-        param_info = converter.validator.extract_parameters(sql)
+
+        # For POSITIONAL_COLON style, use original parameter info if available to preserve numeric identifiers
+        target_style = ParameterStyle(placeholder_style) if isinstance(placeholder_style, str) else placeholder_style
+        if (
+            target_style == ParameterStyle.POSITIONAL_COLON
+            and self._processing_context
+            and self._processing_context.parameter_normalization
+            and self._processing_context.parameter_normalization.original_param_info
+        ):
+            param_info = self._processing_context.parameter_normalization.original_param_info
+        else:
+            param_info = converter.validator.extract_parameters(sql)
 
         if not param_info:
             return sql, params
-
-        target_style = ParameterStyle(placeholder_style) if isinstance(placeholder_style, str) else placeholder_style
 
         if target_style == ParameterStyle.STATIC:
             return self._embed_static_parameters(sql, params, param_info)
@@ -1216,6 +1228,15 @@ class SQL:
         if target_style == ParameterStyle.NAMED_AT:
             return f"@{param.name or f'param_{param.ordinal}'}"
         if target_style == ParameterStyle.POSITIONAL_COLON:
+            # For Oracle positional colon, preserve the original numeric identifier if it was already :N style
+            if (
+                hasattr(param, "style")
+                and param.style == ParameterStyle.POSITIONAL_COLON
+                and hasattr(param, "name")
+                and param.name
+                and param.name.isdigit()
+            ):
+                return f":{param.name}"
             return f":{param.ordinal + 1}"
         if target_style == ParameterStyle.POSITIONAL_PYFORMAT:
             return "%s"
@@ -1360,15 +1381,16 @@ class SQL:
 
             if all(key.startswith("param_") for key in params):
                 param_result_dict: dict[str, Any] = {}
-                for i, p in enumerate(sorted(param_info, key=lambda x: x.ordinal)):
-                    if p.name and p.name.isdigit():
-                        normalized_key = f"param_{i}"
-                        if normalized_key in params:
+                for p in sorted(param_info, key=lambda x: x.ordinal):
+                    # Use the parameter's ordinal to find the normalized key
+                    normalized_key = f"param_{p.ordinal}"
+                    if normalized_key in params:
+                        if p.name and p.name.isdigit():
+                            # For Oracle numeric parameters, preserve the original number
                             param_result_dict[p.name] = params[normalized_key]
-                    else:
-                        normalized_key = f"param_{i}"
-                        if normalized_key in params:
-                            param_result_dict[str(i + 1)] = params[normalized_key]
+                        else:
+                            # For other cases, use sequential numbering
+                            param_result_dict[str(p.ordinal + 1)] = params[normalized_key]
                 return param_result_dict
 
             has_oracle_numeric = any(key.isdigit() for key in params)
