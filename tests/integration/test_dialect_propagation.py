@@ -113,22 +113,27 @@ def test_psycopg_dialect_in_execute_script(postgres_service: PostgresService) ->
     # Verify config has correct dialect
     assert config.dialect == "postgres"
 
-    # Create a real connection
-    with config.provide_connection() as connection:
-        # Create driver
-        driver = PsycopgSyncDriver(connection=connection)
+    try:
+        # Create a real connection
+        with config.provide_connection() as connection:
+            # Create driver
+            driver = PsycopgSyncDriver(connection=connection)
 
-        # Execute script and verify dialect
-        script = "CREATE TEMP TABLE testdialect (id INT); INSERT INTO testdialect VALUES (1);"
-        result = driver.execute_script(script)
+            # Execute script and verify dialect
+            script = "CREATE TEMP TABLE testdialect (id INT); INSERT INTO testdialect VALUES (1);"
+            result = driver.execute_script(script)
 
-        # Verify result
-        assert isinstance(result, SQLResult)
-        assert result.operation_type == "SCRIPT"
+            # Verify result
+            assert isinstance(result, SQLResult)
+            assert result.operation_type == "SCRIPT"
 
-        # Verify the dialect propagated correctly
-        assert result.statement.dialect == "postgres"
-        assert result.statement.is_script is True
+            # Verify the dialect propagated correctly
+            assert result.statement.dialect == "postgres"
+            assert result.statement.is_script is True
+    finally:
+        # Ensure proper cleanup of the connection pool
+        if config.pool_instance:
+            config.close_pool()
 
 
 # Async dialect propagation tests
@@ -166,6 +171,11 @@ async def test_asyncpg_dialect_propagation_through_execute(postgres_service: Pos
 
         # Verify the dialect propagated correctly
         assert result.statement.dialect == "postgres"
+
+    # Ensure proper cleanup of the connection pool after the context manager exits
+    if config.pool_instance:
+        await config.close_pool()
+        config.pool_instance = None
 
 
 @pytest.mark.asyncio
