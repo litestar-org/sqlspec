@@ -206,7 +206,7 @@ class AiosqliteDriver(
             async with self._get_cursor(txn_conn) as cursor:
                 await cursor.executemany(sql, params_list)
                 return SQLResult(
-                    statement=SQL(sql),
+                    statement=SQL(sql, _dialect=self.dialect),
                     data=[],
                     rows_affected=cursor.rowcount,
                     operation_type="EXECUTE",
@@ -223,7 +223,7 @@ class AiosqliteDriver(
             async with self._get_cursor(txn_conn) as cursor:
                 await cursor.executescript(script)
             return SQLResult(
-                statement=SQL(script),
+                statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
                 rows_affected=0,
                 operation_type="SCRIPT",

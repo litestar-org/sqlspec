@@ -114,7 +114,6 @@ class StorageMixinBase(ABC):
         original_path = uri_str
 
         if self._is_uri(uri_str) and "://" not in uri_str:
-            # It's an absolute path without scheme
             uri_str = f"file://{uri_str}"
 
         backend = self._get_storage_backend(uri_str)
@@ -202,7 +201,24 @@ class SyncStorageMixin(StorageMixinBase):
         """
         self._ensure_pyarrow_installed()
 
-        sql = self._build_statement(statement, *parameters, _config=_config or self.config, **kwargs)  # type: ignore[attr-defined]
+        filters, params = separate_filters_and_parameters(parameters)
+        # Convert to SQL object for processing
+        # Use a custom config if transformations will add parameters
+        if _config is None:
+            _config = self.config
+
+        # If no parameters provided but we have transformations enabled,
+        # disable parameter validation entirely to allow transformer-added parameters
+        if params is None and _config and _config.enable_transformations:
+            # Disable validation entirely for transformer-generated parameters
+            _config = replace(_config, strict_mode=False, enable_validation=False)
+
+        # Only pass params if it's not None to avoid adding None as a parameter
+        if params is not None:
+            sql = SQL(statement, params, *filters, config=_config, **kwargs)
+        else:
+            sql = SQL(statement, *filters, config=_config, **kwargs)
+
         return self._fetch_arrow_table(sql, connection=_connection, **kwargs)
 
     def _fetch_arrow_table(self, sql: SQL, connection: "Optional[ConnectionT]" = None, **kwargs: Any) -> "ArrowResult":
@@ -623,7 +639,25 @@ class AsyncStorageMixin(StorageMixinBase):
             ArrowResult wrapping the Arrow table
         """
         self._ensure_pyarrow_installed()
-        sql = self._build_statement(statement, *parameters, _config=_config or self.config, **kwargs)  # type: ignore[attr-defined]
+
+        filters, params = separate_filters_and_parameters(parameters)
+        # Convert to SQL object for processing
+        # Use a custom config if transformations will add parameters
+        if _config is None:
+            _config = self.config
+
+        # If no parameters provided but we have transformations enabled,
+        # disable parameter validation entirely to allow transformer-added parameters
+        if params is None and _config and _config.enable_transformations:
+            # Disable validation entirely for transformer-generated parameters
+            _config = replace(_config, strict_mode=False, enable_validation=False)
+
+        # Only pass params if it's not None to avoid adding None as a parameter
+        if params is not None:
+            sql = SQL(statement, params, *filters, config=_config, **kwargs)
+        else:
+            sql = SQL(statement, *filters, config=_config, **kwargs)
+
         return await self._fetch_arrow_table(sql, connection=_connection, **kwargs)
 
     async def _fetch_arrow_table(

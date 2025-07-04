@@ -192,7 +192,7 @@ class PsycopgSyncDriver(
                     output_data.extend(row for row in copy)
 
                 return SQLResult(
-                    statement=SQL(sql),
+                    statement=SQL(sql, _dialect=self.dialect),
                     data=cast("list[RowT]", output_data),
                     column_names=["copy_data"],
                     rows_affected=len(output_data),
@@ -216,7 +216,7 @@ class PsycopgSyncDriver(
 
             # For COPY operations, cursor.rowcount contains the number of rows affected
             return SQLResult(
-                statement=SQL(sql),
+                statement=SQL(sql, _dialect=self.dialect),
                 data=[],
                 rows_affected=cursor.rowcount or -1,
                 operation_type="EXECUTE",
@@ -242,7 +242,7 @@ class PsycopgSyncDriver(
                 if rows_affected <= 0 and final_param_list:
                     rows_affected = len(final_param_list)
                 return SQLResult(
-                    statement=SQL(sql),
+                    statement=SQL(sql, _dialect=self.dialect),
                     data=[],
                     rows_affected=rows_affected,
                     operation_type="EXECUTE",
@@ -258,7 +258,7 @@ class PsycopgSyncDriver(
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
             cursor.execute(script)
             return SQLResult(
-                statement=SQL(script, dialect=self.dialect),
+                statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
                 rows_affected=0,
                 operation_type="SCRIPT",
@@ -644,7 +644,7 @@ class PsycopgAsyncDriver(
                     output_data.extend([row async for row in copy])
 
                 return SQLResult(
-                    statement=SQL(sql),
+                    statement=SQL(sql, _dialect=self.dialect),
                     data=cast("list[RowT]", output_data),
                     column_names=["copy_data"],
                     rows_affected=len(output_data),
@@ -668,7 +668,7 @@ class PsycopgAsyncDriver(
 
             # For COPY operations, cursor.rowcount contains the number of rows affected
             return SQLResult(
-                statement=SQL(sql),
+                statement=SQL(sql, _dialect=self.dialect),
                 data=[],
                 rows_affected=cursor.rowcount or -1,
                 operation_type="EXECUTE",
@@ -689,7 +689,7 @@ class PsycopgAsyncDriver(
             async with txn_conn.cursor() as cursor:
                 await cursor.executemany(cast("Query", sql), final_param_list)
                 return SQLResult(
-                    statement=SQL(sql),
+                    statement=SQL(sql, _dialect=self.dialect),
                     data=[],
                     rows_affected=cursor.rowcount,
                     operation_type="EXECUTE",
@@ -705,7 +705,7 @@ class PsycopgAsyncDriver(
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn, txn_conn.cursor() as cursor:
             await cursor.execute(cast("Query", script))
             return SQLResult(
-                statement=SQL(script, dialect=self.dialect),
+                statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
                 rows_affected=0,
                 operation_type="SCRIPT",

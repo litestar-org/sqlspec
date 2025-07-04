@@ -193,7 +193,7 @@ class AsyncpgDriver(
                 rows_affected = len(params_list)
 
             return SQLResult(
-                statement=SQL(sql),
+                statement=SQL(sql, _dialect=self.dialect),
                 data=[],
                 rows_affected=rows_affected,
                 operation_type="EXECUTE",
@@ -209,7 +209,7 @@ class AsyncpgDriver(
             status = await txn_conn.execute(script)
 
             return SQLResult(
-                statement=SQL(script),
+                statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
                 rows_affected=0,
                 operation_type="SCRIPT",

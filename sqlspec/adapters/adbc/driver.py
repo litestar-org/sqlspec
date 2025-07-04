@@ -274,7 +274,7 @@ class AdbcDriver(
                     raise e from e
 
                 return SQLResult(
-                    statement=SQL(sql),
+                    statement=SQL(sql, _dialect=self.dialect),
                     data=[],
                     rows_affected=cursor.rowcount,
                     operation_type="EXECUTE",
@@ -299,7 +299,7 @@ class AdbcDriver(
                         executed_count += 1
 
             return SQLResult(
-                statement=SQL(script, dialect=self.dialect),
+                statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
                 rows_affected=0,
                 operation_type="SCRIPT",
@@ -375,7 +375,11 @@ class AdbcDriver(
         conn = self._connection(None)
         with self._get_cursor(conn) as cursor:
             if mode == "replace":
-                cursor.execute(SQL(f"TRUNCATE TABLE {table_name}").to_sql(placeholder_style=ParameterStyle.STATIC))
+                cursor.execute(
+                    SQL(f"TRUNCATE TABLE {table_name}", _dialect=self.dialect).to_sql(
+                        placeholder_style=ParameterStyle.STATIC
+                    )
+                )
             elif mode == "create":
                 msg = "'create' mode is not supported for ADBC ingestion"
                 raise NotImplementedError(msg)

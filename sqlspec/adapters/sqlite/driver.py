@@ -214,7 +214,7 @@ class SqliteDriver(
                 cursor.executemany(sql, formatted_params)
 
                 if statement is None:
-                    statement = SQL(sql)
+                    statement = SQL(sql, _dialect=self.dialect)
 
                 return SQLResult(
                     statement=statement,
@@ -236,7 +236,7 @@ class SqliteDriver(
         conn.commit()
 
         if statement is None:
-            statement = SQL(script)
+            statement = SQL(script, _dialect=self.dialect).as_script()
 
         return SQLResult(
             statement=statement,

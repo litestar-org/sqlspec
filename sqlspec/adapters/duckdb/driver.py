@@ -163,7 +163,7 @@ class DuckDBDriver(
             # DuckDB throws an error if executemany is called with empty parameter list
             if not final_param_list:
                 return SQLResult(
-                    statement=SQL(sql),
+                    statement=SQL(sql, _dialect=self.dialect),
                     data=[],
                     rows_affected=0,
                     operation_type="EXECUTE",
@@ -177,7 +177,7 @@ class DuckDBDriver(
                 # so use parameter list length as the most accurate estimate
                 rows_affected = cursor.rowcount if cursor.rowcount >= 0 else len(final_param_list)
                 return SQLResult(
-                    statement=SQL(sql),
+                    statement=SQL(sql, _dialect=self.dialect),
                     data=[],
                     rows_affected=rows_affected,
                     operation_type="EXECUTE",
@@ -195,7 +195,7 @@ class DuckDBDriver(
                 cursor.execute(script)
 
             return SQLResult(
-                statement=SQL(script),
+                statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
                 rows_affected=0,
                 operation_type="SCRIPT",
@@ -348,7 +348,11 @@ class DuckDBDriver(
         rows = [{col: arrow_dict[col][i] for col in column_names} for i in range(num_rows)]
 
         return SQLResult[dict[str, Any]](
-            statement=SQL(query), data=rows, column_names=column_names, rows_affected=num_rows, operation_type="SELECT"
+            statement=SQL(query, _dialect=self.dialect),
+            data=rows,
+            column_names=column_names,
+            rows_affected=num_rows,
+            operation_type="SELECT",
         )
 
     def _write_parquet_native(
@@ -408,7 +412,7 @@ class DuckDBDriver(
                 msg = f"Unsupported mode: {mode}"
                 raise ValueError(msg)
 
-            result = self.execute(SQL(sql_expr.sql(dialect=self.dialect)))
+            result = self.execute(SQL(sql_expr.sql(dialect=self.dialect), _dialect=self.dialect))
             return result.rows_affected or table.num_rows
         finally:
             with contextlib.suppress(Exception):

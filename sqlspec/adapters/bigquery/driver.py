@@ -375,9 +375,7 @@ class BigQueryDriver(
             return self._execute_many(sql, params, connection=connection, **kwargs)
 
         sql, params = self._compile_bigquery_compatible(statement, target_style)
-        logger.debug("compile() returned - sql: %r, params: %r", sql, params)
         params = self._process_parameters(params)
-        logger.debug("after _process_parameters - params: %r", params)
         return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
@@ -456,7 +454,7 @@ class BigQueryDriver(
             total_rowcount = query_job.num_dml_affected_rows or 0
 
             return SQLResult(
-                statement=SQL(sql),
+                statement=SQL(sql, _dialect=self.dialect),
                 data=[],
                 rows_affected=total_rowcount,
                 operation_type="EXECUTE",
@@ -479,7 +477,7 @@ class BigQueryDriver(
                     query_job.result(timeout=kwargs.get("bq_job_timeout"))
 
             return SQLResult(
-                statement=SQL(script),
+                statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
                 rows_affected=0,
                 operation_type="SCRIPT",
@@ -624,18 +622,22 @@ class BigQueryDriver(
         Returns:
             ArrowResult with native Arrow table
         """
-
+        # Execute the query directly with BigQuery to get the QueryJob
         params = sql.get_parameters(style=self.default_parameter_style)
-        param_dict: dict[str, Any] = {}
-        if params:
+        params_dict: dict[str, Any] = {}
+        if params is not None:
             if isinstance(params, dict):
-                param_dict = params
+                params_dict = params
             elif isinstance(params, (list, tuple)):
-                param_dict = {f"param_{i}": val for i, val in enumerate(params)}
-            else:
-                param_dict = {"param_0": params}
+                for i, value in enumerate(params):
+                    # Skip None values
+                    if value is not None:
+                        params_dict[f"param_{i}"] = value
+            # Single parameter that's not None
+            elif params is not None:
+                params_dict["param_0"] = params
 
-        bq_params = self._prepare_bq_query_parameters(param_dict) if param_dict else []
+        bq_params = self._prepare_bq_query_parameters(params_dict) if params_dict else []
         query_job = self._run_query_job(
             sql.to_sql(placeholder_style=self.default_parameter_style), bq_params, connection=connection
         )

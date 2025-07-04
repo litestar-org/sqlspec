@@ -62,7 +62,7 @@ class AsyncmyDriver(
         self, connection: "Optional[AsyncmyConnection]" = None
     ) -> "AsyncGenerator[Union[Cursor, DictCursor], None]":
         conn = self._connection(connection)
-        cursor = await conn.cursor()
+        cursor = conn.cursor()
         try:
             yield cursor
         finally:
@@ -172,7 +172,7 @@ class AsyncmyDriver(
             async with self._get_cursor(txn_conn) as cursor:
                 await cursor.executemany(sql, params_list)
                 return SQLResult(
-                    statement=SQL(sql),
+                    statement=SQL(sql, _dialect=self.dialect),
                     data=[],
                     rows_affected=cursor.rowcount if cursor.rowcount != -1 else len(params_list),
                     operation_type="EXECUTE",
@@ -197,7 +197,7 @@ class AsyncmyDriver(
                         statements_executed += 1
 
             return SQLResult(
-                statement=SQL(script),
+                statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
                 rows_affected=0,
                 operation_type="SCRIPT",

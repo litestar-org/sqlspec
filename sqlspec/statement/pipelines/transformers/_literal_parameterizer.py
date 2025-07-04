@@ -122,6 +122,14 @@ class ParameterizeLiterals(ProcessorProtocol):
         if expression is None or context.current_expression is None:
             return expression
 
+        # For named parameters (like BigQuery @param), don't reorder to avoid breaking name mapping
+        if (
+            context.config.input_sql_had_placeholders
+            and context.parameter_info
+            and any(p.name for p in context.parameter_info)
+        ):
+            return expression
+
         self.extracted_parameters = []
         self._parameter_metadata = []
 
@@ -446,16 +454,25 @@ class ParameterizeLiterals(ProcessorProtocol):
             self._add_to_final_params(None, node)
             return
 
-        placeholder_name = node.this if hasattr(node, "this") else None
+        raw_placeholder_name = node.this if hasattr(node, "this") else None
+        if not raw_placeholder_name:
+            # Unnamed placeholder '?' with dict params is ambiguous
+            self._add_to_final_params(None, node)
+            return
 
-        if placeholder_name and placeholder_name in self._original_params:
+        # FIX: Normalize the placeholder name by stripping leading sigils
+        placeholder_name = raw_placeholder_name.lstrip(":@")
+
+        # Debug logging
+
+        if placeholder_name in self._original_params:
             # Direct match for placeholder name
             self._add_to_final_params(self._original_params[placeholder_name], node)
-        elif placeholder_name and placeholder_name.isdigit() and self._user_param_index == 0:
+        elif placeholder_name.isdigit() and self._user_param_index == 0:
             # Oracle-style numeric parameters
             self._handle_oracle_numeric_params()
             self._user_param_index += 1
-        elif placeholder_name and placeholder_name.isdigit() and self._user_param_index > 0:
+        elif placeholder_name.isdigit() and self._user_param_index > 0:
             # Already handled Oracle params
             pass
         elif self._user_param_index == 0 and len(self._original_params) > 0:
@@ -524,8 +541,16 @@ class ParameterizeLiterals(ProcessorProtocol):
             self._final_params[param_name] = value
 
     def _process_existing_parameter(self, node: exp.Parameter, context: ParameterizationContext) -> exp.Expression:
-        """Process PostgreSQL-style parameters ($1, $2) when reordering parameters."""
-        # PostgreSQL parameters use 1-based indexing
+        """Process existing parameters (both numeric and named) when reordering parameters."""
+        # First try to get parameter name for named parameters (like BigQuery @param_name)
+        param_name = self._extract_parameter_name(node)
+
+        if param_name and isinstance(self._original_params, dict) and param_name in self._original_params:
+            value = self._original_params[param_name]
+            self._add_param_value_to_finals(value)
+            return node
+
+        # Fall back to numeric parameter handling for PostgreSQL-style parameters ($1, $2)
         param_index = self._extract_parameter_index(node)
 
         if self._original_params is None:
@@ -542,6 +567,18 @@ class ParameterizeLiterals(ProcessorProtocol):
 
         # Return the parameter unchanged
         return node
+
+    @staticmethod
+    def _extract_parameter_name(node: exp.Parameter) -> Optional[str]:
+        """Extract parameter name from a Parameter node for named parameters."""
+        if hasattr(node, "this"):
+            if isinstance(node.this, exp.Var):
+                # Named parameter like @min_value -> min_value
+                return str(node.this.this)
+            if hasattr(node.this, "this"):
+                # Handle other node types that might contain the name
+                return str(node.this.this)
+        return None
 
     @staticmethod
     def _extract_parameter_index(node: exp.Parameter) -> Optional[int]:

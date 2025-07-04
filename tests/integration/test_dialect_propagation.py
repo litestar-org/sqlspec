@@ -116,7 +116,7 @@ def test_psycopg_dialect_in_execute_script(postgres_service: PostgresService) ->
     # Create a real connection
     with config.provide_connection() as connection:
         # Create driver
-        driver = PsycopgSyncDriver(connection=connection, config=SQLConfig())
+        driver = PsycopgSyncDriver(connection=connection)
 
         # Execute script and verify dialect
         script = "CREATE TEMP TABLE testdialect (id INT); INSERT INTO testdialect VALUES (1);"

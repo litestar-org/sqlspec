@@ -184,7 +184,7 @@ class PsqlpyDriver(
             # execute_many doesn't return a value with rows_affected
             affected_count = -1
             return SQLResult(
-                statement=SQL(sql),
+                statement=SQL(sql, _dialect=self.dialect),
                 data=[],
                 rows_affected=affected_count,
                 operation_type="EXECUTE",
@@ -201,7 +201,7 @@ class PsqlpyDriver(
             # psqlpy can execute multi-statement scripts directly
             await txn_conn.execute(script)
             return SQLResult(
-                statement=SQL(script),
+                statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
                 rows_affected=0,
                 operation_type="SCRIPT",
