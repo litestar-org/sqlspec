@@ -4,7 +4,7 @@ from sqlglot import exp
 from typing_extensions import Self
 
 if TYPE_CHECKING:
-    from sqlspec.statement.builder.protocols import BuilderProtocol
+    from sqlspec.protocols import SQLBuilderProtocol
 
 from sqlspec.exceptions import SQLBuilderError
 
@@ -26,7 +26,7 @@ class LimitOffsetClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        builder = cast("BuilderProtocol", self)
+        builder = cast("SQLBuilderProtocol", self)
         if not isinstance(builder._expression, exp.Select):
             msg = "LIMIT is only supported for SELECT statements."
             raise SQLBuilderError(msg)
@@ -45,7 +45,7 @@ class LimitOffsetClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        builder = cast("BuilderProtocol", self)
+        builder = cast("SQLBuilderProtocol", self)
         if not isinstance(builder._expression, exp.Select):
             msg = "OFFSET is only supported for SELECT statements."
             raise SQLBuilderError(msg)

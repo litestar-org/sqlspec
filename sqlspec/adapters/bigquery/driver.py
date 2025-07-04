@@ -21,6 +21,7 @@ from google.cloud.bigquery import (
 from google.cloud.bigquery.table import Row as BigQueryRow
 
 from sqlspec.driver import SyncDriverAdapterProtocol
+from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
     SyncPipelinedExecutionMixin,
@@ -28,11 +29,12 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
+from sqlspec.driver.parameters import normalize_parameter_sequence
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
+from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT, RowT
+from sqlspec.typing import DictRow, RowT
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
@@ -140,6 +142,10 @@ class BigQueryDriver(
         Raises:
             SQLSpecError: If value type is not supported.
         """
+        if value is None:
+            # BigQuery handles NULL values without explicit type
+            return ("STRING", None)  # Use STRING type for NULL values
+
         value_type = type(value)
         if value_type is datetime.datetime:
             return ("TIMESTAMP" if value.tzinfo else "DATETIME", None)
@@ -158,7 +164,6 @@ class BigQueryDriver(
         if value_type in type_map:
             return type_map[value_type]
 
-        # Handle lists/tuples for ARRAY type
         if isinstance(value, (list, tuple)):
             if not value:
                 msg = "Cannot determine BigQuery ARRAY type for empty sequence. Provide typed empty array or ensure context implies type."
@@ -192,8 +197,7 @@ class BigQueryDriver(
             for name, value in params_dict.items():
                 param_name_for_bq = name.lstrip("@")
 
-                # Extract value from TypedParameter if needed
-                actual_value = value.value if hasattr(value, "value") else value
+                actual_value = getattr(value, "value", value)
 
                 param_type, array_element_type = self._get_bq_param_type(actual_value)
 
@@ -238,18 +242,14 @@ class BigQueryDriver(
         """
         conn = connection or self.connection
 
-        # Build final job configuration
         final_job_config = QueryJobConfig()
 
-        # Apply default configuration if available
         if self._default_query_job_config:
             self._copy_job_config_attrs(self._default_query_job_config, final_job_config)
 
-        # Apply override configuration if provided
         if job_config:
             self._copy_job_config_attrs(job_config, final_job_config)
 
-        # Set query parameters
         final_job_config.query_parameters = bq_query_parameters or []
 
         # Debug log the actual parameters being sent
@@ -266,14 +266,11 @@ class BigQueryDriver(
                 )
         query_job = conn.query(sql_str, job_config=final_job_config)
 
-        # Get the auto-generated job ID for callbacks
         if self.on_job_start and query_job.job_id:
             with contextlib.suppress(Exception):
-                # Callback errors should not interfere with job execution
                 self.on_job_start(query_job.job_id)
         if self.on_job_complete and query_job.job_id:
             with contextlib.suppress(Exception):
-                # Callback errors should not interfere with job execution
                 self.on_job_complete(query_job.job_id, query_job)
 
         return query_job
@@ -290,15 +287,21 @@ class BigQueryDriver(
         """
         return [dict(row) for row in rows_iterator]  # type: ignore[misc]
 
-    def _handle_select_job(self, query_job: QueryJob) -> SelectResultDict:
+    def _handle_select_job(self, query_job: QueryJob, statement: SQL) -> SQLResult[RowT]:
         """Handle a query job that is expected to return rows."""
         job_result = query_job.result()
         rows_list = self._rows_to_results(iter(job_result))
         column_names = [field.name for field in query_job.schema] if query_job.schema else []
 
-        return {"data": rows_list, "column_names": column_names, "rows_affected": len(rows_list)}
+        return SQLResult(
+            statement=statement,
+            data=rows_list,
+            column_names=column_names,
+            rows_affected=len(rows_list),
+            operation_type="SELECT",
+        )
 
-    def _handle_dml_job(self, query_job: QueryJob) -> DMLResultDict:
+    def _handle_dml_job(self, query_job: QueryJob, statement: SQL) -> SQLResult[RowT]:
         """Handle a DML job.
 
         Note: BigQuery emulators (e.g., goccy/bigquery-emulator) may report 0 rows affected
@@ -324,7 +327,14 @@ class BigQueryDriver(
             )
             num_affected = 1  # Assume at least one row was affected
 
-        return {"rows_affected": num_affected or 0, "status_message": f"OK - job_id: {query_job.job_id}"}
+        operation_type = self._determine_operation_type(statement)
+        return SQLResult(
+            statement=statement,
+            data=cast("list[RowT]", []),
+            rows_affected=num_affected or 0,
+            operation_type=operation_type,
+            metadata={"status_message": f"OK - job_id: {query_job.job_id}"},
+        )
 
     def _compile_bigquery_compatible(self, statement: SQL, target_style: ParameterStyle) -> tuple[str, Any]:
         """Compile SQL statement for BigQuery.
@@ -336,12 +346,18 @@ class BigQueryDriver(
 
     def _execute_statement(
         self, statement: SQL, connection: Optional[BigQueryConnection] = None, **kwargs: Any
-    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
+    ) -> SQLResult[RowT]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
-        detected_styles = {p.style for p in statement.parameter_info}
+        detected_styles = set()
+        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
+        validator = self.config.parameter_validator if self.config else ParameterValidator()
+        param_infos = validator.extract_parameters(sql_str)
+        if param_infos:
+            detected_styles = {p.style for p in param_infos}
+
         target_style = self.default_parameter_style
 
         unsupported_styles = detected_styles - set(self.supported_parameter_styles)
@@ -359,167 +375,116 @@ class BigQueryDriver(
             return self._execute_many(sql, params, connection=connection, **kwargs)
 
         sql, params = self._compile_bigquery_compatible(statement, target_style)
-        logger.debug("compile() returned - sql: %r, params: %r", sql, params)
         params = self._process_parameters(params)
-        logger.debug("after _process_parameters - params: %r", params)
         return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[BigQueryConnection] = None, **kwargs: Any
-    ) -> Union[SelectResultDict, DMLResultDict]:
-        # SQL should already be in correct format from compile()
-        converted_sql = sql
-        # Parameters are already in the correct format from compile()
-        converted_params = parameters
+    ) -> SQLResult[RowT]:
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
 
-        # Prepare BigQuery parameters
-        # Convert various parameter formats to dict format for BigQuery
-        param_dict: dict[str, Any]
-        if converted_params is None:
-            param_dict = {}
-        elif isinstance(converted_params, dict):
-            # Filter out non-parameter keys (dialect, config, etc.)
-            # Real parameters start with 'param_' or are user-provided named parameters
-            param_dict = {
-                k: v
-                for k, v in converted_params.items()
-                if k.startswith("param_") or (not k.startswith("_") and k not in {"dialect", "config"})
-            }
-        elif isinstance(converted_params, (list, tuple)):
-            # Convert positional parameters to named parameters for BigQuery
-            # Use param_N to match the compiled SQL placeholders
-            param_dict = {f"param_{i}": val for i, val in enumerate(converted_params)}
-        else:
-            # Single scalar parameter
-            param_dict = {"param_0": converted_params}
+        # BigQuery doesn't have traditional transactions, but we'll use the pattern for consistency
+        # The managed_transaction_sync will just pass through for BigQuery Client objects
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
+            # Normalize parameters using consolidated utility
+            normalized_params = normalize_parameter_sequence(parameters)
+            param_dict: dict[str, Any] = {}
+            if normalized_params:
+                if isinstance(normalized_params[0], dict):
+                    param_dict = normalized_params[0]
+                else:
+                    param_dict = {f"param_{i}": val for i, val in enumerate(normalized_params)}
 
-        bq_params = self._prepare_bq_query_parameters(param_dict)
+            bq_params = self._prepare_bq_query_parameters(param_dict)
 
-        query_job = self._run_query_job(converted_sql, bq_params, connection=connection)
+            query_job = self._run_query_job(sql, bq_params, connection=txn_conn)
 
-        if query_job.statement_type == "SELECT" or (
-            hasattr(query_job, "schema") and query_job.schema and len(query_job.schema) > 0
-        ):
-            return self._handle_select_job(query_job)
-        return self._handle_dml_job(query_job)
+            query_schema = getattr(query_job, "schema", None)
+            if query_job.statement_type == "SELECT" or (query_schema is not None and len(query_schema) > 0):
+                return self._handle_select_job(query_job, statement)
+            return self._handle_dml_job(query_job, statement)
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[BigQueryConnection] = None, **kwargs: Any
-    ) -> DMLResultDict:
-        # Use a multi-statement script for batch execution
-        script_parts = []
-        all_params: dict[str, Any] = {}
-        param_counter = 0
+    ) -> SQLResult[RowT]:
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
 
-        for params in param_list or []:
-            # Convert various parameter formats to dict format for BigQuery
-            if isinstance(params, dict):
-                param_dict = params
-            elif isinstance(params, (list, tuple)):
-                # Convert positional parameters to named parameters matching SQL placeholders
-                param_dict = {f"param_{i}": val for i, val in enumerate(params)}
-            else:
-                # Single scalar parameter
-                param_dict = {"param_0": params}
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
+            # Normalize parameter list using consolidated utility
+            normalized_param_list = normalize_parameter_sequence(param_list)
 
-            # Remap parameters to be unique across the entire script
-            param_mapping = {}
-            current_sql = sql
-            for key, value in param_dict.items():
-                new_key = f"p_{param_counter}"
-                param_counter += 1
-                param_mapping[key] = new_key
-                all_params[new_key] = value
+            # Use a multi-statement script for batch execution
+            script_parts = []
+            all_params: dict[str, Any] = {}
+            param_counter = 0
 
-            # Replace placeholders in the SQL for this statement
-            for old_key, new_key in param_mapping.items():
-                current_sql = current_sql.replace(f"@{old_key}", f"@{new_key}")
+            for params in normalized_param_list or []:
+                if isinstance(params, dict):
+                    param_dict = params
+                elif isinstance(params, (list, tuple)):
+                    param_dict = {f"param_{i}": val for i, val in enumerate(params)}
+                else:
+                    param_dict = {"param_0": params}
 
-            script_parts.append(current_sql)
+                # Remap parameters to be unique across the entire script
+                param_mapping = {}
+                current_sql = sql
+                for key, value in param_dict.items():
+                    new_key = f"p_{param_counter}"
+                    param_counter += 1
+                    param_mapping[key] = new_key
+                    all_params[new_key] = value
 
-        # Execute as a single script
-        full_script = ";\n".join(script_parts)
-        bq_params = self._prepare_bq_query_parameters(all_params)
-        # Filter out kwargs that _run_query_job doesn't expect
-        query_kwargs = {k: v for k, v in kwargs.items() if k not in {"parameters", "is_many"}}
-        query_job = self._run_query_job(full_script, bq_params, connection=connection, **query_kwargs)
+                for old_key, new_key in param_mapping.items():
+                    current_sql = current_sql.replace(f"@{old_key}", f"@{new_key}")
 
-        # Wait for the job to complete
-        query_job.result(timeout=kwargs.get("bq_job_timeout"))
-        total_rowcount = query_job.num_dml_affected_rows or 0
+                script_parts.append(current_sql)
 
-        return {"rows_affected": total_rowcount, "status_message": f"OK - executed batch job {query_job.job_id}"}
+            # Execute as a single script
+            full_script = ";\n".join(script_parts)
+            bq_params = self._prepare_bq_query_parameters(all_params)
+            # Filter out kwargs that _run_query_job doesn't expect
+            query_kwargs = {k: v for k, v in kwargs.items() if k not in {"parameters", "is_many"}}
+            query_job = self._run_query_job(full_script, bq_params, connection=txn_conn, **query_kwargs)
+
+            # Wait for the job to complete
+            query_job.result(timeout=kwargs.get("bq_job_timeout"))
+            total_rowcount = query_job.num_dml_affected_rows or 0
+
+            return SQLResult(
+                statement=SQL(sql, _dialect=self.dialect),
+                data=[],
+                rows_affected=total_rowcount,
+                operation_type="EXECUTE",
+                metadata={"status_message": f"OK - executed batch job {query_job.job_id}"},
+            )
 
     def _execute_script(
         self, script: str, connection: Optional[BigQueryConnection] = None, **kwargs: Any
-    ) -> ScriptResultDict:
-        # BigQuery does not support multi-statement scripts in a single job
-        # Use the shared implementation to split and execute statements individually
-        statements = self._split_script_statements(script)
+    ) -> SQLResult[RowT]:
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
 
-        for statement in statements:
-            if statement:
-                query_job = self._run_query_job(statement, [], connection=connection)
-                query_job.result(timeout=kwargs.get("bq_job_timeout"))
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
+            # BigQuery does not support multi-statement scripts in a single job
+            statements = self._split_script_statements(script)
 
-        return {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
+            for statement in statements:
+                if statement:
+                    query_job = self._run_query_job(statement, [], connection=txn_conn)
+                    query_job.result(timeout=kwargs.get("bq_job_timeout"))
 
-    def _wrap_select_result(
-        self, statement: SQL, result: SelectResultDict, schema_type: "Optional[type[ModelDTOT]]" = None, **kwargs: Any
-    ) -> "Union[SQLResult[RowT], SQLResult[ModelDTOT]]":
-        if schema_type:
-            return cast(
-                "SQLResult[ModelDTOT]",
-                SQLResult(
-                    statement=statement,
-                    data=cast("list[ModelDTOT]", list(self.to_schema(data=result["data"], schema_type=schema_type))),
-                    column_names=result["column_names"],
-                    rows_affected=result["rows_affected"],
-                    operation_type="SELECT",
-                ),
-            )
-
-        return cast(
-            "SQLResult[RowT]",
-            SQLResult(
-                statement=statement,
-                data=result["data"],
-                column_names=result["column_names"],
-                operation_type="SELECT",
-                rows_affected=result["rows_affected"],
-            ),
-        )
-
-    def _wrap_execute_result(
-        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
-    ) -> "SQLResult[RowT]":
-        operation_type = "UNKNOWN"
-        if statement.expression:
-            operation_type = str(statement.expression.key).upper()
-        if "statements_executed" in result:
-            return SQLResult[RowT](
-                statement=statement,
+            return SQLResult(
+                statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
                 rows_affected=0,
                 operation_type="SCRIPT",
-                metadata={
-                    "status_message": result.get("status_message", ""),
-                    "statements_executed": result.get("statements_executed", -1),
-                },
+                metadata={"status_message": "SCRIPT EXECUTED"},
+                total_statements=len(statements),
+                successful_statements=len(statements),
             )
-        if "rows_affected" in result:
-            dml_result = cast("DMLResultDict", result)
-            rows_affected = dml_result["rows_affected"]
-            status_message = dml_result.get("status_message", "")
-            return SQLResult[RowT](
-                statement=statement,
-                data=[],
-                rows_affected=rows_affected,
-                operation_type=operation_type,
-                metadata={"status_message": status_message},
-            )
-        msg = f"Unexpected result type: {type(result)}"
-        raise ValueError(msg)
 
     def _connection(self, connection: "Optional[Client]" = None) -> "Client":
         """Get the connection to use for the operation."""
@@ -553,7 +518,6 @@ class BigQueryDriver(
         if destination_str.startswith("gs://"):
             return self._export_to_gcs_native(query, destination_str, format, **options)
 
-        # For non-GCS destinations, check if staging is configured
         staging_bucket = options.get("gcs_staging_bucket") or getattr(self.config, "gcs_staging_bucket", None)
         if not staging_bucket:
             # Fall back to fetch + write for non-GCS destinations without staging
@@ -605,12 +569,10 @@ class BigQueryDriver(
         temp_table_id = f"temp_export_{uuid.uuid4().hex[:8]}"
         dataset_id = getattr(self.connection, "default_dataset", None) or options.get("dataset", "temp")
 
-        # Create a temporary table with query results
         query_with_table = f"CREATE OR REPLACE TABLE `{dataset_id}.{temp_table_id}` AS {query}"
         create_job = self._run_query_job(query_with_table, [])
         create_job.result()
 
-        # Get row count
         count_query = f"SELECT COUNT(*) as cnt FROM `{dataset_id}.{temp_table_id}`"
         count_job = self._run_query_job(count_query, [])
         count_result = list(count_job.result())
@@ -620,7 +582,6 @@ class BigQueryDriver(
             # Configure extract job
             extract_config = ExtractJobConfig(**options)  # type: ignore[no-untyped-call]
 
-            # Set format
             format_mapping = {
                 "parquet": SourceFormat.PARQUET,
                 "csv": SourceFormat.CSV,
@@ -629,7 +590,6 @@ class BigQueryDriver(
             }
             extract_config.destination_format = format_mapping.get(format, SourceFormat.PARQUET)
 
-            # Extract table to GCS
             table_ref = self.connection.dataset(dataset_id).table(temp_table_id)
             extract_job = self.connection.extract_table(table_ref, gcs_uri, job_config=extract_config)
             extract_job.result()
@@ -662,7 +622,6 @@ class BigQueryDriver(
         Returns:
             ArrowResult with native Arrow table
         """
-
         # Execute the query directly with BigQuery to get the QueryJob
         params = sql.get_parameters(style=self.default_parameter_style)
         params_dict: dict[str, Any] = {}
@@ -742,7 +701,6 @@ class BigQueryDriver(
             raise ValueError(msg)
 
         # Use BigQuery's native Arrow loading
-        # Convert Arrow table to bytes for direct loading
 
         import pyarrow.parquet as pq
 

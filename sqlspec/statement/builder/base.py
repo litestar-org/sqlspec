@@ -7,7 +7,7 @@ advanced builder patterns and optimization capabilities.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Generic, NoReturn, Optional, Union
+from typing import TYPE_CHECKING, Any, Generic, NoReturn, Optional, Union, cast
 
 import sqlglot
 from sqlglot import Dialect, exp
@@ -20,6 +20,7 @@ from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import RowT
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.type_guards import has_sql_method, has_with_method
 
 if TYPE_CHECKING:
     from sqlspec.statement.result import SQLResult
@@ -124,6 +125,32 @@ class QueryBuilder(ABC, Generic[RowT]):
         self._parameters[param_name] = value
         return param_name
 
+    def _parameterize_expression(self, expression: exp.Expression) -> exp.Expression:
+        """Replace literal values in an expression with bound parameters.
+
+        This method traverses a SQLGlot expression tree and replaces literal
+        values with parameter placeholders, adding the values to the builder's
+        parameter collection.
+
+        Args:
+            expression: The SQLGlot expression to parameterize
+
+        Returns:
+            A new expression with literals replaced by parameter placeholders
+        """
+
+        def replacer(node: exp.Expression) -> exp.Expression:
+            if isinstance(node, exp.Literal):
+                # Skip boolean literals (TRUE/FALSE) and NULL
+                if node.this in (True, False, None):
+                    return node
+                # Convert other literals to parameters
+                param_name = self._add_parameter(node.this, context="where")
+                return exp.Placeholder(this=param_name)
+            return node
+
+        return expression.transform(replacer, copy=True)
+
     def add_parameter(self: Self, value: Any, name: Optional[str] = None) -> tuple[Self, str]:
         """Explicitly adds a parameter to the query.
 
@@ -191,7 +218,7 @@ class QueryBuilder(ABC, Generic[RowT]):
                 msg = f"CTE query builder expression must be a Select, got {type(query._expression).__name__}."
                 self._raise_sql_builder_error(msg)
             cte_select_expression = query._expression.copy()
-            for p_name, p_value in query._parameters.items():
+            for p_name, p_value in query.parameters.items():
                 # Try to preserve original parameter name, only rename if collision
                 unique_name = self._generate_unique_parameter_name(p_name)
                 self.add_parameter(p_value, unique_name)
@@ -231,23 +258,21 @@ class QueryBuilder(ABC, Generic[RowT]):
         final_expression = self._expression.copy()
 
         if self._with_ctes:
-            if hasattr(final_expression, "with_") and callable(getattr(final_expression, "with_", None)):
+            if has_with_method(final_expression):
+                # Type checker now knows final_expression has with_ method
                 for alias, cte_node in self._with_ctes.items():
-                    final_expression = final_expression.with_(  # pyright: ignore
-                        cte_node.args["this"], as_=alias, copy=False
-                    )
-            elif (
-                isinstance(final_expression, (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union))
-                and self._with_ctes
-            ):
+                    final_expression = cast("Any", final_expression).with_(cte_node.args["this"], as_=alias, copy=False)
+            elif isinstance(final_expression, (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union)):
                 final_expression = exp.With(expressions=list(self._with_ctes.values()), this=final_expression)
 
-        # Apply SQLGlot optimizations if enabled
-        if self.enable_optimization:
+        if self.enable_optimization and isinstance(final_expression, exp.Expression):
             final_expression = self._optimize_expression(final_expression)
 
         try:
-            sql_string = final_expression.sql(dialect=self.dialect_name, pretty=True)
+            if has_sql_method(final_expression):
+                sql_string = final_expression.sql(dialect=self.dialect_name, pretty=True)  # pyright: ignore[reportAttributeAccessIssue]
+            else:
+                sql_string = str(final_expression)
         except Exception as e:
             err_msg = f"Error generating SQL from expression: {e!s}"
             logger.exception("SQL generation failed")
@@ -294,13 +319,30 @@ class QueryBuilder(ABC, Generic[RowT]):
         """
         safe_query = self.build()
 
-        return SQL(
-            statement=safe_query.sql,
-            parameters=safe_query.parameters,
-            _dialect=safe_query.dialect,
-            _config=config,
-            _builder_result_type=self._expected_result_type,
-        )
+        if isinstance(safe_query.parameters, dict):
+            kwargs = safe_query.parameters
+            parameters = None
+        else:
+            kwargs = None
+            parameters = (
+                safe_query.parameters
+                if isinstance(safe_query.parameters, tuple)
+                else tuple(safe_query.parameters)
+                if safe_query.parameters
+                else None
+            )
+
+        if config is None:
+            from sqlspec.statement.sql import SQLConfig
+
+            config = SQLConfig(dialect=safe_query.dialect)
+
+        # SQL expects parameters as variadic args, not as a keyword
+        if kwargs:
+            return SQL(safe_query.sql, config=config, **kwargs)
+        if parameters:
+            return SQL(safe_query.sql, *parameters, config=config)
+        return SQL(safe_query.sql, config=config)
 
     def __str__(self) -> str:
         """Return the SQL string representation of the query.
@@ -311,7 +353,6 @@ class QueryBuilder(ABC, Generic[RowT]):
         try:
             return self.build().sql
         except Exception:
-            # Fallback to default representation if build fails
             return super().__str__()
 
     @property
@@ -324,7 +365,11 @@ class QueryBuilder(ABC, Generic[RowT]):
                 return self.dialect.__name__.lower()
             if isinstance(self.dialect, Dialect):
                 return type(self.dialect).__name__.lower()
-            # Handle case where dialect might have a __name__ attribute
             if hasattr(self.dialect, "__name__"):
                 return self.dialect.__name__.lower()
         return None
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        """Public access to query parameters."""
+        return self._parameters

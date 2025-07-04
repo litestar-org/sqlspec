@@ -338,11 +338,9 @@ def test_convert_parameters(
     """Test parameter conversion process."""
     if should_succeed:
         result = converter.convert_parameters(sql, parameters, [args], kwargs, validate)
-        transformed_sql, param_info, _merged_params, extra_info = result
 
-        assert isinstance(transformed_sql, str)
-        assert isinstance(param_info, list)
-        assert isinstance(extra_info, dict)
+        assert isinstance(result.transformed_sql, str)
+        assert isinstance(result.parameter_info, list)
     else:
         with pytest.raises((ParameterStyleMismatchError, MissingParameterError, ExtraParameterError)):
             converter.convert_parameters(sql, parameters, [args], kwargs, validate)
@@ -356,12 +354,12 @@ def test_transform_sql_for_parsing(converter: ParameterConverter) -> None:
     transformed_sql, placeholder_map = converter._transform_sql_for_parsing(sql, param_info)
 
     # Should have unique placeholder names
-    assert ":__param_0" in transformed_sql
-    assert ":__param_1" in transformed_sql
+    assert ":param_0" in transformed_sql
+    assert ":param_1" in transformed_sql
 
     # Should have mapping
-    assert "__param_0" in placeholder_map
-    assert "__param_1" in placeholder_map
+    assert "param_0" in placeholder_map
+    assert "param_1" in placeholder_map
 
 
 def test_merge_mixed_parameters(converter: ParameterConverter) -> None:
@@ -375,8 +373,8 @@ def test_merge_mixed_parameters(converter: ParameterConverter) -> None:
 
     assert isinstance(merged, dict)
     assert merged["name"] == "John"
-    assert "_arg_0" in merged
-    assert merged["_arg_0"] == 123
+    assert "arg_0" in merged
+    assert merged["arg_0"] == 123
 
 
 @pytest.mark.parametrize(
@@ -400,8 +398,8 @@ def test_scalar_parameter_handling(converter: ParameterConverter) -> None:
     """Test handling of scalar parameters for single parameter queries."""
     sql = "SELECT * FROM users WHERE id = ?"
     result = converter.convert_parameters(sql, 123, None, None, validate=True)
-    _, _, merged_params, _ = result
-    assert merged_params == 123
+
+    assert result.merged_parameters == 123
 
 
 def test_parameter_validation_with_empty_sql(validator: ParameterValidator) -> None:
@@ -417,8 +415,8 @@ def test_parameter_conversion_error_handling(converter: ParameterConverter) -> N
     # Mock validation error
     with patch.object(converter.validator, "validate_parameters", side_effect=ValueError("Test error")):
         result = converter.convert_parameters(sql, {"id": 123}, None, None, validate=False)
-        _, _, merged_params, _ = result
-        assert merged_params == {"id": 123}
+
+        assert result.merged_parameters == {"id": 123}
 
 
 @pytest.mark.parametrize(

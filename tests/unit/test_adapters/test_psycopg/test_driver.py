@@ -19,7 +19,6 @@ import pytest
 
 from sqlspec.adapters.psycopg import PsycopgAsyncDriver, PsycopgSyncDriver
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import DMLResultDict, SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
@@ -255,7 +254,7 @@ def test_sync_execute_statement_routing(
     from sqlspec.statement.sql import SQLConfig
 
     config = SQLConfig(enable_validation=False) if is_script else SQLConfig()
-    statement = SQL(sql_text, _config=config)
+    statement = SQL(sql_text, config=config)
     statement._is_script = is_script
     statement._is_many = is_many
 
@@ -281,11 +280,9 @@ def test_sync_execute_select_statement(sync_driver: PsycopgSyncDriver, mock_sync
     statement = SQL("SELECT * FROM users")
     result = sync_driver._execute_statement(statement)
 
-    assert result == {
-        "data": mock_cursor.fetchall.return_value,
-        "column_names": ["id", "name", "email"],
-        "rows_affected": 2,
-    }
+    assert result.data == mock_cursor.fetchall.return_value
+    assert result.column_names == ["id", "name", "email"]
+    assert result.rows_affected == 2
 
     mock_cursor.execute.assert_called_once_with("SELECT * FROM users", None)
 
@@ -299,7 +296,8 @@ def test_sync_execute_dml_statement(sync_driver: PsycopgSyncDriver, mock_sync_co
     statement = SQL("INSERT INTO users (name, email) VALUES (%s, %s)", ["Alice", "alice@example.com"])
     result = sync_driver._execute_statement(statement)
 
-    assert result == {"rows_affected": 1, "status_message": "INSERT 0 1"}
+    assert result.rows_affected == 1
+    assert result.metadata["status_message"] == "INSERT 0 1"
 
     # Parameters remain as list since _process_parameters doesn't convert to tuple
     mock_cursor.execute.assert_called_once_with(
@@ -331,7 +329,7 @@ async def test_async_execute_statement_routing(
     from sqlspec.statement.sql import SQLConfig
 
     config = SQLConfig(enable_validation=False) if is_script else SQLConfig()
-    statement = SQL(sql_text, _config=config)
+    statement = SQL(sql_text, config=config)
     statement._is_script = is_script
     statement._is_many = is_many
 
@@ -363,11 +361,9 @@ async def test_async_execute_select_statement(
     statement = SQL("SELECT * FROM users")
     result = await async_driver._execute_statement(statement)
 
-    assert result == {
-        "data": mock_cursor.fetchall.return_value,
-        "column_names": ["id", "name", "email"],
-        "rows_affected": 2,
-    }
+    assert result.data == mock_cursor.fetchall.return_value
+    assert result.column_names == ["id", "name", "email"]
+    assert result.rows_affected == 2
 
     mock_cursor.execute.assert_called_once_with("SELECT * FROM users", None)
 
@@ -382,7 +378,8 @@ async def test_async_execute_dml_statement(async_driver: PsycopgAsyncDriver, moc
     statement = SQL("INSERT INTO users (name, email) VALUES (%s, %s)", ["Alice", "alice@example.com"])
     result = await async_driver._execute_statement(statement)
 
-    assert result == {"rows_affected": 1, "status_message": "INSERT 0 1"}
+    assert result.rows_affected == 1
+    assert result.metadata["status_message"] == "INSERT 0 1"
 
     # Parameters remain as list since _process_parameters doesn't convert to tuple
     mock_cursor.execute.assert_called_once_with(
@@ -410,11 +407,11 @@ def test_sync_parameter_style_handling(
     """Test sync parameter style detection and conversion."""
     # Create statement with parameters
     if detected_style == ParameterStyle.POSITIONAL_PYFORMAT:
-        statement = SQL(sql_text, 123)
+        statement = SQL(sql_text, parameters=[123])
     elif detected_style == ParameterStyle.NAMED_PYFORMAT:
         statement = SQL(sql_text, id=123)
     else:  # NUMERIC
-        statement = SQL(sql_text, 123)
+        statement = SQL(sql_text, parameters=[123])
 
     # Set up cursor
     mock_cursor = mock_sync_connection.cursor.return_value
@@ -445,7 +442,8 @@ def test_sync_execute_many(sync_driver: PsycopgSyncDriver, mock_sync_connection:
 
     result = sync_driver._execute_many(sql, params)
 
-    assert result == {"rows_affected": 3, "status_message": "INSERT 0 3"}
+    assert result.rows_affected == 3
+    assert result.metadata["status_message"] == "INSERT 0 3"
 
     # The driver passes params as-is
     mock_cursor.executemany.assert_called_once_with(sql, params)
@@ -463,7 +461,8 @@ async def test_async_execute_many(async_driver: PsycopgAsyncDriver, mock_async_c
 
     result = await async_driver._execute_many(sql, params)
 
-    assert result == {"rows_affected": 3, "status_message": "INSERT 0 3"}
+    assert result.rows_affected == 3
+    assert result.metadata["status_message"] == "INSERT 0 3"
 
     # The driver passes params as-is
     mock_cursor.executemany.assert_called_once_with(sql, params)
@@ -483,7 +482,8 @@ def test_sync_execute_script(sync_driver: PsycopgSyncDriver, mock_sync_connectio
 
     result = sync_driver._execute_script(script)
 
-    assert result == {"statements_executed": -1, "status_message": "CREATE TABLE"}
+    assert result.total_statements == 1  # Script executed as a single statement
+    assert result.metadata["status_message"] == "CREATE TABLE"
 
     mock_cursor.execute.assert_called_once_with(script)
 
@@ -502,84 +502,13 @@ async def test_async_execute_script(async_driver: PsycopgAsyncDriver, mock_async
 
     result = await async_driver._execute_script(script)
 
-    assert result == {"statements_executed": -1, "status_message": "CREATE TABLE"}
+    assert result.total_statements == 1  # Script executed as a single statement
+    assert result.metadata["status_message"] == "CREATE TABLE"
 
     mock_cursor.execute.assert_called_once_with(script)
 
 
-# Result Wrapping Tests
-def test_sync_wrap_select_result(sync_driver: PsycopgSyncDriver) -> None:
-    """Test sync wrapping SELECT results."""
-    from sqlspec.statement.result import SelectResultDict
-
-    statement = SQL("SELECT * FROM users")
-    result: SelectResultDict = {
-        "data": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
-        "column_names": ["id", "name"],
-        "rows_affected": 2,
-    }
-
-    wrapped = sync_driver._wrap_select_result(statement, result)  # pyright: ignore
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.statement is statement
-    assert len(wrapped.data) == 2
-    assert wrapped.column_names == ["id", "name"]
-    assert wrapped.rows_affected == 2
-    assert wrapped.operation_type == "SELECT"
-
-
-@pytest.mark.asyncio
-async def test_async_wrap_select_result(async_driver: PsycopgAsyncDriver) -> None:
-    """Test async wrapping SELECT results."""
-    statement = SQL("SELECT * FROM users")
-    result: SelectResultDict = {
-        "data": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
-        "column_names": ["id", "name"],
-        "rows_affected": 2,
-    }
-
-    wrapped: SQLResult[Any] = await async_driver._wrap_select_result(statement, result)  # pyright: ignore
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.statement is statement
-    assert len(wrapped.data) == 2
-    assert wrapped.column_names == ["id", "name"]
-    assert wrapped.rows_affected == 2
-    assert wrapped.operation_type == "SELECT"
-
-
-def test_sync_wrap_execute_result_dml(sync_driver: PsycopgSyncDriver) -> None:
-    """Test sync wrapping DML results."""
-    statement = SQL("INSERT INTO users VALUES (%s)")
-
-    result: DMLResultDict = {"rows_affected": 1, "status_message": "INSERT 0 1"}
-
-    wrapped = sync_driver._wrap_execute_result(statement, result)
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.data == []
-    assert wrapped.rows_affected == 1
-    # Operation type is determined by the SQL expression
-    assert wrapped.operation_type in ["INSERT", "UNKNOWN", "DML", "ANONYMOUS"]  # Depends on expression parsing
-    assert wrapped.metadata["status_message"] == "INSERT 0 1"
-
-
-@pytest.mark.asyncio
-async def test_async_wrap_execute_result_dml(async_driver: PsycopgAsyncDriver) -> None:
-    """Test async wrapping DML results."""
-    statement = SQL("INSERT INTO users VALUES (%s)")
-
-    result: DMLResultDict = {"rows_affected": 1, "status_message": "INSERT 0 1"}
-
-    wrapped = await async_driver._wrap_execute_result(statement, result)
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.data == []
-    assert wrapped.rows_affected == 1
-    # Operation type is determined by the SQL expression
-    assert wrapped.operation_type in ["INSERT", "UNKNOWN", "DML", "ANONYMOUS"]  # Depends on expression parsing
-    assert wrapped.metadata["status_message"] == "INSERT 0 1"
+# Note: Result wrapping tests removed - drivers now return SQLResult directly from execute methods
 
 
 # Parameter Processing Tests - These tests removed as _format_parameters doesn't exist
@@ -692,7 +621,7 @@ def test_sync_execute_with_no_parameters(sync_driver: PsycopgSyncDriver, mock_sy
 
     # Disable validation for DDL
     config = SQLConfig(enable_validation=False)
-    statement = SQL("CREATE TABLE test (id INTEGER)", _config=config)
+    statement = SQL("CREATE TABLE test (id INTEGER)", config=config)
     sync_driver._execute_statement(statement)
 
     # SQLGlot normalizes INTEGER to INT
@@ -709,7 +638,7 @@ async def test_async_execute_with_no_parameters(
 
     # Disable validation for DDL
     config = SQLConfig(enable_validation=False)
-    statement = SQL("CREATE TABLE test (id INTEGER)", _config=config)
+    statement = SQL("CREATE TABLE test (id INTEGER)", config=config)
     await async_driver._execute_statement(statement)
 
     # SQLGlot normalizes INTEGER to INT
@@ -729,7 +658,9 @@ def test_sync_execute_select_with_empty_result(sync_driver: PsycopgSyncDriver, m
     statement = SQL("SELECT * FROM users WHERE 1=0")
     result = sync_driver._execute_statement(statement)
 
-    assert result == {"data": [], "column_names": ["id", "name"], "rows_affected": 0}
+    assert result.data == []
+    assert result.column_names == ["id", "name"]
+    assert result.rows_affected == 0
 
 
 @pytest.mark.asyncio
@@ -748,4 +679,6 @@ async def test_async_execute_select_with_empty_result(
     statement = SQL("SELECT * FROM users WHERE 1=0")
     result = await async_driver._execute_statement(statement)
 
-    assert result == {"data": [], "column_names": ["id", "name"], "rows_affected": 0}
+    assert result.data == []
+    assert result.column_names == ["id", "name"]
+    assert result.rows_affected == 0

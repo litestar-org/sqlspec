@@ -3,7 +3,6 @@
 import logging
 import sqlite3
 from contextlib import contextmanager
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
 from sqlspec.adapters.sqlite.driver import SqliteConnection, SqliteDriver
@@ -88,7 +87,6 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
             uri: Whether to interpret database as URI
             **kwargs: Additional parameters (stored in extras)
         """
-        # Validate required parameters
         if database is None:
             msg = "database parameter cannot be None"
             raise TypeError(msg)
@@ -164,11 +162,13 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
         """
         with self.provide_connection(*args, **kwargs) as connection:
             statement_config = self.statement_config
+            # Inject parameter style info if not already set
             if statement_config.allowed_parameter_styles is None:
+                from dataclasses import replace
+
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
                     target_parameter_style=self.preferred_parameter_style,
                 )
-
             yield self.driver_type(connection=connection, config=statement_config)

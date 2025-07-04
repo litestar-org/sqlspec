@@ -8,47 +8,57 @@ parameter binding and validation.
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder.base import QueryBuilder, SafeQuery
+from sqlspec.statement.builder.column import Column, ColumnExpression, FunctionColumn
 from sqlspec.statement.builder.ddl import (
-    AlterTableBuilder,
-    CreateIndexBuilder,
-    CreateMaterializedViewBuilder,
-    CreateSchemaBuilder,
-    CreateTableAsSelectBuilder,
-    CreateViewBuilder,
+    AlterTable,
+    CommentOn,
+    CreateIndex,
+    CreateMaterializedView,
+    CreateSchema,
+    CreateTable,
+    CreateTableAsSelect,
+    CreateView,
     DDLBuilder,
-    DropIndexBuilder,
-    DropSchemaBuilder,
-    DropTableBuilder,
-    DropViewBuilder,
-    TruncateTableBuilder,
+    DropIndex,
+    DropSchema,
+    DropTable,
+    DropView,
+    RenameTable,
+    TruncateTable,
 )
-from sqlspec.statement.builder.delete import DeleteBuilder
-from sqlspec.statement.builder.insert import InsertBuilder
-from sqlspec.statement.builder.merge import MergeBuilder
+from sqlspec.statement.builder.delete import Delete
+from sqlspec.statement.builder.insert import Insert
+from sqlspec.statement.builder.merge import Merge
 from sqlspec.statement.builder.mixins import WhereClauseMixin
-from sqlspec.statement.builder.select import SelectBuilder
-from sqlspec.statement.builder.update import UpdateBuilder
+from sqlspec.statement.builder.select import Select
+from sqlspec.statement.builder.update import Update
 
 __all__ = (
-    "AlterTableBuilder",
-    "CreateIndexBuilder",
-    "CreateMaterializedViewBuilder",
-    "CreateSchemaBuilder",
-    "CreateTableAsSelectBuilder",
-    "CreateViewBuilder",
+    "AlterTable",
+    "Column",
+    "ColumnExpression",
+    "CommentOn",
+    "CreateIndex",
+    "CreateMaterializedView",
+    "CreateSchema",
+    "CreateTable",
+    "CreateTableAsSelect",
+    "CreateView",
     "DDLBuilder",
-    "DeleteBuilder",
-    "DropIndexBuilder",
-    "DropSchemaBuilder",
-    "DropTableBuilder",
-    "DropViewBuilder",
-    "InsertBuilder",
-    "MergeBuilder",
+    "Delete",
+    "DropIndex",
+    "DropSchema",
+    "DropTable",
+    "DropView",
+    "FunctionColumn",
+    "Insert",
+    "Merge",
     "QueryBuilder",
+    "RenameTable",
     "SQLBuilderError",
     "SafeQuery",
-    "SelectBuilder",
-    "TruncateTableBuilder",
-    "UpdateBuilder",
+    "Select",
+    "TruncateTable",
+    "Update",
     "WhereClauseMixin",
 )

@@ -157,7 +157,7 @@ def test_get_with_alias(registry: StorageRegistry, mock_obstore_backend: MagicMo
 
 def test_alias_not_found(registry: StorageRegistry) -> None:
     """Test error when alias is not found."""
-    with pytest.raises(ImproperConfigurationError, match="Unknown storage alias: 'unknown-alias'"):
+    with pytest.raises(ImproperConfigurationError, match="Unknown storage alias or invalid URI: 'unknown-alias'"):
         registry.get("unknown-alias")
 
 
@@ -365,13 +365,13 @@ def test_global_registry_usage() -> None:
 # Edge Cases
 def test_empty_uri(registry: StorageRegistry) -> None:
     """Test handling of empty URI."""
-    with pytest.raises(ImproperConfigurationError, match="Unknown storage alias: ''"):
+    with pytest.raises(ImproperConfigurationError, match="URI or alias cannot be empty"):
         registry.get("")
 
 
 def test_none_uri(registry: StorageRegistry) -> None:
     """Test handling of None URI."""
-    with pytest.raises(AttributeError):
+    with pytest.raises(ImproperConfigurationError, match="URI or alias cannot be empty"):
         registry.get(None)  # type: ignore
 
 

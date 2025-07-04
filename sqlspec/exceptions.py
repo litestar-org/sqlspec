@@ -19,6 +19,7 @@ __all__ = (
     "RepositoryError",
     "RiskLevel",
     "SQLBuilderError",
+    "SQLCompilationError",
     "SQLConversionError",
     "SQLFileNotFoundError",
     "SQLFileParseError",
@@ -119,6 +120,15 @@ class SQLBuilderError(SQLSpecError):
     def __init__(self, message: Optional[str] = None) -> None:
         if message is None:
             message = "Issues building SQL statement."
+        super().__init__(message)
+
+
+class SQLCompilationError(SQLSpecError):
+    """Issues Compiling SQL statements."""
+
+    def __init__(self, message: Optional[str] = None) -> None:
+        if message is None:
+            message = "Issues compiling SQL statement."
         super().__init__(message)
 
 
@@ -374,7 +384,6 @@ def wrap_exceptions(
         yield
 
     except Exception as exc:
-        # Handle suppression first
         if suppress is not None and (
             (isinstance(suppress, type) and isinstance(exc, suppress))
             or (isinstance(suppress, tuple) and isinstance(exc, suppress))
@@ -385,7 +394,6 @@ def wrap_exceptions(
         if isinstance(exc, SQLSpecError):
             raise
 
-        # Handle wrapping
         if wrap_exceptions is False:
             raise
         msg = "An error occurred during the operation."

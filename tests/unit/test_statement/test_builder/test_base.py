@@ -19,26 +19,24 @@ from sqlglot import exp
 from sqlglot.dialects.dialect import Dialect
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder import (
-    CreateIndexBuilder,
-    CreateSchemaBuilder,
-    DropIndexBuilder,
-    DropSchemaBuilder,
-    DropTableBuilder,
-    DropViewBuilder,
-    TruncateTableBuilder,
-)
 from sqlspec.statement.builder.base import QueryBuilder, SafeQuery
 from sqlspec.statement.builder.ddl import (
-    AlterTableBuilder,
-    CommentOnBuilder,
-    CreateMaterializedViewBuilder,
-    CreateTableAsSelectBuilder,
-    CreateViewBuilder,
-    RenameTableBuilder,
+    AlterTable,
+    CommentOn,
+    CreateIndex,
+    CreateMaterializedView,
+    CreateSchema,
+    CreateTableAsSelect,
+    CreateView,
+    DropIndex,
+    DropSchema,
+    DropTable,
+    DropView,
+    RenameTable,
+    TruncateTable,
 )
 from sqlspec.statement.builder.mixins._where import WhereClauseMixin
-from sqlspec.statement.builder.select import SelectBuilder
+from sqlspec.statement.builder.select import Select
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
@@ -373,10 +371,16 @@ def test_query_builder_build_expression_not_initialized() -> None:
 @patch("sqlspec.statement.builder.base.logger")
 def test_query_builder_build_sql_generation_error(mock_logger: Mock, test_builder: MockQueryBuilder) -> None:
     """Test build method handles SQL generation errors."""
-    # Mock the expression to raise an error during SQL generation
-    test_builder._expression = Mock()
-    test_builder._expression.copy.return_value = test_builder._expression
-    test_builder._expression.sql.side_effect = Exception("SQL generation failed")
+
+    # Create a mock expression that implements HasSQLMethodProtocol
+    class MockExpression:
+        def sql(self, *args: Any, **kwargs: Any) -> str:
+            raise Exception("SQL generation failed")
+
+        def copy(self) -> "MockExpression":
+            return self
+
+    test_builder._expression = MockExpression()  # type: ignore[assignment]
 
     with pytest.raises(SQLBuilderError, match="Error generating SQL"):
         test_builder.build()
@@ -501,10 +505,32 @@ def test_where_mixin_where_exists_with_string(where_mixin: WhereClauseMixinHelpe
 
 def test_where_mixin_where_exists_with_builder(where_mixin: WhereClauseMixinHelper) -> None:
     """Test where_exists with QueryBuilder subquery."""
-    mock_builder = Mock()
-    mock_builder._parameters = {"status": "active"}
-    mock_builder.build.return_value = Mock()
-    mock_builder.build.return_value.sql = "SELECT 1 FROM orders"
+
+    # Create a concrete mock that implements the necessary interface
+    class MockQueryBuilder:
+        def __init__(self) -> None:
+            self._expression: Optional[Any] = None
+            self._parameters: dict[str, Any] = {"status": "active"}
+            self._parameter_counter: int = 0
+            self.dialect: Optional[Any] = None
+            self.dialect_name: Optional[str] = None
+
+        @property
+        def parameters(self) -> dict[str, Any]:
+            return self._parameters
+
+        def build(self) -> Any:
+            mock_result = Mock()
+            mock_result.sql = "SELECT 1 FROM orders"
+            return mock_result
+
+        def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
+            return value, name or f"param_{len(self._parameters)}"
+
+        def _parameterize_expression(self, expression: Any) -> Any:
+            return expression
+
+    mock_builder = MockQueryBuilder()
 
     result = where_mixin.where_exists(mock_builder)
 
@@ -539,49 +565,49 @@ def test_where_mixin_method_chaining(where_mixin: WhereClauseMixinHelper) -> Non
 # DDL Builder tests
 def test_drop_table_builder_basic() -> None:
     """Test basic DROP TABLE functionality."""
-    sql = DropTableBuilder().table("my_table").build().sql
+    sql = DropTable("my_table").build().sql
     assert "DROP TABLE" in sql and "my_table" in sql
 
 
 def test_drop_index_builder_basic() -> None:
     """Test basic DROP INDEX functionality."""
-    sql = DropIndexBuilder().name("idx_name").on_table("my_table").build().sql
+    sql = DropIndex("idx_name").build().sql
     assert "DROP INDEX" in sql and "idx_name" in sql
 
 
 def test_drop_view_builder_basic() -> None:
     """Test basic DROP VIEW functionality."""
-    sql = DropViewBuilder().name("my_view").build().sql
+    sql = DropView().name("my_view").build().sql
     assert "DROP VIEW" in sql and "my_view" in sql
 
 
 def test_drop_schema_builder_basic() -> None:
     """Test basic DROP SCHEMA functionality."""
-    sql = DropSchemaBuilder().name("my_schema").build().sql
+    sql = DropSchema().name("my_schema").build().sql
     assert "DROP SCHEMA" in sql and "my_schema" in sql
 
 
 def test_create_index_builder_basic() -> None:
     """Test basic CREATE INDEX functionality."""
-    sql = CreateIndexBuilder().name("idx_col").on_table("my_table").columns("col1", "col2").build().sql
+    sql = CreateIndex("idx_col").on_table("my_table").columns("col1", "col2").build().sql
     assert "CREATE INDEX" in sql and "idx_col" in sql
 
 
 def test_truncate_table_builder_basic() -> None:
     """Test basic TRUNCATE TABLE functionality."""
-    sql = TruncateTableBuilder().table("my_table").build().sql
+    sql = TruncateTable().table("my_table").build().sql
     assert "TRUNCATE TABLE" in sql
 
 
 def test_create_schema_builder_basic() -> None:
     """Test basic CREATE SCHEMA functionality."""
-    sql = CreateSchemaBuilder().name("myschema").build().sql
+    sql = CreateSchema().name("myschema").build().sql
     assert "CREATE SCHEMA" in sql and "myschema" in sql
 
-    sql_if_not_exists = CreateSchemaBuilder().name("myschema").if_not_exists().build().sql
+    sql_if_not_exists = CreateSchema().name("myschema").if_not_exists().build().sql
     assert "IF NOT EXISTS" in sql_if_not_exists and "myschema" in sql_if_not_exists
 
-    sql_auth = CreateSchemaBuilder().name("myschema").authorization("bob").build().sql
+    sql_auth = CreateSchema().name("myschema").authorization("bob").build().sql
     assert "CREATE SCHEMA" in sql_auth and "myschema" in sql_auth
 
 
@@ -589,10 +615,8 @@ def test_create_schema_builder_basic() -> None:
 def test_create_table_as_select_builder_basic() -> None:
     """Test CREATE TABLE AS SELECT functionality."""
 
-    select_builder = SelectBuilder().select("id", "name").from_("users").where_eq("active", True)
-    builder = (
-        CreateTableAsSelectBuilder().name("new_table").if_not_exists().columns("id", "name").as_select(select_builder)
-    )
+    select_builder = Select().select("id", "name").from_("users").where_eq("active", True)
+    builder = CreateTableAsSelect().name("new_table").if_not_exists().columns("id", "name").as_select(select_builder)
     result = builder.build()
     sql = result.sql
 
@@ -607,13 +631,9 @@ def test_create_table_as_select_builder_basic() -> None:
 def test_create_materialized_view_basic() -> None:
     """Test CREATE MATERIALIZED VIEW functionality."""
 
-    select_builder = SelectBuilder().select("id", "name").from_("users").where_eq("active", True)
+    select_builder = Select().select("id", "name").from_("users").where_eq("active", True)
     builder = (
-        CreateMaterializedViewBuilder()
-        .name("active_users_mv")
-        .if_not_exists()
-        .columns("id", "name")
-        .as_select(select_builder)
+        CreateMaterializedView().name("active_users_mv").if_not_exists().columns("id", "name").as_select(select_builder)
     )
     result = builder.build()
     sql = result.sql
@@ -628,8 +648,8 @@ def test_create_materialized_view_basic() -> None:
 def test_create_view_basic() -> None:
     """Test CREATE VIEW functionality."""
 
-    select_builder = SelectBuilder().select("id", "name").from_("users").where_eq("active", True)
-    builder = CreateViewBuilder().name("active_users_v").if_not_exists().columns("id", "name").as_select(select_builder)
+    select_builder = Select().select("id", "name").from_("users").where_eq("active", True)
+    builder = CreateView().name("active_users_v").if_not_exists().columns("id", "name").as_select(select_builder)
     result = builder.build()
     sql = result.sql
 
@@ -644,28 +664,28 @@ def test_create_view_basic() -> None:
 def test_alter_table_add_column() -> None:
     """Test ALTER TABLE ADD COLUMN."""
 
-    sql = AlterTableBuilder("users").add_column("age", "INT").build().sql
+    sql = AlterTable("users").add_column("age", "INT").build().sql
     assert "ALTER TABLE" in sql and "ADD COLUMN" in sql and "age" in sql and "INT" in sql
 
 
 def test_alter_table_drop_column() -> None:
     """Test ALTER TABLE DROP COLUMN."""
 
-    sql = AlterTableBuilder("users").drop_column("age").build().sql
+    sql = AlterTable("users").drop_column("age").build().sql
     assert "ALTER TABLE" in sql and "DROP COLUMN" in sql and "age" in sql
 
 
 def test_alter_table_rename_column() -> None:
     """Test ALTER TABLE RENAME COLUMN."""
 
-    sql = AlterTableBuilder("users").rename_column("old_name", "new_name").build().sql
+    sql = AlterTable("users").rename_column("old_name", "new_name").build().sql
     assert "ALTER TABLE" in sql and "RENAME COLUMN" in sql and "old_name" in sql and "new_name" in sql
 
 
 def test_alter_table_error_if_no_action() -> None:
     """Test ALTER TABLE raises error without action."""
 
-    builder = AlterTableBuilder("users")
+    builder = AlterTable("users")
     with pytest.raises(Exception):
         builder.build()
 
@@ -674,14 +694,14 @@ def test_alter_table_error_if_no_action() -> None:
 def test_comment_on_table_builder() -> None:
     """Test COMMENT ON TABLE functionality."""
 
-    sql = CommentOnBuilder().on_table("users").is_("User table").build().sql
+    sql = CommentOn().on_table("users").is_("User table").build().sql
     assert "COMMENT ON TABLE \"users\" IS 'User table'" in sql or "COMMENT ON TABLE users IS 'User table'" in sql
 
 
 def test_comment_on_column_builder() -> None:
     """Test COMMENT ON COLUMN functionality."""
 
-    sql = CommentOnBuilder().on_column("users", "age").is_("User age").build().sql
+    sql = CommentOn().on_column("users", "age").is_("User age").build().sql
     assert "COMMENT ON COLUMN users.age IS 'User age'" in sql
 
 
@@ -689,14 +709,14 @@ def test_comment_on_builder_error() -> None:
     """Test COMMENT ON raises error without comment."""
 
     with pytest.raises(Exception):
-        CommentOnBuilder().on_table("users").build()
+        CommentOn().on_table("users").build()
 
 
 # RENAME TABLE test
 def test_rename_table_builder() -> None:
     """Test RENAME TABLE functionality."""
 
-    sql = RenameTableBuilder().table("users").to("customers").build().sql
+    sql = RenameTable().table("users").to("customers").build().sql
     # Handle both single-line and multi-line formatted output
     assert (
         'ALTER TABLE "users" RENAME TO "customers"' in sql
@@ -710,7 +730,7 @@ def test_rename_table_builder_error() -> None:
     """Test RENAME TABLE raises error without new name."""
 
     with pytest.raises(Exception):
-        RenameTableBuilder().table("users").build()
+        RenameTable().table("users").build()
 
 
 # Integration tests

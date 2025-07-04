@@ -5,13 +5,13 @@ from sqlglot import exp
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.statement.builder.select import SelectBuilder
+    from sqlspec.statement.builder.select import Select
 
 __all__ = ("PivotClauseMixin",)
 
 
 class PivotClauseMixin:
-    """Mixin class to add PIVOT functionality to a SelectBuilder."""
+    """Mixin class to add PIVOT functionality to a Select."""
 
     _expression: "Optional[exp.Expression]" = None
     dialect: "DialectType" = None
@@ -23,7 +23,7 @@ class PivotClauseMixin:
         pivot_column: Union[str, exp.Expression],
         pivot_values: list[Union[str, int, float, exp.Expression]],
         alias: Optional[str] = None,
-    ) -> "SelectBuilder":
+    ) -> "Select":
         """Adds a PIVOT clause to the SELECT statement.
 
         Example:
@@ -61,7 +61,6 @@ class PivotClauseMixin:
             else:
                 pivot_value_exprs.append(exp.Literal.string(str(val)))
 
-        # Create the pivot expression with proper fields structure
         in_expr = exp.In(this=pivot_col_expr, expressions=pivot_value_exprs)
 
         pivot_node = exp.Pivot(expressions=[pivot_agg_expr], fields=[in_expr], unpivot=False)
@@ -69,14 +68,12 @@ class PivotClauseMixin:
         if alias:
             pivot_node.set("alias", exp.TableAlias(this=exp.to_identifier(alias)))
 
-        # Add pivot to the table in the FROM clause
         from_clause = current_expr.args.get("from")
         if from_clause and isinstance(from_clause, exp.From):
             table = from_clause.this
             if isinstance(table, exp.Table):
-                # Add to pivots array
                 existing_pivots = table.args.get("pivots", [])
                 existing_pivots.append(pivot_node)
                 table.set("pivots", existing_pivots)
 
-        return cast("SelectBuilder", self)
+        return cast("Select", self)

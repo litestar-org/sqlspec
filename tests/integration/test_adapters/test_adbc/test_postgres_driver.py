@@ -226,9 +226,20 @@ def test_multiple_parameters(adbc_postgresql_session: AdbcDriver) -> None:
 
 
 @pytest.mark.xdist_group("postgres")
-@pytest.mark.xfail(reason="ADBC PostgreSQL driver has issues with null parameter handling")
+@pytest.mark.xfail(
+    reason="ADBC PostgreSQL driver has issues with null parameter handling - Known limitation: https://github.com/apache/arrow-adbc/issues/81"
+)
 def test_null_parameters(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test handling of NULL parameters."""
+    """Test handling of NULL parameters.
+
+    This test is marked as xfail due to a known limitation in the ADBC PostgreSQL driver.
+    The driver currently has incomplete support for null values in bind parameters,
+    especially for parameterized queries. This is tracked upstream in:
+    https://github.com/apache/arrow-adbc/issues/81
+
+    The test represents a reasonable user case (inserting NULL values into a database),
+    and should pass once the upstream driver is fixed.
+    """
     # Create table that allows NULLs
     adbc_postgresql_session.execute_script("""
         CREATE TABLE null_test (
@@ -256,8 +267,14 @@ def test_null_parameters(adbc_postgresql_session: AdbcDriver) -> None:
 
 
 @pytest.mark.xdist_group("postgres")
+@pytest.mark.xfail(reason="ADBC PostgreSQL driver has issues with Arrow type mapping in executemany - Known limitation")
 def test_execute_many(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test execute_many functionality with ADBC PostgreSQL."""
+    """Test execute_many functionality with ADBC PostgreSQL.
+
+    This test is marked as xfail due to a known limitation in the ADBC PostgreSQL driver.
+    The driver fails with "Can't map Arrow type 'na' to Postgres type" when using executemany.
+    This appears to be an issue with how the driver handles parameter batches through Arrow format.
+    """
     params_list = [("name1", 1), ("name2", 2), ("name3", 3)]
 
     result = adbc_postgresql_session.execute_many(

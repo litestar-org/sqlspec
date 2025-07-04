@@ -2,28 +2,28 @@
 
 import pytest
 
-from sqlspec.statement.builder.ddl import CreateTableAsSelectBuilder
-from sqlspec.statement.builder.select import SelectBuilder
+from sqlspec.statement.builder.ddl import CreateTableAsSelect
+from sqlspec.statement.builder.select import Select
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
 def test_ctas_preserves_parameter_names() -> None:
     """Test that CTAS preserves original parameter names without _1 suffix."""
     # Create a SELECT query with parameters
-    select_builder = SelectBuilder()
+    select_builder = Select()
     select_builder.from_("users").where("active = :active AND status = :status")
     select_builder.add_parameter(True, name="active")
     select_builder.add_parameter("enabled", name="status")
 
     # Create CTAS from the SELECT
-    ctas_builder = CreateTableAsSelectBuilder()
+    ctas_builder = CreateTableAsSelect()
     ctas_builder.name("new_table").as_select(select_builder)
 
     # Build and check
     safe_query = ctas_builder.build()
     # Disable validation for DDL operations
     config = SQLConfig(enable_validation=False, strict_mode=False)
-    sql_statement = SQL(safe_query.sql, parameters=safe_query.parameters, _config=config)
+    sql_statement = SQL(safe_query.sql, parameters=safe_query.parameters, config=config)
 
     # Parameters should preserve original names
     assert "active" in safe_query.parameters
@@ -42,12 +42,12 @@ def test_ctas_preserves_parameter_names() -> None:
 def test_ctas_handles_parameter_collision() -> None:
     """Test that CTAS handles parameter name collisions by using the later value."""
     # Create a CTAS with a parameter
-    ctas_builder = CreateTableAsSelectBuilder()
+    ctas_builder = CreateTableAsSelect()
     ctas_builder.name("new_table")
     ctas_builder.add_parameter("initial_value", name="test_param")
 
     # Add SELECT with same parameter name - this should override the previous value
-    select_builder = SelectBuilder()
+    select_builder = Select()
     select_builder.from_("users").where("name = :test_param")
     select_builder.add_parameter("select_value", name="test_param")
 
@@ -65,37 +65,40 @@ def test_ctas_handles_parameter_collision() -> None:
 
 def test_mixed_parameter_style_normalization() -> None:
     """Test mixed parameter style handling without unnecessary renaming."""
-    # Create SQL with mixed styles - pass both positional and named params
-    sql = SQL(
-        "SELECT * FROM users WHERE id = ? AND status = :active", parameters=[123], active="enabled"
-    )  # Use kwargs directly
+    # When both positional and named parameters are present,
+    # the SQL class merges them into a single dictionary
+    sql = SQL("SELECT * FROM users WHERE id = ? AND status = :active", 123, active="enabled")
 
-    # Parameters should be properly handled
+    # Parameters returns merged dict when both positional and named are present
     params = sql.parameters
     assert isinstance(params, dict)
-
-    # Check both the positional parameter (as arg_0) and named parameter
-    assert "arg_0" in params
-    assert params["arg_0"] == 123
-    assert "active" in params
     assert params["active"] == "enabled"
+    assert params["arg_0"] == 123  # Positional param gets assigned a name
+
+    # Test just positional - returns tuple
+    sql2 = SQL("SELECT * FROM users WHERE id = ?", 123)
+    assert sql2.parameters == (123,)
+
+    # Test just named - returns dict
+    sql3 = SQL("SELECT * FROM users WHERE status = :active", active="enabled")
+    assert sql3.parameters == {"active": "enabled"}
 
 
 def test_complex_ctas_with_ctes() -> None:
     """Test CTAS with CTEs preserves all parameter names."""
     # Create CTE with parameters
-    cte_builder = SelectBuilder()
+    cte_builder = Select()
     cte_builder.select("*").from_("orders").where("created_at > :start_date")
     cte_builder.add_parameter("2024-01-01", name="start_date")
 
     # Create main query with different parameters
-    main_builder = SelectBuilder()
+    main_builder = Select()
     main_builder.with_cte("recent_orders", cte_builder)
     main_builder.select("*").from_("recent_orders").where("amount > :min_amount")
     main_builder.add_parameter(100, name="min_amount")
 
     # Create CTAS
-    ctas_builder = CreateTableAsSelectBuilder()
+    ctas_builder = CreateTableAsSelect()
     ctas_builder.name("summary_table").as_select(main_builder)
 
     safe_query = ctas_builder.build()
@@ -114,30 +117,9 @@ def test_complex_ctas_with_ctes() -> None:
     assert ":min_amount_1" not in sql_str
 
 
-def test_get_unique_parameter_name_with_namespace() -> None:
-    """Test the enhanced get_unique_parameter_name method."""
-    sql = SQL("SELECT 1")
-
-    # Test without namespace - should preserve original
-    name1 = sql.get_unique_parameter_name("test", preserve_original=True)
-    assert name1 == "test"
-
-    # Add the parameter
-    sql = sql.add_named_parameter("test", "value1")
-
-    # Test with namespace - should add namespace prefix
-    name2 = sql.get_unique_parameter_name("test", namespace="cte", preserve_original=True)
-    assert name2 == "cte_test"
-
-    # Test collision - should add suffix
-    sql = sql.add_named_parameter("cte_test", "value2")
-    name3 = sql.get_unique_parameter_name("test", namespace="cte", preserve_original=True)
-    assert name3 == "cte_test_1"
-
-
 def test_builder_parameter_collision_resolution() -> None:
     """Test that builders handle parameter collisions gracefully."""
-    builder = SelectBuilder()
+    builder = Select()
 
     # Add first parameter
     builder.add_parameter("value1", name="param")

@@ -173,7 +173,6 @@ def _make_hashable(value: Any) -> HashableType:
         A hashable version of the value.
     """
     if isinstance(value, dict):
-        # Convert dict to tuple of tuples with sorted keys
         items = []
         for k in sorted(value.keys()):  # pyright: ignore
             v = value[k]  # pyright: ignore
@@ -261,7 +260,6 @@ def _create_statement_filters(
                 required=False,
             ),
         ) -> SearchFilter:
-            # Handle both string and set input types for search fields
             field_names = set(search_fields.split(",")) if isinstance(search_fields, str) else set(search_fields)
 
             return SearchFilter(
@@ -286,9 +284,7 @@ def _create_statement_filters(
 
         filters[dep_defaults.ORDER_BY_FILTER_DEPENDENCY_KEY] = Provide(provide_order_by, sync_to_thread=False)
 
-    # Add not_in filter providers
     if not_in_fields := config.get("not_in_fields"):
-        # Get all field names, handling both strings and FieldNameType objects
         not_in_fields = {not_in_fields} if isinstance(not_in_fields, (str, FieldNameType)) else not_in_fields
 
         for field_def in not_in_fields:
@@ -313,9 +309,7 @@ def _create_statement_filters(
             provider = create_not_in_filter_provider(field_def)  # pyright: ignore
             filters[f"{field_def.name}_not_in_filter"] = Provide(provider, sync_to_thread=False)  # pyright: ignore
 
-    # Add in filter providers
     if in_fields := config.get("in_fields"):
-        # Get all field names, handling both strings and FieldNameType objects
         in_fields = {in_fields} if isinstance(in_fields, (str, FieldNameType)) else in_fields
 
         for field_def in in_fields:
@@ -361,7 +355,6 @@ def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., lis
     parameters: dict[str, inspect.Parameter] = {}
     annotations: dict[str, Any] = {}
 
-    # Build parameters based on config
     if cls := config.get("id_filter"):
         parameters["id_filter"] = inspect.Parameter(
             name="id_filter",
@@ -416,7 +409,6 @@ def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., lis
         )
         annotations["order_by_filter"] = OrderByFilter
 
-    # Add parameters for not_in filters
     if not_in_fields := config.get("not_in_fields"):
         for field_def in not_in_fields:
             field_def = FieldNameType(name=field_def, type_hint=str) if isinstance(field_def, str) else field_def
@@ -428,7 +420,6 @@ def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., lis
             )
             annotations[f"{field_def.name}_not_in_filter"] = NotInCollectionFilter[field_def.type_hint]  # type: ignore
 
-    # Add parameters for in filters
     if in_fields := config.get("in_fields"):
         for field_def in in_fields:
             field_def = FieldNameType(name=field_def, type_hint=str) if isinstance(field_def, str) else field_def
@@ -472,9 +463,7 @@ def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., lis
         ):
             filters.append(order_by)
 
-        # Add not_in filters
         if not_in_fields := config.get("not_in_fields"):
-            # Get all field names, handling both strings and FieldNameType objects
             not_in_fields = {not_in_fields} if isinstance(not_in_fields, (str, FieldNameType)) else not_in_fields
             for field_def in not_in_fields:
                 field_def = FieldNameType(name=field_def, type_hint=str) if isinstance(field_def, str) else field_def
@@ -482,9 +471,7 @@ def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., lis
                 if filter_ is not None:
                     filters.append(filter_)
 
-        # Add in filters
         if in_fields := config.get("in_fields"):
-            # Get all field names, handling both strings and FieldNameType objects
             in_fields = {in_fields} if isinstance(in_fields, (str, FieldNameType)) else in_fields
             for field_def in in_fields:
                 field_def = FieldNameType(name=field_def, type_hint=str) if isinstance(field_def, str) else field_def
@@ -493,7 +480,6 @@ def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., lis
                     filters.append(filter_)
         return filters
 
-    # Set both signature and annotations
     provide_filters.__signature__ = inspect.Signature(  # type: ignore
         parameters=list(parameters.values()), return_annotation=list[FilterTypes]
     )

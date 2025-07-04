@@ -224,8 +224,8 @@ async def test_execute_script(psqlpy_config: PsqlpyConfig) -> None:
         assert result.is_success()
         # For scripts, psqlpy doesn't provide statement counts
         # The driver returns statements_executed: -1 in metadata
-        assert result.total_statements == 0  # Not tracked by psqlpy
-        assert result.successful_statements == 0  # Not tracked by psqlpy
+        assert result.total_statements == -1  # Not tracked by psqlpy
+        assert result.successful_statements == -1  # Not tracked by psqlpy
 
 
 async def test_multiple_positional_parameters(psqlpy_config: PsqlpyConfig) -> None:

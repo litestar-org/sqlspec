@@ -640,11 +640,12 @@ def test_transformer_handles_complex_ast() -> None:
     parameters = context.extracted_parameters_from_pipeline or []
     actual_values = [getattr(p, "value", p) for p in parameters]
 
-    # With recursive CTE literal preservation:
-    # - Literals inside the recursive CTE (1, 5) are preserved
-    # - Only the literal outside the CTE (3) is parameterized
+    # With intelligent recursive CTE literal preservation:
+    # - Literals in SELECT and recursive computations (1) are preserved
+    # - Termination condition (5) and outside CTE (3) are parameterized
     # - 'processed' is not parameterized because it's used as an alias value in SELECT
-    assert len(parameters) == 1
-    assert 3 in actual_values  # Only the literal outside the CTE
+    assert len(parameters) == 2  # 5 and 3 should be parameterized
+    assert 5 in actual_values  # Termination condition
+    assert 3 in actual_values  # Outside CTE
     # 'processed' should NOT be parameterized since it's a SELECT alias value
     assert "processed" not in actual_values

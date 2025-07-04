@@ -398,7 +398,6 @@ def test_bigquery_column_names_and_metadata(
 
 
 @pytest.mark.xdist_group("bigquery")
-@pytest.mark.xfail(reason="BigQuery emulator may not properly return column schema information")
 def test_bigquery_with_schema_type(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test BigQuery driver with schema type conversion."""
     from dataclasses import dataclass

@@ -3,7 +3,6 @@
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
 import asyncmy
@@ -193,7 +192,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             if getattr(self, field, None) is not None and getattr(self, field) is not Empty
         }
 
-        # Add connection-specific extras (not pool-specific ones)
         config.update(self.extras)
 
         return config
@@ -264,15 +262,16 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             An AsyncmyDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as connection:
-            # Create statement config with parameter style info if not already set
             statement_config = self.statement_config
+            # Inject parameter style info if not already set
             if statement_config.allowed_parameter_styles is None:
+                from dataclasses import replace
+
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
                     target_parameter_style=self.preferred_parameter_style,
                 )
-
             yield self.driver_type(connection=connection, config=statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool":  # pyright: ignore

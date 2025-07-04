@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sqlspec.storage.protocol import ObjectStoreProtocol
+from sqlspec.protocols import ObjectStoreProtocol
 from sqlspec.storage.registry import StorageRegistry
 
 
@@ -43,7 +43,7 @@ def test_register_alias_with_backend_class(registry: "StorageRegistry") -> None:
 def test_get_unregistered_backend_raises(registry: "StorageRegistry") -> None:
     from sqlspec.exceptions import ImproperConfigurationError
 
-    with pytest.raises(ImproperConfigurationError, match="Unknown storage alias"):
+    with pytest.raises(ImproperConfigurationError, match="Unknown storage alias or invalid URI"):
         registry.get("missing")
 
 
@@ -229,7 +229,7 @@ def test_empty_alias_rejected() -> None:
     registry.register_alias("", uri="memory://test", backend=backend_cls)  # type: ignore[arg-type]
 
     # Getting empty alias should raise error
-    with pytest.raises(ImproperConfigurationError, match="Unknown storage alias"):
+    with pytest.raises(ImproperConfigurationError, match="URI or alias cannot be empty"):
         registry.get("")
     assert registry.is_alias_registered("")
     assert "" in registry.list_aliases()

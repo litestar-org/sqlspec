@@ -6,9 +6,9 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 from sqlglot import exp
 
 from sqlspec.exceptions import MissingParameterError, RiskLevel, SQLValidationError
-from sqlspec.statement.pipelines.base import ProcessorProtocol
-from sqlspec.statement.pipelines.result_types import ValidationError
-from sqlspec.typing import is_dict
+from sqlspec.protocols import ProcessorProtocol
+from sqlspec.statement.pipelines.context import ValidationError
+from sqlspec.utils.type_guards import is_dict
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
@@ -73,12 +73,15 @@ class ParameterStyleValidator(ProcessorProtocol):
             config = context.config
             param_info = context.parameter_info
 
-            # First check parameter styles if configured
+            # Check if parameters were normalized by looking for param_ placeholders
+            # This happens when Oracle numeric parameters (:1, :2) are normalized
+            is_normalized = param_info and any(p.name and p.name.startswith("param_") for p in param_info)
+
+            # First check parameter styles if configured (skip if normalized)
             has_style_errors = False
-            if config.allowed_parameter_styles is not None and param_info:
+            if not is_normalized and config.allowed_parameter_styles is not None and param_info:
                 unique_styles = {p.style for p in param_info}
 
-                # Check for mixed styles first (before checking individual styles)
                 if len(unique_styles) > 1 and not config.allow_mixed_parameter_styles:
                     detected_style_strs = [str(s) for s in unique_styles]
                     detected_styles = ", ".join(sorted(detected_style_strs))
@@ -95,7 +98,6 @@ class ParameterStyleValidator(ProcessorProtocol):
                     context.validation_errors.append(error)
                     has_style_errors = True
 
-                # Check for disallowed styles
                 disallowed_styles = {str(s) for s in unique_styles if not config.validate_parameter_style(s)}
                 if disallowed_styles:
                     disallowed_str = ", ".join(sorted(disallowed_styles))
@@ -276,13 +278,84 @@ class ParameterStyleValidator(ProcessorProtocol):
     ) -> None:
         """Handle validation for named parameters."""
         missing: list[str] = []
-        for p in param_info:
-            param_name = p.name
-            if param_name not in merged_params:
-                is_synthetic = any(key.startswith(("_arg_", "param_")) for key in merged_params)
-                is_named_style = p.style.value not in {"qmark", "numeric"}
-                if (not is_synthetic or is_named_style) and param_name:
-                    missing.append(param_name)
+
+        # Check if we have normalized parameters (e.g., param_0)
+        is_normalized = any(p.name and p.name.startswith("param_") for p in param_info)
+
+        if is_normalized and hasattr(context, "extra_info"):
+            # For normalized parameters, we need to check against the original placeholder mapping
+            placeholder_map = context.extra_info.get("placeholder_map", {})
+
+            # Check if we have Oracle numeric keys in merged_params
+            all_numeric_keys = all(key.isdigit() for key in merged_params)
+
+            if all_numeric_keys:
+                # Parameters were provided as list and converted to Oracle numeric dict {"1": val1, "2": val2}
+                for i, _p in enumerate(param_info):
+                    normalized_name = f"param_{i}"
+                    original_key = placeholder_map.get(normalized_name)
+
+                    if original_key is not None:
+                        # Check using the original key (e.g., "1", "2" for Oracle)
+                        original_key_str = str(original_key)
+                        if original_key_str not in merged_params or merged_params[original_key_str] is None:
+                            if original_key_str.isdigit():
+                                missing.append(f":{original_key}")
+                            else:
+                                missing.append(f":{original_key}")
+            else:
+                # Check if all params follow param_N pattern
+                all_param_keys = all(key.startswith("param_") and key[6:].isdigit() for key in merged_params)
+
+                if all_param_keys:
+                    # This was originally a list converted to dict with param_N keys
+                    for i, _p in enumerate(param_info):
+                        normalized_name = f"param_{i}"
+                        if normalized_name not in merged_params or merged_params[normalized_name] is None:
+                            # Get original parameter style from placeholder map
+                            original_key = placeholder_map.get(normalized_name)
+                            if original_key is not None:
+                                original_key_str = str(original_key)
+                                if original_key_str.isdigit():
+                                    missing.append(f":{original_key}")
+                                else:
+                                    missing.append(f":{original_key}")
+                else:
+                    # Mixed parameter names, check using placeholder map
+                    for i, _p in enumerate(param_info):
+                        normalized_name = f"param_{i}"
+                        original_key = placeholder_map.get(normalized_name)
+
+                        if original_key is not None:
+                            # For mixed params, check both normalized and original keys
+                            original_key_str = str(original_key)
+
+                            # First check with normalized name
+                            found = normalized_name in merged_params and merged_params[normalized_name] is not None
+
+                            # If not found, check with original key
+                            if not found:
+                                found = (
+                                    original_key_str in merged_params and merged_params[original_key_str] is not None
+                                )
+
+                            if not found:
+                                # Format the missing parameter based on original style
+                                if original_key_str.isdigit():
+                                    # It was an Oracle numeric parameter (e.g., :1)
+                                    missing.append(f":{original_key}")
+                                else:
+                                    # It was a named parameter (e.g., :status)
+                                    missing.append(f":{original_key}")
+        else:
+            # Regular parameter validation
+            for p in param_info:
+                param_name = p.name
+                if param_name not in merged_params or merged_params.get(param_name) is None:
+                    is_synthetic = any(key.startswith(("arg_", "param_")) for key in merged_params)
+                    is_named_style = p.style.value not in {"qmark", "numeric"}
+                    if (not is_synthetic or is_named_style) and param_name:
+                        missing.append(param_name)
 
         if missing:
             msg = f"Missing required parameters: {', '.join(missing)}"

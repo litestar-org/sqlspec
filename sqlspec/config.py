@@ -97,7 +97,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         Returns:
             The SQL dialect type.
         """
-        # Get dialect from driver_class (all drivers must have a dialect attribute)
         return self.driver_type.dialect
 
     @abstractmethod
@@ -154,17 +153,14 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """
         namespace: dict[str, type[Any]] = {}
 
-        # Add the driver and config types
         if hasattr(self, "driver_type") and self.driver_type:
             namespace[self.driver_type.__name__] = self.driver_type
 
         namespace[self.__class__.__name__] = self.__class__
 
-        # Add connection type(s)
         if hasattr(self, "connection_type") and self.connection_type:
             connection_type = self.connection_type
 
-            # Handle Union types (like AsyncPG's Union[Connection, PoolConnectionProxy])
             if hasattr(connection_type, "__args__"):
                 # It's a generic type, extract the actual types
                 for arg_type in connection_type.__args__:  # type: ignore[attr-defined]

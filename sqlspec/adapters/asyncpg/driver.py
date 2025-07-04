@@ -1,5 +1,4 @@
 import re
-from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from asyncpg import Connection as AsyncpgNativeConnection
@@ -7,6 +6,7 @@ from asyncpg import Record
 from typing_extensions import TypeAlias
 
 from sqlspec.driver import AsyncDriverAdapterProtocol
+from sqlspec.driver.connection import managed_transaction_async
 from sqlspec.driver.mixins import (
     AsyncPipelinedExecutionMixin,
     AsyncStorageMixin,
@@ -14,10 +14,11 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
+from sqlspec.driver.parameters import normalize_parameter_sequence
+from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT, RowT
+from sqlspec.typing import DictRow, RowT
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -69,12 +70,10 @@ class AsyncpgDriver(
     # AsyncPG-specific type coercion overrides (PostgreSQL has rich native types)
     def _coerce_boolean(self, value: Any) -> Any:
         """AsyncPG/PostgreSQL has native boolean support."""
-        # Keep booleans as-is, AsyncPG handles them natively
         return value
 
     def _coerce_decimal(self, value: Any) -> Any:
         """AsyncPG/PostgreSQL has native decimal/numeric support."""
-        # Keep decimals as-is, AsyncPG handles them natively
         return value
 
     def _coerce_json(self, value: Any) -> Any:
@@ -84,20 +83,24 @@ class AsyncpgDriver(
 
     def _coerce_array(self, value: Any) -> Any:
         """AsyncPG/PostgreSQL has native array support."""
-        # Convert tuples to lists for consistency
         if isinstance(value, tuple):
             return list(value)
-        # Keep other arrays as-is, AsyncPG handles them natively
         return value
 
     async def _execute_statement(
         self, statement: SQL, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
-    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
+    ) -> SQLResult[RowT]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
-        detected_styles = {p.style for p in statement.parameter_info}
+        detected_styles = set()
+        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
+        validator = self.config.parameter_validator if self.config else ParameterValidator()
+        param_infos = validator.extract_parameters(sql_str)
+        if param_infos:
+            detected_styles = {p.style for p in param_infos}
+
         target_style = self.default_parameter_style
         unsupported_styles = detected_styles - set(self.supported_parameter_styles)
         if unsupported_styles:
@@ -117,142 +120,103 @@ class AsyncpgDriver(
 
     async def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
-    ) -> Union[SelectResultDict, DMLResultDict]:
-        conn = self._connection(connection)
-        # Process parameters to handle TypedParameter objects
-        parameters = self._process_parameters(parameters)
+    ) -> SQLResult[RowT]:
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
 
-        # Check if this is actually a many operation that was misrouted
         if statement.is_many:
             # This should have gone to _execute_many, redirect it
             return await self._execute_many(sql, parameters, connection=connection, **kwargs)
 
-        # AsyncPG expects parameters as *args, not a single list
-        args_for_driver: list[Any] = []
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            # Normalize parameters using consolidated utility
+            normalized_params = normalize_parameter_sequence(parameters)
+            # AsyncPG expects parameters as *args, not a single list
+            args_for_driver: list[Any] = []
+            if normalized_params:
+                # normalized_params is already a list, just use it directly
+                args_for_driver = normalized_params
 
-        if parameters is not None:
-            if isinstance(parameters, (list, tuple)):
-                args_for_driver.extend(parameters)
-            else:
-                args_for_driver.append(parameters)
+            if self.returns_rows(statement.expression):
+                records = await txn_conn.fetch(sql, *args_for_driver)
+                data = [dict(record) for record in records]
+                column_names = list(records[0].keys()) if records else []
+                return SQLResult(
+                    statement=statement,
+                    data=cast("list[RowT]", data),
+                    column_names=column_names,
+                    rows_affected=len(records),
+                    operation_type="SELECT",
+                )
 
-        if self.returns_rows(statement.expression):
-            records = await conn.fetch(sql, *args_for_driver)
-            # Convert asyncpg Records to dicts
-            data = [dict(record) for record in records]
-            # Get column names from first record or empty list
-            column_names = list(records[0].keys()) if records else []
-            result: SelectResultDict = {"data": data, "column_names": column_names, "rows_affected": len(records)}
-            return result
+            status = await txn_conn.execute(sql, *args_for_driver)
+            # Parse row count from status string
+            rows_affected = 0
+            if status and isinstance(status, str):
+                match = ASYNC_PG_STATUS_REGEX.match(status)
+                if match and len(match.groups()) >= EXPECTED_REGEX_GROUPS:
+                    rows_affected = int(match.group(3))
 
-        status = await conn.execute(sql, *args_for_driver)
-        # Parse row count from status string
-        rows_affected = 0
-        if status and isinstance(status, str):
-            match = ASYNC_PG_STATUS_REGEX.match(status)
-            if match and len(match.groups()) >= EXPECTED_REGEX_GROUPS:
-                rows_affected = int(match.group(3))
-
-        dml_result: DMLResultDict = {"rows_affected": rows_affected, "status_message": status or "OK"}
-        return dml_result
+            operation_type = self._determine_operation_type(statement)
+            return SQLResult(
+                statement=statement,
+                data=cast("list[RowT]", []),
+                rows_affected=rows_affected,
+                operation_type=operation_type,
+                metadata={"status_message": status or "OK"},
+            )
 
     async def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
-    ) -> DMLResultDict:
-        conn = self._connection(connection)
-        # Process parameters to handle TypedParameter objects
-        param_list = self._process_parameters(param_list)
+    ) -> SQLResult[RowT]:
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
 
-        params_list: list[tuple[Any, ...]] = []
-        rows_affected = 0
-        if param_list and isinstance(param_list, Sequence):
-            for param_set in param_list:
-                if isinstance(param_set, (list, tuple)):
-                    params_list.append(tuple(param_set))
-                elif param_set is None:
-                    params_list.append(())
-                else:
-                    params_list.append((param_set,))
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            # Normalize parameter list using consolidated utility
+            normalized_param_list = normalize_parameter_sequence(param_list)
 
-            await conn.executemany(sql, params_list)
-            # AsyncPG's executemany returns None, not a status string
-            # We need to use the number of parameter sets as the row count
-            rows_affected = len(params_list)
+            params_list: list[tuple[Any, ...]] = []
+            rows_affected = 0
+            if normalized_param_list:
+                for param_set in normalized_param_list:
+                    if isinstance(param_set, (list, tuple)):
+                        params_list.append(tuple(param_set))
+                    elif param_set is None:
+                        params_list.append(())
+                    else:
+                        params_list.append((param_set,))
 
-        dml_result: DMLResultDict = {"rows_affected": rows_affected, "status_message": "OK"}
-        return dml_result
+                await txn_conn.executemany(sql, params_list)
+                # AsyncPG's executemany returns None, not a status string
+                # We need to use the number of parameter sets as the row count
+                rows_affected = len(params_list)
+
+            return SQLResult(
+                statement=SQL(sql, _dialect=self.dialect),
+                data=[],
+                rows_affected=rows_affected,
+                operation_type="EXECUTE",
+                metadata={"status_message": "OK"},
+            )
 
     async def _execute_script(
         self, script: str, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
-    ) -> ScriptResultDict:
-        conn = self._connection(connection)
-        status = await conn.execute(script)
-
-        result: ScriptResultDict = {
-            "statements_executed": -1,  # AsyncPG doesn't provide statement count
-            "status_message": status or "SCRIPT EXECUTED",
-        }
-        return result
-
-    async def _wrap_select_result(
-        self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
-    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
-        records = cast("list[Record]", result["data"])
-        column_names = result["column_names"]
-        rows_affected = result["rows_affected"]
-
-        rows_as_dicts: list[dict[str, Any]] = [dict(record) for record in records]
-
-        if schema_type:
-            converted_data_seq = self.to_schema(data=rows_as_dicts, schema_type=schema_type)
-            converted_data_list = list(converted_data_seq) if converted_data_seq is not None else []
-            return SQLResult[ModelDTOT](
-                statement=statement,
-                data=converted_data_list,
-                column_names=column_names,
-                rows_affected=rows_affected,
-                operation_type="SELECT",
-            )
-
-        return SQLResult[RowT](
-            statement=statement,
-            data=cast("list[RowT]", rows_as_dicts),
-            column_names=column_names,
-            rows_affected=rows_affected,
-            operation_type="SELECT",
-        )
-
-    async def _wrap_execute_result(
-        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
     ) -> SQLResult[RowT]:
-        operation_type = "UNKNOWN"
-        if statement.expression:
-            operation_type = str(statement.expression.key).upper()
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            status = await txn_conn.execute(script)
 
-        # Handle script results
-        if "statements_executed" in result:
-            return SQLResult[RowT](
-                statement=statement,
-                data=cast("list[RowT]", []),
+            return SQLResult(
+                statement=SQL(script, _dialect=self.dialect).as_script(),
+                data=[],
                 rows_affected=0,
                 operation_type="SCRIPT",
-                metadata={
-                    "status_message": result.get("status_message", ""),
-                    "statements_executed": result.get("statements_executed", -1),
-                },
+                metadata={"status_message": status or "SCRIPT EXECUTED"},
+                total_statements=1,
+                successful_statements=1,
             )
-
-        # Handle DML results
-        rows_affected = cast("int", result.get("rows_affected", -1))
-        status_message = result.get("status_message", "")
-
-        return SQLResult[RowT](
-            statement=statement,
-            data=cast("list[RowT]", []),
-            rows_affected=rows_affected,
-            operation_type=operation_type,
-            metadata={"status_message": status_message},
-        )
 
     def _connection(self, connection: Optional[AsyncpgConnection] = None) -> AsyncpgConnection:
         """Get the connection to use for the operation."""
@@ -290,11 +254,9 @@ class AsyncpgDriver(
         from sqlspec.exceptions import PipelineExecutionError
 
         try:
-            # Convert parameters to positional for AsyncPG (requires $1, $2, etc.)
             sql_str = op.sql.to_sql(placeholder_style=ParameterStyle.NUMERIC)
             params = self._convert_to_positional_params(op.sql.parameters)
 
-            # Apply operation-specific filters
             filtered_sql = self._apply_operation_filters(op.sql, op.filters)
             if filtered_sql != op.sql:
                 sql_str = filtered_sql.to_sql(placeholder_style=ParameterStyle.NUMERIC)
@@ -310,19 +272,18 @@ class AsyncpgDriver(
                     statement=op.sql,
                     data=cast("list[RowT]", []),
                     rows_affected=rows_affected,
-                    operation_type="execute_many",
+                    operation_type="EXECUTE",
                     metadata={"status_message": status},
                 )
             elif op.operation_type == "select":
                 # Use fetch for SELECT statements
                 rows = await connection.fetch(sql_str, *params)
-                # Convert AsyncPG Records to dictionaries
                 data = [dict(record) for record in rows] if rows else []
                 result = SQLResult[RowT](
                     statement=op.sql,
                     data=cast("list[RowT]", data),
                     rows_affected=len(data),
-                    operation_type="select",
+                    operation_type="SELECT",
                     metadata={"column_names": list(rows[0].keys()) if rows else []},
                 )
             elif op.operation_type == "execute_script":
@@ -341,7 +302,7 @@ class AsyncpgDriver(
                     statement=op.sql,
                     data=cast("list[RowT]", []),
                     rows_affected=total_affected,
-                    operation_type="execute_script",
+                    operation_type="SCRIPT",
                     metadata={"status_message": last_status, "statements_executed": len(script_statements)},
                 )
             else:
@@ -351,18 +312,16 @@ class AsyncpgDriver(
                     statement=op.sql,
                     data=cast("list[RowT]", []),
                     rows_affected=rows_affected,
-                    operation_type="execute",
+                    operation_type="EXECUTE",
                     metadata={"status_message": status},
                 )
 
-            # Add operation context
             result.operation_index = i
             result.pipeline_sql = op.sql
             results.append(result)
 
         except Exception as e:
             if options.get("continue_on_error"):
-                # Create error result
                 error_result = SQLResult[RowT](
                     statement=op.sql, error=e, operation_index=i, parameters=op.original_params, data=[]
                 )
@@ -390,7 +349,6 @@ class AsyncpgDriver(
         if isinstance(params, dict):
             if not params:
                 return ()
-            # Convert dict to positional based on $1, $2, etc. order
             # This assumes the SQL was compiled with NUMERIC style
             max_param = 0
             for key in params:

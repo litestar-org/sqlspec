@@ -1,13 +1,13 @@
 """Replaces literals in SQL with placeholders and extracts them using SQLGlot AST."""
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from sqlglot import exp
 from sqlglot.expressions import Array, Binary, Boolean, DataType, Func, Literal, Null
 
-from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.pipelines.base import ProcessorProtocol
+from sqlspec.protocols import ProcessorProtocol
+from sqlspec.statement.parameters import ParameterStyle, TypedParameter
 from sqlspec.statement.pipelines.context import SQLProcessingContext
 
 __all__ = ("ParameterizationContext", "ParameterizeLiterals")
@@ -24,6 +24,12 @@ DEFAULT_MAX_ARRAY_LENGTH = 100
 DEFAULT_MAX_IN_LIST_SIZE = 50
 """Default maximum IN clause list size before parameterization."""
 
+MAX_ENUM_LENGTH = 50
+"""Maximum length for enum-like string values."""
+
+MIN_ENUM_LENGTH = 2
+"""Minimum length for enum-like string values to be meaningful."""
+
 
 @dataclass
 class ParameterizationContext:
@@ -35,8 +41,12 @@ class ParameterizationContext:
     in_array: bool = False
     in_in_clause: bool = False
     in_recursive_cte: bool = False
+    in_subquery: bool = False
+    in_select_list: bool = False
+    in_join_condition: bool = False
     function_depth: int = 0
     cte_depth: int = 0
+    subquery_depth: int = 0
 
 
 class ParameterizeLiterals(ProcessorProtocol):
@@ -94,6 +104,7 @@ class ParameterizeLiterals(ProcessorProtocol):
             "ARRAY_UPPER",
             "ARRAY_LOWER",
             "ARRAY_NDIMS",
+            "ROUND",
         ]
         self.parameterize_arrays = parameterize_arrays
         self.parameterize_in_lists = parameterize_in_lists
@@ -104,20 +115,64 @@ class ParameterizeLiterals(ProcessorProtocol):
         self.extracted_parameters: list[Any] = []
         self._parameter_counter = 0
         self._parameter_metadata: list[dict[str, Any]] = []  # Track parameter types and context
+        self._preserve_dict_format = False  # Track whether to preserve dict format
 
     def process(self, expression: Optional[exp.Expression], context: SQLProcessingContext) -> Optional[exp.Expression]:
         """Advanced literal parameterization with context-aware AST analysis."""
-        if expression is None or context.current_expression is None or context.config.input_sql_had_placeholders:
+        if expression is None or context.current_expression is None:
+            return expression
+
+        # For named parameters (like BigQuery @param), don't reorder to avoid breaking name mapping
+        if (
+            context.config.input_sql_had_placeholders
+            and context.parameter_info
+            and any(p.name for p in context.parameter_info)
+        ):
             return expression
 
         self.extracted_parameters = []
-        self._parameter_counter = 0
         self._parameter_metadata = []
+
+        # When reordering is needed (SQL already has placeholders), we need to start
+        # our counter at the number of existing parameters to avoid conflicts
+        if context.config.input_sql_had_placeholders and context.parameter_info:
+            # Find the highest ordinal among existing parameters
+            max_ordinal = max(p.ordinal for p in context.parameter_info)
+            self._parameter_counter = max_ordinal + 1
+        else:
+            self._parameter_counter = 0
+
+        # Track original user parameters for proper merging
+        self._original_params = context.merged_parameters
+        self._user_param_index = 0
+        # If original params are dict and we have named placeholders, preserve dict format
+        if isinstance(context.merged_parameters, dict) and context.parameter_info:
+            # Check if we have named placeholders
+            has_named = any(p.name for p in context.parameter_info)
+            if has_named:
+                self._final_params: Union[dict[str, Any], list[Any]] = {}
+                self._preserve_dict_format = True
+            else:
+                self._final_params = []
+                self._preserve_dict_format = False
+        else:
+            self._final_params = []
+            self._preserve_dict_format = False
+        self._is_reordering_needed = context.config.input_sql_had_placeholders
 
         param_context = ParameterizationContext(parent_stack=[])
         transformed_expression = self._transform_with_context(context.current_expression.copy(), param_context)
         context.current_expression = transformed_expression
-        context.extracted_parameters_from_pipeline.extend(self.extracted_parameters)
+
+        # If we're reordering, update the merged parameters with the reordered result
+        # In this case, we don't need to add to extracted_parameters_from_pipeline
+        # because the parameters are already in _final_params
+        if self._is_reordering_needed and self._final_params:
+            context.merged_parameters = self._final_params
+        else:
+            # Only add extracted parameters to the pipeline if we're not reordering
+            # This prevents duplication when parameters are already in merged_parameters
+            context.extracted_parameters_from_pipeline.extend(self.extracted_parameters)
 
         context.metadata["parameter_metadata"] = self._parameter_metadata
 
@@ -138,6 +193,32 @@ class ParameterizeLiterals(ProcessorProtocol):
             result = self._process_array(node, context)
         elif isinstance(node, exp.In) and self.parameterize_in_lists:
             result = self._process_in_clause(node, context)
+        elif isinstance(node, exp.Placeholder) and self._is_reordering_needed:
+            # Handle existing placeholders when reordering is needed
+            result = self._process_existing_placeholder(node, context)
+        elif isinstance(node, exp.Parameter) and self._is_reordering_needed:
+            # Handle PostgreSQL-style parameters ($1, $2) when reordering is needed
+            result = self._process_existing_parameter(node, context)
+        elif isinstance(node, exp.Column) and self._is_reordering_needed:
+            # Check if this column looks like a PostgreSQL parameter ($1, $2, etc.)
+            column_name = str(node.this) if hasattr(node, "this") else ""
+            if column_name.startswith("$") and column_name[1:].isdigit():
+                # This is a PostgreSQL-style parameter parsed as a column
+                result = self._process_postgresql_column_parameter(node, context)
+            else:
+                # Regular column - process children
+                for key, value in node.args.items():
+                    if isinstance(value, exp.Expression):
+                        node.set(key, self._transform_with_context(value, context))
+                    elif isinstance(value, list):
+                        node.set(
+                            key,
+                            [
+                                self._transform_with_context(v, context) if isinstance(v, exp.Expression) else v
+                                for v in value
+                            ],
+                        )
+                result = node
         else:
             # Recursively process children
             for key, value in node.args.items():
@@ -161,51 +242,136 @@ class ParameterizeLiterals(ProcessorProtocol):
     def _update_context(self, node: exp.Expression, context: ParameterizationContext, entering: bool) -> None:
         """Update parameterization context based on current AST node."""
         if entering:
-            context.parent_stack.append(node)
-
-            if isinstance(node, Func):
-                context.function_depth += 1
-                # Get function name from class name or node.name
-                func_name = node.__class__.__name__.upper()
-                if func_name in self.preserve_in_functions or (
-                    node.name and node.name.upper() in self.preserve_in_functions
-                ):
-                    context.in_function_args = True
-            elif isinstance(node, exp.Case):
-                context.in_case_when = True
-            elif isinstance(node, Array):
-                context.in_array = True
-            elif isinstance(node, exp.In):
-                context.in_in_clause = True
-            elif isinstance(node, exp.CTE):
-                context.cte_depth += 1
-                # Check if this CTE is recursive:
-                # 1. Parent WITH must be RECURSIVE
-                # 2. CTE must contain UNION (characteristic of recursive CTEs)
-                is_in_recursive_with = any(
-                    isinstance(parent, exp.With) and parent.args.get("recursive", False)
-                    for parent in reversed(context.parent_stack)
-                )
-                if is_in_recursive_with and self._contains_union(node):
-                    context.in_recursive_cte = True
+            self._update_context_entering(node, context)
         else:
-            if context.parent_stack:
-                context.parent_stack.pop()
+            self._update_context_leaving(node, context)
 
-            if isinstance(node, Func):
-                context.function_depth -= 1
-                if context.function_depth == 0:
-                    context.in_function_args = False
-            elif isinstance(node, exp.Case):
-                context.in_case_when = False
-            elif isinstance(node, Array):
-                context.in_array = False
-            elif isinstance(node, exp.In):
-                context.in_in_clause = False
-            elif isinstance(node, exp.CTE):
-                context.cte_depth -= 1
-                if context.cte_depth == 0:
-                    context.in_recursive_cte = False
+    def _update_context_entering(self, node: exp.Expression, context: ParameterizationContext) -> None:
+        """Update context when entering a node."""
+        context.parent_stack.append(node)
+
+        if isinstance(node, Func):
+            self._update_context_entering_func(node, context)
+        elif isinstance(node, exp.Case):
+            context.in_case_when = True
+        elif isinstance(node, Array):
+            context.in_array = True
+        elif isinstance(node, exp.In):
+            context.in_in_clause = True
+        elif isinstance(node, exp.CTE):
+            self._update_context_entering_cte(node, context)
+        elif isinstance(node, exp.Subquery):
+            context.subquery_depth += 1
+            context.in_subquery = True
+        elif isinstance(node, exp.Select):
+            self._update_context_entering_select(node, context)
+        elif isinstance(node, exp.Join):
+            context.in_join_condition = True
+
+    def _update_context_entering_func(self, node: Func, context: ParameterizationContext) -> None:
+        """Update context when entering a function node."""
+        context.function_depth += 1
+        # Get function name from class name or node.name
+        func_name = node.__class__.__name__.upper()
+        if func_name in self.preserve_in_functions or (node.name and node.name.upper() in self.preserve_in_functions):
+            context.in_function_args = True
+
+    def _update_context_entering_cte(self, node: exp.CTE, context: ParameterizationContext) -> None:
+        """Update context when entering a CTE node."""
+        context.cte_depth += 1
+        # Check if this CTE is recursive:
+        # 1. Parent WITH must be RECURSIVE
+        # 2. CTE must contain UNION (characteristic of recursive CTEs)
+        is_in_recursive_with = any(
+            isinstance(parent, exp.With) and parent.args.get("recursive", False)
+            for parent in reversed(context.parent_stack)
+        )
+        if is_in_recursive_with and self._contains_union(node):
+            context.in_recursive_cte = True
+
+    def _update_context_entering_select(self, node: exp.Select, context: ParameterizationContext) -> None:
+        """Update context when entering a SELECT node."""
+        # Only track nested SELECT statements as subqueries if they're not part of a recursive CTE
+        is_in_recursive_cte = any(
+            isinstance(parent, exp.CTE)
+            and any(
+                isinstance(grandparent, exp.With) and grandparent.args.get("recursive", False)
+                for grandparent in context.parent_stack
+            )
+            for parent in context.parent_stack[:-1]
+        )
+
+        if not is_in_recursive_cte and any(
+            isinstance(parent, (exp.Select, exp.Subquery, exp.CTE))
+            for parent in context.parent_stack[:-1]  # Exclude the current node
+        ):
+            context.subquery_depth += 1
+            context.in_subquery = True
+        # Check if we're in a SELECT clause expressions list
+        if hasattr(node, "expressions"):
+            # We'll handle this specifically when processing individual expressions
+            context.in_select_list = False  # Will be detected by _is_in_select_expressions
+
+    def _update_context_leaving(self, node: exp.Expression, context: ParameterizationContext) -> None:
+        """Update context when leaving a node."""
+        if context.parent_stack:
+            context.parent_stack.pop()
+
+        if isinstance(node, Func):
+            self._update_context_leaving_func(node, context)
+        elif isinstance(node, exp.Case):
+            context.in_case_when = False
+        elif isinstance(node, Array):
+            context.in_array = False
+        elif isinstance(node, exp.In):
+            context.in_in_clause = False
+        elif isinstance(node, exp.CTE):
+            self._update_context_leaving_cte(node, context)
+        elif isinstance(node, exp.Subquery):
+            self._update_context_leaving_subquery(node, context)
+        elif isinstance(node, exp.Select):
+            self._update_context_leaving_select(node, context)
+        elif isinstance(node, exp.Join):
+            context.in_join_condition = False
+
+    def _update_context_leaving_func(self, node: Func, context: ParameterizationContext) -> None:
+        """Update context when leaving a function node."""
+        context.function_depth -= 1
+        if context.function_depth == 0:
+            context.in_function_args = False
+
+    def _update_context_leaving_cte(self, node: exp.CTE, context: ParameterizationContext) -> None:
+        """Update context when leaving a CTE node."""
+        context.cte_depth -= 1
+        if context.cte_depth == 0:
+            context.in_recursive_cte = False
+
+    def _update_context_leaving_subquery(self, node: exp.Subquery, context: ParameterizationContext) -> None:
+        """Update context when leaving a subquery node."""
+        context.subquery_depth -= 1
+        if context.subquery_depth == 0:
+            context.in_subquery = False
+
+    def _update_context_leaving_select(self, node: exp.Select, context: ParameterizationContext) -> None:
+        """Update context when leaving a SELECT node."""
+        # Only decrement if this was a nested SELECT (not part of recursive CTE)
+        is_in_recursive_cte = any(
+            isinstance(parent, exp.CTE)
+            and any(
+                isinstance(grandparent, exp.With) and grandparent.args.get("recursive", False)
+                for grandparent in context.parent_stack
+            )
+            for parent in context.parent_stack[:-1]
+        )
+
+        if not is_in_recursive_cte and any(
+            isinstance(parent, (exp.Select, exp.Subquery, exp.CTE))
+            for parent in context.parent_stack[:-1]  # Exclude current node
+        ):
+            context.subquery_depth -= 1
+            if context.subquery_depth == 0:
+                context.in_subquery = False
+        context.in_select_list = False
 
     def _process_literal_with_context(
         self, literal: exp.Expression, context: ParameterizationContext
@@ -228,11 +394,26 @@ class ParameterizeLiterals(ProcessorProtocol):
             semantic_name=semantic_name,
         )
 
-        # Add to parameters list
+        # Always track extracted parameters for proper merging
         self.extracted_parameters.append(typed_param)
+
+        # If we're reordering, also add to final params directly
+        if self._is_reordering_needed:
+            if self._preserve_dict_format and isinstance(self._final_params, dict):
+                # For dict format, we need a key
+                param_key = semantic_name or f"param_{len(self._final_params)}"
+                self._final_params[param_key] = typed_param
+            elif isinstance(self._final_params, list):
+                self._final_params.append(typed_param)
+            else:
+                # Fallback - this shouldn't happen but handle gracefully
+                if not hasattr(self, "_fallback_params"):
+                    self._fallback_params = []
+                self._fallback_params.append(typed_param)
+
         self._parameter_metadata.append(
             {
-                "index": len(self.extracted_parameters) - 1,
+                "index": len(self._final_params if self._is_reordering_needed else self.extracted_parameters) - 1,
                 "type": type_hint,
                 "semantic_name": semantic_name,
                 "context": self._get_context_description(context),
@@ -242,23 +423,343 @@ class ParameterizeLiterals(ProcessorProtocol):
         # Create appropriate placeholder
         return self._create_placeholder(hint=semantic_name)
 
+    def _process_existing_placeholder(self, node: exp.Placeholder, context: ParameterizationContext) -> exp.Expression:
+        """Process an existing placeholder when reordering parameters."""
+        if self._original_params is None:
+            return node
+
+        if isinstance(self._original_params, (list, tuple)):
+            self._handle_list_params_for_placeholder(node)
+        elif isinstance(self._original_params, dict):
+            self._handle_dict_params_for_placeholder(node)
+        else:
+            # Single value parameter
+            self._handle_single_value_param_for_placeholder(node)
+
+        return node
+
+    def _handle_list_params_for_placeholder(self, node: exp.Placeholder) -> None:
+        """Handle list/tuple parameters for placeholder."""
+        if isinstance(self._original_params, (list, tuple)) and self._user_param_index < len(self._original_params):
+            value = self._original_params[self._user_param_index]
+            self._add_to_final_params(value, node)
+            self._user_param_index += 1
+        else:
+            # More placeholders than user parameters
+            self._add_to_final_params(None, node)
+
+    def _handle_dict_params_for_placeholder(self, node: exp.Placeholder) -> None:
+        """Handle dict parameters for placeholder."""
+        if not isinstance(self._original_params, dict):
+            self._add_to_final_params(None, node)
+            return
+
+        raw_placeholder_name = node.this if hasattr(node, "this") else None
+        if not raw_placeholder_name:
+            # Unnamed placeholder '?' with dict params is ambiguous
+            self._add_to_final_params(None, node)
+            return
+
+        # FIX: Normalize the placeholder name by stripping leading sigils
+        placeholder_name = raw_placeholder_name.lstrip(":@")
+
+        # Debug logging
+
+        if placeholder_name in self._original_params:
+            # Direct match for placeholder name
+            self._add_to_final_params(self._original_params[placeholder_name], node)
+        elif placeholder_name.isdigit() and self._user_param_index == 0:
+            # Oracle-style numeric parameters
+            self._handle_oracle_numeric_params()
+            self._user_param_index += 1
+        elif placeholder_name.isdigit() and self._user_param_index > 0:
+            # Already handled Oracle params
+            pass
+        elif self._user_param_index == 0 and len(self._original_params) > 0:
+            # Single dict parameter case
+            self._handle_single_dict_param()
+            self._user_param_index += 1
+        else:
+            # No match found
+            self._add_to_final_params(None, node)
+
+    def _handle_single_value_param_for_placeholder(self, node: exp.Placeholder) -> None:
+        """Handle single value parameter for placeholder."""
+        if self._user_param_index == 0:
+            self._add_to_final_params(self._original_params, node)
+            self._user_param_index += 1
+        else:
+            self._add_to_final_params(None, node)
+
+    def _handle_oracle_numeric_params(self) -> None:
+        """Handle Oracle-style numeric parameters."""
+        if not isinstance(self._original_params, dict):
+            return
+
+        if self._preserve_dict_format and isinstance(self._final_params, dict):
+            for k, v in self._original_params.items():
+                if k.isdigit():
+                    self._final_params[k] = v
+        else:
+            # Convert to positional list
+            numeric_keys = [k for k in self._original_params if k.isdigit()]
+            if numeric_keys:
+                max_index = max(int(k) for k in numeric_keys)
+                param_list = [None] * (max_index + 1)
+                for k, v in self._original_params.items():
+                    if k.isdigit():
+                        param_list[int(k)] = v
+                if isinstance(self._final_params, list):
+                    self._final_params.extend(param_list)
+                elif isinstance(self._final_params, dict):
+                    for i, val in enumerate(param_list):
+                        self._final_params[str(i)] = val
+
+    def _handle_single_dict_param(self) -> None:
+        """Handle single dict parameter case."""
+        if not isinstance(self._original_params, dict):
+            return
+
+        if self._preserve_dict_format and isinstance(self._final_params, dict):
+            for k, v in self._original_params.items():
+                self._final_params[k] = v
+        elif isinstance(self._final_params, list):
+            self._final_params.append(self._original_params)
+        elif isinstance(self._final_params, dict):
+            param_name = f"param_{len(self._final_params)}"
+            self._final_params[param_name] = self._original_params
+
+    def _add_to_final_params(self, value: Any, node: exp.Placeholder) -> None:
+        """Add a value to final params with proper type handling."""
+        if self._preserve_dict_format and isinstance(self._final_params, dict):
+            placeholder_name = node.this if hasattr(node, "this") else f"param_{self._user_param_index}"
+            self._final_params[placeholder_name] = value
+        elif isinstance(self._final_params, list):
+            self._final_params.append(value)
+        elif isinstance(self._final_params, dict):
+            param_name = f"param_{len(self._final_params)}"
+            self._final_params[param_name] = value
+
+    def _process_existing_parameter(self, node: exp.Parameter, context: ParameterizationContext) -> exp.Expression:
+        """Process existing parameters (both numeric and named) when reordering parameters."""
+        # First try to get parameter name for named parameters (like BigQuery @param_name)
+        param_name = self._extract_parameter_name(node)
+
+        if param_name and isinstance(self._original_params, dict) and param_name in self._original_params:
+            value = self._original_params[param_name]
+            self._add_param_value_to_finals(value)
+            return node
+
+        # Fall back to numeric parameter handling for PostgreSQL-style parameters ($1, $2)
+        param_index = self._extract_parameter_index(node)
+
+        if self._original_params is None:
+            self._add_none_to_final_params()
+        elif isinstance(self._original_params, (list, tuple)):
+            self._handle_list_params_for_parameter_node(param_index)
+        elif isinstance(self._original_params, dict):
+            self._handle_dict_params_for_parameter_node(param_index)
+        elif param_index == 0:
+            # Single parameter case
+            self._add_param_value_to_finals(self._original_params)
+        else:
+            self._add_none_to_final_params()
+
+        # Return the parameter unchanged
+        return node
+
+    @staticmethod
+    def _extract_parameter_name(node: exp.Parameter) -> Optional[str]:
+        """Extract parameter name from a Parameter node for named parameters."""
+        if hasattr(node, "this"):
+            if isinstance(node.this, exp.Var):
+                # Named parameter like @min_value -> min_value
+                return str(node.this.this)
+            if hasattr(node.this, "this"):
+                # Handle other node types that might contain the name
+                return str(node.this.this)
+        return None
+
+    @staticmethod
+    def _extract_parameter_index(node: exp.Parameter) -> Optional[int]:
+        """Extract parameter index from a Parameter node."""
+        if hasattr(node, "this") and isinstance(node.this, Literal):
+            import contextlib
+
+            with contextlib.suppress(ValueError, TypeError):
+                return int(node.this.this) - 1  # Convert to 0-based index
+        return None
+
+    def _handle_list_params_for_parameter_node(self, param_index: Optional[int]) -> None:
+        """Handle list/tuple parameters for Parameter node."""
+        if (
+            isinstance(self._original_params, (list, tuple))
+            and param_index is not None
+            and 0 <= param_index < len(self._original_params)
+        ):
+            # Use the parameter at the specified index
+            self._add_param_value_to_finals(self._original_params[param_index])
+        else:
+            # More parameters than user provided
+            self._add_none_to_final_params()
+
+    def _handle_dict_params_for_parameter_node(self, param_index: Optional[int]) -> None:
+        """Handle dict parameters for Parameter node."""
+        if param_index is not None:
+            self._handle_dict_param_with_index(param_index)
+        else:
+            self._add_none_to_final_params()
+
+    def _handle_dict_param_with_index(self, param_index: int) -> None:
+        """Handle dict parameter when we have an index."""
+        if not isinstance(self._original_params, dict):
+            self._add_none_to_final_params()
+            return
+
+        # Try param_N key first
+        param_key = f"param_{param_index}"
+        if param_key in self._original_params:
+            self._add_dict_value_to_finals(param_key)
+            return
+
+        # Try direct numeric key (1-based)
+        numeric_key = str(param_index + 1)
+        if numeric_key in self._original_params:
+            self._add_dict_value_to_finals(numeric_key)
+        else:
+            self._add_none_to_final_params()
+
+    def _add_dict_value_to_finals(self, key: str) -> None:
+        """Add a value from dict params to final params."""
+        if isinstance(self._original_params, dict) and key in self._original_params:
+            value = self._original_params[key]
+            if isinstance(self._final_params, list):
+                self._final_params.append(value)
+            elif isinstance(self._final_params, dict):
+                self._final_params[key] = value
+
+    def _add_param_value_to_finals(self, value: Any) -> None:
+        """Add a parameter value to final params."""
+        if isinstance(self._final_params, list):
+            self._final_params.append(value)
+        elif isinstance(self._final_params, dict):
+            param_name = f"param_{len(self._final_params)}"
+            self._final_params[param_name] = value
+
+    def _add_none_to_final_params(self) -> None:
+        """Add None to final params."""
+        if isinstance(self._final_params, list):
+            self._final_params.append(None)
+        elif isinstance(self._final_params, dict):
+            param_name = f"param_{len(self._final_params)}"
+            self._final_params[param_name] = None
+
+    def _process_postgresql_column_parameter(
+        self, node: exp.Column, context: ParameterizationContext
+    ) -> exp.Expression:
+        """Process PostgreSQL-style parameters that were parsed as columns ($1, $2)."""
+        # Extract the numeric part from $1, $2, etc.
+        column_name = str(node.this) if hasattr(node, "this") else ""
+        param_index = None
+
+        if column_name.startswith("$") and column_name[1:].isdigit():
+            import contextlib
+
+            with contextlib.suppress(ValueError, TypeError):
+                param_index = int(column_name[1:]) - 1  # Convert to 0-based index
+
+        if self._original_params is None:
+            # No user parameters provided - don't add None
+            return node
+        if isinstance(self._original_params, (list, tuple)):
+            # When we have mixed parameter styles and reordering is needed,
+            # use sequential assignment based on _user_param_index
+            if self._is_reordering_needed:
+                # For mixed styles, parameters should be assigned sequentially
+                # regardless of the numeric value in the placeholder
+                if self._user_param_index < len(self._original_params):
+                    param_value = self._original_params[self._user_param_index]
+                    self._user_param_index += 1
+                else:
+                    param_value = None
+            else:
+                # Non-mixed styles - use the numeric value from the placeholder
+                param_value = (
+                    self._original_params[param_index]
+                    if param_index is not None and 0 <= param_index < len(self._original_params)
+                    else None
+                )
+
+            if param_value is not None:
+                # Add the parameter value to final params
+                if self._preserve_dict_format and isinstance(self._final_params, dict):
+                    param_key = f"param_{len(self._final_params)}"
+                    self._final_params[param_key] = param_value
+                elif isinstance(self._final_params, list):
+                    self._final_params.append(param_value)
+                elif isinstance(self._final_params, dict):
+                    param_name = f"param_{len(self._final_params)}"
+                    self._final_params[param_name] = param_value
+            # More parameters than user provided - don't add None
+        elif isinstance(self._original_params, dict):
+            # For dict parameters with numeric placeholders, try to map by index
+            if param_index is not None:
+                param_key = f"param_{param_index}"
+                if param_key in self._original_params:
+                    if self._preserve_dict_format and isinstance(self._final_params, dict):
+                        self._final_params[param_key] = self._original_params[param_key]
+                    elif isinstance(self._final_params, list):
+                        self._final_params.append(self._original_params[param_key])
+                    elif isinstance(self._final_params, dict):
+                        self._final_params[param_key] = self._original_params[param_key]
+                else:
+                    # Try direct numeric key
+                    numeric_key = str(param_index + 1)  # 1-based
+                    if numeric_key in self._original_params:
+                        if self._preserve_dict_format and isinstance(self._final_params, dict):
+                            self._final_params[numeric_key] = self._original_params[numeric_key]
+                        elif isinstance(self._final_params, list):
+                            self._final_params.append(self._original_params[numeric_key])
+                        elif isinstance(self._final_params, dict):
+                            self._final_params[numeric_key] = self._original_params[numeric_key]
+        # Single parameter case
+        elif param_index == 0:
+            if self._preserve_dict_format and isinstance(self._final_params, dict):
+                param_key = f"param_{len(self._final_params)}"
+                self._final_params[param_key] = self._original_params
+            elif isinstance(self._final_params, list):
+                self._final_params.append(self._original_params)
+            elif isinstance(self._final_params, dict):
+                param_name = f"param_{len(self._final_params)}"
+                self._final_params[param_name] = self._original_params
+
+        # Return the column unchanged - it represents the parameter placeholder
+        return node
+
     def _should_preserve_literal_in_context(self, literal: exp.Expression, context: ParameterizationContext) -> bool:
-        """Context-aware decision on literal preservation."""
-        # Check for NULL values
+        """Enhanced context-aware decision on literal preservation."""
+        # Existing preservation rules (maintain compatibility)
         if self.preserve_null and isinstance(literal, Null):
             return True
 
-        # Check for boolean values
         if self.preserve_boolean and isinstance(literal, Boolean):
             return True
+
+        # NEW: Context-based preservation rules
+
+        # Rule 4: Preserve enum-like literals in subquery lookups (the main fix we need)
+        if context.in_subquery and self._is_scalar_lookup_pattern(literal, context):
+            return self._is_enum_like_literal(literal)
+
+        # Existing preservation rules continue...
 
         # Check if in preserved function arguments
         if context.in_function_args:
             return True
 
-        # Preserve literals in recursive CTEs to avoid type inference issues
+        # ENHANCED: Intelligent recursive CTE literal preservation
         if self.preserve_in_recursive_cte and context.in_recursive_cte:
-            return True
+            return self._should_preserve_literal_in_recursive_cte(literal, context)
 
         # Check if this literal is being used as an alias value in SELECT
         # e.g., 'computed' as process_status should be preserved
@@ -298,6 +799,76 @@ class ParameterizeLiterals(ProcessorProtocol):
                 return True
 
         return False
+
+    def _is_in_select_expressions(self, literal: exp.Expression, context: ParameterizationContext) -> bool:
+        """Check if literal is in SELECT clause expressions (critical for type inference)."""
+        for parent in reversed(context.parent_stack):
+            if isinstance(parent, exp.Select):
+                if hasattr(parent, "expressions") and parent.expressions:
+                    return any(self._literal_is_in_expression_tree(literal, expr) for expr in parent.expressions)
+            elif isinstance(parent, (exp.Where, exp.Having, exp.Join)):
+                return False
+        return False
+
+    def _is_recursive_computation(self, literal: exp.Expression, context: ParameterizationContext) -> bool:
+        """Check if literal is part of recursive computation logic."""
+        # Look for arithmetic operations that are part of recursive logic
+        for parent in reversed(context.parent_stack):
+            if isinstance(parent, exp.Binary) and parent.key in ("ADD", "SUB", "MUL", "DIV"):
+                # Check if this arithmetic is in a SELECT clause of a recursive part
+                return self._is_in_select_expressions(literal, context)
+        return False
+
+    def _should_preserve_literal_in_recursive_cte(
+        self, literal: exp.Expression, context: ParameterizationContext
+    ) -> bool:
+        """Intelligent recursive CTE literal preservation based on semantic role."""
+        # Preserve SELECT clause literals (type inference critical)
+        if self._is_in_select_expressions(literal, context):
+            return True
+
+        # Preserve recursive computation literals (core logic)
+        return self._is_recursive_computation(literal, context)
+
+    def _literal_is_in_expression_tree(self, target_literal: exp.Expression, expr: exp.Expression) -> bool:
+        """Check if target literal is within the given expression tree."""
+        if expr == target_literal:
+            return True
+        # Recursively check child expressions
+        return any(child == target_literal for child in expr.iter_expressions())
+
+    def _is_scalar_lookup_pattern(self, literal: exp.Expression, context: ParameterizationContext) -> bool:
+        """Detect if literal is part of a scalar subquery lookup pattern."""
+        # Must be in a subquery for this pattern to apply
+        if context.subquery_depth == 0:
+            return False
+
+        # Check if we're in a WHERE clause of a subquery that returns a single column
+        # and the literal is being compared against a column
+        for parent in reversed(context.parent_stack):
+            if isinstance(parent, exp.Where):
+                # Look for pattern: WHERE column = 'literal'
+                if isinstance(parent.this, exp.Binary) and parent.this.right == literal:
+                    return isinstance(parent.this.left, exp.Column)
+                # Also check for literal on the left side: WHERE 'literal' = column
+                if isinstance(parent.this, exp.Binary) and parent.this.left == literal:
+                    return isinstance(parent.this.right, exp.Column)
+        return False
+
+    def _is_enum_like_literal(self, literal: exp.Expression) -> bool:
+        """Detect if literal looks like an enum/identifier constant."""
+        if not isinstance(literal, exp.Literal) or not self._is_string_literal(literal):
+            return False
+
+        value = str(literal.this)
+
+        # Conservative heuristics for enum-like values
+        return (
+            len(value) <= MAX_ENUM_LENGTH  # Reasonable length limit
+            and value.replace("_", "").isalnum()  # Only alphanumeric + underscores
+            and not value.isdigit()  # Not a pure number
+            and len(value) > MIN_ENUM_LENGTH  # Not too short to be meaningful
+        )
 
     def _extract_literal_value_and_type(self, literal: exp.Expression) -> tuple[Any, str]:
         """Extract the Python value and type info from a SQLGlot literal."""
@@ -551,7 +1122,6 @@ class ParameterizeLiterals(ProcessorProtocol):
             array_sqlglot_type = exp.DataType.build("ARRAY", expressions=[element_sqlglot_type])
 
             # Create TypedParameter for the entire array
-            from sqlspec.statement.parameters import TypedParameter
 
             typed_param = TypedParameter(
                 value=array_values,

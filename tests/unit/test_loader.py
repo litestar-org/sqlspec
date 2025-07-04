@@ -144,7 +144,7 @@ INSERT INTO users (username, email) VALUES (:username, :email);
         # Get SQL without parameters
         sql = loader.get_sql("get_user")
         assert isinstance(sql, SQL)
-        assert "SELECT * FROM users WHERE id = :user_id" in sql._sql  # pyright: ignore
+        assert "SELECT * FROM users WHERE id = :user_id" in sql.sql
 
         # Get SQL with parameters
         sql_with_params = loader.get_sql("create_user", username="alice", email="alice@example.com")
@@ -476,8 +476,10 @@ class TestSQLFileLoaderWithFixtures:
         # Disable parsing to avoid errors with Oracle-specific syntax
         from sqlspec.statement.sql import SQLConfig
 
-        config = SQLConfig(enable_parsing=False, enable_validation=False, strict_mode=False)
-        stmt = SQL(content, dialect="oracle", config=config).as_script()
+        stmt = SQL(
+            content,
+            config=SQLConfig(enable_parsing=False, enable_validation=False, strict_mode=False, dialect="oracle"),
+        ).as_script()
         assert stmt.is_script is True
 
         # Method 2: Programmatically add as a named query

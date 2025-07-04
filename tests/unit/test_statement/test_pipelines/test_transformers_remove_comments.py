@@ -16,7 +16,7 @@ import pytest
 from sqlglot import parse_one
 
 from sqlspec.statement.pipelines.context import SQLProcessingContext
-from sqlspec.statement.pipelines.transformers._remove_comments import CommentRemover
+from sqlspec.statement.pipelines.transformers._remove_comments_and_hints import CommentAndHintRemover as CommentRemover
 from sqlspec.statement.sql import SQLConfig
 
 if TYPE_CHECKING:

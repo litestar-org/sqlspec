@@ -20,7 +20,6 @@ import pytest
 
 from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.statement.parameters import ParameterInfo, ParameterStyle
-from sqlspec.statement.result import SelectResultDict, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
@@ -220,7 +219,7 @@ def test_execute_statement_routing(
     config = SQLConfig(
         enable_validation=False  # Disable validation to allow DDL
     )
-    statement = SQL(sql_text, _config=config)
+    statement = SQL(sql_text, config=config)
 
     # Set the internal flags
     statement._is_script = is_script
@@ -244,11 +243,9 @@ def test_execute_select_statement(driver: SqliteDriver, mock_connection: MagicMo
     statement = SQL("SELECT * FROM users")
     result = driver._execute_statement(statement)
 
-    assert result == {
-        "data": mock_cursor.fetchall.return_value,
-        "column_names": ["id", "name", "email"],
-        "rows_affected": 2,
-    }
+    assert result.data == mock_cursor.fetchall.return_value
+    assert result.column_names == ["id", "name", "email"]
+    assert result.rows_affected == 2
 
     mock_cursor.execute.assert_called_once_with("SELECT * FROM users", ())
 
@@ -261,7 +258,8 @@ def test_execute_dml_statement(driver: SqliteDriver, mock_connection: MagicMock)
     statement = SQL("INSERT INTO users (name, email) VALUES (?, ?)", ["Alice", "alice@example.com"])
     result = driver._execute_statement(statement)
 
-    assert result == {"rows_affected": 1, "status_message": "OK"}
+    assert result.rows_affected == 1
+    assert result.metadata["status_message"] == "OK"
 
     mock_cursor.execute.assert_called_once_with(
         "INSERT INTO users (name, email) VALUES (?, ?)", ("Alice", "alice@example.com")
@@ -311,7 +309,8 @@ def test_execute_many(driver: SqliteDriver, mock_connection: MagicMock) -> None:
 
     result = driver._execute_many(sql, params)
 
-    assert result == {"rows_affected": 3, "status_message": "OK"}
+    assert result.rows_affected == 3
+    assert result.metadata["status_message"] == "OK"
 
     expected_params = [("Alice", "alice@example.com"), ("Bob", "bob@example.com"), ("Charlie", "charlie@example.com")]
     mock_cursor.executemany.assert_called_once_with(sql, expected_params)
@@ -351,7 +350,8 @@ def test_execute_script(driver: SqliteDriver, mock_connection: MagicMock) -> Non
 
     result = driver._execute_script(script)
 
-    assert result == {"statements_executed": -1, "status_message": "SCRIPT EXECUTED"}
+    assert result.total_statements == -1
+    assert result.metadata["status_message"] == "SCRIPT EXECUTED"
 
     mock_cursor.executescript.assert_called_once_with(script)
     mock_connection.commit.assert_called_once()
@@ -403,90 +403,6 @@ def test_bulk_load_unsupported_format(driver: SqliteDriver) -> None:
         driver._bulk_load_file(Path("/tmp/test.parquet"), "users", "parquet", "append")
 
 
-# Result Wrapping Tests
-def test_wrap_select_result(driver: SqliteDriver) -> None:
-    """Test wrapping SELECT results."""
-    statement = SQL("SELECT * FROM users")
-    result: SelectResultDict = {
-        "data": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
-        "column_names": ["id", "name"],
-        "rows_affected": 2,
-    }
-
-    wrapped = driver._wrap_select_result(statement, result)  # pyright: ignore
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.statement is statement
-    assert wrapped.data == result["data"]
-    assert wrapped.column_names == ["id", "name"]
-    assert wrapped.rows_affected == 2
-    assert wrapped.operation_type == "SELECT"
-
-
-def test_wrap_select_result_with_schema(driver: SqliteDriver) -> None:
-    """Test wrapping SELECT results with schema type."""
-    from dataclasses import dataclass
-
-    @dataclass
-    class User:
-        id: int
-        name: str
-
-    statement = SQL("SELECT * FROM users")
-    result: SelectResultDict = {
-        "data": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
-        "column_names": ["id", "name"],
-        "rows_affected": 2,
-    }
-
-    wrapped = driver._wrap_select_result(statement, result, schema_type=User)
-
-    assert isinstance(wrapped, SQLResult)
-    assert all(isinstance(item, User) for item in wrapped.data)
-    assert wrapped.data[0].id == 1
-    assert wrapped.data[0].name == "Alice"
-
-
-def test_wrap_execute_result_dml(driver: SqliteDriver) -> None:
-    """Test wrapping DML results."""
-    statement = SQL("INSERT INTO users VALUES (?)")
-    mock_expression = MagicMock()
-    mock_expression.key = "insert"
-
-    from sqlspec.statement.result import DMLResultDict
-
-    result: DMLResultDict = {"rows_affected": 1, "status_message": "OK"}
-
-    with patch.object(type(statement), "expression", new_callable=PropertyMock, return_value=mock_expression):
-        wrapped = driver._wrap_execute_result(statement, result)  # pyright: ignore
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.data == []
-    assert wrapped.rows_affected == 1
-    assert wrapped.operation_type == "INSERT"
-    assert wrapped.metadata["status_message"] == "OK"
-
-
-def test_wrap_execute_result_script(driver: SqliteDriver) -> None:
-    """Test wrapping script results."""
-    statement = SQL("CREATE TABLE test; INSERT INTO test;")
-
-    from sqlspec.statement.result import ScriptResultDict
-
-    result: ScriptResultDict = {"statements_executed": 2, "status_message": "SCRIPT EXECUTED"}
-
-    with patch.object(type(statement), "expression", new_callable=PropertyMock, return_value=None):
-        wrapped = driver._wrap_execute_result(statement, result)  # pyright: ignore
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.data == []
-    assert wrapped.rows_affected == 0
-    assert wrapped.operation_type == "SCRIPT"
-    assert wrapped.metadata["status_message"] == "SCRIPT EXECUTED"
-    assert wrapped.metadata["statements_executed"] == 2
-
-
-# Error Handling Tests
 def test_execute_with_connection_error(driver: SqliteDriver, mock_connection: MagicMock) -> None:
     """Test handling connection errors during execution."""
     mock_cursor = mock_connection.cursor.return_value
@@ -507,7 +423,7 @@ def test_execute_with_no_parameters(driver: SqliteDriver, mock_connection: Magic
     from sqlspec.statement.sql import SQLConfig
 
     config = SQLConfig(enable_validation=False)  # Allow DDL
-    statement = SQL("CREATE TABLE test (id INTEGER)", _config=config)
+    statement = SQL("CREATE TABLE test (id INTEGER)", config=config)
     driver._execute_statement(statement)
 
     # sqlglot normalizes INTEGER to INT
@@ -524,4 +440,6 @@ def test_execute_select_with_empty_result(driver: SqliteDriver, mock_connection:
     statement = SQL("SELECT * FROM users WHERE 1=0")
     result = driver._execute_statement(statement)
 
-    assert result == {"data": [], "column_names": ["id", "name"], "rows_affected": 0}
+    assert result.data == []
+    assert result.column_names == ["id", "name"]
+    assert result.rows_affected == 0

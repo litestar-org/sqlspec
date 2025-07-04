@@ -18,7 +18,7 @@ import pytest
 
 from sqlspec.adapters.duckdb import DuckDBDriver
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, DMLResultDict, SelectResultDict, SQLResult
+from sqlspec.statement.result import ArrowResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
@@ -140,7 +140,7 @@ def test_execute_statement_routing(
 
     # Create config that allows DDL if needed
     config = SQLConfig(enable_validation=False) if "CREATE" in sql_text else SQLConfig()
-    statement = SQL(sql_text, _config=config)
+    statement = SQL(sql_text, config=config)
     statement._is_script = is_script
     statement._is_many = is_many
 
@@ -153,17 +153,22 @@ def test_execute_select_statement(driver: DuckDBDriver, mock_connection: MagicMo
     """Test executing a SELECT statement."""
     # Set up mock result
     mock_result = mock_connection.execute.return_value
-    mock_result.fetchall.return_value = [(1, "Alice", "alice@example.com"), (2, "Bob", "bob@example.com")]
+    # DuckDB returns list of dictionaries for default row type
+    mock_result.fetchall.return_value = [
+        {"id": 1, "name": "Alice", "email": "alice@example.com"},
+        {"id": 2, "name": "Bob", "email": "bob@example.com"},
+    ]
     mock_result.description = [("id",), ("name",), ("email",)]
 
     statement = SQL("SELECT * FROM users")
     result = driver._execute_statement(statement)
 
-    assert result == {
-        "data": [(1, "Alice", "alice@example.com"), (2, "Bob", "bob@example.com")],
-        "column_names": ["id", "name", "email"],
-        "rows_affected": 2,
-    }
+    assert result.data == [
+        {"id": 1, "name": "Alice", "email": "alice@example.com"},
+        {"id": 2, "name": "Bob", "email": "bob@example.com"},
+    ]
+    assert result.column_names == ["id", "name", "email"]
+    assert result.rows_affected == 2
 
     mock_connection.execute.assert_called_once_with("SELECT * FROM users", [])
 
@@ -177,7 +182,7 @@ def test_execute_dml_statement(driver: DuckDBDriver, mock_connection: MagicMock)
     statement = SQL("INSERT INTO users (name, email) VALUES (?, ?)", ["Alice", "alice@example.com"])
     result = driver._execute_statement(statement)
 
-    assert result == {"rows_affected": 1}
+    assert result.rows_affected == 1
 
     # DML statements should use cursor.execute, not connection.execute
     mock_cursor.execute.assert_called_once_with(
@@ -233,7 +238,7 @@ def test_execute_many(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
 
     result = driver._execute_many(sql, params)
 
-    assert result == {"rows_affected": 3}
+    assert result.rows_affected == 3
 
     mock_cursor.executemany.assert_called_once_with(sql, params)
 
@@ -251,91 +256,14 @@ def test_execute_script(driver: DuckDBDriver, mock_connection: MagicMock) -> Non
 
     result = driver._execute_script(script)
 
-    assert result == {
-        "statements_executed": -1,
-        "status_message": "Script executed successfully.",
-        "description": "The script was sent to the database.",
-    }
+    assert result.total_statements == -1
+    assert result.metadata["status_message"] == "Script executed successfully."
+    assert result.metadata["description"] == "The script was sent to the database."
 
     mock_cursor.execute.assert_called_once_with(script)
 
 
-# Result Wrapping Tests
-def test_wrap_select_result(driver: DuckDBDriver) -> None:
-    """Test wrapping SELECT results."""
-    statement = SQL("SELECT * FROM users")
-    result: SelectResultDict = {"data": [(1, "Alice"), (2, "Bob")], "column_names": ["id", "name"], "rows_affected": 2}
-
-    wrapped = driver._wrap_select_result(statement, result)
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.statement is statement
-    assert len(wrapped.data) == 2
-    assert wrapped.data == [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
-    assert wrapped.column_names == ["id", "name"]
-    assert wrapped.rows_affected == 2
-    assert wrapped.operation_type == "SELECT"
-
-
-def test_wrap_select_result_with_schema(driver: DuckDBDriver) -> None:
-    """Test wrapping SELECT results with schema type."""
-    from dataclasses import dataclass
-
-    @dataclass
-    class User:
-        id: int
-        name: str
-
-    statement = SQL("SELECT * FROM users")
-    result: SelectResultDict = {"data": [(1, "Alice"), (2, "Bob")], "column_names": ["id", "name"], "rows_affected": 2}
-
-    wrapped = driver._wrap_select_result(statement, result, schema_type=User)
-
-    assert isinstance(wrapped, SQLResult)
-    assert all(isinstance(item, User) for item in wrapped.data)
-    assert wrapped.data[0].id == 1
-    assert wrapped.data[0].name == "Alice"
-
-
-def test_wrap_execute_result_dml(driver: DuckDBDriver) -> None:
-    """Test wrapping DML results."""
-    statement = SQL("INSERT INTO users VALUES (?)")
-    # No need to mock _expression - it's computed from the SQL
-
-    result: DMLResultDict = {"rows_affected": 1}
-
-    wrapped = driver._wrap_execute_result(statement, result)  # pyright: ignore
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.data == []
-    assert wrapped.rows_affected == 1
-    assert wrapped.operation_type == "INSERT"
-
-
-def test_wrap_execute_result_script(driver: DuckDBDriver) -> None:
-    """Test wrapping script results."""
-    from sqlspec.statement.sql import SQLConfig
-
-    config = SQLConfig(enable_validation=False)  # Allow DDL
-    statement = SQL("CREATE TABLE test; INSERT INTO test;", _config=config)
-    # No need to set _expression
-
-    from sqlspec.statement.result import ScriptResultDict
-
-    result: ScriptResultDict = {
-        "statements_executed": 2,
-        "status_message": "Script executed successfully.",
-        "description": "The script was sent to the database.",
-    }
-
-    wrapped = driver._wrap_execute_result(statement, result)  # pyright: ignore
-
-    assert isinstance(wrapped, SQLResult)
-    assert wrapped.data == []
-    assert wrapped.rows_affected == 0
-    # For scripts, the operation_type is based on the first statement (CREATE)
-    assert wrapped.operation_type == "CREATE"
-    assert wrapped.metadata["status_message"] == "Script executed successfully."
+# Note: Result wrapping tests removed - drivers now return SQLResult directly from execute methods
 
 
 # Connection Tests
@@ -588,7 +516,7 @@ def test_execute_with_no_parameters(driver: DuckDBDriver, mock_connection: Magic
     from sqlspec.statement.sql import SQLConfig
 
     config = SQLConfig(enable_validation=False)
-    statement = SQL("CREATE TABLE test (id INTEGER)", _config=config)
+    statement = SQL("CREATE TABLE test (id INTEGER)", config=config)
     driver._execute_statement(statement)
 
     # Note: SQLGlot normalizes INTEGER to INT
@@ -606,7 +534,9 @@ def test_execute_select_with_empty_result(driver: DuckDBDriver, mock_connection:
     statement = SQL("SELECT * FROM users WHERE 1=0")
     result = driver._execute_statement(statement)
 
-    assert result == {"data": [], "column_names": ["id", "name"], "rows_affected": 0}
+    assert result.data == []
+    assert result.column_names == ["id", "name"]
+    assert result.rows_affected == 0
 
 
 def test_execute_many_with_empty_parameters(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
@@ -619,7 +549,7 @@ def test_execute_many_with_empty_parameters(driver: DuckDBDriver, mock_connectio
 
     result = driver._execute_many(sql, params)
 
-    assert result == {"rows_affected": 0}
+    assert result.rows_affected == 0
 
     # DuckDB driver optimizes by not calling executemany with empty parameter list
     mock_cursor.executemany.assert_not_called()

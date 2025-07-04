@@ -4,6 +4,7 @@ from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
+from sqlspec.utils.type_guards import has_query_builder_parameters
 
 __all__ = (
     "MergeIntoClauseMixin",
@@ -66,9 +67,9 @@ class MergeUsingClauseMixin:
         source_expr: exp.Expression
         if isinstance(source, str):
             source_expr = exp.to_table(source, alias=alias)
-        elif hasattr(source, "_parameters") and hasattr(source, "_expression"):
+        elif has_query_builder_parameters(source) and hasattr(source, "_expression"):
             # Merge parameters from the SELECT builder or other builder
-            subquery_builder_params = getattr(source, "_parameters", {})
+            subquery_builder_params = source.parameters
             if subquery_builder_params:
                 for p_name, p_value in subquery_builder_params.items():
                     self.add_parameter(p_value, name=p_name)  # type: ignore[attr-defined]
@@ -145,13 +146,11 @@ class MergeMatchedClauseMixin:
         if not isinstance(self._expression, exp.Merge):
             self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
 
-        # Get or create the whens object
         whens = self._expression.args.get("whens")
         if not whens:
             whens = exp.Whens(expressions=[])
             self._expression.set("whens", whens)
 
-        # Add the when clause to the whens expressions using SQLGlot's append method
         whens.append("expressions", when_clause)
 
     def when_matched_then_update(

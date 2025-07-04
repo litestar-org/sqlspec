@@ -63,15 +63,12 @@ class StructuredFormatter(logging.Formatter):
             "line": record.lineno,
         }
 
-        # Add correlation ID if available
         if correlation_id := get_correlation_id():
             log_entry["correlation_id"] = correlation_id
 
-        # Add any extra fields from the record
         if hasattr(record, "extra_fields"):
             log_entry.update(record.extra_fields)  # pyright: ignore
 
-        # Add exception info if present
         if record.exc_info:
             log_entry["exception"] = self.formatException(record.exc_info)
 
@@ -107,13 +104,11 @@ def get_logger(name: str | None = None) -> logging.Logger:
     if name is None:
         return logging.getLogger("sqlspec")
 
-    # Ensure all loggers are under the sqlspec namespace
     if not name.startswith("sqlspec"):
         name = f"sqlspec.{name}"
 
     logger = logging.getLogger(name)
 
-    # Add correlation ID filter if not already present
     if not any(isinstance(f, CorrelationIDFilter) for f in logger.filters):
         logger.addFilter(CorrelationIDFilter())
 
@@ -129,7 +124,6 @@ def log_with_context(logger: logging.Logger, level: int, message: str, **extra_f
         message: Log message
         **extra_fields: Additional fields to include in structured logs
     """
-    # Create a LogRecord with extra fields
     record = logger.makeRecord(logger.name, level, "(unknown file)", 0, message, (), None)
     record.extra_fields = extra_fields
     logger.handle(record)

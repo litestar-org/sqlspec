@@ -2,7 +2,6 @@
 
 from sqlspec.statement.pipelines.transformers._expression_simplifier import ExpressionSimplifier, SimplificationConfig
 from sqlspec.statement.pipelines.transformers._literal_parameterizer import ParameterizeLiterals
-from sqlspec.statement.pipelines.transformers._remove_comments import CommentRemover
-from sqlspec.statement.pipelines.transformers._remove_hints import HintRemover
+from sqlspec.statement.pipelines.transformers._remove_comments_and_hints import CommentAndHintRemover
 
-__all__ = ("CommentRemover", "ExpressionSimplifier", "HintRemover", "ParameterizeLiterals", "SimplificationConfig")
+__all__ = ("CommentAndHintRemover", "ExpressionSimplifier", "ParameterizeLiterals", "SimplificationConfig")

@@ -38,7 +38,6 @@ class InsertFromSelectMixin:
         if subquery_params:
             for p_name, p_value in subquery_params.items():
                 self.add_parameter(p_value, name=p_name)  # type: ignore[attr-defined]
-        # Set the SELECT expression as the source
         select_expr = getattr(select_builder, "_expression", None)
         if select_expr and isinstance(select_expr, exp.Select):
             self._expression.set("expression", select_expr.copy())

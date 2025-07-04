@@ -16,6 +16,12 @@ from sqlspec.statement.filters import StatementFilter
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.type_guards import (
+    is_async_pipeline_capable_driver,
+    is_async_transaction_state_capable,
+    is_sync_pipeline_capable_driver,
+    is_sync_transaction_state_capable,
+)
 
 if TYPE_CHECKING:
     from typing import Literal
@@ -136,11 +142,11 @@ class Pipeline:
         """
         self._operations.append(
             PipelineOperation(
-                sql=SQL(statement, *parameters, _config=self.driver.config, **kwargs), operation_type="execute"
+                sql=SQL(statement, parameters=parameters or None, config=self.driver.config, **kwargs),
+                operation_type="execute",
             )
         )
 
-        # Check for auto-flush
         if len(self._operations) >= self.max_operations:
             logger.warning("Pipeline auto-flushing at %s operations", len(self._operations))
             self.process()
@@ -153,7 +159,8 @@ class Pipeline:
         """Add a select operation to the pipeline."""
         self._operations.append(
             PipelineOperation(
-                sql=SQL(statement, *parameters, _config=self.driver.config, **kwargs), operation_type="select"
+                sql=SQL(statement, parameters=parameters or None, config=self.driver.config, **kwargs),
+                operation_type="select",
             )
         )
         return self
@@ -175,11 +182,11 @@ class Pipeline:
             raise ValueError(msg)
 
         batch_params = parameters[0]
-        # Convert tuple to list if needed
         if isinstance(batch_params, tuple):
             batch_params = list(batch_params)
-        # Create SQL object and mark as many, passing remaining args as filters
-        sql_obj = SQL(statement, *parameters[1:], **kwargs).as_many(batch_params)
+        sql_obj = SQL(
+            statement, parameters=parameters[1:] if len(parameters) > 1 else None, config=self.driver.config, **kwargs
+        ).as_many(batch_params)
 
         self._operations.append(PipelineOperation(sql=sql_obj, operation_type="execute_many"))
         return self
@@ -189,7 +196,7 @@ class Pipeline:
         if isinstance(script, SQL):
             sql_obj = script.as_script()
         else:
-            sql_obj = SQL(script, *filters, _config=self.driver.config, **kwargs).as_script()
+            sql_obj = SQL(script, parameters=filters or None, config=self.driver.config, **kwargs).as_script()
 
         self._operations.append(PipelineOperation(sql=sql_obj, operation_type="execute_script"))
         return self
@@ -206,13 +213,11 @@ class Pipeline:
         if not self._operations:
             return []
 
-        # Apply global filters
         if filters:
             self._apply_global_filters(filters)
 
-        # Check for native support
-        if hasattr(self.driver, "_execute_pipeline_native"):
-            results = self.driver._execute_pipeline_native(self._operations, **self.options)  # pyright: ignore
+        if is_sync_pipeline_capable_driver(self.driver):
+            results = self.driver._execute_pipeline_native(self._operations, **self.options)
         else:
             results = self._execute_pipeline_simulated()
 
@@ -226,7 +231,6 @@ class Pipeline:
         connection = None
         auto_transaction = False
 
-        # Only log once per pipeline, not for each operation
         if not self._simulation_logged:
             logger.info(
                 "%s using simulated pipeline. Native support: %s",
@@ -236,29 +240,21 @@ class Pipeline:
             self._simulation_logged = True
 
         try:
-            # Get a connection for the entire pipeline
             connection = self.driver._connection()
 
-            # Start transaction if not already in one
-            if self.isolation_level:
-                # Set isolation level if specified
-                pass  # Driver-specific implementation
-
-            if hasattr(connection, "in_transaction") and not connection.in_transaction():
-                if hasattr(connection, "begin"):
-                    connection.begin()
+            if is_sync_transaction_state_capable(connection) and not connection.in_transaction():
+                connection.begin()
                 auto_transaction = True
 
-            # Process each operation
             for i, op in enumerate(self._operations):
                 self._execute_single_operation(i, op, results, connection, auto_transaction)
 
             # Commit if we started the transaction
-            if auto_transaction and hasattr(connection, "commit"):
+            if auto_transaction and is_sync_transaction_state_capable(connection):
                 connection.commit()
 
         except Exception as e:
-            if connection and auto_transaction and hasattr(connection, "rollback"):
+            if connection and auto_transaction and is_sync_transaction_state_capable(connection):
                 connection.rollback()
             if not isinstance(e, PipelineExecutionError):
                 msg = f"Pipeline execution failed: {e}"
@@ -281,20 +277,18 @@ class Pipeline:
             else:
                 result = cast("SQLResult[Any]", self.driver.execute(op.sql, _connection=connection))
 
-            # Add operation context to result
             result.operation_index = i
             result.pipeline_sql = op.sql
             results.append(result)
 
         except Exception as e:
             if self.continue_on_error:
-                # Create error result
                 error_result = SQLResult(
                     statement=op.sql, data=[], error=e, operation_index=i, parameters=op.sql.parameters
                 )
                 results.append(error_result)
             else:
-                if auto_transaction and hasattr(connection, "rollback"):
+                if auto_transaction and is_sync_transaction_state_capable(connection):
                     connection.rollback()
                 msg = f"Pipeline failed at operation {i}: {e}"
                 raise PipelineExecutionError(
@@ -304,7 +298,6 @@ class Pipeline:
     def _apply_global_filters(self, filters: "list[StatementFilter]") -> None:
         """Apply global filters to all operations."""
         for operation in self._operations:
-            # Add filters to each operation
             if operation.filters is None:
                 operation.filters = []
             operation.filters.extend(filters)
@@ -313,13 +306,12 @@ class Pipeline:
         """Apply filters to a SQL object."""
         result = sql
         for filter_obj in filters:
-            if hasattr(filter_obj, "apply"):
-                result = cast("Any", filter_obj).apply(result)
+            result = filter_obj.append_to_statement(result)
         return result
 
     def _has_native_support(self) -> bool:
         """Check if driver has native pipeline support."""
-        return hasattr(self.driver, "_execute_pipeline_native")
+        return is_sync_pipeline_capable_driver(self.driver)
 
     def _process_parameters(self, params: tuple[Any, ...]) -> tuple["list[StatementFilter]", "Optional[Any]"]:
         """Extract filters and parameters from mixed args.
@@ -336,7 +328,6 @@ class Pipeline:
             else:
                 parameters.append(param)
 
-        # Return parameters based on count
         if not parameters:
             return filters, None
         if len(parameters) == 1:
@@ -375,11 +366,11 @@ class AsyncPipeline:
         """Add an execute operation to the async pipeline."""
         self._operations.append(
             PipelineOperation(
-                sql=SQL(statement, *parameters, _config=self.driver.config, **kwargs), operation_type="execute"
+                sql=SQL(statement, parameters=parameters or None, config=self.driver.config, **kwargs),
+                operation_type="execute",
             )
         )
 
-        # Check for auto-flush
         if len(self._operations) >= self.max_operations:
             logger.warning("Async pipeline auto-flushing at %s operations", len(self._operations))
             await self.process()
@@ -392,7 +383,8 @@ class AsyncPipeline:
         """Add a select operation to the async pipeline."""
         self._operations.append(
             PipelineOperation(
-                sql=SQL(statement, *parameters, _config=self.driver.config, **kwargs), operation_type="select"
+                sql=SQL(statement, parameters=parameters or None, config=self.driver.config, **kwargs),
+                operation_type="select",
             )
         )
         return self
@@ -407,11 +399,11 @@ class AsyncPipeline:
             raise ValueError(msg)
 
         batch_params = parameters[0]
-        # Convert tuple to list if needed
         if isinstance(batch_params, tuple):
             batch_params = list(batch_params)
-        # Create SQL object and mark as many, passing remaining args as filters
-        sql_obj = SQL(statement, *parameters[1:], **kwargs).as_many(batch_params)
+        sql_obj = SQL(
+            statement, parameters=parameters[1:] if len(parameters) > 1 else None, config=self.driver.config, **kwargs
+        ).as_many(batch_params)
 
         self._operations.append(PipelineOperation(sql=sql_obj, operation_type="execute_many"))
         return self
@@ -423,7 +415,7 @@ class AsyncPipeline:
         if isinstance(script, SQL):
             sql_obj = script.as_script()
         else:
-            sql_obj = SQL(script, *filters, _config=self.driver.config, **kwargs).as_script()
+            sql_obj = SQL(script, parameters=filters or None, config=self.driver.config, **kwargs).as_script()
 
         self._operations.append(PipelineOperation(sql=sql_obj, operation_type="execute_script"))
         return self
@@ -433,8 +425,7 @@ class AsyncPipeline:
         if not self._operations:
             return []
 
-        # Check for native support
-        if hasattr(self.driver, "_execute_pipeline_native"):
+        if is_async_pipeline_capable_driver(self.driver):
             results = await cast("Any", self.driver)._execute_pipeline_native(self._operations, **self.options)
         else:
             results = await self._execute_pipeline_simulated()
@@ -460,20 +451,18 @@ class AsyncPipeline:
         try:
             connection = self.driver._connection()
 
-            if hasattr(connection, "in_transaction") and not connection.in_transaction():
-                if hasattr(connection, "begin"):
-                    await connection.begin()
+            if is_async_transaction_state_capable(connection) and not connection.in_transaction():
+                await connection.begin()
                 auto_transaction = True
 
-            # Process each operation
             for i, op in enumerate(self._operations):
                 await self._execute_single_operation_async(i, op, results, connection, auto_transaction)
 
-            if auto_transaction and hasattr(connection, "commit"):
+            if auto_transaction and is_async_transaction_state_capable(connection):
                 await connection.commit()
 
         except Exception as e:
-            if connection and auto_transaction and hasattr(connection, "rollback"):
+            if connection and auto_transaction and is_async_transaction_state_capable(connection):
                 await connection.rollback()
             if not isinstance(e, PipelineExecutionError):
                 msg = f"Async pipeline execution failed: {e}"
@@ -506,7 +495,7 @@ class AsyncPipeline:
                 )
                 results.append(error_result)
             else:
-                if auto_transaction and hasattr(connection, "rollback"):
+                if auto_transaction and is_async_transaction_state_capable(connection):
                     await connection.rollback()
                 msg = f"Async pipeline failed at operation {i}: {e}"
                 raise PipelineExecutionError(
@@ -515,7 +504,7 @@ class AsyncPipeline:
 
     def _has_native_support(self) -> bool:
         """Check if driver has native pipeline support."""
-        return hasattr(self.driver, "_execute_pipeline_native")
+        return is_async_pipeline_capable_driver(self.driver)
 
     @property
     def operations(self) -> "list[PipelineOperation]":

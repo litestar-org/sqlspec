@@ -7,10 +7,11 @@ from typing import TYPE_CHECKING, Any, Optional
 from sqlglot import exp, parse_one
 from sqlglot.errors import ParseError as SQLGlotParseError
 
-from sqlspec.statement.pipelines.base import ProcessorProtocol
-from sqlspec.statement.pipelines.result_types import AnalysisFinding
+from sqlspec.protocols import ProcessorProtocol
+from sqlspec.statement.pipelines.context import AnalysisFinding
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.type_guards import has_expressions
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -146,7 +147,6 @@ class StatementAnalyzer(ProcessorProtocol):
 
         duration = time.perf_counter() - start_time
 
-        # Add analysis findings to context
         if analysis_result_obj.complexity_warnings:
             for warning in analysis_result_obj.complexity_warnings:
                 finding = AnalysisFinding(key="complexity_warning", value=warning, processor=self.__class__.__name__)
@@ -194,7 +194,6 @@ class StatementAnalyzer(ProcessorProtocol):
                 if expr is None:
                     expr = parse_one(sql_string, dialect=dialect)
 
-                # Check if the parsed expression is a valid SQL statement type
                 # Simple expressions like Alias or Identifier are not valid SQL statements
                 valid_statement_types = (
                     exp.Select,
@@ -230,7 +229,6 @@ class StatementAnalyzer(ProcessorProtocol):
         self, expression: exp.Expression, dialect: "DialectType" = None, config: "Optional[SQLConfig]" = None
     ) -> StatementAnalysis:
         """Analyze a SQLGlot expression directly, potentially using validation results for context."""
-        # Check cache first (using expression.sql() as key)
         # This caching needs to be context-aware if analysis depends on prior steps (e.g. validation_result)
         # For simplicity, let's assume for now direct expression analysis is cacheable if validation_result is not used deeply.
         cache_key = expression.sql()  # Simplified cache key
@@ -291,7 +289,7 @@ class StatementAnalyzer(ProcessorProtocol):
 
         for select in expression.find_all(exp.Select):
             from_clause = select.args.get("from")
-            if from_clause and hasattr(from_clause, "expressions") and len(from_clause.expressions) > 1:
+            if from_clause and has_expressions(from_clause) and len(from_clause.expressions) > 1:
                 # This logic checks for multiple tables in FROM without explicit JOINs
                 # It's a simplified check for potential cartesian products
                 cartesian_products += 1
@@ -342,7 +340,6 @@ class StatementAnalyzer(ProcessorProtocol):
             """Calculate the maximum depth of nested SELECT statements."""
             max_depth = 0
 
-            # Find all SELECT statements
             select_statements = list(expr.find_all(exp.Select))
 
             for select in select_statements:
@@ -350,7 +347,6 @@ class StatementAnalyzer(ProcessorProtocol):
                 depth = 0
                 current = select.parent
                 while current:
-                    # Check if parent is a SELECT or if it's inside a SELECT via Subquery/IN/EXISTS
                     if isinstance(current, exp.Select):
                         depth += 1
                     elif isinstance(current, (exp.Subquery, exp.In, exp.Exists)):
@@ -477,18 +473,21 @@ class StatementAnalyzer(ProcessorProtocol):
     def _extract_primary_table_name(expr: exp.Expression) -> "Optional[str]":
         """Extract the primary table name from an expression."""
         if isinstance(expr, exp.Insert):
-            if expr.this and hasattr(expr.this, "this"):
-                # Handle schema.table cases
+            if expr.this:
                 table = expr.this
                 if isinstance(table, exp.Table):
                     return table.name
-                if hasattr(table, "name"):
+                if isinstance(table, (exp.Identifier, exp.Var)):
                     return str(table.name)
         elif isinstance(expr, (exp.Update, exp.Delete)):
             if expr.this:
-                return str(expr.this.name) if hasattr(expr.this, "name") else str(expr.this)
+                if isinstance(expr.this, (exp.Table, exp.Identifier, exp.Var)):
+                    return str(expr.this.name)
+                return str(expr.this)
         elif isinstance(expr, exp.Select) and (from_clause := expr.find(exp.From)) and from_clause.this:
-            return str(from_clause.this.name) if hasattr(from_clause.this, "name") else str(from_clause.this)
+            if isinstance(from_clause.this, (exp.Table, exp.Identifier, exp.Var)):
+                return str(from_clause.this.name)
+            return str(from_clause.this)
         return None
 
     @staticmethod
@@ -496,16 +495,19 @@ class StatementAnalyzer(ProcessorProtocol):
         """Extract column names from an expression."""
         columns: list[str] = []
         if isinstance(expr, exp.Insert):
-            if expr.this and hasattr(expr.this, "expressions"):
-                columns.extend(str(col_expr.name) for col_expr in expr.this.expressions if hasattr(col_expr, "name"))
+            if expr.this and has_expressions(expr.this):
+                columns.extend(
+                    str(col_expr.name)
+                    for col_expr in expr.this.expressions
+                    if isinstance(col_expr, (exp.Column, exp.Identifier, exp.Var))
+                )
         elif isinstance(expr, exp.Select):
-            # Extract selected columns
             for projection in expr.expressions:
                 if isinstance(projection, exp.Column):
                     columns.append(str(projection.name))
-                elif hasattr(projection, "alias") and projection.alias:
+                elif isinstance(projection, exp.Alias) and projection.alias:
                     columns.append(str(projection.alias))
-                elif hasattr(projection, "name"):
+                elif isinstance(projection, (exp.Identifier, exp.Var)):
                     columns.append(str(projection.name))
 
         return columns
@@ -515,7 +517,7 @@ class StatementAnalyzer(ProcessorProtocol):
         """Extract all table names referenced in the expression."""
         tables: list[str] = []
         for table in expr.find_all(exp.Table):
-            if hasattr(table, "name"):
+            if isinstance(table, exp.Table):
                 table_name = str(table.name)
                 if table_name not in tables:
                     tables.append(table_name)
@@ -563,7 +565,6 @@ class StatementAnalyzer(ProcessorProtocol):
         # but exclude those within CTEs
         select_statements = []
         for select in expr.find_all(exp.Select):
-            # Check if this SELECT is inside a CTE
             parent = select.parent
             is_in_cte = False
             while parent:

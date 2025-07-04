@@ -5,10 +5,10 @@ from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._parsing_utils import parse_table_expression
-from sqlspec.typing import is_expression
+from sqlspec.utils.type_guards import has_query_builder_parameters, is_expression
 
 if TYPE_CHECKING:
-    from sqlspec.statement.builder.protocols import BuilderProtocol
+    from sqlspec.protocols import SQLBuilderProtocol
 
 __all__ = ("FromClauseMixin",)
 
@@ -29,7 +29,7 @@ class FromClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        builder = cast("BuilderProtocol", self)
+        builder = cast("SQLBuilderProtocol", self)
         if builder._expression is None:
             builder._expression = exp.Select()
         if not isinstance(builder._expression, exp.Select):
@@ -41,16 +41,18 @@ class FromClauseMixin:
         elif is_expression(table):
             # Direct sqlglot expression - use as is
             from_expr = exp.alias_(table, alias) if alias else table
-        elif hasattr(table, "build"):
+        elif has_query_builder_parameters(table):
             # Query builder with build() method
-            subquery = table.build()  # pyright: ignore
-            subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(builder, "dialect", None)))
+            subquery = table.build()
+            sql_str = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
+            subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(builder, "dialect", None)))
             from_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
             current_params = getattr(builder, "_parameters", None)
             merged_params = getattr(type(builder), "ParameterConverter", None)
-            if merged_params:
+            if merged_params and hasattr(subquery, "parameters"):
+                subquery_params = getattr(subquery, "parameters", {})
                 merged_params = merged_params.merge_parameters(
-                    parameters=subquery.parameters,
+                    parameters=subquery_params,
                     args=current_params if isinstance(current_params, list) else None,
                     kwargs=current_params if isinstance(current_params, dict) else {},
                 )

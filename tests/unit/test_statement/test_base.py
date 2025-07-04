@@ -296,7 +296,7 @@ def test_returns_rows(
     try:
         # Create a permissive configuration for testing that allows DDL, risky DML, and UNION operations
         test_config = SQLConfig(strict_mode=False)
-        statement = SQL(sql, _config=test_config)
+        statement = SQL(sql, config=test_config)
         expression = statement.expression
         actual_returns_rows = driver_attributes.returns_rows(expression)
 

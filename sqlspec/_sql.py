@@ -13,7 +13,7 @@ from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder import DeleteBuilder, InsertBuilder, MergeBuilder, SelectBuilder, UpdateBuilder
+from sqlspec.statement.builder import Column, Delete, Insert, Merge, Select, Update
 
 __all__ = ("SQLFactory",)
 
@@ -100,7 +100,6 @@ class SQLFactory:
             if parsed_expr:
                 # Attempt to get the class name as a fallback, e.g., "Set", "Command"
                 command_type = type(parsed_expr).__name__.upper()
-                # Handle specific cases like "COMMAND" which might be too generic
                 if command_type == "COMMAND" and parsed_expr.this:
                     return str(parsed_expr.this).upper()  # e.g. "SET", "ALTER"
                 return command_type
@@ -163,14 +162,12 @@ class SQLFactory:
             "WITH": "WITH",
         }
         actual_type_str = expr_type_map.get(actual_type, actual_type)
-        # Only allow SELECT or WITH (if WITH wraps SELECT)
         if actual_type_str == "SELECT" or (
             actual_type_str == "WITH" and parsed_expr.this and isinstance(parsed_expr.this, exp.Select)
         ):
-            builder = SelectBuilder(dialect=dialect or self.dialect)
+            builder = Select(dialect=dialect or self.dialect)
             builder._expression = parsed_expr
             return builder
-        # If not SELECT, raise with helpful message
         msg = (
             f"sql(...) only supports SELECT statements. Detected type: {actual_type_str}. "
             f"Use sql.{actual_type_str.lower()}() instead."
@@ -180,13 +177,11 @@ class SQLFactory:
     # ===================
     # Statement Builders
     # ===================
-    def select(self, *columns_or_sql: Union[str, exp.Expression], dialect: DialectType = None) -> "SelectBuilder":
+    def select(self, *columns_or_sql: Union[str, exp.Expression, Column], dialect: DialectType = None) -> "Select":
         builder_dialect = dialect or self.dialect
         if len(columns_or_sql) == 1 and isinstance(columns_or_sql[0], str):
             sql_candidate = columns_or_sql[0].strip()
-            # Check if it actually looks like SQL before parsing
             if self._looks_like_sql(sql_candidate):
-                # Validate type
                 detected = self.detect_sql_type(sql_candidate, dialect=builder_dialect)
                 if detected not in {"SELECT", "WITH"}:
                     msg = (
@@ -194,21 +189,20 @@ class SQLFactory:
                         f"Use sql.{detected.lower()}() if a dedicated builder exists, or ensure the SQL is SELECT/WITH."
                     )
                     raise SQLBuilderError(msg)
-                select_builder = SelectBuilder(dialect=builder_dialect)
+                select_builder = Select(dialect=builder_dialect)
                 if select_builder._expression is None:
                     select_builder.__post_init__()
                 return self._populate_select_from_sql(select_builder, sql_candidate)
-            # Otherwise treat as column name and fall through to normal column handling
-        select_builder = SelectBuilder(dialect=builder_dialect)
+        select_builder = Select(dialect=builder_dialect)
         if select_builder._expression is None:
             select_builder.__post_init__()
         if columns_or_sql:
             select_builder.select(*columns_or_sql)
         return select_builder
 
-    def insert(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "InsertBuilder":
+    def insert(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "Insert":
         builder_dialect = dialect or self.dialect
-        builder = InsertBuilder(dialect=builder_dialect)
+        builder = Insert(dialect=builder_dialect)
         if builder._expression is None:
             builder.__post_init__()
         if table_or_sql:
@@ -225,9 +219,9 @@ class SQLFactory:
             return builder.into(table_or_sql)
         return builder
 
-    def update(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "UpdateBuilder":
+    def update(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "Update":
         builder_dialect = dialect or self.dialect
-        builder = UpdateBuilder(dialect=builder_dialect)
+        builder = Update(dialect=builder_dialect)
         if builder._expression is None:
             builder.__post_init__()
         if table_or_sql:
@@ -240,9 +234,9 @@ class SQLFactory:
             return builder.table(table_or_sql)
         return builder
 
-    def delete(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "DeleteBuilder":
+    def delete(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "Delete":
         builder_dialect = dialect or self.dialect
-        builder = DeleteBuilder(dialect=builder_dialect)
+        builder = Delete(dialect=builder_dialect)
         if builder._expression is None:
             builder.__post_init__()
         if table_or_sql and self._looks_like_sql(table_or_sql):
@@ -253,9 +247,9 @@ class SQLFactory:
             return self._populate_delete_from_sql(builder, table_or_sql)
         return builder
 
-    def merge(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "MergeBuilder":
+    def merge(self, table_or_sql: Optional[str] = None, dialect: DialectType = None) -> "Merge":
         builder_dialect = dialect or self.dialect
-        builder = MergeBuilder(dialect=builder_dialect)
+        builder = Merge(dialect=builder_dialect)
         if builder._expression is None:
             builder.__post_init__()
         if table_or_sql:
@@ -288,7 +282,6 @@ class SQLFactory:
 
         candidate_upper = candidate.strip().upper()
 
-        # Check for SQL keywords at the beginning
         if expected_type:
             return candidate_upper.startswith(expected_type.upper())
 
@@ -302,7 +295,7 @@ class SQLFactory:
 
         return False
 
-    def _populate_insert_from_sql(self, builder: "InsertBuilder", sql_string: str) -> "InsertBuilder":
+    def _populate_insert_from_sql(self, builder: "Insert", sql_string: str) -> "Insert":
         """Parse SQL string and populate INSERT builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here
@@ -311,12 +304,10 @@ class SQLFactory:
                 parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Insert):
-                # Set the internal expression to the parsed one
                 builder._expression = parsed_expr
                 return builder
 
             if isinstance(parsed_expr, exp.Select):
-                # Handle INSERT FROM SELECT case - just return builder for now
                 # The actual conversion logic can be handled by the builder itself
                 logger.info("Detected SELECT statement for INSERT - may need target table specification")
                 return builder
@@ -328,7 +319,7 @@ class SQLFactory:
             logger.warning("Failed to parse INSERT SQL, falling back to traditional mode: %s", e)
         return builder
 
-    def _populate_select_from_sql(self, builder: "SelectBuilder", sql_string: str) -> "SelectBuilder":
+    def _populate_select_from_sql(self, builder: "Select", sql_string: str) -> "Select":
         """Parse SQL string and populate SELECT builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here
@@ -337,7 +328,6 @@ class SQLFactory:
                 parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Select):
-                # Set the internal expression to the parsed one
                 builder._expression = parsed_expr
                 return builder
 
@@ -347,7 +337,7 @@ class SQLFactory:
             logger.warning("Failed to parse SELECT SQL, falling back to traditional mode: %s", e)
         return builder
 
-    def _populate_update_from_sql(self, builder: "UpdateBuilder", sql_string: str) -> "UpdateBuilder":
+    def _populate_update_from_sql(self, builder: "Update", sql_string: str) -> "Update":
         """Parse SQL string and populate UPDATE builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here
@@ -356,7 +346,6 @@ class SQLFactory:
                 parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Update):
-                # Set the internal expression to the parsed one
                 builder._expression = parsed_expr
                 return builder
 
@@ -366,7 +355,7 @@ class SQLFactory:
             logger.warning("Failed to parse UPDATE SQL, falling back to traditional mode: %s", e)
         return builder
 
-    def _populate_delete_from_sql(self, builder: "DeleteBuilder", sql_string: str) -> "DeleteBuilder":
+    def _populate_delete_from_sql(self, builder: "Delete", sql_string: str) -> "Delete":
         """Parse SQL string and populate DELETE builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here
@@ -375,7 +364,6 @@ class SQLFactory:
                 parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Delete):
-                # Set the internal expression to the parsed one
                 builder._expression = parsed_expr
                 return builder
 
@@ -385,7 +373,7 @@ class SQLFactory:
             logger.warning("Failed to parse DELETE SQL, falling back to traditional mode: %s", e)
         return builder
 
-    def _populate_merge_from_sql(self, builder: "MergeBuilder", sql_string: str) -> "MergeBuilder":
+    def _populate_merge_from_sql(self, builder: "Merge", sql_string: str) -> "Merge":
         """Parse SQL string and populate MERGE builder using SQLGlot directly."""
         try:
             # Use SQLGlot directly for parsing - no validation here
@@ -394,7 +382,6 @@ class SQLFactory:
                 parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Merge):
-                # Set the internal expression to the parsed one
                 builder._expression = parsed_expr
                 return builder
 
@@ -408,16 +395,16 @@ class SQLFactory:
     # Column References
     # ===================
 
-    def __getattr__(self, name: str) -> exp.Column:
+    def __getattr__(self, name: str) -> Column:
         """Dynamically create column references.
 
         Args:
             name: Column name.
 
         Returns:
-            Column expression for the specified column name.
+            Column object that supports method chaining and operator overloading.
         """
-        return exp.column(name)
+        return Column(name)
 
     # ===================
     # Aggregate Functions
@@ -579,7 +566,6 @@ class SQLFactory:
         for column_set in column_sets:
             if isinstance(column_set, (tuple, list)):
                 if len(column_set) == 0:
-                    # Empty set for grand total
                     set_expressions.append(exp.Tuple(expressions=[]))
                 else:
                     columns = [exp.column(col) for col in column_set]
@@ -611,7 +597,6 @@ class SQLFactory:
             ```
         """
         if isinstance(values, list):
-            # Convert list to array literal
             literals = [exp.Literal.string(str(v)) if isinstance(v, str) else exp.Literal.number(v) for v in values]
             return exp.Any(this=exp.Array(expressions=literals))
         if isinstance(values, str):
@@ -734,11 +719,9 @@ class SQLFactory:
             msg = "DECODE requires at least one search/result pair"
             raise ValueError(msg)
 
-        # Build CASE expression
         conditions = []
         default = None
 
-        # Process search/result pairs
         for i in range(0, len(args) - 1, 2):
             if i + 1 >= len(args):
                 # Odd number of args means last one is default
@@ -748,7 +731,6 @@ class SQLFactory:
             search_val = args[i]
             result_val = args[i + 1]
 
-            # Create search expression
             if isinstance(search_val, str):
                 search_expr = exp.Literal.string(search_val)
             elif isinstance(search_val, (int, float)):
@@ -758,7 +740,6 @@ class SQLFactory:
             else:
                 search_expr = exp.Literal.string(str(search_val))
 
-            # Create result expression
             if isinstance(result_val, str):
                 result_expr = exp.Literal.string(result_val)
             elif isinstance(result_val, (int, float)):
@@ -768,79 +749,10 @@ class SQLFactory:
             else:
                 result_expr = exp.Literal.string(str(result_val))
 
-            # Create WHEN condition
             condition = exp.EQ(this=col_expr, expression=search_expr)
             conditions.append(exp.When(this=condition, then=result_expr))
 
         return exp.Case(ifs=conditions, default=default)
-
-    @staticmethod
-    def to_date(date_string: Union[str, exp.Expression], format_mask: Optional[str] = None) -> exp.Expression:
-        """Create a TO_DATE expression for converting strings to dates.
-
-        Args:
-            date_string: String or expression containing the date to convert.
-            format_mask: Optional format mask (e.g., 'YYYY-MM-DD', 'DD/MM/YYYY').
-
-        Returns:
-            TO_DATE function expression.
-        """
-        date_expr = exp.column(date_string) if isinstance(date_string, str) else date_string
-
-        if format_mask:
-            format_expr = exp.Literal.string(format_mask)
-            return exp.Anonymous(this="TO_DATE", expressions=[date_expr, format_expr])
-        return exp.Anonymous(this="TO_DATE", expressions=[date_expr])
-
-    @staticmethod
-    def to_char(column: Union[str, exp.Expression], format_mask: Optional[str] = None) -> exp.Expression:
-        """Create a TO_CHAR expression for converting values to strings.
-
-        Args:
-            column: Column or expression to convert to string.
-            format_mask: Optional format mask for dates/numbers.
-
-        Returns:
-            TO_CHAR function expression.
-        """
-        col_expr = exp.column(column) if isinstance(column, str) else column
-
-        if format_mask:
-            format_expr = exp.Literal.string(format_mask)
-            return exp.Anonymous(this="TO_CHAR", expressions=[col_expr, format_expr])
-        return exp.Anonymous(this="TO_CHAR", expressions=[col_expr])
-
-    @staticmethod
-    def to_string(column: Union[str, exp.Expression]) -> exp.Expression:
-        """Create a TO_STRING expression for converting values to strings.
-
-        Args:
-            column: Column or expression to convert to string.
-
-        Returns:
-            TO_STRING or CAST AS STRING expression.
-        """
-        col_expr = exp.column(column) if isinstance(column, str) else column
-        # Use CAST for broader compatibility
-        return exp.Cast(this=col_expr, to=exp.DataType.build("STRING"))
-
-    @staticmethod
-    def to_number(column: Union[str, exp.Expression], format_mask: Optional[str] = None) -> exp.Expression:
-        """Create a TO_NUMBER expression for converting strings to numbers.
-
-        Args:
-            column: Column or expression to convert to number.
-            format_mask: Optional format mask for the conversion.
-
-        Returns:
-            TO_NUMBER function expression.
-        """
-        col_expr = exp.column(column) if isinstance(column, str) else column
-
-        if format_mask:
-            format_expr = exp.Literal.string(format_mask)
-            return exp.Anonymous(this="TO_NUMBER", expressions=[col_expr, format_expr])
-        return exp.Anonymous(this="TO_NUMBER", expressions=[col_expr])
 
     @staticmethod
     def cast(column: Union[str, exp.Expression], data_type: str) -> exp.Expression:
@@ -855,75 +767,6 @@ class SQLFactory:
         """
         col_expr = exp.column(column) if isinstance(column, str) else column
         return exp.Cast(this=col_expr, to=exp.DataType.build(data_type))
-
-    # ===================
-    # JSON Functions
-    # ===================
-
-    @staticmethod
-    def to_json(column: Union[str, exp.Expression]) -> exp.Expression:
-        """Create a TO_JSON expression for converting values to JSON.
-
-        Args:
-            column: Column or expression to convert to JSON.
-
-        Returns:
-            TO_JSON function expression.
-        """
-        col_expr = exp.column(column) if isinstance(column, str) else column
-        return exp.Anonymous(this="TO_JSON", expressions=[col_expr])
-
-    @staticmethod
-    def from_json(json_column: Union[str, exp.Expression], schema: Optional[str] = None) -> exp.Expression:
-        """Create a FROM_JSON expression for parsing JSON strings.
-
-        Args:
-            json_column: Column or expression containing JSON string.
-            schema: Optional schema specification for the JSON structure.
-
-        Returns:
-            FROM_JSON function expression.
-        """
-        json_expr = exp.column(json_column) if isinstance(json_column, str) else json_column
-
-        if schema:
-            schema_expr = exp.Literal.string(schema)
-            return exp.Anonymous(this="FROM_JSON", expressions=[json_expr, schema_expr])
-        return exp.Anonymous(this="FROM_JSON", expressions=[json_expr])
-
-    @staticmethod
-    def json_extract(json_column: Union[str, exp.Expression], path: str) -> exp.Expression:
-        """Create a JSON_EXTRACT expression for extracting values from JSON.
-
-        Args:
-            json_column: Column or expression containing JSON.
-            path: JSON path to extract (e.g., '$.field', '$.array[0]').
-
-        Returns:
-            JSON_EXTRACT function expression.
-        """
-        json_expr = exp.column(json_column) if isinstance(json_column, str) else json_column
-        path_expr = exp.Literal.string(path)
-        return exp.Anonymous(this="JSON_EXTRACT", expressions=[json_expr, path_expr])
-
-    @staticmethod
-    def json_value(json_column: Union[str, exp.Expression], path: str) -> exp.Expression:
-        """Create a JSON_VALUE expression for extracting scalar values from JSON.
-
-        Args:
-            json_column: Column or expression containing JSON.
-            path: JSON path to extract scalar value.
-
-        Returns:
-            JSON_VALUE function expression.
-        """
-        json_expr = exp.column(json_column) if isinstance(json_column, str) else json_column
-        path_expr = exp.Literal.string(path)
-        return exp.Anonymous(this="JSON_VALUE", expressions=[json_expr, path_expr])
-
-    # ===================
-    # NULL Functions
-    # ===================
 
     @staticmethod
     def coalesce(*expressions: Union[str, exp.Expression]) -> exp.Expression:
@@ -1045,10 +888,8 @@ class SQLFactory:
         Returns:
             Window function expression.
         """
-        # Create the function call
         func_expr = exp.Anonymous(this=func_name, expressions=func_args)
 
-        # Build OVER clause
         over_args: dict[str, Any] = {}
 
         if partition_by:

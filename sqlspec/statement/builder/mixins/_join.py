@@ -5,9 +5,10 @@ from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._parsing_utils import parse_table_expression
+from sqlspec.utils.type_guards import has_query_builder_parameters
 
 if TYPE_CHECKING:
-    from sqlspec.statement.builder.protocols import BuilderProtocol
+    from sqlspec.protocols import SQLBuilderProtocol
 
 __all__ = ("JoinClauseMixin",)
 
@@ -22,7 +23,7 @@ class JoinClauseMixin:
         alias: Optional[str] = None,
         join_type: str = "INNER",
     ) -> Self:
-        builder = cast("BuilderProtocol", self)
+        builder = cast("SQLBuilderProtocol", self)
         if builder._expression is None:
             builder._expression = exp.Select()
         if not isinstance(builder._expression, exp.Select):
@@ -31,16 +32,19 @@ class JoinClauseMixin:
         table_expr: exp.Expression
         if isinstance(table, str):
             table_expr = parse_table_expression(table, alias)
-        elif hasattr(table, "build"):
-            # Handle builder objects with build() method
+        elif has_query_builder_parameters(table):
             # Work directly with AST when possible to avoid string parsing
             if hasattr(table, "_expression") and getattr(table, "_expression", None) is not None:
-                subquery_exp = exp.paren(table._expression.copy())  # pyright: ignore
+                table_expr_value = getattr(table, "_expression", None)
+                if table_expr_value is not None:
+                    subquery_exp = exp.paren(table_expr_value.copy())  # pyright: ignore
+                else:
+                    subquery_exp = exp.paren(exp.Anonymous(this=""))
                 table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
             else:
-                # Fallback to string parsing
                 subquery = table.build()  # pyright: ignore
-                subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(builder, "dialect", None)))
+                sql_str = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
+                subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(builder, "dialect", None)))
                 table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
             # Parameter merging logic can be added here if needed
         else:
@@ -84,7 +88,7 @@ class JoinClauseMixin:
         return self.join(table, on, alias, "FULL")
 
     def cross_join(self, table: Union[str, exp.Expression, Any], alias: Optional[str] = None) -> Self:
-        builder = cast("BuilderProtocol", self)
+        builder = cast("SQLBuilderProtocol", self)
         if builder._expression is None:
             builder._expression = exp.Select()
         if not isinstance(builder._expression, exp.Select):
@@ -93,15 +97,18 @@ class JoinClauseMixin:
         table_expr: exp.Expression
         if isinstance(table, str):
             table_expr = parse_table_expression(table, alias)
-        elif hasattr(table, "build"):
-            # Handle builder objects with build() method
+        elif has_query_builder_parameters(table):
             if hasattr(table, "_expression") and getattr(table, "_expression", None) is not None:
-                subquery_exp = exp.paren(table._expression.copy())  # pyright: ignore
+                table_expr_value = getattr(table, "_expression", None)
+                if table_expr_value is not None:
+                    subquery_exp = exp.paren(table_expr_value.copy())  # pyright: ignore
+                else:
+                    subquery_exp = exp.paren(exp.Anonymous(this=""))
                 table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
             else:
-                # Fallback to string parsing
                 subquery = table.build()  # pyright: ignore
-                subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=getattr(builder, "dialect", None)))
+                sql_str = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
+                subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(builder, "dialect", None)))
                 table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
         else:
             table_expr = table

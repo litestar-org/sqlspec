@@ -1,13 +1,12 @@
 """Unit tests for PSQLPy driver."""
 
-from typing import cast
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
 from sqlspec.adapters.psqlpy import PsqlpyDriver
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, SelectResultDict
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -83,14 +82,11 @@ async def test_psqlpy_driver_execute_statement_select(
     statement = SQL("SELECT * FROM users WHERE id = $1", [1])
     result = await psqlpy_driver._execute_statement(statement)
 
-    # Verify result is a dictionary (SelectResultDict)
-    assert isinstance(result, dict)
-    assert "data" in result
-    assert "column_names" in result
-    # Cast to SelectResultDict for type checking
-    select_result = cast(SelectResultDict, result)
-    assert select_result["data"] == mock_data
-    assert select_result["column_names"] == ["id", "name"]
+    # Verify result is SQLResult
+    assert isinstance(result, SQLResult)
+    assert result.data == mock_data
+    assert result.column_names == ["id", "name"]
+    assert result.operation_type == "SELECT"
 
     # Verify connection operations
     mock_psqlpy_connection.fetch.assert_called_once()

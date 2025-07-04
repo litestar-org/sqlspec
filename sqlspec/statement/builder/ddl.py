@@ -12,25 +12,28 @@ from sqlspec.statement.builder.base import QueryBuilder, SafeQuery
 from sqlspec.statement.result import SQLResult
 
 if TYPE_CHECKING:
+    from sqlspec.statement.builder.column import ColumnExpression
     from sqlspec.statement.sql import SQL, SQLConfig
 
 __all__ = (
     "AlterOperation",
-    "AlterTableBuilder",
+    "AlterTable",
     "ColumnDefinition",
-    "CommentOnBuilder",
+    "CommentOn",
     "ConstraintDefinition",
-    "CreateIndexBuilder",
-    "CreateSchemaBuilder",
-    "CreateTableAsSelectBuilder",
-    "CreateTableBuilder",
+    "CreateIndex",
+    "CreateMaterializedView",
+    "CreateSchema",
+    "CreateTable",
+    "CreateTableAsSelect",
+    "CreateView",
     "DDLBuilder",
-    "DropIndexBuilder",
-    "DropSchemaBuilder",
-    "DropTableBuilder",
-    "DropViewBuilder",
-    "RenameTableBuilder",
-    "TruncateTableBuilder",
+    "DropIndex",
+    "DropSchema",
+    "DropTable",
+    "DropView",
+    "RenameTable",
+    "TruncateTable",
 )
 
 
@@ -99,12 +102,12 @@ class ConstraintDefinition:
 
 # --- CREATE TABLE ---
 @dataclass
-class CreateTableBuilder(DDLBuilder):
+class CreateTable(DDLBuilder):
     """Builder for CREATE TABLE statements with columns and constraints.
 
     Example:
         builder = (
-            CreateTableBuilder("users")
+            CreateTable("users")
             .column("id", "SERIAL", primary_key=True)
             .column("email", "VARCHAR(255)", not_null=True, unique=True)
             .column("created_at", "TIMESTAMP", default="CURRENT_TIMESTAMP")
@@ -179,11 +182,9 @@ class CreateTableBuilder(DDLBuilder):
         if not dtype:
             self._raise_sql_builder_error("Column type must be a non-empty string")
 
-        # Check for duplicate column names
         if any(col.name == name for col in self._columns):
             self._raise_sql_builder_error(f"Column '{name}' already defined")
 
-        # Create column definition
         column_def = ColumnDefinition(
             name=name,
             dtype=dtype,
@@ -215,15 +216,12 @@ class CreateTableBuilder(DDLBuilder):
         if not col_list:
             self._raise_sql_builder_error("Primary key must include at least one column")
 
-        # Check if primary key already exists
         existing_pk = next((c for c in self._constraints if c.constraint_type == "PRIMARY KEY"), None)
         if existing_pk:
-            # Update existing primary key to include new columns
             for col in col_list:
                 if col not in existing_pk.columns:
                     existing_pk.columns.append(col)
         else:
-            # Create new primary key constraint
             constraint = ConstraintDefinition(constraint_type="PRIMARY KEY", name=name, columns=col_list)
             self._constraints.append(constraint)
 
@@ -250,7 +248,6 @@ class CreateTableBuilder(DDLBuilder):
         if len(col_list) != len(ref_col_list):
             self._raise_sql_builder_error("Foreign key columns and referenced columns must have same length")
 
-        # Validate actions
         valid_actions = {"CASCADE", "SET NULL", "SET DEFAULT", "RESTRICT", "NO ACTION", None}
         if on_delete and on_delete.upper() not in valid_actions:
             self._raise_sql_builder_error(f"Invalid ON DELETE action: {on_delete}")
@@ -285,12 +282,21 @@ class CreateTableBuilder(DDLBuilder):
         self._constraints.append(constraint)
         return self
 
-    def check_constraint(self, condition: str, name: "Optional[str]" = None) -> "Self":
+    def check_constraint(self, condition: Union[str, "ColumnExpression"], name: "Optional[str]" = None) -> "Self":
         """Add a check constraint."""
         if not condition:
             self._raise_sql_builder_error("Check constraint must have a condition")
 
-        constraint = ConstraintDefinition(constraint_type="CHECK", name=name, condition=condition)
+        condition_str: str
+        if hasattr(condition, "sqlglot_expression"):
+            # This is a ColumnExpression - render as raw SQL for DDL (no parameters)
+            sqlglot_expr = getattr(condition, "sqlglot_expression", None)
+            condition_str = sqlglot_expr.sql(dialect=self.dialect) if sqlglot_expr else str(condition)
+        else:
+            # String condition - use as-is
+            condition_str = str(condition)
+
+        constraint = ConstraintDefinition(constraint_type="CHECK", name=name, condition=condition_str)
 
         self._constraints.append(constraint)
         return self
@@ -325,19 +331,16 @@ class CreateTableBuilder(DDLBuilder):
         if not self._columns and not self._like_table:
             self._raise_sql_builder_error("Table must have at least one column or use LIKE clause")
 
-        # Build table identifier with schema if provided
         if self._schema:
             table = exp.Table(this=exp.to_identifier(self._table_name), db=exp.to_identifier(self._schema))
         else:
             table = exp.to_table(self._table_name)
 
-        # Build column expressions
         column_defs: list[exp.Expression] = []
         for col in self._columns:
             col_expr = build_column_expression(col)
             column_defs.append(col_expr)
 
-        # Build constraint expressions
         for constraint in self._constraints:
             # Skip PRIMARY KEY constraints that are already defined on columns
             if constraint.constraint_type == "PRIMARY KEY" and len(constraint.columns) == 1:
@@ -349,7 +352,6 @@ class CreateTableBuilder(DDLBuilder):
             if constraint_expr:
                 column_defs.append(constraint_expr)
 
-        # Build properties for table options
         props: list[exp.Property] = []
         if self._table_options.get("engine"):
             props.append(
@@ -364,7 +366,6 @@ class CreateTableBuilder(DDLBuilder):
                 exp.Property(this=exp.to_identifier("PARTITION BY"), value=exp.Literal.string(self._partition_by))
             )
 
-        # Add other table options
         for key, value in self._table_options.items():
             if key != "engine":  # Skip already handled options
                 if isinstance(value, str):
@@ -374,15 +375,12 @@ class CreateTableBuilder(DDLBuilder):
 
         properties_node = exp.Properties(expressions=props) if props else None
 
-        # Build schema expression
         schema_expr = exp.Schema(expressions=column_defs) if column_defs else None
 
-        # Handle LIKE clause
         like_expr = None
         if self._like_table:
             like_expr = exp.to_table(self._like_table)
 
-        # Create the CREATE expression
         return exp.Create(
             kind="TABLE",
             this=table,
@@ -406,12 +404,22 @@ class CreateTableBuilder(DDLBuilder):
 
 # --- DROP TABLE ---
 @dataclass
-class DropTableBuilder(DDLBuilder):
+class DropTable(DDLBuilder):
     """Builder for DROP TABLE [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
     _table_name: Optional[str] = None
     _if_exists: bool = False
     _cascade: Optional[bool] = None  # True: CASCADE, False: RESTRICT, None: not set
+
+    def __init__(self, table_name: str, **kwargs: Any) -> None:
+        """Initialize DROP TABLE with table name.
+
+        Args:
+            table_name: Name of the table to drop
+            **kwargs: Additional DDLBuilder arguments
+        """
+        super().__init__(**kwargs)
+        self._table_name = table_name
 
     def table(self, name: str) -> Self:
         self._table_name = name
@@ -439,13 +447,23 @@ class DropTableBuilder(DDLBuilder):
 
 # --- DROP INDEX ---
 @dataclass
-class DropIndexBuilder(DDLBuilder):
+class DropIndex(DDLBuilder):
     """Builder for DROP INDEX [IF EXISTS] ... [ON table] [CASCADE|RESTRICT]."""
 
     _index_name: Optional[str] = None
     _table_name: Optional[str] = None
     _if_exists: bool = False
     _cascade: Optional[bool] = None
+
+    def __init__(self, index_name: str, **kwargs: Any) -> None:
+        """Initialize DROP INDEX with index name.
+
+        Args:
+            index_name: Name of the index to drop
+            **kwargs: Additional DDLBuilder arguments
+        """
+        super().__init__(**kwargs)
+        self._index_name = index_name
 
     def name(self, index_name: str) -> Self:
         self._index_name = index_name
@@ -481,7 +499,7 @@ class DropIndexBuilder(DDLBuilder):
 
 # --- DROP VIEW ---
 @dataclass
-class DropViewBuilder(DDLBuilder):
+class DropView(DDLBuilder):
     """Builder for DROP VIEW [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
     _view_name: Optional[str] = None
@@ -514,7 +532,7 @@ class DropViewBuilder(DDLBuilder):
 
 # --- DROP SCHEMA ---
 @dataclass
-class DropSchemaBuilder(DDLBuilder):
+class DropSchema(DDLBuilder):
     """Builder for DROP SCHEMA [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
     _schema_name: Optional[str] = None
@@ -547,7 +565,7 @@ class DropSchemaBuilder(DDLBuilder):
 
 # --- CREATE INDEX ---
 @dataclass
-class CreateIndexBuilder(DDLBuilder):
+class CreateIndex(DDLBuilder):
     """Builder for CREATE [UNIQUE] INDEX [IF NOT EXISTS] ... ON ... (...).
 
     Supports columns, expressions, ordering, using, and where.
@@ -560,6 +578,19 @@ class CreateIndexBuilder(DDLBuilder):
     _if_not_exists: bool = False
     _using: Optional[str] = None
     _where: Optional[Union[str, exp.Expression]] = None
+
+    def __init__(self, index_name: str, **kwargs: Any) -> None:
+        """Initialize CREATE INDEX with index name.
+
+        Args:
+            index_name: Name of the index to create
+            **kwargs: Additional DDLBuilder arguments
+        """
+        super().__init__(**kwargs)
+        self._index_name = index_name
+        # Initialize dataclass fields that may not be set by super().__init__
+        if not hasattr(self, "_columns"):
+            self._columns = []
 
     def name(self, index_name: str) -> Self:
         self._index_name = index_name
@@ -620,7 +651,7 @@ class CreateIndexBuilder(DDLBuilder):
 
 # --- TRUNCATE TABLE ---
 @dataclass
-class TruncateTableBuilder(DDLBuilder):
+class TruncateTable(DDLBuilder):
     """Builder for TRUNCATE TABLE ... [CASCADE|RESTRICT] [RESTART IDENTITY|CONTINUE IDENTITY]."""
 
     _table_name: Optional[str] = None
@@ -673,7 +704,7 @@ class AlterOperation:
 
 # --- CREATE SCHEMA ---
 @dataclass
-class CreateSchemaBuilder(DDLBuilder):
+class CreateSchema(DDLBuilder):
     """Builder for CREATE SCHEMA [IF NOT EXISTS] schema_name [AUTHORIZATION user_name]."""
 
     _schema_name: Optional[str] = None
@@ -710,7 +741,7 @@ class CreateSchemaBuilder(DDLBuilder):
 
 
 @dataclass
-class CreateTableAsSelectBuilder(DDLBuilder):
+class CreateTableAsSelect(DDLBuilder):
     """Builder for CREATE TABLE [IF NOT EXISTS] ... AS SELECT ... (CTAS).
 
     Supports optional column list and parameterized SELECT sources.
@@ -759,24 +790,20 @@ class CreateTableAsSelectBuilder(DDLBuilder):
         if self._select_query is None:
             self._raise_sql_builder_error("SELECT query must be set for CREATE TABLE AS SELECT.")
 
-        # Determine the SELECT expression and parameters
         select_expr = None
         select_params = None
-        from sqlspec.statement.builder.select import SelectBuilder
+        from sqlspec.statement.builder.select import Select
         from sqlspec.statement.sql import SQL
 
         if isinstance(self._select_query, SQL):
             select_expr = self._select_query.expression
             select_params = getattr(self._select_query, "parameters", None)
-        elif isinstance(self._select_query, SelectBuilder):
-            # Get the expression and parameters directly
+        elif isinstance(self._select_query, Select):
             select_expr = getattr(self._select_query, "_expression", None)
             select_params = getattr(self._select_query, "_parameters", None)
 
-            # Apply CTEs if present
             with_ctes = getattr(self._select_query, "_with_ctes", {})
             if with_ctes and select_expr and isinstance(select_expr, exp.Select):
-                # Apply CTEs directly to the SELECT expression using sqlglot's with_ method
                 for alias, cte in with_ctes.items():
                     if hasattr(select_expr, "with_"):
                         select_expr = select_expr.with_(
@@ -799,7 +826,6 @@ class CreateTableAsSelectBuilder(DDLBuilder):
                 # The SELECT query already has unique parameter names
                 self._parameters[p_name] = p_value
 
-        # Build schema/column list if provided
         schema_expr = None
         if self._columns:
             schema_expr = exp.Schema(expressions=[exp.column(c) for c in self._columns])
@@ -814,7 +840,7 @@ class CreateTableAsSelectBuilder(DDLBuilder):
 
 
 @dataclass
-class CreateMaterializedViewBuilder(DDLBuilder):
+class CreateMaterializedView(DDLBuilder):
     """Builder for CREATE MATERIALIZED VIEW [IF NOT EXISTS] ... AS SELECT ...
 
     Supports optional column list, parameterized SELECT sources, and dialect-specific options.
@@ -881,16 +907,15 @@ class CreateMaterializedViewBuilder(DDLBuilder):
         if self._select_query is None:
             self._raise_sql_builder_error("SELECT query must be set for CREATE MATERIALIZED VIEW.")
 
-        # Determine the SELECT expression and parameters
         select_expr = None
         select_params = None
-        from sqlspec.statement.builder.select import SelectBuilder
+        from sqlspec.statement.builder.select import Select
         from sqlspec.statement.sql import SQL
 
         if isinstance(self._select_query, SQL):
             select_expr = self._select_query.expression
             select_params = getattr(self._select_query, "parameters", None)
-        elif isinstance(self._select_query, SelectBuilder):
+        elif isinstance(self._select_query, Select):
             select_expr = getattr(self._select_query, "_expression", None)
             select_params = getattr(self._select_query, "_parameters", None)
         elif isinstance(self._select_query, str):
@@ -908,12 +933,10 @@ class CreateMaterializedViewBuilder(DDLBuilder):
                 # The SELECT query already has unique parameter names
                 self._parameters[p_name] = p_value
 
-        # Build schema/column list if provided
         schema_expr = None
         if self._columns:
             schema_expr = exp.Schema(expressions=[exp.column(c) for c in self._columns])
 
-        # Build properties for dialect-specific options
         props: list[exp.Property] = []
         if self._refresh_mode:
             props.append(
@@ -945,7 +968,7 @@ class CreateMaterializedViewBuilder(DDLBuilder):
 
 
 @dataclass
-class CreateViewBuilder(DDLBuilder):
+class CreateView(DDLBuilder):
     """Builder for CREATE VIEW [IF NOT EXISTS] ... AS SELECT ...
 
     Supports optional column list, parameterized SELECT sources, and hints.
@@ -983,16 +1006,15 @@ class CreateViewBuilder(DDLBuilder):
         if self._select_query is None:
             self._raise_sql_builder_error("SELECT query must be set for CREATE VIEW.")
 
-        # Determine the SELECT expression and parameters
         select_expr = None
         select_params = None
-        from sqlspec.statement.builder.select import SelectBuilder
+        from sqlspec.statement.builder.select import Select
         from sqlspec.statement.sql import SQL
 
         if isinstance(self._select_query, SQL):
             select_expr = self._select_query.expression
             select_params = getattr(self._select_query, "parameters", None)
-        elif isinstance(self._select_query, SelectBuilder):
+        elif isinstance(self._select_query, Select):
             select_expr = getattr(self._select_query, "_expression", None)
             select_params = getattr(self._select_query, "_parameters", None)
         elif isinstance(self._select_query, str):
@@ -1010,12 +1032,10 @@ class CreateViewBuilder(DDLBuilder):
                 # The SELECT query already has unique parameter names
                 self._parameters[p_name] = p_value
 
-        # Build schema/column list if provided
         schema_expr = None
         if self._columns:
             schema_expr = exp.Schema(expressions=[exp.column(c) for c in self._columns])
 
-        # Build properties for hints
         props: list[exp.Property] = [
             exp.Property(this=exp.to_identifier("HINT"), value=exp.Literal.string(h)) for h in self._hints
         ]
@@ -1032,7 +1052,7 @@ class CreateViewBuilder(DDLBuilder):
 
 
 @dataclass
-class AlterTableBuilder(DDLBuilder):
+class AlterTable(DDLBuilder):
     """Builder for ALTER TABLE with granular operations.
 
     Supports column operations (add, drop, alter type, rename) and constraint operations.
@@ -1137,7 +1157,7 @@ class AlterTableBuilder(DDLBuilder):
         name: "Optional[str]" = None,
         references_table: "Optional[str]" = None,
         references_columns: "Optional[Union[str, list[str]]]" = None,
-        condition: "Optional[str]" = None,
+        condition: "Optional[Union[str, ColumnExpression]]" = None,
         on_delete: "Optional[str]" = None,
         on_update: "Optional[str]" = None,
     ) -> "Self":
@@ -1167,13 +1187,22 @@ class AlterTableBuilder(DDLBuilder):
         if references_columns is not None:
             ref_col_list = [references_columns] if isinstance(references_columns, str) else list(references_columns)
 
+        # Handle ColumnExpression for CHECK constraints
+        condition_str: Optional[str] = None
+        if condition is not None:
+            if hasattr(condition, "sqlglot_expression"):
+                sqlglot_expr = getattr(condition, "sqlglot_expression", None)
+                condition_str = sqlglot_expr.sql(dialect=self.dialect) if sqlglot_expr else str(condition)
+            else:
+                condition_str = str(condition)
+
         constraint_def = ConstraintDefinition(
             constraint_type=constraint_type.upper(),
             name=name,
             columns=col_list or [],
             references_table=references_table,
             references_columns=ref_col_list or [],
-            condition=condition,
+            condition=condition_str,
             on_delete=on_delete,
             on_update=on_update,
         )
@@ -1293,10 +1322,8 @@ class AlterTableBuilder(DDLBuilder):
             if not op.column_definition or op.column_definition.default is None:
                 self._raise_sql_builder_error("Default value required for SET DEFAULT")
             default_val = op.column_definition.default
-            # Handle different default value types
             default_expr: Optional[exp.Expression]
             if isinstance(default_val, str):
-                # Check if it's a function/expression or a literal string
                 if default_val.upper() in {"CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME"} or "(" in default_val:
                     default_expr = exp.maybe_parse(default_val)
                 else:
@@ -1319,7 +1346,7 @@ class AlterTableBuilder(DDLBuilder):
 
 
 @dataclass
-class CommentOnBuilder(DDLBuilder):
+class CommentOn(DDLBuilder):
     """Builder for COMMENT ON ... IS ... statements.
 
     Supports COMMENT ON TABLE and COMMENT ON COLUMN.
@@ -1348,12 +1375,10 @@ class CommentOnBuilder(DDLBuilder):
 
     def _create_base_expression(self) -> exp.Expression:
         if self._target_type == "TABLE" and self._table and self._comment is not None:
-            # Create a proper Comment expression
             return exp.Comment(
                 this=exp.to_table(self._table), kind="TABLE", expression=exp.Literal.string(self._comment)
             )
         if self._target_type == "COLUMN" and self._table and self._column and self._comment is not None:
-            # Create a proper Comment expression for column
             return exp.Comment(
                 this=exp.Column(table=self._table, this=self._column),
                 kind="COLUMN",
@@ -1364,7 +1389,7 @@ class CommentOnBuilder(DDLBuilder):
 
 
 @dataclass
-class RenameTableBuilder(DDLBuilder):
+class RenameTable(DDLBuilder):
     """Builder for ALTER TABLE ... RENAME TO ... statements.
 
     Supports renaming a table.
@@ -1384,7 +1409,6 @@ class RenameTableBuilder(DDLBuilder):
     def _create_base_expression(self) -> exp.Expression:
         if not self._old_name or not self._new_name:
             self._raise_sql_builder_error("Both old and new table names must be set for RENAME TABLE.")
-        # Create ALTER TABLE with RENAME TO action
         return exp.Alter(
             this=exp.to_table(self._old_name),
             kind="TABLE",

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 from sqlglot import exp
 
 from sqlspec.driver import AsyncDriverAdapterProtocol, CommonDriverAttributesMixin, SyncDriverAdapterProtocol
 from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
 
@@ -75,11 +76,40 @@ class MockSyncDriver(SyncDriverAdapterProtocol[MockConnection, DictRow]):
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.NAMED_COLON
 
-    def _execute_statement(self, statement: SQL, connection: MockConnection | None = None, **kwargs: Any) -> Any:
+    def _execute_statement(
+        self, statement: SQL, connection: MockConnection | None = None, **kwargs: Any
+    ) -> SQLResult[DictRow]:
         conn = connection or self.connection
         if statement.is_script:
-            return "Script executed successfully"
-        return conn.execute(statement.sql, statement.parameters)
+            return SQLResult(
+                statement=statement,
+                data=[],
+                operation_type="SCRIPT",
+                metadata={"message": "Script executed successfully"},
+            )
+
+        result_data = conn.execute(statement.sql, statement.parameters)
+
+        # Determine operation type from SQL
+        sql_upper = statement.sql.upper().strip()
+        if sql_upper.startswith("SELECT"):
+            operation_type = "SELECT"
+        elif sql_upper.startswith("INSERT"):
+            operation_type = "INSERT"
+        elif sql_upper.startswith("UPDATE"):
+            operation_type = "UPDATE"
+        elif sql_upper.startswith("DELETE"):
+            operation_type = "DELETE"
+        else:
+            operation_type = "EXECUTE"
+
+        return SQLResult(
+            statement=statement,
+            data=result_data if operation_type == "SELECT" else [],
+            column_names=list(result_data[0].keys()) if result_data and operation_type == "SELECT" else [],
+            operation_type=operation_type,  # type: ignore  # operation_type is dynamically determined
+            rows_affected=1 if operation_type != "SELECT" else 0,
+        )
 
     def _wrap_select_result(self, statement: SQL, result: Any, schema_type: type | None = None, **kwargs: Any) -> Mock:
         mock_result = Mock()
@@ -113,11 +143,38 @@ class MockAsyncDriver(AsyncDriverAdapterProtocol[MockAsyncConnection, DictRow]):
 
     async def _execute_statement(
         self, statement: SQL, connection: MockAsyncConnection | None = None, **kwargs: Any
-    ) -> Any:
+    ) -> SQLResult[DictRow]:
         conn = connection or self.connection
         if statement.is_script:
-            return "Async script executed successfully"
-        return await conn.execute(statement.sql, statement.parameters)
+            return SQLResult(
+                statement=statement,
+                data=[],
+                operation_type="SCRIPT",
+                metadata={"message": "Async script executed successfully"},
+            )
+
+        result_data = await conn.execute(statement.sql, statement.parameters)
+
+        # Determine operation type from SQL
+        sql_upper = statement.sql.upper().strip()
+        if sql_upper.startswith("SELECT"):
+            operation_type = "SELECT"
+        elif sql_upper.startswith("INSERT"):
+            operation_type = "INSERT"
+        elif sql_upper.startswith("UPDATE"):
+            operation_type = "UPDATE"
+        elif sql_upper.startswith("DELETE"):
+            operation_type = "DELETE"
+        else:
+            operation_type = "EXECUTE"
+
+        return SQLResult(
+            statement=statement,
+            data=result_data if operation_type == "SELECT" else [],
+            column_names=list(result_data[0].keys()) if result_data and operation_type == "SELECT" else [],
+            operation_type=operation_type,  # type: ignore  # operation_type is dynamically determined
+            rows_affected=1 if operation_type != "SELECT" else 0,
+        )
 
     async def _wrap_select_result(
         self, statement: SQL, result: Any, schema_type: type | None = None, **kwargs: Any
@@ -273,12 +330,12 @@ def test_sync_driver_build_statement_with_sql_object() -> None:
     connection = MockConnection()
     driver = MockSyncDriver(connection)
 
-    sql_obj = SQL("SELECT * FROM users WHERE id = :id", parameters={"id": 1})
+    sql_obj = SQL("SELECT * FROM users WHERE id = :id", id=1)
     statement = driver._build_statement(sql_obj)
     # SQL objects are immutable, so a new instance is created
     assert isinstance(statement, SQL)
     assert statement._raw_sql == sql_obj._raw_sql
-    assert statement._named_params == sql_obj._named_params
+    assert statement._named_params == sql_obj._named_params  # type: ignore[attr-defined]
 
 
 def test_sync_driver_build_statement_with_filters() -> None:
@@ -311,16 +368,15 @@ def test_sync_driver_execute_select() -> None:
     driver = MockSyncDriver(connection)
 
     with patch.object(driver, "_execute_statement") as mock_execute:
-        with patch.object(driver, "_wrap_select_result") as mock_wrap:
-            mock_execute.return_value = [{"id": 1, "name": "test"}]
-            mock_result = Mock()
-            mock_wrap.return_value = mock_result
+        # In the new architecture, _execute_statement returns SQLResult directly
+        mock_result = Mock(spec=SQLResult)
+        mock_result.data = [{"id": 1, "name": "test"}]
+        mock_execute.return_value = mock_result
 
-            result = driver.execute("SELECT * FROM users")
+        result = driver.execute("SELECT * FROM users")
 
-            mock_execute.assert_called_once()
-            mock_wrap.assert_called_once()
-            assert result is mock_result
+        mock_execute.assert_called_once()
+        assert result is mock_result
 
 
 def test_sync_driver_execute_insert() -> None:
@@ -329,16 +385,16 @@ def test_sync_driver_execute_insert() -> None:
     driver = MockSyncDriver(connection)
 
     with patch.object(driver, "_execute_statement") as mock_execute:
-        with patch.object(driver, "_wrap_execute_result") as mock_wrap:
-            mock_execute.return_value = 1
-            mock_result = Mock()
-            mock_wrap.return_value = mock_result
+        # In the new architecture, _execute_statement returns SQLResult directly
+        mock_result = Mock(spec=SQLResult)
+        mock_result.rows_affected = 1
+        mock_result.operation_type = "INSERT"
+        mock_execute.return_value = mock_result
 
-            result = driver.execute("INSERT INTO users (name) VALUES ('test')")
+        result = driver.execute("INSERT INTO users (name) VALUES ('test')")
 
-            mock_execute.assert_called_once()
-            mock_wrap.assert_called_once()
-            assert result is mock_result
+        mock_execute.assert_called_once()
+        assert result is mock_result
 
 
 def test_sync_driver_execute_many() -> None:
@@ -349,19 +405,18 @@ def test_sync_driver_execute_many() -> None:
     parameters = [{"name": "user1"}, {"name": "user2"}]
 
     with patch.object(driver, "_execute_statement") as mock_execute:
-        with patch.object(driver, "_wrap_execute_result") as mock_wrap:
-            mock_execute.return_value = 2
-            mock_result = Mock()
-            mock_wrap.return_value = mock_result
+        # In the new architecture, _execute_statement returns SQLResult directly
+        mock_result = Mock(spec=SQLResult)
+        mock_result.rows_affected = 2
+        mock_result.operation_type = "EXECUTE"
+        mock_execute.return_value = mock_result
 
-            # Use a non-strict config to avoid validation issues
-            config = SQLConfig(strict_mode=False)
-            result = driver.execute_many("INSERT INTO users (name) VALUES (:name)", parameters, _config=config)
+        # Use a non-strict config to avoid validation issues
+        config = SQLConfig(strict_mode=False)
+        result = driver.execute_many("INSERT INTO users (name) VALUES (:name)", parameters, _config=config)
 
-            mock_execute.assert_called_once()
-            _, kwargs = mock_execute.call_args
-            assert kwargs["is_many"] is True
-            assert result is mock_result
+        mock_execute.assert_called_once()
+        assert result is mock_result
 
 
 def test_sync_driver_execute_script() -> None:
@@ -372,7 +427,12 @@ def test_sync_driver_execute_script() -> None:
     script = "CREATE TABLE test (id INT); INSERT INTO test VALUES (1);"
 
     with patch.object(driver, "_execute_statement") as mock_execute:
-        mock_execute.return_value = "Script executed successfully"
+        # In the new architecture, _execute_statement returns SQLResult directly
+        mock_result = Mock(spec=SQLResult)
+        mock_result.operation_type = "SCRIPT"
+        mock_result.total_statements = 1
+        mock_result.successful_statements = 1
+        mock_execute.return_value = mock_result
 
         # Use a non-strict config to avoid DDL validation issues
         config = SQLConfig(strict_mode=False, enable_validation=False)
@@ -394,22 +454,29 @@ def test_sync_driver_execute_with_parameters() -> None:
     driver = MockSyncDriver(connection)
 
     # Only provide parameters that are actually used in the SQL
-    parameters = {"id": 1}
 
     with patch.object(driver, "_execute_statement") as mock_execute:
-        with patch.object(driver, "_wrap_select_result") as mock_wrap:
-            mock_execute.return_value = [{"id": 1, "name": "test"}]
-            mock_wrap.return_value = Mock()
+        # _execute_statement should return SQLResult
+        mock_result = SQLResult(
+            statement=SQL("SELECT * FROM users WHERE id = :id"),
+            data=[{"id": 1, "name": "test"}],
+            column_names=["id", "name"],
+            operation_type="SELECT",
+        )
+        mock_execute.return_value = mock_result
 
-            # Use a non-strict config to avoid validation issues
-            config = SQLConfig(strict_mode=False)
-            driver.execute("SELECT * FROM users WHERE id = :id", parameters, _config=config)
+        # Use a non-strict config to avoid validation issues
+        config = SQLConfig(strict_mode=False)
+        # Pass named parameters as keyword arguments
+        result = driver.execute("SELECT * FROM users WHERE id = :id", id=1, _config=config)
 
-            mock_execute.assert_called_once()
-            # Check that the statement passed to _execute_statement contains the parameters
-            call_args = mock_execute.call_args
-            statement = call_args[1]["statement"]
-            assert statement.parameters == parameters
+        mock_execute.assert_called_once()
+        # Check that the statement passed to _execute_statement contains the parameters
+        call_args = mock_execute.call_args
+        statement = call_args[1]["statement"]
+        # Named parameters should be in a dict
+        assert statement.parameters == {"id": 1}
+        assert result == mock_result
 
 
 # AsyncDriverAdapterProtocol Tests
@@ -433,15 +500,20 @@ async def test_async_driver_execute_select() -> None:
     driver = MockAsyncDriver(connection)
 
     with patch.object(driver, "_execute_statement") as mock_execute:
-        with patch.object(driver, "_wrap_select_result") as mock_wrap:
-            mock_execute.return_value = AsyncMock(return_value=[{"id": 1, "name": "test"}])
-            mock_result = Mock()
-            mock_wrap.return_value = AsyncMock(return_value=mock_result)
+        # _execute_statement should return SQLResult directly
+        mock_result = SQLResult(
+            statement=SQL("SELECT * FROM users"),
+            data=[{"id": 1, "name": "test"}],
+            column_names=["id", "name"],
+            operation_type="SELECT",
+            rows_affected=1,
+        )
+        mock_execute.return_value = mock_result
 
-            await driver.execute("SELECT * FROM users")
+        result = await driver.execute("SELECT * FROM users")
 
-            mock_execute.assert_called_once()
-            mock_wrap.assert_called_once()
+        mock_execute.assert_called_once()
+        assert result == mock_result
 
 
 async def test_async_driver_execute_insert() -> None:
@@ -450,15 +522,20 @@ async def test_async_driver_execute_insert() -> None:
     driver = MockAsyncDriver(connection)
 
     with patch.object(driver, "_execute_statement") as mock_execute:
-        with patch.object(driver, "_wrap_execute_result") as mock_wrap:
-            mock_execute.return_value = AsyncMock(return_value=1)
-            mock_result = Mock()
-            mock_wrap.return_value = AsyncMock(return_value=mock_result)
+        # _execute_statement should return SQLResult directly
+        mock_result = SQLResult(
+            statement=SQL("INSERT INTO users (name) VALUES ('test')"),
+            data=[],
+            operation_type="INSERT",
+            rows_affected=1,
+            last_inserted_id=1,
+        )
+        mock_execute.return_value = mock_result
 
-            await driver.execute("INSERT INTO users (name) VALUES ('test')")
+        result = await driver.execute("INSERT INTO users (name) VALUES ('test')")
 
-            mock_execute.assert_called_once()
-            mock_wrap.assert_called_once()
+        mock_execute.assert_called_once()
+        assert result == mock_result
 
 
 async def test_async_driver_execute_many() -> None:
@@ -469,18 +546,18 @@ async def test_async_driver_execute_many() -> None:
     parameters = [{"name": "user1"}, {"name": "user2"}]
 
     with patch.object(driver, "_execute_statement") as mock_execute:
-        with patch.object(driver, "_wrap_execute_result") as mock_wrap:
-            mock_execute.return_value = AsyncMock(return_value=2)
-            mock_result = Mock()
-            mock_wrap.return_value = AsyncMock(return_value=mock_result)
+        # _execute_statement should return SQLResult directly
+        mock_result = SQLResult(
+            statement=SQL("INSERT INTO users (name) VALUES (:name)"), data=[], operation_type="INSERT", rows_affected=2
+        )
+        mock_execute.return_value = mock_result
 
-            # Use a non-strict config to avoid validation issues
-            config = SQLConfig(strict_mode=False)
-            await driver.execute_many("INSERT INTO users (name) VALUES (:name)", parameters, _config=config)
+        # Use a non-strict config to avoid validation issues
+        config = SQLConfig(strict_mode=False)
+        result = await driver.execute_many("INSERT INTO users (name) VALUES (:name)", parameters, _config=config)
 
-            mock_execute.assert_called_once()
-            _, kwargs = mock_execute.call_args
-            assert kwargs["is_many"] is True
+        mock_execute.assert_called_once()
+        assert result == mock_result
 
 
 async def test_async_driver_execute_script() -> None:
@@ -491,8 +568,9 @@ async def test_async_driver_execute_script() -> None:
     script = "CREATE TABLE test (id INT); INSERT INTO test VALUES (1);"
 
     with patch.object(driver, "_execute_statement") as mock_execute:
-        # For async, we need to return the actual value, not an AsyncMock
-        mock_execute.return_value = "Async script executed successfully"
+        # _execute_statement should return SQLResult directly
+        mock_result = SQLResult(statement=SQL(script), data=[], operation_type="SCRIPT", metadata={"status": "success"})
+        mock_execute.return_value = mock_result
 
         # Use a non-strict config to avoid DDL validation issues
         config = SQLConfig(strict_mode=False, enable_validation=False)
@@ -503,6 +581,7 @@ async def test_async_driver_execute_script() -> None:
         call_args = mock_execute.call_args
         statement = call_args[1]["statement"]
         assert statement.is_script is True
+        assert result == mock_result
         # Result should be wrapped in SQLResult object
         assert hasattr(result, "operation_type")
         assert result.operation_type == "SCRIPT"
@@ -514,14 +593,21 @@ async def test_async_driver_execute_with_schema_type() -> None:
     driver = MockAsyncDriver(connection)
 
     with patch.object(driver, "_execute_statement") as mock_execute:
-        with patch.object(driver, "_wrap_select_result") as mock_wrap:
-            mock_execute.return_value = AsyncMock(return_value=[{"id": 1, "name": "test"}])
-            mock_wrap.return_value = AsyncMock(return_value=Mock())
+        # _execute_statement should return SQLResult directly
+        mock_result = SQLResult(
+            statement=SQL("SELECT * FROM users"),
+            data=[{"id": 1, "name": "test"}],
+            column_names=["id", "name"],
+            operation_type="SELECT",
+            rows_affected=1,
+        )
+        mock_execute.return_value = mock_result
 
-            # Note: This test may need adjustment based on actual schema_type support
-            await driver.execute("SELECT * FROM users")
+        # Note: This test may need adjustment based on actual schema_type support
+        result = await driver.execute("SELECT * FROM users")
 
-            mock_wrap.assert_called_once()
+        mock_execute.assert_called_once()
+        assert result == mock_result
 
 
 # Error Handling Tests
@@ -548,25 +634,23 @@ async def test_async_driver_execute_statement_exception() -> None:
 
 
 def test_sync_driver_wrap_result_exception() -> None:
-    """Test sync driver result wrapping exception handling."""
+    """Test sync driver exception handling."""
     connection = MockConnection()
     driver = MockSyncDriver(connection)
 
-    with patch.object(driver, "_execute_statement", return_value=[{"data": "test"}]):
-        with patch.object(driver, "_wrap_select_result", side_effect=Exception("Wrap error")):
-            with pytest.raises(Exception, match="Wrap error"):
-                driver.execute("SELECT * FROM users")
+    with patch.object(driver, "_execute_statement", side_effect=Exception("Execute error")):
+        with pytest.raises(Exception, match="Execute error"):
+            driver.execute("SELECT * FROM users")
 
 
 async def test_async_driver_wrap_result_exception() -> None:
-    """Test async driver result wrapping exception handling."""
+    """Test async driver exception handling."""
     connection = MockAsyncConnection()
     driver = MockAsyncDriver(connection)
 
-    with patch.object(driver, "_execute_statement", return_value=AsyncMock(return_value=[{"data": "test"}])):
-        with patch.object(driver, "_wrap_select_result", side_effect=Exception("Async wrap error")):
-            with pytest.raises(Exception, match="Async wrap error"):
-                await driver.execute("SELECT * FROM users")
+    with patch.object(driver, "_execute_statement", side_effect=Exception("Async execute error")):
+        with pytest.raises(Exception, match="Async execute error"):
+            await driver.execute("SELECT * FROM users")
 
 
 def test_driver_connection_method() -> None:
@@ -600,22 +684,40 @@ def test_driver_returns_rows_detection(statement_type: str, expected_returns_row
     driver = MockSyncDriver(connection)
 
     with patch.object(driver, "_execute_statement") as mock_execute:
-        with patch.object(driver, "_wrap_select_result") as mock_wrap_select:
-            with patch.object(driver, "_wrap_execute_result") as mock_wrap_execute:
-                mock_execute.return_value = [{"data": "test"}]
-                mock_wrap_select.return_value = Mock()
-                mock_wrap_execute.return_value = Mock()
+        # Determine operation type based on statement
+        if "SELECT" in statement_type:
+            operation_type = "SELECT"
+        elif "INSERT" in statement_type:
+            operation_type = "INSERT"
+        elif "UPDATE" in statement_type:
+            operation_type = "UPDATE"
+        elif "DELETE" in statement_type:
+            operation_type = "DELETE"
+        else:
+            operation_type = "EXECUTE"  # For DDL
 
-                # Use a non-strict config to avoid DDL validation issues
-                config = SQLConfig(strict_mode=False, enable_validation=False)
-                driver.execute(statement_type, _config=config)
+        # _execute_statement should return SQLResult directly
+        mock_result = SQLResult(
+            statement=SQL(statement_type),
+            data=[{"data": "test"}] if expected_returns_rows else [],
+            column_names=["data"] if expected_returns_rows else [],
+            operation_type=operation_type,  # type: ignore  # operation_type is dynamically determined
+            rows_affected=1 if not expected_returns_rows else 0,
+        )
+        mock_execute.return_value = mock_result
 
-                if expected_returns_rows:
-                    mock_wrap_select.assert_called_once()
-                    mock_wrap_execute.assert_not_called()
-                else:
-                    mock_wrap_execute.assert_called_once()
-                    mock_wrap_select.assert_not_called()
+        # Use a non-strict config to avoid DDL validation issues
+        config = SQLConfig(strict_mode=False, enable_validation=False)
+        result = driver.execute(statement_type, _config=config)
+
+        mock_execute.assert_called_once()
+        assert result == mock_result
+
+        # Verify the result has appropriate data
+        if expected_returns_rows:
+            assert result.data  # Should have data for SELECT
+        else:
+            assert result.rows_affected is not None  # Should have rows_affected for DML/DDL
 
 
 # Concurrent and Threading Tests
@@ -675,9 +777,11 @@ def test_driver_full_execution_flow() -> None:
         # Verify connection was called
         mock_conn_execute.assert_called_once()
 
-        # Verify result structure
-        assert hasattr(result, "rows")
-        assert hasattr(result, "row_count")
+        # Verify result structure (should be SQLResult)
+        assert isinstance(result, SQLResult)
+        assert result.data == [{"id": 1, "name": "test"}]
+        assert result.column_names == ["id", "name"]
+        assert result.operation_type == "SELECT"
 
 
 async def test_async_driver_full_execution_flow() -> None:
@@ -694,9 +798,11 @@ async def test_async_driver_full_execution_flow() -> None:
         # Verify connection was called
         mock_conn_execute.assert_called_once()
 
-        # Verify result structure
-        assert hasattr(result, "rows")
-        assert hasattr(result, "row_count")
+        # Verify result structure (should be SQLResult)
+        assert isinstance(result, SQLResult)
+        assert result.data == [{"id": 1, "name": "test"}]
+        assert result.column_names == ["id", "name"]
+        assert result.operation_type == "SELECT"
 
 
 def test_driver_supports_arrow_attribute() -> None:

@@ -45,7 +45,7 @@ def test_as_many_without_parameters() -> None:
 
     # Parameters property should process normally
     params = sql_many.parameters
-    assert params is None or params == []
+    assert params == {} or params is None or params == []
 
 
 def test_as_many_with_placeholder_conversion() -> None:

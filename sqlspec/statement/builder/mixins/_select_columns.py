@@ -7,7 +7,8 @@ from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder._parsing_utils import parse_column_expression
 
 if TYPE_CHECKING:
-    from sqlspec.statement.builder.protocols import BuilderProtocol
+    from sqlspec.protocols import SQLBuilderProtocol
+    from sqlspec.statement.builder.column import Column, FunctionColumn
 
 __all__ = ("SelectColumnsMixin",)
 
@@ -15,7 +16,7 @@ __all__ = ("SelectColumnsMixin",)
 class SelectColumnsMixin:
     """Mixin providing SELECT column and DISTINCT clauses for SELECT builders."""
 
-    def select(self, *columns: Union[str, exp.Expression]) -> Self:
+    def select(self, *columns: Union[str, exp.Expression, "Column", "FunctionColumn"]) -> Self:
         """Add columns to SELECT clause.
 
         Raises:
@@ -24,7 +25,7 @@ class SelectColumnsMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        builder = cast("BuilderProtocol", self)
+        builder = cast("SQLBuilderProtocol", self)
         if builder._expression is None:
             builder._expression = exp.Select()
         if not isinstance(builder._expression, exp.Select):
@@ -34,7 +35,7 @@ class SelectColumnsMixin:
             builder._expression = builder._expression.select(parse_column_expression(column), copy=False)
         return cast("Self", builder)
 
-    def distinct(self, *columns: Union[str, exp.Expression]) -> Self:
+    def distinct(self, *columns: Union[str, exp.Expression, "Column", "FunctionColumn"]) -> Self:
         """Add DISTINCT clause to SELECT.
 
         Args:
@@ -46,7 +47,7 @@ class SelectColumnsMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        builder = cast("BuilderProtocol", self)
+        builder = cast("SQLBuilderProtocol", self)
         if builder._expression is None:
             builder._expression = exp.Select()
         if not isinstance(builder._expression, exp.Select):

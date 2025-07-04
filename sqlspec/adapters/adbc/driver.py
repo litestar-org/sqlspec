@@ -2,12 +2,14 @@ import contextlib
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
 
 from adbc_driver_manager.dbapi import Connection, Cursor
 
 from sqlspec.driver import SyncDriverAdapterProtocol
+from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
     SyncPipelinedExecutionMixin,
@@ -15,11 +17,12 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
+from sqlspec.driver.parameters import normalize_parameter_sequence
 from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT, RowT, is_dict_with_field
+from sqlspec.typing import DictRow, RowT
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
@@ -65,8 +68,15 @@ class AdbcDriver(
         config: "Optional[SQLConfig]" = None,
         default_row_type: "type[DictRow]" = DictRow,
     ) -> None:
+        dialect = self._get_dialect(connection)
+        if config and not config.dialect:
+            config = replace(config, dialect=dialect)
+        elif not config:
+            # Create config with dialect
+            config = SQLConfig(dialect=dialect)
+
         super().__init__(connection=connection, config=config, default_row_type=default_row_type)
-        self.dialect: DialectType = self._get_dialect(connection)
+        self.dialect: DialectType = dialect
         self.default_parameter_style = self._get_parameter_style_for_dialect(self.dialect)
         # Override supported parameter styles based on actual dialect capabilities
         self.supported_parameter_styles = self._get_supported_parameter_styles_for_dialect(self.dialect)
@@ -169,13 +179,13 @@ class AdbcDriver(
 
     def _execute_statement(
         self, statement: SQL, connection: Optional["AdbcConnection"] = None, **kwargs: Any
-    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
+    ) -> SQLResult[RowT]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
-        # Determine if we need to convert parameter style
         detected_styles = {p.style for p in statement.parameter_info}
+
         target_style = self.default_parameter_style
         unsupported_styles = detected_styles - set(self.supported_parameter_styles)
 
@@ -196,69 +206,107 @@ class AdbcDriver(
 
     def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional["AdbcConnection"] = None, **kwargs: Any
-    ) -> Union[SelectResultDict, DMLResultDict]:
-        conn = self._connection(connection)
-        with self._get_cursor(conn) as cursor:
-            # ADBC expects parameters as a list for most drivers
-            if parameters is not None and not isinstance(parameters, (list, tuple)):
-                cursor_params = [parameters]
+    ) -> SQLResult[RowT]:
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
+
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
+            normalized_params = normalize_parameter_sequence(parameters)
+            if normalized_params is not None and not isinstance(normalized_params, (list, tuple)):
+                cursor_params = [normalized_params]
             else:
-                cursor_params = parameters  # type: ignore[assignment]
+                cursor_params = normalized_params
 
-            try:
-                cursor.execute(sql, cursor_params or [])
-            except Exception as e:
-                # Rollback transaction on error for PostgreSQL to avoid "current transaction is aborted" errors
-                if self.dialect == "postgres":
-                    with contextlib.suppress(Exception):
-                        cursor.execute("ROLLBACK")
-                raise e from e
+            with self._get_cursor(txn_conn) as cursor:
+                try:
+                    cursor.execute(sql, cursor_params or [])
+                except Exception as e:
+                    # Rollback transaction on error for PostgreSQL to avoid "current transaction is aborted" errors
+                    if self.dialect == "postgres":
+                        with contextlib.suppress(Exception):
+                            cursor.execute("ROLLBACK")
+                    raise e from e
 
-            if self.returns_rows(statement.expression):
-                fetched_data = cursor.fetchall()
-                column_names = [col[0] for col in cursor.description or []]
-                result: SelectResultDict = {
-                    "data": fetched_data,
-                    "column_names": column_names,
-                    "rows_affected": len(fetched_data),
-                }
-                return result
+                if self.returns_rows(statement.expression):
+                    fetched_data = cursor.fetchall()
+                    column_names = [col[0] for col in cursor.description or []]
 
-            dml_result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
-            return dml_result
+                    if fetched_data and isinstance(fetched_data[0], tuple):
+                        dict_data: list[dict[Any, Any]] = [dict(zip(column_names, row)) for row in fetched_data]
+                    else:
+                        dict_data = fetched_data  # type: ignore[assignment]
+
+                    return SQLResult(
+                        statement=statement,
+                        data=cast("list[RowT]", dict_data),
+                        column_names=column_names,
+                        rows_affected=len(dict_data),
+                        operation_type="SELECT",
+                    )
+
+                operation_type = self._determine_operation_type(statement)
+                return SQLResult(
+                    statement=statement,
+                    data=cast("list[RowT]", []),
+                    rows_affected=cursor.rowcount,
+                    operation_type=operation_type,
+                    metadata={"status_message": "OK"},
+                )
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional["AdbcConnection"] = None, **kwargs: Any
-    ) -> DMLResultDict:
-        conn = self._connection(connection)
-        with self._get_cursor(conn) as cursor:
-            try:
-                cursor.executemany(sql, param_list or [])
-            except Exception as e:
-                if self.dialect == "postgres":
-                    with contextlib.suppress(Exception):
-                        cursor.execute("ROLLBACK")
-                # Always re-raise the original exception
-                raise e from e
+    ) -> SQLResult[RowT]:
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
 
-            result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
-            return result
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
+            # Normalize parameter list using consolidated utility
+            normalized_param_list = normalize_parameter_sequence(param_list)
+
+            with self._get_cursor(txn_conn) as cursor:
+                try:
+                    cursor.executemany(sql, normalized_param_list or [])
+                except Exception as e:
+                    if self.dialect == "postgres":
+                        with contextlib.suppress(Exception):
+                            cursor.execute("ROLLBACK")
+                    # Always re-raise the original exception
+                    raise e from e
+
+                return SQLResult(
+                    statement=SQL(sql, _dialect=self.dialect),
+                    data=[],
+                    rows_affected=cursor.rowcount,
+                    operation_type="EXECUTE",
+                    metadata={"status_message": "OK"},
+                )
 
     def _execute_script(
         self, script: str, connection: Optional["AdbcConnection"] = None, **kwargs: Any
-    ) -> ScriptResultDict:
-        conn = self._connection(connection)
-        # ADBC drivers don't support multiple statements in a single execute
-        # Use the shared implementation to split the script
-        statements = self._split_script_statements(script)
+    ) -> SQLResult[RowT]:
+        # Use provided connection or driver's default connection
+        conn = connection if connection is not None else self._connection(None)
 
-        executed_count = 0
-        with self._get_cursor(conn) as cursor:
-            for statement in statements:
-                executed_count += self._execute_single_script_statement(cursor, statement)
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
+            # ADBC drivers don't support multiple statements in a single execute
+            statements = self._split_script_statements(script)
 
-        result: ScriptResultDict = {"statements_executed": executed_count, "status_message": "SCRIPT EXECUTED"}
-        return result
+            executed_count = 0
+            with self._get_cursor(txn_conn) as cursor:
+                for statement in statements:
+                    if statement.strip():
+                        self._execute_single_script_statement(cursor, statement)
+                        executed_count += 1
+
+            return SQLResult(
+                statement=SQL(script, _dialect=self.dialect).as_script(),
+                data=[],
+                rows_affected=0,
+                operation_type="SCRIPT",
+                metadata={"status_message": "SCRIPT EXECUTED"},
+                total_statements=executed_count,
+                successful_statements=executed_count,
+            )
 
     def _execute_single_script_statement(self, cursor: "Cursor", statement: str) -> int:
         """Execute a single statement from a script and handle errors.
@@ -273,66 +321,13 @@ class AdbcDriver(
         try:
             cursor.execute(statement)
         except Exception as e:
-            # Rollback transaction on error for PostgreSQL
+            # Rollback transaction on error for PostgreSQL to avoid "current transaction is aborted" errors
             if self.dialect == "postgres":
                 with contextlib.suppress(Exception):
                     cursor.execute("ROLLBACK")
             raise e from e
         else:
             return 1
-
-    def _wrap_select_result(
-        self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
-    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
-        # result must be a dict with keys: data, column_names, rows_affected
-
-        rows_as_dicts = [dict(zip(result["column_names"], row)) for row in result["data"]]
-
-        if schema_type:
-            return SQLResult[ModelDTOT](
-                statement=statement,
-                data=list(self.to_schema(data=rows_as_dicts, schema_type=schema_type)),
-                column_names=result["column_names"],
-                rows_affected=result["rows_affected"],
-                operation_type="SELECT",
-            )
-        return SQLResult[RowT](
-            statement=statement,
-            data=rows_as_dicts,
-            column_names=result["column_names"],
-            rows_affected=result["rows_affected"],
-            operation_type="SELECT",
-        )
-
-    def _wrap_execute_result(
-        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
-    ) -> SQLResult[RowT]:
-        operation_type = (
-            str(statement.expression.key).upper()
-            if statement.expression and hasattr(statement.expression, "key")
-            else "UNKNOWN"
-        )
-
-        # Handle TypedDict results
-        if is_dict_with_field(result, "statements_executed"):
-            return SQLResult[RowT](
-                statement=statement,
-                data=[],
-                rows_affected=0,
-                total_statements=result["statements_executed"],
-                operation_type="SCRIPT",  # Scripts always have operation_type SCRIPT
-                metadata={"status_message": result["status_message"]},
-            )
-        if is_dict_with_field(result, "rows_affected"):
-            return SQLResult[RowT](
-                statement=statement,
-                data=[],
-                rows_affected=result["rows_affected"],
-                operation_type=operation_type,
-                metadata={"status_message": result["status_message"]},
-            )
-        msg = f"Unexpected result type: {type(result)}"
-        raise ValueError(msg)
 
     def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
         """ADBC native Arrow table fetching.
@@ -379,10 +374,17 @@ class AdbcDriver(
 
         conn = self._connection(None)
         with self._get_cursor(conn) as cursor:
-            # Handle different modes
             if mode == "replace":
-                cursor.execute(SQL(f"TRUNCATE TABLE {table_name}").to_sql(placeholder_style=ParameterStyle.STATIC))
+                cursor.execute(
+                    SQL(f"TRUNCATE TABLE {table_name}", _dialect=self.dialect).to_sql(
+                        placeholder_style=ParameterStyle.STATIC
+                    )
+                )
             elif mode == "create":
                 msg = "'create' mode is not supported for ADBC ingestion"
                 raise NotImplementedError(msg)
             return cursor.adbc_ingest(table_name, table, mode=mode, **options)  # type: ignore[arg-type]
+
+    def _connection(self, connection: Optional["AdbcConnection"] = None) -> "AdbcConnection":
+        """Get the connection to use for the operation."""
+        return connection or self.connection

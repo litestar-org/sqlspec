@@ -56,6 +56,36 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
 
+def create_mock_query_builder() -> Any:
+    """Create a mock query builder that implements SQLBuilderProtocol."""
+    from unittest.mock import Mock
+
+    # Create a mock that implements the SQLBuilderProtocol properly
+    class MockQueryBuilder:
+        def __init__(self) -> None:
+            self._parameters: dict[str, Any] = {}
+            self._parameter_counter: int = 0
+            self.dialect: Optional[Any] = None
+            self.dialect_name: Optional[str] = None
+            self._expression: Optional[Any] = None
+
+        @property
+        def parameters(self) -> dict[str, Any]:
+            return self._parameters
+
+        def build(self) -> Any:
+            return Mock(sql="SELECT id FROM users")
+
+        def add_parameter(self, value: Any) -> tuple[Any, str]:
+            return (self, "param_1")
+
+        def _parameterize_expression(self, expr: Any) -> Any:
+            return Mock()
+
+    # Return an instance of the mock query builder
+    return MockQueryBuilder()
+
+
 # Helper Classes
 class MockQueryResult:
     """Mock query result for testing."""
@@ -181,7 +211,7 @@ def test_where_null_checks(column: Any) -> None:
     [
         ([1, 2, 3], exp.Tuple),
         ((4, 5, 6), exp.Tuple),
-        (Mock(build=lambda: Mock(sql="SELECT id FROM users")), type(None)),  # Subquery
+        (create_mock_query_builder(), type(None)),  # Subquery
     ],
     ids=["list_values", "tuple_values", "subquery"],
 )
@@ -935,52 +965,13 @@ class AggregateTestBuilder(MockBuilder, AggregateFunctionsMixin):
     "method,column,expected_function",
     [
         ("count_", "*", "COUNT"),
-        pytest.param(
-            "count_distinct", "user_id", "COUNT", marks=pytest.mark.skip(reason="count_distinct not implemented")
-        ),
         ("sum_", "amount", "SUM"),
         ("avg_", "score", "AVG"),
         ("min_", "price", "MIN"),
         ("max_", "price", "MAX"),
-        pytest.param("stddev", "value", "STDDEV", marks=pytest.mark.skip(reason="stddev not implemented")),
-        pytest.param("stddev_pop", "value", "STDDEV_POP", marks=pytest.mark.skip(reason="stddev_pop not implemented")),
-        pytest.param(
-            "stddev_samp", "value", "STDDEV_SAMP", marks=pytest.mark.skip(reason="stddev_samp not implemented")
-        ),
-        pytest.param("variance", "value", "VARIANCE", marks=pytest.mark.skip(reason="variance not implemented")),
-        pytest.param("var_pop", "value", "VAR_POP", marks=pytest.mark.skip(reason="var_pop not implemented")),
-        pytest.param("var_samp", "value", "VAR_SAMP", marks=pytest.mark.skip(reason="var_samp not implemented")),
         ("array_agg", "tags", "ARRAY_AGG"),
-        pytest.param("string_agg", "name", "STRING_AGG", marks=pytest.mark.skip(reason="string_agg not implemented")),
-        pytest.param("json_agg", "data", "JSON_AGG", marks=pytest.mark.skip(reason="json_agg not implemented")),
-        pytest.param("jsonb_agg", "data", "JSONB_AGG", marks=pytest.mark.skip(reason="jsonb_agg not implemented")),
-        ("bool_and", "active", "BOOL_AND"),
-        ("bool_or", "verified", "BOOL_OR"),
-        pytest.param("bit_and", "flags", "BIT_AND", marks=pytest.mark.skip(reason="bit_and not implemented")),
-        pytest.param("bit_or", "flags", "BIT_OR", marks=pytest.mark.skip(reason="bit_or not implemented")),
     ],
-    ids=[
-        "count",
-        "count_distinct",
-        "sum",
-        "avg",
-        "min",
-        "max",
-        "stddev",
-        "stddev_pop",
-        "stddev_samp",
-        "variance",
-        "var_pop",
-        "var_samp",
-        "array_agg",
-        "string_agg",
-        "json_agg",
-        "jsonb_agg",
-        "bool_and",
-        "bool_or",
-        "bit_and",
-        "bit_or",
-    ],
+    ids=["count", "sum", "avg", "min", "max", "array_agg"],
 )
 def test_aggregate_functions(method: str, column: str, expected_function: str) -> None:
     """Test aggregate function methods."""

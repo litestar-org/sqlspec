@@ -3,7 +3,6 @@
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 from psqlpy import ConnectionPool
@@ -302,7 +301,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             if getattr(self, field, None) is not None and getattr(self, field) is not Empty
         }
 
-        # Add connection-specific extras (not pool-specific ones)
         config.update(self.extras)
 
         return config
@@ -359,11 +357,9 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         Returns:
             A psqlpy Connection instance.
         """
-        # Ensure pool exists
         if not self.pool_instance:
             self.pool_instance = await self._create_pool()
 
-        # Get connection from pool
         return await self.pool_instance.connection()
 
     @asynccontextmanager
@@ -377,7 +373,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         Yields:
             A psqlpy Connection instance.
         """
-        # Ensure pool exists
         if not self.pool_instance:
             self.pool_instance = await self._create_pool()
 
@@ -396,15 +391,16 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             A PsqlpyDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as conn:
-            # Create statement config with parameter style info if not already set
             statement_config = self.statement_config
+            # Inject parameter style info if not already set
             if statement_config.allowed_parameter_styles is None:
+                from dataclasses import replace
+
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
                     target_parameter_style=self.preferred_parameter_style,
                 )
-
             driver = self.driver_type(connection=conn, config=statement_config)
             yield driver
 

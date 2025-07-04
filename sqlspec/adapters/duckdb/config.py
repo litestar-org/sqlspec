@@ -2,7 +2,6 @@
 
 import logging
 from contextlib import contextmanager
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict
 
 import duckdb
@@ -336,11 +335,9 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         # DuckDB connect() only accepts database, read_only, and config parameters
         connect_params: dict[str, Any] = {}
 
-        # Set database if provided
         if hasattr(self, "database") and self.database is not None:
             connect_params["database"] = self.database
 
-        # Set read_only if provided
         if hasattr(self, "read_only") and self.read_only is not None:
             connect_params["read_only"] = self.read_only
 
@@ -352,7 +349,6 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                 if value is not None and value is not Empty:
                     config_dict[field] = value
 
-        # Add extras to config dict
         config_dict.update(self.extras)
 
         # If we have config parameters, add them
@@ -475,15 +471,16 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         @contextmanager
         def session_manager() -> "Generator[DuckDBDriver, None, None]":
             with self.provide_connection(*args, **kwargs) as connection:
-                # Create statement config with parameter style info if not already set
                 statement_config = self.statement_config
+                # Inject parameter style info if not already set
                 if statement_config.allowed_parameter_styles is None:
+                    from dataclasses import replace
+
                     statement_config = replace(
                         statement_config,
                         allowed_parameter_styles=self.supported_parameter_styles,
                         target_parameter_style=self.preferred_parameter_style,
                     )
-
                 driver = self.driver_type(connection=connection, config=statement_config)
                 yield driver
 

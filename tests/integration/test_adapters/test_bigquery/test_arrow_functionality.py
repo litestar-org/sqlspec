@@ -25,7 +25,7 @@ def bigquery_arrow_session(bigquery_service: BigQueryService) -> "Generator[BigQ
         dataset_id=bigquery_service.dataset,
         client_options=ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
         credentials=AnonymousCredentials(),  # type: ignore[no-untyped-call]
-        statement_config=SQLConfig(strict_mode=False),
+        statement_config=SQLConfig(dialect="bigquery"),
     )
 
     with config.provide_session() as session:
@@ -171,8 +171,7 @@ def test_bigquery_to_arrow_with_sql_object(
     sql_obj = SQL(
         f"SELECT name, value FROM {table_name} WHERE is_active = @active",
         parameters={"active": True},
-        _dialect="bigquery",
-        _config=SQLConfig(strict_mode=False),
+        config=SQLConfig(strict_mode=False, dialect="bigquery"),
     )
     result = bigquery_arrow_session.fetch_arrow_table(sql_obj)
 
@@ -335,8 +334,7 @@ def test_bigquery_parquet_export_with_partitioning(
             WHERE is_active = @active
             """,
             parameters={"active": True},
-            _dialect="bigquery",
-            _config=SQLConfig(strict_mode=False),
+            config=SQLConfig(strict_mode=False, dialect="bigquery"),
         )
 
         bigquery_arrow_session.export_to_storage(

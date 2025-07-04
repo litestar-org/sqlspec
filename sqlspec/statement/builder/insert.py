@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 
-__all__ = ("InsertBuilder",)
+__all__ = ("Insert",)
 
 ERR_MSG_TABLE_NOT_SET = "The target table must be set using .into() before adding values."
 ERR_MSG_VALUES_COLUMNS_MISMATCH = (
@@ -36,9 +36,7 @@ ERR_MSG_EXPRESSION_NOT_INITIALIZED = "Internal error: base expression not initia
 
 
 @dataclass(unsafe_hash=True)
-class InsertBuilder(
-    QueryBuilder[RowT], ReturningClauseMixin, InsertValuesMixin, InsertFromSelectMixin, InsertIntoClauseMixin
-):
+class Insert(QueryBuilder[RowT], ReturningClauseMixin, InsertValuesMixin, InsertFromSelectMixin, InsertIntoClauseMixin):
     """Builder for INSERT statements.
 
     This builder facilitates the construction of SQL INSERT queries
@@ -48,15 +46,20 @@ class InsertBuilder(
         ```python
         # Basic INSERT with values
         insert_query = (
-            InsertBuilder()
+            Insert()
             .into("users")
             .columns("name", "email", "age")
             .values("John Doe", "john@example.com", 30)
         )
 
+        # Even more concise with constructor
+        insert_query = Insert("users").values(
+            {"name": "John", "age": 30}
+        )
+
         # Multi-row INSERT
         insert_query = (
-            InsertBuilder()
+            Insert()
             .into("users")
             .columns("name", "email")
             .values("John", "john@example.com")
@@ -65,7 +68,7 @@ class InsertBuilder(
 
         # INSERT from dictionary
         insert_query = (
-            InsertBuilder()
+            Insert()
             .into("users")
             .values_from_dict(
                 {"name": "John", "email": "john@example.com"}
@@ -74,10 +77,10 @@ class InsertBuilder(
 
         # INSERT from SELECT
         insert_query = (
-            InsertBuilder()
+            Insert()
             .into("users_backup")
             .from_select(
-                SelectBuilder()
+                Select()
                 .select("name", "email")
                 .from_("users")
                 .where("active = true")
@@ -89,6 +92,23 @@ class InsertBuilder(
     _table: "Optional[str]" = field(default=None, init=False)
     _columns: list[str] = field(default_factory=list, init=False)
     _values_added_count: int = field(default=0, init=False)
+
+    def __init__(self, table: Optional[str] = None, **kwargs: Any) -> None:
+        """Initialize INSERT with optional table.
+
+        Args:
+            table: Target table name
+            **kwargs: Additional QueryBuilder arguments
+        """
+        super().__init__(**kwargs)
+
+        # Initialize fields from dataclass
+        self._table = None
+        self._columns = []
+        self._values_added_count = 0
+
+        if table:
+            self.into(table)
 
     def _create_base_expression(self) -> exp.Insert:
         """Create a base INSERT expression.
@@ -165,7 +185,6 @@ class InsertBuilder(
         else:
             # This case should ideally not be reached if logic is correct:
             # means _values_added_count > 0 but expression is not exp.Values.
-            # Fallback to creating a new Values node, though this might indicate an issue.
             new_values_node = exp.Values(expressions=[exp.Tuple(expressions=list(value_placeholders))])
             insert_expr.set("expression", new_values_node)
 
@@ -191,14 +210,12 @@ class InsertBuilder(
             raise SQLBuilderError(ERR_MSG_TABLE_NOT_SET)
 
         if not self._columns:
-            # Set columns from dictionary keys if not already set
             self.columns(*data.keys())
         elif set(self._columns) != set(data.keys()):
             # Verify that dictionary keys match existing columns
             msg = f"Dictionary keys {set(data.keys())} do not match existing columns {set(self._columns)}."
             raise SQLBuilderError(msg)
 
-        # Add values in the same order as columns
         return self.values(*[data[col] for col in self._columns])
 
     def values_from_dicts(self, data: "Sequence[Mapping[str, Any]]") -> "Self":
@@ -219,12 +236,10 @@ class InsertBuilder(
         if not data:
             return self
 
-        # Use the first dictionary to establish columns
         first_dict = data[0]
         if not self._columns:
             self.columns(*first_dict.keys())
 
-        # Validate that all dictionaries have the same keys
         expected_keys = set(self._columns)
         for i, row_dict in enumerate(data):
             if set(row_dict.keys()) != expected_keys:
@@ -234,7 +249,6 @@ class InsertBuilder(
                 )
                 raise SQLBuilderError(msg)
 
-        # Add each row
         for row_dict in data:
             self.values(*[row_dict[col] for col in self._columns])
 

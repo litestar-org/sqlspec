@@ -18,7 +18,9 @@ from sqlglot.optimizer import (
 )
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.validators.base import BaseValidator
+from sqlspec.protocols import ProcessorProtocol
+from sqlspec.statement.pipelines.context import ValidationError
+from sqlspec.utils.type_guards import has_expressions
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
@@ -126,7 +128,7 @@ class PerformanceAnalysis:
     potential_improvement: float = 0.0
 
 
-class PerformanceValidator(BaseValidator):
+class PerformanceValidator(ProcessorProtocol):
     """Comprehensive query performance validator.
 
     Validates query performance by detecting:
@@ -143,8 +145,30 @@ class PerformanceValidator(BaseValidator):
         Args:
             config: Configuration for performance validation
         """
-        super().__init__()
         self.config = config or PerformanceConfig()
+
+    def process(
+        self, expression: "Optional[exp.Expression]", context: "SQLProcessingContext"
+    ) -> "Optional[exp.Expression]":
+        """Process the expression for validation (implements ProcessorProtocol)."""
+        if expression is None:
+            return None
+        self.validate(expression, context)
+        return expression
+
+    def add_error(
+        self,
+        context: "SQLProcessingContext",
+        message: str,
+        code: str,
+        risk_level: RiskLevel,
+        expression: "Optional[exp.Expression]" = None,
+    ) -> None:
+        """Add a validation error to the context."""
+        error = ValidationError(
+            message=message, code=code, risk_level=risk_level, processor=self.__class__.__name__, expression=expression
+        )
+        context.validation_errors.append(error)
 
     def validate(self, expression: "exp.Expression", context: "SQLProcessingContext") -> None:
         """Validate SQL statement for performance issues.
@@ -167,7 +191,6 @@ class PerformanceValidator(BaseValidator):
         if self.config.enable_optimization_analysis:
             self._analyze_optimization_opportunities(expression, analysis, context)
 
-        # Check for cartesian products
         if self.config.warn_on_cartesian:
             cartesian_issues = self._check_cartesian_products(analysis)
             for issue in cartesian_issues:
@@ -179,7 +202,6 @@ class PerformanceValidator(BaseValidator):
                     expression=expression,
                 )
 
-        # Check join complexity
         if analysis.join_count > self.config.max_joins:
             self.add_error(
                 context,
@@ -189,7 +211,6 @@ class PerformanceValidator(BaseValidator):
                 expression=expression,
             )
 
-        # Check subquery depth
         if analysis.max_subquery_depth > self.config.max_subqueries:
             self.add_error(
                 context,
@@ -213,7 +234,6 @@ class PerformanceValidator(BaseValidator):
         # Calculate overall complexity score
         complexity_score = self._calculate_complexity(analysis)
 
-        # Build metadata
         context.metadata[self.__class__.__name__] = {
             "complexity_score": complexity_score,
             "join_analysis": {
@@ -260,7 +280,6 @@ class PerformanceValidator(BaseValidator):
             analysis.current_subquery_depth = max(analysis.current_subquery_depth, depth + 1)
             analysis.max_subquery_depth = max(analysis.max_subquery_depth, analysis.current_subquery_depth)
 
-            # Check if correlated
             if self._is_correlated_subquery(expr):
                 analysis.correlated_subqueries += 1
 
@@ -270,7 +289,6 @@ class PerformanceValidator(BaseValidator):
             join_type = expr.args.get("kind", "INNER").upper()
             analysis.join_types[join_type] = analysis.join_types.get(join_type, 0) + 1
 
-            # Extract join condition
             condition = expr.args.get("on")
             left_table = self._get_table_name(expr.parent) if expr.parent else "unknown"
             right_table = self._get_table_name(expr.this)
@@ -287,10 +305,10 @@ class PerformanceValidator(BaseValidator):
             analysis.where_conditions += len(list(expr.find_all(exp.Predicate)))
 
         elif isinstance(expr, exp.Group):
-            analysis.group_by_columns += len(expr.expressions) if hasattr(expr, "expressions") else 0
+            analysis.group_by_columns += len(expr.expressions) if has_expressions(expr) else 0
 
         elif isinstance(expr, exp.Order):
-            analysis.order_by_columns += len(expr.expressions) if hasattr(expr, "expressions") else 0
+            analysis.order_by_columns += len(expr.expressions) if has_expressions(expr) else 0
 
         elif isinstance(expr, exp.Distinct):
             analysis.distinct_operations += 1
@@ -302,13 +320,15 @@ class PerformanceValidator(BaseValidator):
             analysis.select_star_count += 1
 
         # Recursive traversal
-        for child in expr.args.values():
-            if isinstance(child, exp.Expression):
-                self._analyze_expression(child, analysis, depth)
-            elif isinstance(child, list):
-                for item in child:
-                    if isinstance(item, exp.Expression):
-                        self._analyze_expression(item, analysis, depth)
+        expr_args = getattr(expr, "args", None)
+        if expr_args is not None and isinstance(expr_args, dict):
+            for child in expr_args.values():
+                if isinstance(child, exp.Expression):
+                    self._analyze_expression(child, analysis, depth)
+                elif isinstance(child, list):
+                    for item in child:
+                        if isinstance(item, exp.Expression):
+                            self._analyze_expression(item, analysis, depth)
 
     def _check_cartesian_products(self, analysis: PerformanceAnalysis) -> "list[PerformanceIssue]":
         """Detect potential cartesian products from join analysis.
@@ -335,11 +355,9 @@ class PerformanceValidator(BaseValidator):
                     )
                 )
             else:
-                # Build join graph
                 join_graph[condition.left_table].add(condition.right_table)
                 join_graph[condition.right_table].add(condition.left_table)
 
-        # Check for disconnected tables (implicit cartesian)
         if len(analysis.tables) > 1:
             connected = self._find_connected_components(join_graph, analysis.tables)
             if len(connected) > 1:
@@ -595,7 +613,6 @@ class PerformanceValidator(BaseValidator):
 
             for opt_type, optimizer, description in optimizations:
                 try:
-                    # Apply the optimization
                     optimized = optimizer(expression.copy(), dialect=context.dialect)  # type: ignore[operator]
 
                     if optimized is None:
@@ -623,7 +640,6 @@ class PerformanceValidator(BaseValidator):
                     else:
                         improvement = 0.0
 
-                    # Only add if improvement meets threshold
                     if improvement >= self.config.optimization_threshold:
                         opportunities.append(
                             OptimizationOpportunity(
@@ -636,7 +652,6 @@ class PerformanceValidator(BaseValidator):
                             )
                         )
 
-                        # Update the best optimization if this is better
                         if improvement > cumulative_improvement:
                             best_optimized = optimized
                             cumulative_improvement = improvement

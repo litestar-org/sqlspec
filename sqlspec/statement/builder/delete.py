@@ -5,7 +5,7 @@ with automatic parameter binding and validation.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from sqlglot import exp
 
@@ -14,11 +14,11 @@ from sqlspec.statement.builder.mixins import DeleteFromClauseMixin, ReturningCla
 from sqlspec.statement.result import SQLResult
 from sqlspec.typing import RowT
 
-__all__ = ("DeleteBuilder",)
+__all__ = ("Delete",)
 
 
 @dataclass(unsafe_hash=True)
-class DeleteBuilder(QueryBuilder[RowT], WhereClauseMixin, ReturningClauseMixin, DeleteFromClauseMixin):
+class Delete(QueryBuilder[RowT], WhereClauseMixin, ReturningClauseMixin, DeleteFromClauseMixin):
     """Builder for DELETE statements.
 
     This builder provides a fluent interface for constructing SQL DELETE statements
@@ -28,13 +28,14 @@ class DeleteBuilder(QueryBuilder[RowT], WhereClauseMixin, ReturningClauseMixin, 
     Example:
         ```python
         # Basic DELETE
-        delete_query = (
-            DeleteBuilder().from_("users").where("age < 18")
-        )
+        delete_query = Delete().from_("users").where("age < 18")
+
+        # Even more concise with constructor
+        delete_query = Delete("users").where("age < 18")
 
         # DELETE with parameterized conditions
         delete_query = (
-            DeleteBuilder()
+            Delete()
             .from_("users")
             .where_eq("status", "inactive")
             .where_in("category", ["test", "demo"])
@@ -43,6 +44,21 @@ class DeleteBuilder(QueryBuilder[RowT], WhereClauseMixin, ReturningClauseMixin, 
     """
 
     _table: "Optional[str]" = field(default=None, init=False)
+
+    def __init__(self, table: Optional[str] = None, **kwargs: Any) -> None:
+        """Initialize DELETE with optional table.
+
+        Args:
+            table: Target table name
+            **kwargs: Additional QueryBuilder arguments
+        """
+        super().__init__(**kwargs)
+
+        # Initialize fields from dataclass
+        self._table = None
+
+        if table:
+            self.from_(table)
 
     @property
     def _expected_result_type(self) -> "type[SQLResult[RowT]]":

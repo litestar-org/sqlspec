@@ -1,11 +1,12 @@
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
-from typing import Any, ClassVar, Optional, Union, cast
+from typing import Any, ClassVar, Optional, cast
 
 from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
 from sqlglot.dialects.dialect import DialectType
 
 from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
+from sqlspec.driver.connection import managed_transaction_async, managed_transaction_sync
 from sqlspec.driver.mixins import (
     AsyncPipelinedExecutionMixin,
     AsyncStorageMixin,
@@ -15,10 +16,11 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, DMLResultDict, ScriptResultDict, SelectResultDict, SQLResult
+from sqlspec.driver.parameters import normalize_parameter_sequence
+from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
+from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, ModelDTOT, RowT, SQLParameterType
+from sqlspec.typing import DictRow, RowT, SQLParameterType
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import ensure_async_
 
@@ -41,30 +43,21 @@ def _process_oracle_parameters(params: Any) -> Any:
     if params is None:
         return None
 
-    # Handle TypedParameter objects
     if isinstance(params, TypedParameter):
         return _process_oracle_parameters(params.value)
 
     if isinstance(params, tuple):
-        # Convert single tuple to list and process each element
         return [_process_oracle_parameters(item) for item in params]
     if isinstance(params, list):
-        # Process list of parameter sets
         processed = []
         for param_set in params:
-            if isinstance(param_set, tuple):
-                # Convert tuple to list and process each element
-                processed.append([_process_oracle_parameters(item) for item in param_set])
-            elif isinstance(param_set, list):
-                # Process each element in the list
+            if isinstance(param_set, (tuple, list)):
                 processed.append([_process_oracle_parameters(item) for item in param_set])
             else:
                 processed.append(_process_oracle_parameters(param_set))
         return processed
     if isinstance(params, dict):
-        # Process dict values
         return {key: _process_oracle_parameters(value) for key, value in params.items()}
-    # Return as-is for other types
     return params
 
 
@@ -114,22 +107,24 @@ class OracleSyncDriver(
 
     def _execute_statement(
         self, statement: SQL, connection: Optional[OracleSyncConnection] = None, **kwargs: Any
-    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
+    ) -> SQLResult[RowT]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
-        # Determine if we need to convert parameter style
-        detected_styles = {p.style for p in statement.parameter_info}
+        detected_styles = set()
+        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
+        validator = self.config.parameter_validator if self.config else ParameterValidator()
+        param_infos = validator.extract_parameters(sql_str)
+        if param_infos:
+            detected_styles = {p.style for p in param_infos}
+
         target_style = self.default_parameter_style
 
-        # Check if any detected style is not supported
         unsupported_styles = detected_styles - set(self.supported_parameter_styles)
         if unsupported_styles:
-            # Convert to default style if we have unsupported styles
             target_style = self.default_parameter_style
         elif detected_styles:
-            # Use the first detected style if all are supported
             # Prefer the first supported style found
             for style in detected_styles:
                 if style in self.supported_parameter_styles:
@@ -138,32 +133,10 @@ class OracleSyncDriver(
 
         if statement.is_many:
             sql, params = statement.compile(placeholder_style=target_style)
-            # Process parameters to convert tuples to lists for Oracle
             params = self._process_parameters(params)
-            # Oracle doesn't like underscores in bind parameter names
-            if isinstance(params, list) and params and isinstance(params[0], dict):
-                # Fix the SQL and parameters
-                for key in list(params[0].keys()):
-                    if key.startswith("_arg_"):
-                        # Remove leading underscore: _arg_0 -> arg0
-                        new_key = key[1:].replace("_", "")
-                        sql = sql.replace(f":{key}", f":{new_key}")
-                        # Update all parameter sets
-                        for param_set in params:
-                            if isinstance(param_set, dict) and key in param_set:
-                                param_set[new_key] = param_set.pop(key)
             return self._execute_many(sql, params, connection=connection, **kwargs)
 
         sql, params = statement.compile(placeholder_style=target_style)
-        # Oracle doesn't like underscores in bind parameter names
-        if isinstance(params, dict):
-            # Fix the SQL and parameters
-            for key in list(params.keys()):
-                if key.startswith("_arg_"):
-                    # Remove leading underscore: _arg_0 -> arg0
-                    new_key = key[1:].replace("_", "")
-                    sql = sql.replace(f":{key}", f":{new_key}")
-                    params[new_key] = params.pop(key)
         return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
@@ -173,65 +146,130 @@ class OracleSyncDriver(
         statement: SQL,
         connection: Optional[OracleSyncConnection] = None,
         **kwargs: Any,
-    ) -> Union[SelectResultDict, DMLResultDict]:
+    ) -> SQLResult[RowT]:
+        # Use provided connection or driver's default connection
         conn = self._connection(connection)
-        with self._get_cursor(conn) as cursor:
-            # Process parameters to extract values from TypedParameter objects
-            processed_params = self._process_parameters(parameters) if parameters else []
-            cursor.execute(sql, processed_params)
 
-            if self.returns_rows(statement.expression):
-                fetched_data = cursor.fetchall()
-                column_names = [col[0] for col in cursor.description or []]
-                return {"data": fetched_data, "column_names": column_names, "rows_affected": cursor.rowcount}
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
+            # Oracle requires special parameter handling
+            processed_params = self._process_parameters(parameters) if parameters is not None else []
 
-            return {"rows_affected": cursor.rowcount, "status_message": "OK"}
+            with self._get_cursor(txn_conn) as cursor:
+                cursor.execute(sql, processed_params)
+
+                if self.returns_rows(statement.expression):
+                    fetched_data = cursor.fetchall()
+                    column_names = [col[0] for col in cursor.description or []]
+
+                    # Convert to dict if default_row_type is dict
+                    if self.default_row_type == DictRow or issubclass(self.default_row_type, dict):
+                        data = cast("list[RowT]", [dict(zip(column_names, row)) for row in fetched_data])
+                    else:
+                        data = cast("list[RowT]", fetched_data)
+
+                    return SQLResult(
+                        statement=statement,
+                        data=data,
+                        column_names=column_names,
+                        rows_affected=cursor.rowcount,
+                        operation_type="SELECT",
+                    )
+
+                return SQLResult(
+                    statement=statement,
+                    data=[],
+                    rows_affected=cursor.rowcount,
+                    operation_type=self._determine_operation_type(statement),
+                    metadata={"status_message": "OK"},
+                )
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[OracleSyncConnection] = None, **kwargs: Any
-    ) -> DMLResultDict:
+    ) -> SQLResult[RowT]:
+        # Use provided connection or driver's default connection
         conn = self._connection(connection)
-        with self._get_cursor(conn) as cursor:
-            # Handle None or empty param_list
-            if param_list is None:
-                param_list = []
-            # Ensure param_list is a list of parameter sets
-            elif param_list and not isinstance(param_list, list):
+
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
+            # Normalize parameter list using consolidated utility
+            normalized_param_list = normalize_parameter_sequence(param_list)
+
+            # Process parameters for Oracle
+            if normalized_param_list is None:
+                processed_param_list = []
+            elif normalized_param_list and not isinstance(normalized_param_list, list):
                 # Single parameter set, wrap it
-                param_list = [param_list]
-            elif param_list and not isinstance(param_list[0], (list, tuple, dict)):
+                processed_param_list = [normalized_param_list]
+            elif normalized_param_list and not isinstance(normalized_param_list[0], (list, tuple, dict)):
                 # Already a flat list, likely from incorrect usage
-                param_list = [param_list]
+                processed_param_list = [normalized_param_list]
+            else:
+                processed_param_list = normalized_param_list
+
             # Parameters have already been processed in _execute_statement
-            cursor.executemany(sql, param_list)
-            return {"rows_affected": cursor.rowcount, "status_message": "OK"}
+            with self._get_cursor(txn_conn) as cursor:
+                cursor.executemany(sql, processed_param_list or [])
+                return SQLResult(
+                    statement=SQL(sql, _dialect=self.dialect),
+                    data=[],
+                    rows_affected=cursor.rowcount,
+                    operation_type="EXECUTE",
+                    metadata={"status_message": "OK"},
+                )
 
     def _execute_script(
         self, script: str, connection: Optional[OracleSyncConnection] = None, **kwargs: Any
-    ) -> ScriptResultDict:
+    ) -> SQLResult[RowT]:
+        # Use provided connection or driver's default connection
         conn = self._connection(connection)
-        statements = self._split_script_statements(script, strip_trailing_semicolon=True)
-        with self._get_cursor(conn) as cursor:
-            for statement in statements:
-                if statement and statement.strip():
-                    cursor.execute(statement.strip())
 
-        return {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
+            statements = self._split_script_statements(script, strip_trailing_semicolon=True)
+            with self._get_cursor(txn_conn) as cursor:
+                for statement in statements:
+                    if statement and statement.strip():
+                        cursor.execute(statement.strip())
+
+            return SQLResult(
+                statement=SQL(script, _dialect=self.dialect).as_script(),
+                data=[],
+                rows_affected=0,
+                operation_type="SCRIPT",
+                metadata={"status_message": "SCRIPT EXECUTED"},
+                total_statements=len(statements),
+                successful_statements=len(statements),
+            )
 
     def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
         self._ensure_pyarrow_installed()
         conn = self._connection(connection)
 
-        # Get SQL and parameters using compile to ensure they match
-        # For fetch_arrow_table, we need to use POSITIONAL_COLON style since the SQL has :1 placeholders
-        sql_str, params = sql.compile(placeholder_style=ParameterStyle.POSITIONAL_COLON)
-        if params is None:
-            params = []
+        # Use the exact same parameter style detection logic as _execute_statement
+        detected_styles = set()
+        sql_str = sql.to_sql(placeholder_style=None)  # Get raw SQL
+        validator = self.config.parameter_validator if self.config else ParameterValidator()
+        param_infos = validator.extract_parameters(sql_str)
+        if param_infos:
+            detected_styles = {p.style for p in param_infos}
 
-        # Process parameters to extract values from TypedParameter objects
-        processed_params = self._process_parameters(params) if params else []
+        target_style = self.default_parameter_style
 
-        oracle_df = conn.fetch_df_all(sql_str, processed_params)
+        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
+        if unsupported_styles:
+            target_style = self.default_parameter_style
+        elif detected_styles:
+            # Prefer the first supported style found
+            for style in detected_styles:
+                if style in self.supported_parameter_styles:
+                    target_style = style
+                    break
+
+        sql_str, params = sql.compile(placeholder_style=target_style)
+        processed_params = self._process_parameters(params) if params is not None else []
+
+        # Use proper transaction management like other methods
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
+            oracle_df = txn_conn.fetch_df_all(sql_str, processed_params)
+
         from pyarrow.interchange.from_dataframe import from_dataframe
 
         arrow_table = from_dataframe(oracle_df)
@@ -242,7 +280,8 @@ class OracleSyncDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(None)
 
-        with self._get_cursor(conn) as cursor:
+        # Use proper transaction management like other methods
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
             if mode == "replace":
                 cursor.execute(f"TRUNCATE TABLE {table_name}")
             elif mode == "create":
@@ -260,57 +299,9 @@ class OracleSyncDriver(
             cursor.executemany(sql, data_for_ingest)
             return cursor.rowcount
 
-    def _wrap_select_result(
-        self, statement: SQL, result: SelectResultDict, schema_type: Optional[type[ModelDTOT]] = None, **kwargs: Any
-    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
-        fetched_tuples = result.get("data", [])
-        column_names = result.get("column_names", [])
-
-        if not fetched_tuples:
-            return SQLResult[RowT](statement=statement, data=[], column_names=column_names, operation_type="SELECT")
-
-        rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row_tuple)) for row_tuple in fetched_tuples]
-
-        if schema_type:
-            converted_data = self.to_schema(rows_as_dicts, schema_type=schema_type)
-            return SQLResult[ModelDTOT](
-                statement=statement, data=list(converted_data), column_names=column_names, operation_type="SELECT"
-            )
-
-        return SQLResult[RowT](
-            statement=statement, data=rows_as_dicts, column_names=column_names, operation_type="SELECT"
-        )
-
-    def _wrap_execute_result(
-        self, statement: SQL, result: Union[DMLResultDict, ScriptResultDict], **kwargs: Any
-    ) -> SQLResult[RowT]:
-        operation_type = "UNKNOWN"
-        if statement.expression:
-            operation_type = str(statement.expression.key).upper()
-
-        if "statements_executed" in result:
-            script_result = cast("ScriptResultDict", result)
-            return SQLResult[RowT](
-                statement=statement,
-                data=[],
-                rows_affected=0,
-                operation_type="SCRIPT",
-                metadata={
-                    "status_message": script_result.get("status_message", ""),
-                    "statements_executed": script_result.get("statements_executed", -1),
-                },
-            )
-
-        dml_result = cast("DMLResultDict", result)
-        rows_affected = dml_result.get("rows_affected", -1)
-        status_message = dml_result.get("status_message", "")
-        return SQLResult[RowT](
-            statement=statement,
-            data=[],
-            rows_affected=rows_affected,
-            operation_type=operation_type,
-            metadata={"status_message": status_message},
-        )
+    def _connection(self, connection: Optional[OracleSyncConnection] = None) -> OracleSyncConnection:
+        """Get the connection to use for the operation."""
+        return connection or self.connection
 
 
 class OracleAsyncDriver(
@@ -362,22 +353,24 @@ class OracleAsyncDriver(
 
     async def _execute_statement(
         self, statement: SQL, connection: Optional[OracleAsyncConnection] = None, **kwargs: Any
-    ) -> Union[SelectResultDict, DMLResultDict, ScriptResultDict]:
+    ) -> SQLResult[RowT]:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
-        # Determine if we need to convert parameter style
-        detected_styles = {p.style for p in statement.parameter_info}
+        detected_styles = set()
+        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
+        validator = self.config.parameter_validator if self.config else ParameterValidator()
+        param_infos = validator.extract_parameters(sql_str)
+        if param_infos:
+            detected_styles = {p.style for p in param_infos}
+
         target_style = self.default_parameter_style
 
-        # Check if any detected style is not supported
         unsupported_styles = detected_styles - set(self.supported_parameter_styles)
         if unsupported_styles:
-            # Convert to default style if we have unsupported styles
             target_style = self.default_parameter_style
         elif detected_styles:
-            # Use the first detected style if all are supported
             # Prefer the first supported style found
             for style in detected_styles:
                 if style in self.supported_parameter_styles:
@@ -386,32 +379,20 @@ class OracleAsyncDriver(
 
         if statement.is_many:
             sql, params = statement.compile(placeholder_style=target_style)
-            # Process parameters to convert tuples to lists for Oracle
             params = self._process_parameters(params)
             # Oracle doesn't like underscores in bind parameter names
             if isinstance(params, list) and params and isinstance(params[0], dict):
                 # Fix the SQL and parameters
                 for key in list(params[0].keys()):
                     if key.startswith("_arg_"):
-                        # Remove leading underscore: _arg_0 -> arg0
                         new_key = key[1:].replace("_", "")
                         sql = sql.replace(f":{key}", f":{new_key}")
-                        # Update all parameter sets
                         for param_set in params:
                             if isinstance(param_set, dict) and key in param_set:
                                 param_set[new_key] = param_set.pop(key)
             return await self._execute_many(sql, params, connection=connection, **kwargs)
 
         sql, params = statement.compile(placeholder_style=target_style)
-        # Oracle doesn't like underscores in bind parameter names
-        if isinstance(params, dict):
-            # Fix the SQL and parameters
-            for key in list(params.keys()):
-                if key.startswith("_arg_"):
-                    # Remove leading underscore: _arg_0 -> arg0
-                    new_key = key[1:].replace("_", "")
-                    sql = sql.replace(f":{key}", f":{new_key}")
-                    params[new_key] = params.pop(key)
         return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
     async def _execute(
@@ -421,77 +402,132 @@ class OracleAsyncDriver(
         statement: SQL,
         connection: Optional[OracleAsyncConnection] = None,
         **kwargs: Any,
-    ) -> Union[SelectResultDict, DMLResultDict]:
+    ) -> SQLResult[RowT]:
+        # Use provided connection or driver's default connection
         conn = self._connection(connection)
-        async with self._get_cursor(conn) as cursor:
-            if parameters is None:
-                await cursor.execute(sql)
-            else:
-                # Process parameters to extract values from TypedParameter objects
-                processed_params = self._process_parameters(parameters)
-                await cursor.execute(sql, processed_params)
 
-            # For SELECT statements, extract data while cursor is open
-            if self.returns_rows(statement.expression):
-                fetched_data = await cursor.fetchall()
-                column_names = [col[0] for col in cursor.description or []]
-                result: SelectResultDict = {
-                    "data": fetched_data,
-                    "column_names": column_names,
-                    "rows_affected": cursor.rowcount,
-                }
-                return result
-            dml_result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
-            return dml_result
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            # Oracle requires special parameter handling
+            processed_params = self._process_parameters(parameters) if parameters is not None else []
+
+            async with self._get_cursor(txn_conn) as cursor:
+                if parameters is None:
+                    await cursor.execute(sql)
+                else:
+                    await cursor.execute(sql, processed_params)
+
+                # For SELECT statements, extract data while cursor is open
+                if self.returns_rows(statement.expression):
+                    fetched_data = await cursor.fetchall()
+                    column_names = [col[0] for col in cursor.description or []]
+
+                    # Convert to dict if default_row_type is dict
+                    if self.default_row_type == DictRow or issubclass(self.default_row_type, dict):
+                        data = cast("list[RowT]", [dict(zip(column_names, row)) for row in fetched_data])
+                    else:
+                        data = cast("list[RowT]", fetched_data)
+
+                    return SQLResult(
+                        statement=statement,
+                        data=data,
+                        column_names=column_names,
+                        rows_affected=cursor.rowcount,
+                        operation_type="SELECT",
+                    )
+
+                return SQLResult(
+                    statement=statement,
+                    data=[],
+                    rows_affected=cursor.rowcount,
+                    operation_type=self._determine_operation_type(statement),
+                    metadata={"status_message": "OK"},
+                )
 
     async def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[OracleAsyncConnection] = None, **kwargs: Any
-    ) -> DMLResultDict:
+    ) -> SQLResult[RowT]:
+        # Use provided connection or driver's default connection
         conn = self._connection(connection)
-        async with self._get_cursor(conn) as cursor:
-            # Handle None or empty param_list
-            if param_list is None:
-                param_list = []
-            # Ensure param_list is a list of parameter sets
-            elif param_list and not isinstance(param_list, list):
+
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            # Normalize parameter list using consolidated utility
+            normalized_param_list = normalize_parameter_sequence(param_list)
+
+            # Process parameters for Oracle
+            if normalized_param_list is None:
+                processed_param_list = []
+            elif normalized_param_list and not isinstance(normalized_param_list, list):
                 # Single parameter set, wrap it
-                param_list = [param_list]
-            elif param_list and not isinstance(param_list[0], (list, tuple, dict)):
+                processed_param_list = [normalized_param_list]
+            elif normalized_param_list and not isinstance(normalized_param_list[0], (list, tuple, dict)):
                 # Already a flat list, likely from incorrect usage
-                param_list = [param_list]
+                processed_param_list = [normalized_param_list]
+            else:
+                processed_param_list = normalized_param_list
+
             # Parameters have already been processed in _execute_statement
-            await cursor.executemany(sql, param_list)
-            result: DMLResultDict = {"rows_affected": cursor.rowcount, "status_message": "OK"}
-            return result
+            async with self._get_cursor(txn_conn) as cursor:
+                await cursor.executemany(sql, processed_param_list or [])
+                return SQLResult(
+                    statement=SQL(sql, _dialect=self.dialect),
+                    data=[],
+                    rows_affected=cursor.rowcount,
+                    operation_type="EXECUTE",
+                    metadata={"status_message": "OK"},
+                )
 
     async def _execute_script(
         self, script: str, connection: Optional[OracleAsyncConnection] = None, **kwargs: Any
-    ) -> ScriptResultDict:
+    ) -> SQLResult[RowT]:
+        # Use provided connection or driver's default connection
         conn = self._connection(connection)
-        # Oracle doesn't support multi-statement scripts in a single execute
-        # The splitter now handles PL/SQL blocks correctly when strip_trailing_semicolon=True
-        statements = self._split_script_statements(script, strip_trailing_semicolon=True)
 
-        async with self._get_cursor(conn) as cursor:
-            for statement in statements:
-                if statement and statement.strip():
-                    await cursor.execute(statement.strip())
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            # Oracle doesn't support multi-statement scripts in a single execute
+            # The splitter now handles PL/SQL blocks correctly when strip_trailing_semicolon=True
+            statements = self._split_script_statements(script, strip_trailing_semicolon=True)
 
-        result: ScriptResultDict = {"statements_executed": len(statements), "status_message": "SCRIPT EXECUTED"}
-        return result
+            async with self._get_cursor(txn_conn) as cursor:
+                for statement in statements:
+                    if statement and statement.strip():
+                        await cursor.execute(statement.strip())
+
+            return SQLResult(
+                statement=SQL(script, _dialect=self.dialect).as_script(),
+                data=[],
+                rows_affected=0,
+                operation_type="SCRIPT",
+                metadata={"status_message": "SCRIPT EXECUTED"},
+                total_statements=len(statements),
+                successful_statements=len(statements),
+            )
 
     async def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
         self._ensure_pyarrow_installed()
         conn = self._connection(connection)
 
-        # Get SQL and parameters using compile to ensure they match
-        # For fetch_arrow_table, we need to use POSITIONAL_COLON style since the SQL has :1 placeholders
-        sql_str, params = sql.compile(placeholder_style=ParameterStyle.POSITIONAL_COLON)
-        if params is None:
-            params = []
+        # Use the exact same parameter style detection logic as _execute_statement
+        detected_styles = set()
+        sql_str = sql.to_sql(placeholder_style=None)  # Get raw SQL
+        validator = self.config.parameter_validator if self.config else ParameterValidator()
+        param_infos = validator.extract_parameters(sql_str)
+        if param_infos:
+            detected_styles = {p.style for p in param_infos}
 
-        # Process parameters to extract values from TypedParameter objects
-        processed_params = self._process_parameters(params) if params else []
+        target_style = self.default_parameter_style
+
+        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
+        if unsupported_styles:
+            target_style = self.default_parameter_style
+        elif detected_styles:
+            # Prefer the first supported style found
+            for style in detected_styles:
+                if style in self.supported_parameter_styles:
+                    target_style = style
+                    break
+
+        sql_str, params = sql.compile(placeholder_style=target_style)
+        processed_params = self._process_parameters(params) if params is not None else []
 
         oracle_df = await conn.fetch_df_all(sql_str, processed_params)
         from pyarrow.interchange.from_dataframe import from_dataframe
@@ -504,7 +540,8 @@ class OracleAsyncDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(None)
 
-        async with self._get_cursor(conn) as cursor:
+        # Use proper transaction management like other methods
+        async with managed_transaction_async(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
             if mode == "replace":
                 await cursor.execute(f"TRUNCATE TABLE {table_name}")
             elif mode == "create":
@@ -522,60 +559,6 @@ class OracleAsyncDriver(
             await cursor.executemany(sql, data_for_ingest)
             return cursor.rowcount
 
-    async def _wrap_select_result(
-        self,
-        statement: SQL,
-        result: SelectResultDict,
-        schema_type: Optional[type[ModelDTOT]] = None,
-        **kwargs: Any,  # pyright: ignore[reportUnusedParameter]
-    ) -> Union[SQLResult[ModelDTOT], SQLResult[RowT]]:
-        fetched_tuples = result["data"]
-        column_names = result["column_names"]
-
-        if not fetched_tuples:
-            return SQLResult[RowT](statement=statement, data=[], column_names=column_names, operation_type="SELECT")
-
-        rows_as_dicts: list[dict[str, Any]] = [dict(zip(column_names, row_tuple)) for row_tuple in fetched_tuples]
-
-        if schema_type:
-            converted_data = self.to_schema(rows_as_dicts, schema_type=schema_type)
-            return SQLResult[ModelDTOT](
-                statement=statement, data=list(converted_data), column_names=column_names, operation_type="SELECT"
-            )
-        return SQLResult[RowT](
-            statement=statement, data=rows_as_dicts, column_names=column_names, operation_type="SELECT"
-        )
-
-    async def _wrap_execute_result(
-        self,
-        statement: SQL,
-        result: Union[DMLResultDict, ScriptResultDict],
-        **kwargs: Any,  # pyright: ignore[reportUnusedParameter]
-    ) -> SQLResult[RowT]:
-        operation_type = "UNKNOWN"
-        if statement.expression:
-            operation_type = str(statement.expression.key).upper()
-
-        if "statements_executed" in result:
-            script_result = cast("ScriptResultDict", result)
-            return SQLResult[RowT](
-                statement=statement,
-                data=[],
-                rows_affected=0,
-                operation_type="SCRIPT",
-                metadata={
-                    "status_message": script_result.get("status_message", ""),
-                    "statements_executed": script_result.get("statements_executed", -1),
-                },
-            )
-
-        dml_result = cast("DMLResultDict", result)
-        rows_affected = dml_result.get("rows_affected", -1)
-        status_message = dml_result.get("status_message", "")
-        return SQLResult[RowT](
-            statement=statement,
-            data=[],
-            rows_affected=rows_affected,
-            operation_type=operation_type,
-            metadata={"status_message": status_message},
-        )
+    def _connection(self, connection: Optional[OracleAsyncConnection] = None) -> OracleAsyncConnection:
+        """Get the connection to use for the operation."""
+        return connection or self.connection

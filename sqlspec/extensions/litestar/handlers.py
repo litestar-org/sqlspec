@@ -246,7 +246,6 @@ def session_provider_maker(
 
     conn_type_annotation = config.connection_type
 
-    # Import Dependency at function level to avoid circular imports
     from litestar.params import Dependency
 
     db_conn_param = inspect.Parameter(

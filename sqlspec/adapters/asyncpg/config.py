@@ -3,7 +3,6 @@
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from asyncpg import Record
@@ -224,7 +223,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         super().__init__()
 
-        # Set pool_instance after super().__init__() to ensure it's not overridden
         if pool_instance_from_kwargs is not None:
             self.pool_instance = pool_instance_from_kwargs
 
@@ -241,7 +239,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             if getattr(self, field, None) is not None and getattr(self, field) is not Empty
         }
 
-        # Add connection-specific extras (not pool-specific ones)
         config.update(self.extras)
 
         return config
@@ -318,15 +315,16 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             An AsyncpgDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as connection:
-            # Create statement config with parameter style info if not already set
             statement_config = self.statement_config
+            # Inject parameter style info if not already set
             if statement_config is not None and statement_config.allowed_parameter_styles is None:
+                from dataclasses import replace
+
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
                     target_parameter_style=self.preferred_parameter_style,
                 )
-
             yield self.driver_type(connection=connection, config=statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool[Record]":
@@ -348,10 +346,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Returns:
             Dictionary mapping type names to types.
         """
-        # Get base types from parent
         namespace = super().get_signature_namespace()
 
-        # Add AsyncPG-specific types
         try:
             from asyncpg import Connection, Record
             from asyncpg.connection import ConnectionMeta

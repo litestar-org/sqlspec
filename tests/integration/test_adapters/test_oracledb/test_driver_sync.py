@@ -119,16 +119,15 @@ def test_sync_select(oracle_sync_session: OracleSyncConfig, params: Any, style: 
         driver.execute_script(sql)
 
         if style == "positional_binds":
-            insert_sql = "INSERT INTO test_table (id, name) VALUES (1, :1)"
-            select_sql = "SELECT name FROM test_table WHERE name = :1"
-            insert_params = params
-            select_params = params
+            insert_sql = "INSERT INTO test_table (id, name) VALUES (:id, :name)"
+            select_sql = "SELECT name FROM test_table WHERE name = :name"
+            insert_params = {"id": 1, "name": params[0]}
+            select_params = {"name": params[0]}
         else:  # dict_binds
-            # Workaround: Use positional binds due to DPY-4009
-            insert_sql = "INSERT INTO test_table (id, name) VALUES (1, :1)"
-            select_sql = "SELECT name FROM test_table WHERE name = :1"
-            insert_params = (params["name"],)
-            select_params = (params["name"],)
+            insert_sql = "INSERT INTO test_table (id, name) VALUES (:id, :name)"
+            select_sql = "SELECT name FROM test_table WHERE name = :name"
+            insert_params = {"id": 1, **params}
+            select_params = params
 
         insert_result = driver.execute(insert_sql, insert_params)
         assert isinstance(insert_result, SQLResult)
@@ -172,9 +171,8 @@ def test_sync_select_value(oracle_sync_session: OracleSyncConfig, params: Any, s
             setup_value = params[0]
         else:  # dict_binds
             setup_value = params["name"]
-        setup_params_tuple = (setup_value,)
-        insert_sql_setup = "INSERT INTO test_table (id, name) VALUES (1, :1)"
-        insert_result = driver.execute(insert_sql_setup, setup_params_tuple)
+        insert_sql_setup = "INSERT INTO test_table (id, name) VALUES (:id, :name)"
+        insert_result = driver.execute(insert_sql_setup, {"id": 1, "name": setup_value})
         assert isinstance(insert_result, SQLResult)
         assert insert_result.rows_affected == 1
 
@@ -215,9 +213,9 @@ def test_sync_select_arrow(oracle_sync_session: OracleSyncConfig) -> None:
         assert insert_result.rows_affected == 1
 
         # Select and verify with Arrow support if available
-        select_sql = "SELECT name, id FROM test_table WHERE name = :1"
+        select_sql = "SELECT name, id FROM test_table WHERE name = :name"
         if hasattr(driver, "fetch_arrow_table"):
-            arrow_result = driver.fetch_arrow_table(select_sql, ("arrow_name",))
+            arrow_result = driver.fetch_arrow_table(select_sql, {"name": "arrow_name"})
             assert hasattr(arrow_result, "data")
             arrow_table = arrow_result.data
             assert isinstance(arrow_table, pa.Table)
@@ -254,8 +252,8 @@ def test_sync_to_parquet(oracle_sync_session: OracleSyncConfig) -> None:
         """
         driver.execute_script(sql)
         # Insert test records
-        driver.execute("INSERT INTO test_table (id, name) VALUES (1, :1)", ("pq1",))
-        driver.execute("INSERT INTO test_table (id, name) VALUES (2, :1)", ("pq2",))
+        driver.execute("INSERT INTO test_table (id, name) VALUES (:id, :name)", {"id": 1, "name": "pq1"})
+        driver.execute("INSERT INTO test_table (id, name) VALUES (:id, :name)", {"id": 2, "name": "pq2"})
         statement = "SELECT name, id FROM test_table ORDER BY name"
         import tempfile
 

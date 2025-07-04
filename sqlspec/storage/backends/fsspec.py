@@ -2,10 +2,11 @@
 import logging
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Union
 
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.storage.backends.base import ObjectStoreBase
+from sqlspec.storage.capabilities import StorageCapabilities
 from sqlspec.typing import FSSPEC_INSTALLED, PYARROW_INSTALLED
 from sqlspec.utils.sync_tools import async_
 
@@ -47,6 +48,16 @@ class FSSpecBackend(ObjectStoreBase):
     and offering fallback capabilities.
     """
 
+    # FSSpec supports most operations but varies by underlying filesystem
+    _default_capabilities: ClassVar[StorageCapabilities] = StorageCapabilities(
+        supports_arrow=PYARROW_INSTALLED,
+        supports_streaming=PYARROW_INSTALLED,
+        supports_async=True,
+        supports_compression=True,
+        is_remote=True,
+        is_cloud_native=False,
+    )
+
     def __init__(self, fs: "Union[str, AbstractFileSystem]", base_path: str = "") -> None:
         if not FSSPEC_INSTALLED:
             raise MissingDependencyError(package="fsspec", install_package="fsspec")
@@ -63,6 +74,10 @@ class FSSpecBackend(ObjectStoreBase):
             self.fs = fs
             self.protocol = getattr(fs, "protocol", "unknown")
             self._fs_uri = f"{self.protocol}://"
+
+        # Set instance-level capabilities based on detected protocol
+        self._instance_capabilities = self._detect_capabilities()
+
         super().__init__()
 
     @classmethod
@@ -71,7 +86,6 @@ class FSSpecBackend(ObjectStoreBase):
         fs_config = config.get("fs_config", {})
         base_path = config.get("base_path", "")
 
-        # Create filesystem instance from protocol
         import fsspec
 
         fs_instance = fsspec.filesystem(protocol, **fs_config)
@@ -82,11 +96,46 @@ class FSSpecBackend(ObjectStoreBase):
         """Resolve path relative to base_path."""
         path_str = str(path)
         if self.base_path:
-            # Ensure no double slashes
             clean_base = self.base_path.rstrip("/")
             clean_path = path_str.lstrip("/")
             return f"{clean_base}/{clean_path}"
         return path_str
+
+    def _detect_capabilities(self) -> StorageCapabilities:
+        """Detect capabilities based on underlying filesystem protocol."""
+        protocol = self.protocol.lower()
+
+        if protocol in {"s3", "s3a", "s3n"}:
+            return StorageCapabilities.s3_compatible()
+        if protocol in {"gcs", "gs"}:
+            return StorageCapabilities.gcs()
+        if protocol in {"abfs", "az", "azure"}:
+            return StorageCapabilities.azure_blob()
+        if protocol in {"file", "local"}:
+            return StorageCapabilities.local_filesystem()
+        return StorageCapabilities(
+            supports_arrow=PYARROW_INSTALLED,
+            supports_streaming=PYARROW_INSTALLED,
+            supports_async=True,
+            supports_compression=True,
+            is_remote=True,
+            is_cloud_native=False,
+        )
+
+    @property
+    def capabilities(self) -> StorageCapabilities:
+        """Return instance-specific capabilities based on detected protocol."""
+        return getattr(self, "_instance_capabilities", self.__class__._default_capabilities)
+
+    @classmethod
+    def has_capability(cls, capability: str) -> bool:
+        """Check if backend has a specific capability."""
+        return getattr(cls._default_capabilities, capability, False)
+
+    @classmethod
+    def get_capabilities(cls) -> StorageCapabilities:
+        """Get all capabilities for this backend."""
+        return cls._default_capabilities
 
     @property
     def backend_type(self) -> str:
@@ -174,7 +223,6 @@ class FSSpecBackend(ObjectStoreBase):
         else:
             pattern = f"{resolved_prefix}/*" if resolved_prefix else "*"
 
-        # Get all files (not directories)
         paths = [str(path) for path in self.fs.glob(pattern, **kwargs) if not self.fs.isdir(path)]
         return sorted(paths)
 
@@ -200,7 +248,6 @@ class FSSpecBackend(ObjectStoreBase):
         """Get object metadata."""
         info = self.fs.info(self._resolve_path(path), **kwargs)
 
-        # Convert fsspec info to dict
         if isinstance(info, dict):
             return info
 
@@ -210,7 +257,6 @@ class FSSpecBackend(ObjectStoreBase):
         except AttributeError:
             pass
 
-        # Fallback to basic metadata with safe attribute access
         resolved_path = self._resolve_path(path)
         return {
             "path": resolved_path,
@@ -241,7 +287,7 @@ class FSSpecBackend(ObjectStoreBase):
         return await async_(self.read_bytes)(path, **kwargs)
 
     async def write_bytes_async(self, path: Union[str, Path], data: bytes, **kwargs: Any) -> None:
-        """Async write bytes. Wras the sync implementation."""
+        """Async write bytes. Wraps the sync implementation."""
         return await async_(self.write_bytes)(path, data, **kwargs)
 
     async def _stream_file_batches_async(self, obj_path: Union[str, Path]) -> "AsyncIterator[ArrowRecordBatch]":
@@ -268,7 +314,6 @@ class FSSpecBackend(ObjectStoreBase):
         if not PYARROW_INSTALLED:
             raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
 
-        # Get paths asynchronously
         paths = await async_(self.glob)(pattern, **kwargs)
 
         # Stream batches from each path

@@ -43,3 +43,10 @@ CLAUDE.md
 CLAUDE.*.md
 TODO*
 .claudedocs
+.env
+GEMINI.md
+GEMINI.*.md
+.cursor/
+.cursorrules
+CLAUDE*.md
+*CLAUDE*.md

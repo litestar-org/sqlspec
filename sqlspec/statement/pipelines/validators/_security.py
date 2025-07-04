@@ -11,8 +11,9 @@ from sqlglot import exp
 from sqlglot.expressions import EQ, Binary, Func, Literal, Or, Subquery, Union
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.base import ProcessorProtocol
-from sqlspec.statement.pipelines.result_types import ValidationError
+from sqlspec.protocols import ProcessorProtocol
+from sqlspec.statement.pipelines.context import ValidationError
+from sqlspec.utils.type_guards import has_expressions, has_sql_method
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
@@ -178,10 +179,26 @@ class SecurityValidator(ProcessorProtocol):
             with contextlib.suppress(re.error):
                 self._compiled_patterns[f"custom_suspicious_{i}"] = re.compile(pattern, re.IGNORECASE)
 
-    def process(self, expression: Optional[exp.Expression], context: "SQLProcessingContext") -> None:
+    def add_error(
+        self,
+        context: "SQLProcessingContext",
+        message: str,
+        code: str,
+        risk_level: RiskLevel,
+        expression: "Optional[exp.Expression]" = None,
+    ) -> None:
+        """Add a validation error to the context."""
+        error = ValidationError(
+            message=message, code=code, risk_level=risk_level, processor=self.__class__.__name__, expression=expression
+        )
+        context.validation_errors.append(error)
+
+    def process(
+        self, expression: Optional[exp.Expression], context: "SQLProcessingContext"
+    ) -> Optional[exp.Expression]:
         """Process the SQL expression and detect security issues in a single pass."""
         if not context.current_expression:
-            return
+            return None
 
         security_issues: list[SecurityIssue] = []
         visited_nodes: set[int] = set()
@@ -198,17 +215,14 @@ class SecurityValidator(ProcessorProtocol):
             if isinstance(node, (Subquery, exp.Select)):
                 nesting_depth += 1
 
-            # Check injection patterns (enhanced AST-based)
             if self.config.check_injection:
                 injection_issues = self._check_injection_patterns(node, context)
                 security_issues.extend(injection_issues)
 
-            # Check tautology conditions (enhanced)
             if self.config.check_tautology:
                 tautology_issues = self._check_tautology_patterns(node, context)
                 security_issues.extend(tautology_issues)
 
-            # Check suspicious keywords/functions
             if self.config.check_keywords:
                 keyword_issues = self._check_suspicious_keywords(node, context)
                 security_issues.extend(keyword_issues)
@@ -223,7 +237,6 @@ class SecurityValidator(ProcessorProtocol):
                 structural_issues = self._check_structural_attacks(node, context)
                 security_issues.extend(structural_issues)
 
-        # Check combined attack patterns
         if self.config.check_combined_patterns and security_issues:
             combined_issues = self._check_combined_patterns(context.current_expression, security_issues)
             security_issues.extend(combined_issues)
@@ -242,11 +255,9 @@ class SecurityValidator(ProcessorProtocol):
                         )
                     )
 
-        # Determine overall risk level
         if security_issues:
             max(issue.risk_level for issue in security_issues)
 
-        # Create validation errors
         for issue in security_issues:
             error = ValidationError(
                 message=issue.description,
@@ -278,9 +289,7 @@ class SecurityValidator(ProcessorProtocol):
             issue for issue in security_issues if issue.confidence >= self.config.min_confidence_threshold
         ]
 
-        # Update validation result with filtered issues
         if filtered_issues != security_issues:
-            # Clear previous errors and add filtered ones
             context.validation_errors = []
             for issue in filtered_issues:
                 error = ValidationError(
@@ -292,7 +301,6 @@ class SecurityValidator(ProcessorProtocol):
                 )
                 context.validation_errors.append(error)
 
-            # Update metadata with filtered issues
             context.metadata["security_validator"] = {
                 "security_issues": filtered_issues,
                 "total_issues_found": len(security_issues),
@@ -312,13 +320,14 @@ class SecurityValidator(ProcessorProtocol):
                 },
             }
 
+        return expression
+
     def _check_injection_patterns(
         self, node: "exp.Expression", context: "SQLProcessingContext"
     ) -> "list[SecurityIssue]":
         """Check for SQL injection patterns in the node."""
         issues: list[SecurityIssue] = []
 
-        # Check UNION-based injection
         if isinstance(node, exp.Union):
             union_issues = self._check_union_injection(node, context)
             issues.extend(union_issues)
@@ -336,7 +345,6 @@ class SecurityValidator(ProcessorProtocol):
                 )
             )
 
-        # Check for encoded characters
         if PATTERNS["encoded_chars"].search(sql_text) or PATTERNS["hex_encoding"].search(sql_text):
             issues.append(
                 SecurityIssue(
@@ -349,7 +357,6 @@ class SecurityValidator(ProcessorProtocol):
                 )
             )
 
-        # Check for system schema access
         if isinstance(node, exp.Table):
             system_access = self._check_system_schema_access(node)
             if system_access:
@@ -391,8 +398,7 @@ class SecurityValidator(ProcessorProtocol):
                 )
             )
 
-        # Check for NULL padding in UNION SELECT
-        if hasattr(union_node, "right") and isinstance(union_node.right, exp.Select):
+        if isinstance(union_node, exp.Union) and isinstance(union_node.right, exp.Select):
             select_expr = union_node.right
             if select_expr.expressions:
                 null_count = sum(1 for expr in select_expr.expressions if isinstance(expr, exp.Null))
@@ -417,7 +423,6 @@ class SecurityValidator(ProcessorProtocol):
         schema_name = table_node.db.lower() if table_node.db else ""
         table_node.catalog.lower() if table_node.catalog else ""
 
-        # Check if schema is in allowed list
         if schema_name in self.config.allowed_system_schemas:
             return None
 
@@ -442,7 +447,6 @@ class SecurityValidator(ProcessorProtocol):
         """Check for tautology conditions that are always true."""
         issues: list[SecurityIssue] = []
 
-        # Check for boolean literals in WHERE conditions
         if isinstance(node, exp.Boolean) and node.this is True:
             issues.append(
                 SecurityIssue(
@@ -455,7 +459,6 @@ class SecurityValidator(ProcessorProtocol):
                 )
             )
 
-        # Check for tautological conditions
         if isinstance(node, (exp.EQ, exp.NEQ, exp.GT, exp.LT, exp.GTE, exp.LTE)) and self._is_tautology(node):
             issues.append(
                 SecurityIssue(
@@ -468,7 +471,6 @@ class SecurityValidator(ProcessorProtocol):
                 )
             )
 
-        # Check for OR 1=1 patterns
         if isinstance(node, exp.Or):
             or_sql = node.sql()
             if PATTERNS["or_patterns"].search(or_sql) or PATTERNS["always_true"].search(or_sql):
@@ -494,14 +496,12 @@ class SecurityValidator(ProcessorProtocol):
         left = comparison.this
         right = comparison.expression
 
-        # Check if comparing identical expressions
         if self._expressions_identical(left, right):
             if isinstance(comparison, (exp.EQ, exp.GTE, exp.LTE)):
                 return True
             if isinstance(comparison, (exp.NEQ, exp.GT, exp.LT)):
                 return False
 
-        # Check for literal comparisons
         if isinstance(left, exp.Literal) and isinstance(right, exp.Literal):
             try:
                 left_val = left.this
@@ -511,7 +511,6 @@ class SecurityValidator(ProcessorProtocol):
                     return bool(left_val == right_val)
                 if isinstance(comparison, exp.NEQ):
                     return bool(left_val != right_val)
-                # Add more comparison logic as needed
             except Exception:
                 # Value extraction failed, can't evaluate the condition
                 logger.debug("Failed to extract values for comparison evaluation")
@@ -539,11 +538,9 @@ class SecurityValidator(ProcessorProtocol):
         """Check for suspicious functions and keywords."""
         issues: list[SecurityIssue] = []
 
-        # Check function calls
         if isinstance(node, exp.Func):
             func_name = node.name.lower() if node.name else ""
 
-            # Check if function is explicitly blocked
             if func_name in self.config.blocked_functions:
                 issues.append(
                     SecurityIssue(
@@ -555,7 +552,6 @@ class SecurityValidator(ProcessorProtocol):
                         recommendation=f"Function {func_name} is not allowed",
                     )
                 )
-            # Check if function is suspicious but not explicitly allowed
             elif func_name in SUSPICIOUS_FUNCTIONS and func_name not in self.config.allowed_functions:
                 issues.append(
                     SecurityIssue(
@@ -569,7 +565,6 @@ class SecurityValidator(ProcessorProtocol):
                     )
                 )
 
-        # Special handling for Command nodes (e.g., EXECUTE statements)
         if isinstance(node, exp.Command):
             # Commands are often used for dynamic SQL execution
             command_text = str(node)
@@ -587,8 +582,7 @@ class SecurityValidator(ProcessorProtocol):
                     )
                 )
 
-        # Check for specific patterns in SQL text
-        if hasattr(node, "sql"):
+        if has_sql_method(node):
             sql_text = node.sql()
 
             # File operations
@@ -725,14 +719,13 @@ class SecurityValidator(ProcessorProtocol):
         """
         issues: list[SecurityIssue] = []
 
-        # Check for excessive nesting (potential injection)
         if nesting_depth > self.config.max_nesting_depth:
             issues.append(
                 SecurityIssue(
                     issue_type=SecurityIssueType.AST_ANOMALY,
                     risk_level=self.config.ast_anomaly_risk_level,
                     description=f"Excessive query nesting detected (depth: {nesting_depth})",
-                    location=node.sql()[:100] if hasattr(node, "sql") else str(node)[:100],
+                    location=node.sql()[:100] if has_sql_method(node) else str(node)[:100],
                     pattern_matched="excessive_nesting",
                     recommendation="Review query structure for potential injection",
                     ast_node_type=type(node).__name__,
@@ -741,7 +734,6 @@ class SecurityValidator(ProcessorProtocol):
                 )
             )
 
-        # Check for suspiciously long literals (potential injection payload)
         if isinstance(node, Literal) and isinstance(node.this, str):
             literal_length = len(str(node.this))
             if literal_length > self.config.max_literal_length:
@@ -759,12 +751,10 @@ class SecurityValidator(ProcessorProtocol):
                     )
                 )
 
-        # Check for unusual function call patterns
         if isinstance(node, Func):
             func_issues = self._analyze_function_anomalies(node)
             issues.extend(func_issues)
 
-        # Check for suspicious binary operations (potential injection)
         if isinstance(node, Binary):
             binary_issues = self._analyze_binary_anomalies(node)
             issues.extend(binary_issues)
@@ -777,17 +767,14 @@ class SecurityValidator(ProcessorProtocol):
         """Check for structural attack patterns using AST analysis."""
         issues: list[SecurityIssue] = []
 
-        # Check for UNION-based injection using AST structure
         if isinstance(node, Union):
             union_issues = self._analyze_union_structure(node)
             issues.extend(union_issues)
 
-        # Check for subquery injection patterns
         if isinstance(node, Subquery):
             subquery_issues = self._analyze_subquery_structure(node)
             issues.extend(subquery_issues)
 
-        # Check for OR-based injection using AST structure
         if isinstance(node, Or):
             or_issues = self._analyze_or_structure(node)
             issues.extend(or_issues)
@@ -804,8 +791,7 @@ class SecurityValidator(ProcessorProtocol):
 
         func_name = func_node.name.lower()
 
-        # Check for chained function calls (potential evasion)
-        if hasattr(func_node, "this") and isinstance(func_node.this, Func):
+        if func_node.this and isinstance(func_node.this, Func):
             nested_func = func_node.this
             if nested_func.name and nested_func.name.lower() in SUSPICIOUS_FUNCTIONS:
                 issues.append(
@@ -813,7 +799,7 @@ class SecurityValidator(ProcessorProtocol):
                         issue_type=SecurityIssueType.AST_ANOMALY,
                         risk_level=RiskLevel.MEDIUM,
                         description=f"Nested suspicious function call: {nested_func.name.lower()} inside {func_name}",
-                        location=func_node.sql()[:100],
+                        location=func_node.sql()[:100] if has_sql_method(func_node) else str(func_node)[:100],
                         pattern_matched="nested_suspicious_function",
                         recommendation="Review nested function calls for evasion attempts",
                         ast_node_type="Func",
@@ -822,8 +808,7 @@ class SecurityValidator(ProcessorProtocol):
                     )
                 )
 
-        # Check for unusual argument patterns
-        if hasattr(func_node, "expressions") and func_node.expressions:
+        if has_expressions(func_node) and func_node.expressions:
             arg_count = len(func_node.expressions)
             if func_name in {"concat", "concat_ws"} and arg_count > MAX_FUNCTION_ARGS:
                 issues.append(
@@ -831,7 +816,7 @@ class SecurityValidator(ProcessorProtocol):
                         issue_type=SecurityIssueType.AST_ANOMALY,
                         risk_level=RiskLevel.MEDIUM,
                         description=f"Excessive arguments to {func_name} function ({arg_count} args)",
-                        location=func_node.sql()[:100],
+                        location=func_node.sql()[:100] if has_sql_method(func_node) else str(func_node)[:100],
                         pattern_matched="excessive_function_args",
                         recommendation="Review function arguments for potential injection",
                         ast_node_type="Func",
@@ -869,8 +854,7 @@ class SecurityValidator(ProcessorProtocol):
         """Analyze UNION structure for injection patterns."""
         issues: list[SecurityIssue] = []
 
-        # Check if UNION has mismatched column counts (classic injection)
-        if hasattr(union_node, "left") and hasattr(union_node, "right"):
+        if isinstance(union_node, exp.Union):
             left_cols = self._count_select_columns(union_node.left)
             right_cols = self._count_select_columns(union_node.right)
 
@@ -896,12 +880,10 @@ class SecurityValidator(ProcessorProtocol):
         """Analyze subquery structure for injection patterns."""
         issues: list[SecurityIssue] = []
 
-        # Check for subqueries that return unusual patterns
-        if hasattr(subquery_node, "this") and isinstance(subquery_node.this, exp.Select):
+        if subquery_node.this and isinstance(subquery_node.this, exp.Select):
             select_expr = subquery_node.this
 
-            # Check if subquery selects only literals (potential injection)
-            if hasattr(select_expr, "expressions") and select_expr.expressions:
+            if has_expressions(select_expr) and select_expr.expressions:
                 literal_count = sum(1 for expr in select_expr.expressions if isinstance(expr, Literal))
                 total_expressions = len(select_expr.expressions)
 
@@ -926,11 +908,8 @@ class SecurityValidator(ProcessorProtocol):
         """Analyze OR conditions for tautology patterns."""
         issues: list[SecurityIssue] = []
 
-        # Check for OR with tautological conditions using AST
-        if (
-            hasattr(or_node, "left")
-            and hasattr(or_node, "right")
-            and (self._is_always_true_condition(or_node.left) or self._is_always_true_condition(or_node.right))
+        if isinstance(or_node, exp.Binary) and (
+            self._is_always_true_condition(or_node.left) or self._is_always_true_condition(or_node.right)
         ):
             issues.append(
                 SecurityIssue(
@@ -955,10 +934,10 @@ class SecurityValidator(ProcessorProtocol):
         """Calculate the depth of nested binary operations."""
         max_depth = depth
 
-        if hasattr(node, "left") and isinstance(node.left, Binary):
+        if isinstance(node, exp.Binary) and isinstance(node.left, Binary):
             max_depth = max(max_depth, self._calculate_binary_depth(node.left, depth + 1))
 
-        if hasattr(node, "right") and isinstance(node.right, Binary):
+        if isinstance(node, exp.Binary) and isinstance(node.right, Binary):
             max_depth = max(max_depth, self._calculate_binary_depth(node.right, depth + 1))
 
         return max_depth
@@ -966,22 +945,20 @@ class SecurityValidator(ProcessorProtocol):
     @staticmethod
     def _count_select_columns(node: "exp.Expression") -> int:
         """Count the number of columns in a SELECT statement."""
-        if isinstance(node, exp.Select) and hasattr(node, "expressions"):
+        if isinstance(node, exp.Select) and has_expressions(node):
             return len(node.expressions) if node.expressions else 0
         return 0
 
     @staticmethod
     def _is_always_true_condition(node: "exp.Expression") -> bool:
         """Check if a condition is always true using AST analysis."""
-        # Check for literal true
         if isinstance(node, Literal) and str(node.this).upper() in {"TRUE", "1"}:
             return True
 
         # Check for 1=1 or similar tautologies
         return bool(
             isinstance(node, EQ)
-            and hasattr(node, "left")
-            and hasattr(node, "right")
+            and isinstance(node, exp.Binary)
             and (
                 isinstance(node.left, Literal)
                 and isinstance(node.right, Literal)

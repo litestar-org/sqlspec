@@ -1,17 +1,22 @@
 """Asynchronous driver protocol implementation."""
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any, Optional, Union, overload
 
 from sqlspec.driver._common import CommonDriverAttributesMixin
-from sqlspec.statement.builder import DeleteBuilder, InsertBuilder, QueryBuilder, SelectBuilder, UpdateBuilder
-from sqlspec.statement.filters import StatementFilter
+from sqlspec.driver.parameters import process_execute_many_parameters
+from sqlspec.statement.builder import Delete, Insert, QueryBuilder, Select, Update
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig, Statement
 from sqlspec.typing import ConnectionT, DictRow, ModelDTOT, RowT, StatementParameters
+from sqlspec.utils.logging import get_logger
+from sqlspec.utils.type_guards import can_convert_to_schema
 
 if TYPE_CHECKING:
-    from sqlspec.statement.result import DMLResultDict, ScriptResultDict, SelectResultDict
+    from sqlspec.statement.filters import StatementFilter
+
+logger = get_logger("sqlspec")
 
 __all__ = ("AsyncDriverAdapterProtocol",)
 
@@ -49,42 +54,64 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
 
         if isinstance(statement, QueryBuilder):
             return statement.to_statement(config=_config)
-        # If statement is already a SQL object, return it as-is
+        # If statement is already a SQL object, handle additional parameters
         if isinstance(statement, SQL):
+            if parameters or kwargs:
+                new_config = _config
+                if self.dialect and not new_config.dialect:
+                    new_config = replace(new_config, dialect=self.dialect)
+                # Use raw SQL if available to ensure proper parsing with dialect
+                sql_source = statement._raw_sql or statement._statement
+                # Preserve filters and state when creating new SQL object
+                existing_state = {
+                    "is_many": statement._is_many,
+                    "is_script": statement._is_script,
+                    "original_parameters": statement._original_parameters,
+                    "filters": statement._filters,
+                    "positional_params": statement._positional_params,
+                    "named_params": statement._named_params,
+                }
+                return SQL(sql_source, *parameters, config=new_config, _existing_state=existing_state, **kwargs)
+            # Even without additional parameters, ensure dialect is set
+            if self.dialect and (not statement._config.dialect or statement._config.dialect != self.dialect):
+                new_config = replace(statement._config, dialect=self.dialect)
+                # Use raw SQL if available to ensure proper parsing with dialect
+                sql_source = statement._raw_sql or statement._statement
+                # Preserve parameters and state when creating new SQL object
+                # Use the public parameters property which always has the right value
+                existing_state = {
+                    "is_many": statement._is_many,
+                    "is_script": statement._is_script,
+                    "original_parameters": statement._original_parameters,
+                    "filters": statement._filters,
+                    "positional_params": statement._positional_params,
+                    "named_params": statement._named_params,
+                }
+                if statement.parameters:
+                    return SQL(
+                        sql_source, parameters=statement.parameters, config=new_config, _existing_state=existing_state
+                    )
+                return SQL(sql_source, config=new_config, _existing_state=existing_state)
             return statement
-        return SQL(statement, *parameters, _dialect=self.dialect, _config=_config, **kwargs)
+        new_config = _config
+        if self.dialect and not new_config.dialect:
+            new_config = replace(new_config, dialect=self.dialect)
+        return SQL(statement, *parameters, config=new_config, **kwargs)
 
     @abstractmethod
     async def _execute_statement(
         self, statement: "SQL", connection: "Optional[ConnectionT]" = None, **kwargs: Any
-    ) -> "Union[SelectResultDict, DMLResultDict, ScriptResultDict]":
+    ) -> "SQLResult[RowT]":
         """Actual execution implementation by concrete drivers, using the raw connection.
 
-        Returns one of the standardized result dictionaries based on the statement type.
+        Returns SQLResult directly based on the statement type.
         """
         raise NotImplementedError
 
-    @abstractmethod
-    async def _wrap_select_result(
-        self,
-        statement: "SQL",
-        result: "SelectResultDict",
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        **kwargs: Any,
-    ) -> "Union[SQLResult[ModelDTOT], SQLResult[RowT]]":
-        raise NotImplementedError
-
-    @abstractmethod
-    async def _wrap_execute_result(
-        self, statement: "SQL", result: "Union[DMLResultDict, ScriptResultDict]", **kwargs: Any
-    ) -> "SQLResult[RowT]":
-        raise NotImplementedError
-
-    # Type-safe overloads based on the refactor plan pattern
     @overload
     async def execute(
         self,
-        statement: "SelectBuilder",
+        statement: "Select",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
@@ -96,7 +123,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
     @overload
     async def execute(
         self,
-        statement: "SelectBuilder",
+        statement: "Select",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
@@ -108,7 +135,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
     @overload
     async def execute(
         self,
-        statement: "Union[InsertBuilder, UpdateBuilder, DeleteBuilder]",
+        statement: "Union[Insert, Update, Delete]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         _connection: "Optional[ConnectionT]" = None,
@@ -155,51 +182,45 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
             statement=sql_statement, connection=self._connection(_connection), **kwargs
         )
 
-        if self.returns_rows(sql_statement.expression):
-            return await self._wrap_select_result(
-                sql_statement, cast("SelectResultDict", result), schema_type=schema_type, **kwargs
+        # If schema_type is provided and we have data, convert it
+        if schema_type and result.data and can_convert_to_schema(self):
+            converted_data = list(self.to_schema(data=result.data, schema_type=schema_type))
+            return SQLResult[ModelDTOT](
+                statement=result.statement,
+                data=converted_data,
+                column_names=result.column_names,
+                rows_affected=result.rows_affected,
+                operation_type=result.operation_type,
+                last_inserted_id=result.last_inserted_id,
+                execution_time=result.execution_time,
+                metadata=result.metadata,
             )
-        return await self._wrap_execute_result(
-            sql_statement, cast("Union[DMLResultDict, ScriptResultDict]", result), **kwargs
-        )
+
+        return result
 
     async def execute_many(
         self,
-        statement: "Union[SQL, Statement, QueryBuilder[Any]]",  # QueryBuilder for DMLs will likely not return rows.
+        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> "SQLResult[RowT]":
-        # Separate parameters from filters
-        param_sequences = []
-        filters = []
-        for param in parameters:
-            if isinstance(param, StatementFilter):
-                filters.append(param)
-            else:
-                param_sequences.append(param)
+        _filters, param_sequence = process_execute_many_parameters(parameters)
 
-        # Use first parameter as the sequence for execute_many
-        param_sequence = param_sequences[0] if param_sequences else None
-        # Convert tuple to list if needed
-        if isinstance(param_sequence, tuple):
-            param_sequence = list(param_sequence)
-        # Ensure param_sequence is a list or None
-        if param_sequence is not None and not isinstance(param_sequence, list):
-            param_sequence = list(param_sequence) if hasattr(param_sequence, "__iter__") else None
-        sql_statement = self._build_statement(statement, _config=_config or self.config, **kwargs)
-        sql_statement = sql_statement.as_many(param_sequence)
-        result = await self._execute_statement(
-            statement=sql_statement,
-            connection=self._connection(_connection),
-            parameters=param_sequence,
-            is_many=True,
-            **kwargs,
-        )
-        return await self._wrap_execute_result(
-            sql_statement, cast("Union[DMLResultDict, ScriptResultDict]", result), **kwargs
+        # For execute_many, disable transformations to prevent literal extraction
+        # since the SQL already has placeholders for bulk operations
+        many_config = _config or self.config
+        if many_config.enable_transformations:
+            from dataclasses import replace
+
+            many_config = replace(many_config, enable_transformations=False)
+
+        sql_statement = self._build_statement(statement, _config=many_config, **kwargs).as_many(param_sequence)
+
+        return await self._execute_statement(
+            statement=sql_statement, connection=self._connection(_connection), **kwargs
         )
 
     async def execute_script(
@@ -211,42 +232,12 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> "SQLResult[RowT]":
-        param_values = []
-        filters = []
-        for param in parameters:
-            if isinstance(param, StatementFilter):
-                filters.append(param)
-            else:
-                param_values.append(param)
-
-        # Use first parameter as the primary parameter value, or None if no parameters
-        primary_params = param_values[0] if param_values else None
-
         script_config = _config or self.config
         if script_config.enable_validation:
-            script_config = SQLConfig(
-                enable_parsing=script_config.enable_parsing,
-                enable_validation=False,
-                enable_transformations=script_config.enable_transformations,
-                enable_analysis=script_config.enable_analysis,
-                strict_mode=False,
-                cache_parsed_expression=script_config.cache_parsed_expression,
-                parameter_converter=script_config.parameter_converter,
-                parameter_validator=script_config.parameter_validator,
-                analysis_cache_size=script_config.analysis_cache_size,
-                allowed_parameter_styles=script_config.allowed_parameter_styles,
-                target_parameter_style=script_config.target_parameter_style,
-                allow_mixed_parameter_styles=script_config.allow_mixed_parameter_styles,
-            )
-        sql_statement = SQL(statement, primary_params, *filters, _dialect=self.dialect, _config=script_config, **kwargs)
+            script_config = replace(script_config, enable_validation=False, strict_mode=False)
+
+        sql_statement = self._build_statement(statement, *parameters, _config=script_config, **kwargs)
         sql_statement = sql_statement.as_script()
-        script_output = await self._execute_statement(
-            statement=sql_statement, connection=self._connection(_connection), is_script=True, **kwargs
+        return await self._execute_statement(
+            statement=sql_statement, connection=self._connection(_connection), **kwargs
         )
-        if isinstance(script_output, str):
-            result = SQLResult[RowT](statement=sql_statement, data=[], operation_type="SCRIPT")
-            result.total_statements = 1
-            result.successful_statements = 1
-            return result
-        # Wrap the ScriptResultDict using the driver's wrapper
-        return await self._wrap_execute_result(sql_statement, cast("ScriptResultDict", script_output), **kwargs)

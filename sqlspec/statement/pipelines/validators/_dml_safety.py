@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING, Optional
 from sqlglot import expressions as exp
 
 from sqlspec.exceptions import RiskLevel
-from sqlspec.statement.pipelines.validators.base import BaseValidator
+from sqlspec.protocols import ProcessorProtocol
+from sqlspec.statement.pipelines.context import ValidationError
 
 if TYPE_CHECKING:
     from sqlspec.statement.pipelines.context import SQLProcessingContext
@@ -36,7 +37,7 @@ class DMLSafetyConfig:
     max_affected_rows: "Optional[int]" = None  # Limit for DML operations
 
 
-class DMLSafetyValidator(BaseValidator):
+class DMLSafetyValidator(ProcessorProtocol):
     """Unified validator for DML/DDL safety checks.
 
     This validator consolidates:
@@ -52,8 +53,30 @@ class DMLSafetyValidator(BaseValidator):
         Args:
             config: Configuration for safety validation
         """
-        super().__init__()
         self.config = config or DMLSafetyConfig()
+
+    def process(
+        self, expression: "Optional[exp.Expression]", context: "SQLProcessingContext"
+    ) -> "Optional[exp.Expression]":
+        """Process the expression for validation (implements ProcessorProtocol)."""
+        if expression is None:
+            return None
+        self.validate(expression, context)
+        return expression
+
+    def add_error(
+        self,
+        context: "SQLProcessingContext",
+        message: str,
+        code: str,
+        risk_level: RiskLevel,
+        expression: "Optional[exp.Expression]" = None,
+    ) -> None:
+        """Add a validation error to the context."""
+        error = ValidationError(
+            message=message, code=code, risk_level=risk_level, processor=self.__class__.__name__, expression=expression
+        )
+        context.validation_errors.append(error)
 
     def validate(self, expression: "exp.Expression", context: "SQLProcessingContext") -> None:
         """Validate SQL statement for safety issues.
@@ -66,7 +89,6 @@ class DMLSafetyValidator(BaseValidator):
         category = self._categorize_statement(expression)
         operation = self._get_operation_type(expression)
 
-        # Check DDL restrictions
         if category == StatementCategory.DDL and self.config.prevent_ddl:
             if operation not in self.config.allowed_ddl_operations:
                 self.add_error(
@@ -77,7 +99,6 @@ class DMLSafetyValidator(BaseValidator):
                     expression=expression,
                 )
 
-        # Check DML safety
         elif category == StatementCategory.DML:
             if operation in self.config.require_where_clause and not self._has_where_clause(expression):
                 self.add_error(
@@ -88,7 +109,6 @@ class DMLSafetyValidator(BaseValidator):
                     expression=expression,
                 )
 
-            # Check affected row limits
             if self.config.max_affected_rows:
                 estimated_rows = self._estimate_affected_rows(expression)
                 if estimated_rows > self.config.max_affected_rows:
@@ -100,7 +120,6 @@ class DMLSafetyValidator(BaseValidator):
                         expression=expression,
                     )
 
-        # Check DCL restrictions
         elif category == StatementCategory.DCL and self.config.prevent_dcl:
             self.add_error(
                 context,
@@ -187,10 +206,8 @@ class DMLSafetyValidator(BaseValidator):
 
         where = expression.args.get("where")
         if where:
-            # Check for primary key or unique conditions
             if self._has_unique_condition(where):
                 return 1
-            # Check for indexed conditions
             if self._has_indexed_condition(where):
                 return 100  # Rough estimate
 
@@ -230,8 +247,10 @@ class DMLSafetyValidator(BaseValidator):
             return False
         # Look for common indexed column patterns
         for condition in where.find_all(exp.Predicate):
-            if hasattr(condition, "left") and isinstance(condition.left, exp.Column):  # pyright: ignore
-                col_name = condition.left.name.lower()  # pyright: ignore
+            if isinstance(condition, (exp.EQ, exp.GT, exp.GTE, exp.LT, exp.LTE, exp.NEQ)) and isinstance(
+                condition.left, exp.Column
+            ):
+                col_name = condition.left.name.lower()
                 # Common indexed columns
                 if col_name in {"created_at", "updated_at", "email", "username", "status", "type"}:
                     return True
@@ -251,20 +270,16 @@ class DMLSafetyValidator(BaseValidator):
 
         # For DML statements
         if isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):
-            if hasattr(expression, "this") and expression.this:
+            if expression.this:
                 table_expr = expression.this
                 if isinstance(table_expr, exp.Table):
                     tables.append(table_expr.name)
 
         # For DDL statements
-        elif (
-            isinstance(expression, (exp.Create, exp.Drop, exp.Alter))
-            and hasattr(expression, "this")
-            and expression.this
-        ):
+        elif isinstance(expression, (exp.Create, exp.Drop, exp.Alter)) and expression.this:
             # For CREATE TABLE, the table is in expression.this.this
             if isinstance(expression, exp.Create) and isinstance(expression.this, exp.Schema):
-                if hasattr(expression.this, "this") and expression.this.this:
+                if expression.this.this:
                     table_expr = expression.this.this
                     if isinstance(table_expr, exp.Table):
                         tables.append(table_expr.name)

@@ -9,8 +9,6 @@ and storage backend operations for optimal performance.
 """
 
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
-import csv
-import json
 import logging
 import tempfile
 from abc import ABC
@@ -19,48 +17,28 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 from urllib.parse import urlparse
 
+from sqlspec.driver.mixins._csv_writer import write_csv
+from sqlspec.driver.parameters import separate_filters_and_parameters
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.statement import SQL, ArrowResult, StatementFilter
-from sqlspec.statement.sql import SQLConfig
 from sqlspec.storage import storage_registry
 from sqlspec.typing import ArrowTable, RowT, StatementParameters
+from sqlspec.utils.serializers import to_json
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
+    from sqlspec.protocols import ObjectStoreProtocol
     from sqlspec.statement import SQLResult, Statement
-    from sqlspec.storage.protocol import ObjectStoreProtocol
+    from sqlspec.statement.sql import SQLConfig
     from sqlspec.typing import ConnectionT
 
 __all__ = ("AsyncStorageMixin", "SyncStorageMixin")
 
 logger = logging.getLogger(__name__)
 
-# Constants
 WINDOWS_PATH_MIN_LENGTH = 3
-
-
-def _separate_filters_from_parameters(
-    parameters: "tuple[Any, ...]",
-) -> "tuple[list[StatementFilter], Optional[StatementParameters]]":
-    """Separate filters from parameters in positional args."""
-    filters: list[StatementFilter] = []
-    params: list[Any] = []
-
-    for arg in parameters:
-        if isinstance(arg, StatementFilter):
-            filters.append(arg)
-        else:
-            # Everything else is treated as parameters
-            params.append(arg)
-
-    # Convert to appropriate parameter format
-    if len(params) == 0:
-        return filters, None
-    if len(params) == 1:
-        return filters, params[0]
-    return filters, params
 
 
 class StorageMixinBase(ABC):
@@ -68,9 +46,8 @@ class StorageMixinBase(ABC):
 
     __slots__ = ()
 
-    # These attributes are expected to be provided by the driver class
-    config: Any  # Driver config - drivers use 'config' not '_config'
-    _connection: Any  # Database connection
+    config: Any
+    _connection: Any
     dialect: "DialectType"
     supports_native_parquet_export: "ClassVar[bool]"
     supports_native_parquet_import: "ClassVar[bool]"
@@ -87,7 +64,6 @@ class StorageMixinBase(ABC):
     @staticmethod
     def _get_storage_backend(uri_or_key: "Union[str, Path]") -> "ObjectStoreProtocol":
         """Get storage backend by URI or key with intelligent routing."""
-        # Pass Path objects directly to storage registry for proper URI conversion
         if isinstance(uri_or_key, Path):
             return storage_registry.get(uri_or_key)
         return storage_registry.get(str(uri_or_key))
@@ -134,18 +110,14 @@ class StorageMixinBase(ABC):
         Returns:
             Tuple of (backend, path) where path is relative to the backend's base path
         """
-        # Convert Path objects to string
         uri_str = str(uri)
         original_path = uri_str
 
-        # Convert absolute paths to file:// URIs if needed
         if self._is_uri(uri_str) and "://" not in uri_str:
-            # It's an absolute path without scheme
             uri_str = f"file://{uri_str}"
 
         backend = self._get_storage_backend(uri_str)
 
-        # For file:// URIs, return just the path part for the backend
         path = uri_str[7:] if uri_str.startswith("file://") else original_path
 
         return backend, path
@@ -156,12 +128,9 @@ class StorageMixinBase(ABC):
         import pyarrow as pa
 
         if not rows:
-            # Empty table with column names
-            # Create empty arrays for each column
             empty_data: dict[str, list[Any]] = {col: [] for col in columns}
             return pa.table(empty_data)
 
-        # Convert rows to columnar format
         if isinstance(rows[0], dict):
             # Dict rows
             data = {col: [cast("dict[str, Any]", row).get(col) for row in rows] for col in columns}
@@ -232,7 +201,7 @@ class SyncStorageMixin(StorageMixinBase):
         """
         self._ensure_pyarrow_installed()
 
-        filters, params = _separate_filters_from_parameters(parameters)
+        filters, params = separate_filters_and_parameters(parameters)
         # Convert to SQL object for processing
         # Use a custom config if transformations will add parameters
         if _config is None:
@@ -246,9 +215,9 @@ class SyncStorageMixin(StorageMixinBase):
 
         # Only pass params if it's not None to avoid adding None as a parameter
         if params is not None:
-            sql = SQL(statement, params, *filters, _config=_config, _dialect=self.dialect, **kwargs)
+            sql = SQL(statement, params, *filters, config=_config, **kwargs)
         else:
-            sql = SQL(statement, *filters, _config=_config, _dialect=self.dialect, **kwargs)
+            sql = SQL(statement, *filters, config=_config, **kwargs)
 
         return self._fetch_arrow_table(sql, connection=_connection, **kwargs)
 
@@ -266,11 +235,9 @@ class SyncStorageMixin(StorageMixinBase):
         Returns:
             ArrowResult with converted data
         """
-        # Check if this SQL object has validation issues due to transformer-generated parameters
         try:
             result = cast("SQLResult", self.execute(sql, _connection=connection))  # type: ignore[attr-defined]
         except Exception:
-            # Get the compiled SQL and parameters
             compiled_sql, compiled_params = sql.compile("qmark")
 
             # Execute directly via the driver's _execute method
@@ -320,21 +287,21 @@ class SyncStorageMixin(StorageMixinBase):
         Returns:
             Number of rows exported
         """
-        # Create SQL object with proper parameter handling
-        filters, params = _separate_filters_from_parameters(parameters)
+        filters, params = separate_filters_and_parameters(parameters)
 
         # For storage operations, disable transformations that might add unwanted parameters
         if _config is None:
             _config = self.config
+            if _config and not _config.dialect:
+                _config = replace(_config, dialect=self.dialect)
         if _config and _config.enable_transformations:
-            from dataclasses import replace
-
             _config = replace(_config, enable_transformations=False)
 
-        if params is not None:
-            sql = SQL(statement, params, *filters, _config=_config, _dialect=self.dialect)
-        else:
-            sql = SQL(statement, *filters, _config=_config, _dialect=self.dialect)
+        sql = (
+            SQL(statement, parameters=params, config=_config) if params is not None else SQL(statement, config=_config)
+        )
+        for filter_ in filters:
+            sql = sql.filter(filter_)
 
         return self._export_to_storage(
             sql, destination_uri=destination_uri, format=format, _connection=_connection, **options
@@ -342,37 +309,22 @@ class SyncStorageMixin(StorageMixinBase):
 
     def _export_to_storage(
         self,
-        statement: "Statement",
-        /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
+        sql: "SQL",
         destination_uri: "Union[str, Path]",
         format: "Optional[str]" = None,
         _connection: "Optional[ConnectionT]" = None,
-        _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> int:
-        # Convert query to string for format detection
-        if hasattr(statement, "to_sql"):  # SQL object
-            query_str = cast("SQL", statement).to_sql()
-        elif isinstance(statement, str):
-            query_str = statement
-        else:  # sqlglot Expression
-            query_str = str(statement)
-
-        # Auto-detect format if not provided
-        # If no format is specified and detection fails (returns "csv" as default),
-        # default to "parquet" for export operations as it's the most common use case
+        """Protected method for sync export operation implementation."""
         detected_format = self._detect_format(destination_uri)
         if format:
             file_format = format
         elif detected_format == "csv" and not str(destination_uri).endswith((".csv", ".tsv", ".txt")):
             # Detection returned default "csv" but file doesn't actually have CSV extension
-            # Default to parquet for better compatibility with tests and common usage
             file_format = "parquet"
         else:
             file_format = detected_format
 
-        # Special handling for parquet format - if we're exporting to parquet but the
         # destination doesn't have .parquet extension, add it to ensure compatibility
         # with pyarrow.parquet.read_table() which requires the extension
         if file_format == "parquet" and not str(destination_uri).endswith(".parquet"):
@@ -383,38 +335,22 @@ class SyncStorageMixin(StorageMixinBase):
 
         # Try native database export first
         if file_format == "parquet" and self.supports_native_parquet_export:
-            # If we have a SQL object with parameters, compile it first
-            if hasattr(statement, "compile") and hasattr(statement, "parameters") and statement.parameters:
-                _compiled_sql, _compiled_params = statement.compile(placeholder_style=self.default_parameter_style)  # type: ignore[attr-defined]
-            else:
-                try:
-                    return self._export_native(query_str, destination_uri, file_format, **kwargs)
-                except NotImplementedError:
-                    # Fall through to use storage backend
-                    pass
+            try:
+                compiled_sql, _ = sql.compile(placeholder_style="static")
+                return self._export_native(compiled_sql, destination_uri, file_format, **kwargs)
+            except NotImplementedError:
+                # Fall through to use storage backend
+                pass
 
         if file_format == "parquet":
-            # Use Arrow for efficient transfer - if statement is already a SQL object, use it directly
-            if hasattr(statement, "compile"):  # It's already a SQL object from export_to_storage
-                # For parquet export via Arrow, just use the SQL object directly
-                sql_obj = cast("SQL", statement)
-                # Pass connection parameter correctly
-                arrow_result = self._fetch_arrow_table(sql_obj, connection=_connection, **kwargs)
-            else:
-                # Create SQL object if it's still a string
-                arrow_result = self.fetch_arrow_table(statement, *parameters, _connection=_connection, _config=_config)
-
-            # ArrowResult.data is never None according to the type definition
+            # Use Arrow for efficient transfer
+            arrow_result = self._fetch_arrow_table(sql, connection=_connection, **kwargs)
             arrow_table = arrow_result.data
             num_rows = arrow_table.num_rows
             backend.write_arrow(path, arrow_table, **kwargs)
             return num_rows
-        # Pass the SQL object if available, otherwise create one
-        if isinstance(statement, str):
-            sql_obj = SQL(statement, _config=_config, _dialect=self.dialect)
-        else:
-            sql_obj = cast("SQL", statement)
-        return self._export_via_backend(sql_obj, backend, path, file_format, **kwargs)
+
+        return self._export_via_backend(sql, backend, path, file_format, **kwargs)
 
     def import_from_storage(
         self,
@@ -550,10 +486,8 @@ class SyncStorageMixin(StorageMixinBase):
             backend.write_arrow(path, arrow_table, **options)
             return len(result.data or [])
 
-        # Convert to appropriate format and write to backend
         compression = options.get("compression")
 
-        # Create temp file with appropriate suffix
         suffix = f".{format}"
         if compression == "gzip":
             suffix += ".gz"
@@ -561,7 +495,6 @@ class SyncStorageMixin(StorageMixinBase):
         with tempfile.NamedTemporaryFile(mode="w", suffix=suffix, delete=False, encoding="utf-8") as tmp:
             tmp_path = Path(tmp.name)
 
-        # Handle compression and writing
         if compression == "gzip":
             import gzip
 
@@ -615,41 +548,24 @@ class SyncStorageMixin(StorageMixinBase):
     @staticmethod
     def _write_csv(result: "SQLResult", file: Any, **options: Any) -> None:
         """Write result to CSV file."""
-        # Remove options that csv.writer doesn't understand
-        csv_options = options.copy()
-        csv_options.pop("compression", None)  # Handle compression separately
-        csv_options.pop("partition_by", None)  # Not applicable to CSV
-
-        writer = csv.writer(file, **csv_options)  # TODO: anything better?
-        if result.column_names:
-            writer.writerow(result.column_names)
-        if result.data:
-            # Handle dict rows by extracting values in column order
-            if result.data and isinstance(result.data[0], dict):
-                rows = []
-                for row_dict in result.data:
-                    # Extract values in the same order as column_names
-                    row_values = [row_dict.get(col) for col in result.column_names or []]
-                    rows.append(row_values)
-                writer.writerows(rows)
-            else:
-                writer.writerows(result.data)
+        write_csv(result, file, **options)
 
     @staticmethod
     def _write_json(result: "SQLResult", file: Any, **options: Any) -> None:
         """Write result to JSON file."""
+        _ = options
 
         if result.data and result.column_names:
-            # Check if data is already in dict format
             if result.data and isinstance(result.data[0], dict):
                 # Data is already dictionaries, use as-is
                 rows = result.data
             else:
-                # Convert tuples/lists to list of dicts
                 rows = [dict(zip(result.column_names, row)) for row in result.data]
-            json.dump(rows, file, **options)  # TODO: use sqlspec.utils.serializer
+            json_str = to_json(rows)
+            file.write(json_str)
         else:
-            json.dump([], file)  # TODO: use sqlspec.utils.serializer
+            json_str = to_json([])
+            file.write(json_str)
 
     def _bulk_load_file(self, file_path: Path, table_name: str, format: str, mode: str, **options: Any) -> int:
         """Database-specific bulk load implementation. Override in drivers."""
@@ -724,7 +640,7 @@ class AsyncStorageMixin(StorageMixinBase):
         """
         self._ensure_pyarrow_installed()
 
-        filters, params = _separate_filters_from_parameters(parameters)
+        filters, params = separate_filters_and_parameters(parameters)
         # Convert to SQL object for processing
         # Use a custom config if transformations will add parameters
         if _config is None:
@@ -733,18 +649,15 @@ class AsyncStorageMixin(StorageMixinBase):
         # If no parameters provided but we have transformations enabled,
         # disable parameter validation entirely to allow transformer-added parameters
         if params is None and _config and _config.enable_transformations:
-            from dataclasses import replace
-
             # Disable validation entirely for transformer-generated parameters
             _config = replace(_config, strict_mode=False, enable_validation=False)
 
         # Only pass params if it's not None to avoid adding None as a parameter
         if params is not None:
-            sql = SQL(statement, params, *filters, _config=_config, _dialect=self.dialect, **kwargs)
+            sql = SQL(statement, params, *filters, config=_config, **kwargs)
         else:
-            sql = SQL(statement, *filters, _config=_config, _dialect=self.dialect, **kwargs)
+            sql = SQL(statement, *filters, config=_config, **kwargs)
 
-        # Delegate to protected method that drivers can override
         return await self._fetch_arrow_table(sql, connection=_connection, **kwargs)
 
     async def _fetch_arrow_table(
@@ -768,7 +681,6 @@ class AsyncStorageMixin(StorageMixinBase):
         # Execute regular query
         result = await self.execute(sql, _connection=connection)  # type: ignore[attr-defined]
 
-        # Convert to Arrow table
         arrow_table = self._rows_to_arrow_table(result.data or [], result.column_names or [])
 
         return ArrowResult(statement=sql, data=arrow_table)
@@ -782,25 +694,25 @@ class AsyncStorageMixin(StorageMixinBase):
         format: "Optional[str]" = None,
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
-        **options: Any,
+        **kwargs: Any,
     ) -> int:
-        # Create SQL object with proper parameter handling
-        filters, params = _separate_filters_from_parameters(parameters)
+        filters, params = separate_filters_and_parameters(parameters)
 
         # For storage operations, disable transformations that might add unwanted parameters
         if _config is None:
             _config = self.config
+            if _config and not _config.dialect:
+                _config = replace(_config, dialect=self.dialect)
         if _config and _config.enable_transformations:
-            from dataclasses import replace
-
             _config = replace(_config, enable_transformations=False)
 
-        if params is not None:
-            sql = SQL(statement, params, *filters, _config=_config, _dialect=self.dialect, **options)
-        else:
-            sql = SQL(statement, *filters, _config=_config, _dialect=self.dialect, **options)
+        sql = (
+            SQL(statement, parameters=params, config=_config) if params is not None else SQL(statement, config=_config)
+        )
+        for filter_ in filters:
+            sql = sql.filter(filter_)
 
-        return await self._export_to_storage(sql, destination_uri, format, connection=_connection, **options)
+        return await self._export_to_storage(sql, destination_uri, format, connection=_connection, **kwargs)
 
     async def _export_to_storage(
         self,
@@ -808,7 +720,7 @@ class AsyncStorageMixin(StorageMixinBase):
         destination_uri: "Union[str, Path]",
         format: "Optional[str]" = None,
         connection: "Optional[ConnectionT]" = None,
-        **options: Any,
+        **kwargs: Any,
     ) -> int:
         """Protected async method for export operation implementation.
 
@@ -817,25 +729,21 @@ class AsyncStorageMixin(StorageMixinBase):
             destination_uri: URI to export data to
             format: Optional format override (auto-detected from URI if not provided)
             connection: Optional connection override
-            **options: Additional export options
+            **kwargs: Additional export options
 
         Returns:
             Number of rows exported
         """
         # Auto-detect format if not provided
-        # If no format is specified and detection fails (returns "csv" as default),
-        # default to "parquet" for export operations as it's the most common use case
         detected_format = self._detect_format(destination_uri)
         if format:
             file_format = format
         elif detected_format == "csv" and not str(destination_uri).endswith((".csv", ".tsv", ".txt")):
             # Detection returned default "csv" but file doesn't actually have CSV extension
-            # Default to parquet for better compatibility with tests and common usage
             file_format = "parquet"
         else:
             file_format = detected_format
 
-        # Special handling for parquet format - if we're exporting to parquet but the
         # destination doesn't have .parquet extension, add it to ensure compatibility
         # with pyarrow.parquet.read_table() which requires the extension
         if file_format == "parquet" and not str(destination_uri).endswith(".parquet"):
@@ -846,31 +754,23 @@ class AsyncStorageMixin(StorageMixinBase):
 
         # Try native database export first
         if file_format == "parquet" and self.supports_native_parquet_export:
-            return await self._export_native(query.as_script().sql, destination_uri, file_format, **options)
+            try:
+                compiled_sql, _ = query.compile(placeholder_style="static")
+                return await self._export_native(compiled_sql, destination_uri, file_format, **kwargs)
+            except NotImplementedError:
+                # Fall through to use storage backend
+                pass
 
         if file_format == "parquet":
-            # For parquet export via Arrow, we need to ensure no unwanted parameter transformations
-            # If the query already has parameters from transformations, create a fresh SQL object
-            if hasattr(query, "parameters") and query.parameters and hasattr(query, "_raw_sql"):
-                # Create fresh SQL object from raw SQL without transformations
-                fresh_sql = SQL(
-                    query._raw_sql,
-                    _config=replace(self.config, enable_transformations=False)
-                    if self.config
-                    else SQLConfig(enable_transformations=False),
-                    _dialect=self.dialect,
-                )
-                arrow_result = await self._fetch_arrow_table(fresh_sql, connection=connection, **options)
-            else:
-                # query is already a SQL object, call _fetch_arrow_table directly
-                arrow_result = await self._fetch_arrow_table(query, connection=connection, **options)
+            # Use Arrow for efficient transfer
+            arrow_result = await self._fetch_arrow_table(query, connection=connection, **kwargs)
             arrow_table = arrow_result.data
             if arrow_table is not None:
-                await backend.write_arrow_async(path, arrow_table, **options)
+                await backend.write_arrow_async(path, arrow_table, **kwargs)
                 return arrow_table.num_rows
             return 0
 
-        return await self._export_via_backend(query, backend, path, file_format, **options)
+        return await self._export_via_backend(query, backend, path, file_format, **kwargs)
 
     async def import_from_storage(
         self,
@@ -964,7 +864,6 @@ class AsyncStorageMixin(StorageMixinBase):
             await backend.write_arrow_async(path, arrow_table, **options)
             return len(result.data or [])
 
-        # Convert to appropriate format and write to backend
         with tempfile.NamedTemporaryFile(mode="w", suffix=f".{format}", delete=False, encoding="utf-8") as tmp:
             if format == "csv":
                 self._write_csv(result, tmp, **options)
@@ -1002,37 +901,24 @@ class AsyncStorageMixin(StorageMixinBase):
     @staticmethod
     def _write_csv(result: "SQLResult", file: Any, **options: Any) -> None:
         """Reuse sync implementation."""
-
-        writer = csv.writer(file, **options)
-        if result.column_names:
-            writer.writerow(result.column_names)
-        if result.data:
-            # Handle dict rows by extracting values in column order
-            if result.data and isinstance(result.data[0], dict):
-                rows = []
-                for row_dict in result.data:
-                    # Extract values in the same order as column_names
-                    row_values = [row_dict.get(col) for col in result.column_names or []]
-                    rows.append(row_values)
-                writer.writerows(rows)
-            else:
-                writer.writerows(result.data)
+        write_csv(result, file, **options)
 
     @staticmethod
     def _write_json(result: "SQLResult", file: Any, **options: Any) -> None:
         """Reuse sync implementation."""
+        _ = options  # May be used in the future for JSON formatting options
 
         if result.data and result.column_names:
-            # Check if data is already in dict format
             if result.data and isinstance(result.data[0], dict):
                 # Data is already dictionaries, use as-is
                 rows = result.data
             else:
-                # Convert tuples/lists to list of dicts
                 rows = [dict(zip(result.column_names, row)) for row in result.data]
-            json.dump(rows, file, **options)
+            json_str = to_json(rows)
+            file.write(json_str)
         else:
-            json.dump([], file)
+            json_str = to_json([])
+            file.write(json_str)
 
     async def _bulk_load_file(self, file_path: Path, table_name: str, format: str, mode: str, **options: Any) -> int:
         """Async database-specific bulk load implementation."""

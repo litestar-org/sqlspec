@@ -5,13 +5,13 @@ from sqlglot import exp
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.statement.builder.select import SelectBuilder
+    from sqlspec.statement.builder.select import Select
 
 __all__ = ("UnpivotClauseMixin",)
 
 
 class UnpivotClauseMixin:
-    """Mixin class to add UNPIVOT functionality to a SelectBuilder."""
+    """Mixin class to add UNPIVOT functionality to a Select."""
 
     _expression: "Optional[exp.Expression]" = None
     dialect: "DialectType" = None
@@ -22,7 +22,7 @@ class UnpivotClauseMixin:
         name_column_name: str,
         columns_to_unpivot: list[Union[str, exp.Expression]],
         alias: Optional[str] = None,
-    ) -> "SelectBuilder":
+    ) -> "Select":
         """Adds an UNPIVOT clause to the SELECT statement.
 
         Example:
@@ -38,12 +38,12 @@ class UnpivotClauseMixin:
             TypeError: If the current expression is not a Select expression.
 
         Returns:
-            The SelectBuilder instance for chaining.
+            The Select instance for chaining.
         """
         current_expr = self._expression
         if not isinstance(current_expr, exp.Select):
             # SelectBuilder's __init__ ensures _expression is exp.Select.
-            msg = "Unpivot can only be applied to a Select expression managed by SelectBuilder."
+            msg = "Unpivot can only be applied to a Select expression managed by Select."
             raise TypeError(msg)
 
         value_col_ident = exp.to_identifier(value_column_name)
@@ -59,7 +59,6 @@ class UnpivotClauseMixin:
                 # Fallback for other types, should ideally be an error or more specific handling
                 unpivot_cols_exprs.append(exp.column(str(col_name_or_expr)))
 
-        # Create the unpivot expression (stored as Pivot with unpivot=True)
         in_expr = exp.In(this=name_col_ident, expressions=unpivot_cols_exprs)
 
         unpivot_node = exp.Pivot(expressions=[value_col_ident], fields=[in_expr], unpivot=True)
@@ -67,14 +66,12 @@ class UnpivotClauseMixin:
         if alias:
             unpivot_node.set("alias", exp.TableAlias(this=exp.to_identifier(alias)))
 
-        # Add unpivot to the table in the FROM clause
         from_clause = current_expr.args.get("from")
         if from_clause and isinstance(from_clause, exp.From):
             table = from_clause.this
             if isinstance(table, exp.Table):
-                # Add to pivots array
                 existing_pivots = table.args.get("pivots", [])
                 existing_pivots.append(unpivot_node)
                 table.set("pivots", existing_pivots)
 
-        return cast("SelectBuilder", self)
+        return cast("Select", self)

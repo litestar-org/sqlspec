@@ -7,6 +7,8 @@ TypedParameter objects and perform appropriate type conversions.
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional, Union
 
+from sqlspec.utils.type_guards import has_parameter_value
+
 if TYPE_CHECKING:
     from sqlspec.typing import SQLParameterType
 
@@ -68,13 +70,10 @@ class TypeCoercionMixin:
         Returns:
             Coerced parameter value suitable for the database
         """
-        # Check if it's a TypedParameter
-        if hasattr(param, "__class__") and param.__class__.__name__ == "TypedParameter":
-            # Extract value and type hint
+        if has_parameter_value(param):
             value = param.value
             type_hint = param.type_hint
 
-            # Apply driver-specific coercion based on type hint
             return self._apply_type_coercion(value, type_hint)
         # Regular parameter - apply default coercion
         return self._apply_type_coercion(param, None)

@@ -39,7 +39,6 @@ class InsertValuesMixin:
         if not isinstance(self._expression, exp.Insert):
             msg = "Cannot add values to a non-INSERT expression."
             raise SQLBuilderError(msg)
-        # Validate value count if _columns is present and non-empty
         if (
             hasattr(self, "_columns") and getattr(self, "_columns", []) and len(values) != len(self._columns)  # pyright: ignore
         ):
@@ -50,7 +49,6 @@ class InsertValuesMixin:
             if isinstance(v, exp.Expression):
                 row_exprs.append(v)
             else:
-                # Add as parameter
                 _, param_name = self.add_parameter(v)  # type: ignore[attr-defined]
                 row_exprs.append(exp.var(param_name))
         values_expr = exp.Values(expressions=[row_exprs])
