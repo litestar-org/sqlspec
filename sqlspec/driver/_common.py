@@ -9,9 +9,10 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.tokens import TokenType
 
+from sqlspec.driver.parameters import normalize_parameter_sequence
 from sqlspec.exceptions import NotFoundError
 from sqlspec.statement import SQLConfig
-from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
+from sqlspec.statement.parameters import ParameterStyle, ParameterValidator, TypedParameter
 from sqlspec.statement.splitter import split_sql_script
 from sqlspec.typing import ConnectionT, DictRow, RowT, T
 from sqlspec.utils.logging import get_logger
@@ -320,3 +321,53 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         """
         # The split_sql_script function already handles dialect mapping and fallback
         return split_sql_script(script, dialect=str(self.dialect), strip_trailing_semicolon=strip_trailing_semicolon)
+
+    def _prepare_driver_parameters(self, parameters: Any) -> Any:
+        """Prepare parameters for database driver consumption by unwrapping TypedParameter objects.
+
+        This method normalizes parameter structure and unwraps TypedParameter objects
+        to their underlying values, which database drivers expect.
+
+        Args:
+            parameters: Parameters in any format (dict, list, tuple, scalar, TypedParameter)
+
+        Returns:
+            Parameters with TypedParameter objects unwrapped to primitive values
+        """
+
+        normalized = normalize_parameter_sequence(parameters)
+        if not normalized:
+            return []
+
+        return [self._coerce_parameter(p) if isinstance(p, TypedParameter) else p for p in normalized]
+
+    def _prepare_driver_parameters_many(self, parameters: Any) -> "list[Any]":
+        """Prepare parameter sequences for executemany operations.
+
+        This method handles sequences of parameter sets, unwrapping TypedParameter
+        objects in each set for database driver consumption.
+
+        Args:
+            parameters: Sequence of parameter sets for executemany
+
+        Returns:
+            List of parameter sets with TypedParameter objects unwrapped
+        """
+        if not parameters:
+            return []
+        return [self._prepare_driver_parameters(param_set) for param_set in parameters]
+
+    def _coerce_parameter(self, param: "TypedParameter") -> Any:
+        """Coerce TypedParameter to driver-safe value.
+
+        This method extracts the underlying value from a TypedParameter object.
+        Individual drivers can override this method to perform driver-specific
+        type coercion using the rich type information available in TypedParameter.
+
+        Args:
+            param: TypedParameter object with value and type information
+
+        Returns:
+            The underlying parameter value suitable for the database driver
+        """
+        return param.value

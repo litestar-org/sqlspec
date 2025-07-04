@@ -62,7 +62,7 @@ class AsyncmyDriver(
         self, connection: "Optional[AsyncmyConnection]" = None
     ) -> "AsyncGenerator[Union[Cursor, DictCursor], None]":
         conn = self._connection(connection)
-        cursor = conn.cursor()
+        cursor = await conn.cursor()
         try:
             yield cursor
         finally:

@@ -391,28 +391,12 @@ class BigQueryDriver(
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # Normalize parameters using consolidated utility
             normalized_params = normalize_parameter_sequence(parameters)
-            # Handle parameter conversion
-            converted_params = (
-                normalized_params[0] if normalized_params and len(normalized_params) == 1 else normalized_params
-            )
-
-            param_dict: dict[str, Any]
-            if converted_params is None:
-                param_dict = {}
-            elif isinstance(converted_params, dict):
-                # Filter out non-parameter keys (dialect, config, etc.)
-                # Real parameters start with 'param_' or are user-provided named parameters
-                param_dict = {
-                    k: v
-                    for k, v in converted_params.items()
-                    if k.startswith("param_") or (not k.startswith("_") and k not in {"dialect", "config"})
-                }
-            elif isinstance(converted_params, (list, tuple)):
-                # Use param_N to match the compiled SQL placeholders
-                param_dict = {f"param_{i}": val for i, val in enumerate(converted_params)}
-            else:
-                # Single scalar parameter
-                param_dict = {"param_0": converted_params}
+            param_dict: dict[str, Any] = {}
+            if normalized_params:
+                if isinstance(normalized_params[0], dict):
+                    param_dict = normalized_params[0]
+                else:
+                    param_dict = {f"param_{i}": val for i, val in enumerate(normalized_params)}
 
             bq_params = self._prepare_bq_query_parameters(param_dict)
 
@@ -444,7 +428,6 @@ class BigQueryDriver(
                 elif isinstance(params, (list, tuple)):
                     param_dict = {f"param_{i}": val for i, val in enumerate(params)}
                 else:
-                    # Single scalar parameter
                     param_dict = {"param_0": params}
 
                 # Remap parameters to be unique across the entire script
@@ -642,22 +625,17 @@ class BigQueryDriver(
             ArrowResult with native Arrow table
         """
 
-        # Execute the query directly with BigQuery to get the QueryJob
         params = sql.get_parameters(style=self.default_parameter_style)
-        params_dict: dict[str, Any] = {}
-        if params is not None:
+        param_dict: dict[str, Any] = {}
+        if params:
             if isinstance(params, dict):
-                params_dict = params
+                param_dict = params
             elif isinstance(params, (list, tuple)):
-                for i, value in enumerate(params):
-                    # Skip None values
-                    if value is not None:
-                        params_dict[f"param_{i}"] = value
-            # Single parameter that's not None
-            elif params is not None:
-                params_dict["param_0"] = params
+                param_dict = {f"param_{i}": val for i, val in enumerate(params)}
+            else:
+                param_dict = {"param_0": params}
 
-        bq_params = self._prepare_bq_query_parameters(params_dict) if params_dict else []
+        bq_params = self._prepare_bq_query_parameters(param_dict) if param_dict else []
         query_job = self._run_query_job(
             sql.to_sql(placeholder_style=self.default_parameter_style), bq_params, connection=connection
         )

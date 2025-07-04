@@ -294,10 +294,12 @@ class AdbcDriver(
             executed_count = 0
             with self._get_cursor(txn_conn) as cursor:
                 for statement in statements:
-                    executed_count += self._execute_single_script_statement(cursor, statement)
+                    if statement.strip():
+                        self._execute_single_script_statement(cursor, statement)
+                        executed_count += 1
 
             return SQLResult(
-                statement=SQL(script),
+                statement=SQL(script, dialect=self.dialect),
                 data=[],
                 rows_affected=0,
                 operation_type="SCRIPT",
@@ -319,7 +321,7 @@ class AdbcDriver(
         try:
             cursor.execute(statement)
         except Exception as e:
-            # Rollback transaction on error for PostgreSQL
+            # Rollback transaction on error for PostgreSQL to avoid "current transaction is aborted" errors
             if self.dialect == "postgres":
                 with contextlib.suppress(Exception):
                     cursor.execute("ROLLBACK")

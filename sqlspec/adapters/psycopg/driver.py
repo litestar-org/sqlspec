@@ -199,9 +199,7 @@ class PsycopgSyncDriver(
                 if data:
                     # If data is provided, write it to the copy stream
                     if isinstance(data, str):
-                        # Strip trailing newline for text format to avoid "extra data" error
-                        clean_data = data.rstrip("\n")
-                        copy.write(clean_data)
+                        copy.write(data.encode("utf-8"))
                     elif isinstance(data, bytes):
                         copy.write(data)
                     elif isinstance(data, (list, tuple)):
@@ -256,7 +254,7 @@ class PsycopgSyncDriver(
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
             cursor.execute(script)
             return SQLResult(
-                statement=SQL(script),
+                statement=SQL(script, dialect=self.dialect),
                 data=[],
                 rows_affected=0,
                 operation_type="SCRIPT",
@@ -649,9 +647,7 @@ class PsycopgAsyncDriver(
                 if data:
                     # If data is provided, write it to the copy stream
                     if isinstance(data, str):
-                        # Strip trailing newline for text format to avoid "extra data" error
-                        clean_data = data.rstrip("\n")
-                        await copy.write(clean_data)
+                        await copy.write(data.encode("utf-8"))
                     elif isinstance(data, bytes):
                         await copy.write(data)
                     elif isinstance(data, (list, tuple)):
@@ -701,7 +697,7 @@ class PsycopgAsyncDriver(
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn, txn_conn.cursor() as cursor:
             await cursor.execute(cast("Query", script))
             return SQLResult(
-                statement=SQL(script),
+                statement=SQL(script, dialect=self.dialect),
                 data=[],
                 rows_affected=0,
                 operation_type="SCRIPT",

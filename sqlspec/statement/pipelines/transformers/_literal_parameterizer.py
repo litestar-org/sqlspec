@@ -104,6 +104,7 @@ class ParameterizeLiterals(ProcessorProtocol):
             "ARRAY_UPPER",
             "ARRAY_LOWER",
             "ARRAY_NDIMS",
+            "ROUND",
         ]
         self.parameterize_arrays = parameterize_arrays
         self.parameterize_in_lists = parameterize_in_lists
@@ -155,12 +156,15 @@ class ParameterizeLiterals(ProcessorProtocol):
         transformed_expression = self._transform_with_context(context.current_expression.copy(), param_context)
         context.current_expression = transformed_expression
 
-        # Always add extracted parameters to the pipeline so they can be properly merged
-        context.extracted_parameters_from_pipeline.extend(self.extracted_parameters)
-
-        # If we're reordering, also update the merged parameters with the reordered result
+        # If we're reordering, update the merged parameters with the reordered result
+        # In this case, we don't need to add to extracted_parameters_from_pipeline
+        # because the parameters are already in _final_params
         if self._is_reordering_needed and self._final_params:
             context.merged_parameters = self._final_params
+        else:
+            # Only add extracted parameters to the pipeline if we're not reordering
+            # This prevents duplication when parameters are already in merged_parameters
+            context.extracted_parameters_from_pipeline.extend(self.extracted_parameters)
 
         context.metadata["parameter_metadata"] = self._parameter_metadata
 
@@ -631,16 +635,34 @@ class ParameterizeLiterals(ProcessorProtocol):
             # No user parameters provided - don't add None
             return node
         if isinstance(self._original_params, (list, tuple)):
-            if param_index is not None and 0 <= param_index < len(self._original_params):
-                # Use the parameter at the specified index
+            # When we have mixed parameter styles and reordering is needed,
+            # use sequential assignment based on _user_param_index
+            if self._is_reordering_needed:
+                # For mixed styles, parameters should be assigned sequentially
+                # regardless of the numeric value in the placeholder
+                if self._user_param_index < len(self._original_params):
+                    param_value = self._original_params[self._user_param_index]
+                    self._user_param_index += 1
+                else:
+                    param_value = None
+            else:
+                # Non-mixed styles - use the numeric value from the placeholder
+                param_value = (
+                    self._original_params[param_index]
+                    if param_index is not None and 0 <= param_index < len(self._original_params)
+                    else None
+                )
+
+            if param_value is not None:
+                # Add the parameter value to final params
                 if self._preserve_dict_format and isinstance(self._final_params, dict):
                     param_key = f"param_{len(self._final_params)}"
-                    self._final_params[param_key] = self._original_params[param_index]
+                    self._final_params[param_key] = param_value
                 elif isinstance(self._final_params, list):
-                    self._final_params.append(self._original_params[param_index])
+                    self._final_params.append(param_value)
                 elif isinstance(self._final_params, dict):
                     param_name = f"param_{len(self._final_params)}"
-                    self._final_params[param_name] = self._original_params[param_index]
+                    self._final_params[param_name] = param_value
             # More parameters than user provided - don't add None
         elif isinstance(self._original_params, dict):
             # For dict parameters with numeric placeholders, try to map by index

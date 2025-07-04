@@ -243,6 +243,7 @@ class ParameterValidator:
                 name = name_candidate
                 style = ParameterStyle.NAMED_DOLLAR
             else:
+                name = name_candidate  # Keep the numeric value as name for NUMERIC style
                 style = ParameterStyle.NUMERIC
         elif match.group("qmark"):
             style = ParameterStyle.QMARK

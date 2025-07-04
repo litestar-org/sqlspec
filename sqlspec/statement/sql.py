@@ -538,21 +538,29 @@ class SQL:
         """Merge parameters from the pipeline processing."""
         merged_params = result.context.merged_parameters
 
-        if merged_params == final_params and result.context.extracted_parameters_from_pipeline:
-            merged_params = final_params
-            if result.context.extracted_parameters_from_pipeline:
+        # If we have extracted parameters from the pipeline, only merge them if:
+        # 1. We don't already have parameters in merged_params, OR
+        # 2. The original params were None and we need to use the extracted ones
+        if result.context.extracted_parameters_from_pipeline:
+            if merged_params is None:
+                # No existing parameters - use the extracted ones
+                merged_params = result.context.extracted_parameters_from_pipeline
+            elif merged_params == final_params and final_params is None:
+                # Both are None, use extracted parameters
+                merged_params = result.context.extracted_parameters_from_pipeline
+            elif merged_params != result.context.extracted_parameters_from_pipeline:
+                # Only merge if the extracted parameters are different from what we already have
+                # This prevents the duplication issue where the same parameters get added twice
                 if is_dict(merged_params):
                     for i, param in enumerate(result.context.extracted_parameters_from_pipeline):
                         param_name = f"{PARAM_PREFIX}{i}"
                         merged_params[param_name] = param
                 elif isinstance(merged_params, (list, tuple)):
-                    # For list/tuple parameters, we need to be careful about merging
+                    # Only extend if we don't already have these parameters
                     # Convert to list and extend with extracted parameters
                     if isinstance(merged_params, tuple):
                         merged_params = list(merged_params)
                     merged_params.extend(result.context.extracted_parameters_from_pipeline)
-                elif merged_params is None:
-                    merged_params = result.context.extracted_parameters_from_pipeline
                 else:
                     # Single parameter case - convert to list with original + extracted
                     merged_params = [merged_params, *list(result.context.extracted_parameters_from_pipeline)]
@@ -1452,6 +1460,39 @@ class SQL:
 
             return result_list
         if isinstance(params, (list, tuple)):
+            # Special case: if params is empty, preserve it (don't create None values)
+            # This is important for execute_many with empty parameter lists
+            if not params:
+                return params
+
+            # Handle mixed parameter styles correctly
+            # For mixed styles, assign parameters in order of appearance, not by numeric reference
+            if param_info and any(p.style == ParameterStyle.NUMERIC for p in param_info):
+                # Create mapping from ordinal to parameter value
+                param_mapping: dict[int, Any] = {}
+
+                # Sort parameter info by position to get order of appearance
+                sorted_params = sorted(param_info, key=lambda p: p.position)
+
+                # Assign parameters sequentially in order of appearance
+                for i, param_info_item in enumerate(sorted_params):
+                    if i < len(params):
+                        param_mapping[param_info_item.ordinal] = params[i]
+
+                # Build result list ordered by original ordinal values
+                for i in range(len(param_info)):
+                    val = param_mapping.get(i)
+                    if val is not None:
+                        if has_parameter_value(val):
+                            result_list.append(val.value)
+                        else:
+                            result_list.append(val)
+                    else:
+                        result_list.append(None)
+
+                return result_list
+
+            # Standard conversion for non-mixed styles
             for param in params:
                 if has_parameter_value(param):
                     result_list.append(param.value)
