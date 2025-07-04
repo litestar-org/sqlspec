@@ -239,9 +239,11 @@ def test_sql_filter_method() -> None:
     assert stmt2._filters == [filter_obj]
     assert stmt1._filters == []
 
-    # Filter is applied - limit is parameterized
-    assert "LIMIT :limit" in stmt2.sql
-    assert stmt2.parameters["limit"] == 10
+    # Filter is applied - limit is parameterized with unique name
+    assert "LIMIT :" in stmt2.sql
+    # Check that there's a parameter with value 10 (limit parameter)
+    limit_params = [key for key, value in stmt2.parameters.items() if value == 10 and key.startswith("limit_")]
+    assert len(limit_params) == 1
 
 
 def test_sql_multiple_filters() -> None:

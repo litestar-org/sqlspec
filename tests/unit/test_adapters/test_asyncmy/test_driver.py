@@ -19,8 +19,8 @@ def mock_asyncmy_connection() -> AsyncMock:
     mock_connection = AsyncMock(spec=AsyncmyConnection)
     mock_cursor = AsyncMock()
 
-    # cursor() in asyncmy is async and should be awaitable
-    mock_connection.cursor = AsyncMock(return_value=mock_cursor)
+    # cursor() in asyncmy returns cursor directly, not a coroutine
+    mock_connection.cursor.return_value = mock_cursor
     mock_cursor.close.return_value = None
     mock_cursor.execute.return_value = None
     mock_cursor.executemany.return_value = None
@@ -84,7 +84,7 @@ async def test_asyncmy_config_dialect_property() -> None:
 async def test_asyncmy_driver_get_cursor(asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock) -> None:
     """Test Asyncmy driver _get_cursor context manager."""
     # Get the mock cursor that the fixture set up
-    mock_cursor = await mock_asyncmy_connection.cursor()
+    mock_cursor = mock_asyncmy_connection.cursor()
 
     async with asyncmy_driver._get_cursor(mock_asyncmy_connection) as cursor:
         assert cursor is mock_cursor
@@ -100,7 +100,7 @@ async def test_asyncmy_driver_execute_statement_select(
 ) -> None:
     """Test Asyncmy driver _execute_statement for SELECT statements."""
     # Get the mock cursor from the fixture and configure it
-    mock_cursor = await mock_asyncmy_connection.cursor()
+    mock_cursor = mock_asyncmy_connection.cursor()
     mock_cursor.fetchall.return_value = [(1, "test", "test@example.com")]  # Match the 3 columns
     mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
 
@@ -128,7 +128,7 @@ async def test_asyncmy_driver_fetch_arrow_table_with_parameters(
 ) -> None:
     """Test Asyncmy driver fetch_arrow_table method with parameters."""
     # Get the mock cursor from the fixture and configure it
-    mock_cursor = await mock_asyncmy_connection.cursor()
+    mock_cursor = mock_asyncmy_connection.cursor()
     mock_cursor.description = [(col,) for col in ["id", "name"]]  # Match the SELECT query
     mock_cursor.fetchall.return_value = [(42, "Test User")]
 
