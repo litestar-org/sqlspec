@@ -37,7 +37,7 @@ def demo_unified_storage_architecture() -> None:
                 range AS id,
                 'Product_' || (range % 10) AS product_name,
                 (random() * 1000)::int AS amount,
-                DATE '2024-01-01' + (range % 365) AS sale_date
+                DATE '2024-01-01' + (range % 365)::INTEGER AS sale_date
             FROM range(1000)
         """)
         )
