@@ -59,7 +59,9 @@ async def test_psycopg_async_copy_operations(psycopg_async_session: PsycopgAsync
 
     # Test COPY FROM STDIN with text format
     copy_data = "1\ttest1\t100\n2\ttest2\t200\n"
-    result = await psycopg_async_session.execute("COPY copy_test_async FROM STDIN WITH (FORMAT text)", copy_data)
+    result = await psycopg_async_session.execute(
+        "COPY copy_test_async FROM STDIN WITH (FORMAT text)", parameters=copy_data
+    )
     assert isinstance(result, SQLResult)
     assert result.rows_affected >= 0  # May be -1 or actual count
 
@@ -90,7 +92,9 @@ async def test_psycopg_async_copy_csv_format(psycopg_async_session: PsycopgAsync
 
     # Test COPY FROM STDIN with CSV format
     csv_data = "3,test3,300\n4,test4,400\n5,test5,500\n"
-    result = await psycopg_async_session.execute("COPY copy_csv_async FROM STDIN WITH (FORMAT csv)", csv_data)
+    result = await psycopg_async_session.execute(
+        "COPY copy_csv_async FROM STDIN WITH (FORMAT csv)", parameters=csv_data
+    )
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
 
