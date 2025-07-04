@@ -25,22 +25,32 @@ async def psycopg_async_session(postgres_service: PostgresService) -> AsyncGener
         statement_config=SQLConfig(enable_transformations=False, enable_validation=False, enable_parsing=False),
     )
 
-    async with config.provide_session() as session:
-        # Create test table
-        await session.execute_script("""
-            CREATE TABLE IF NOT EXISTS test_table_async (
-                id SERIAL PRIMARY KEY,
-                name TEXT NOT NULL,
-                value INTEGER DEFAULT 0
-            )
-        """)
-        yield session
-        # Cleanup
-        try:
-            await session.execute_script("DROP TABLE IF EXISTS test_table_async")
-        except Exception:
-            # Ignore errors during cleanup
-            pass
+    # Manually create and manage the pool to ensure proper cleanup
+    pool = await config.create_pool()
+    config.pool_instance = pool
+
+    try:
+        async with config.provide_session() as session:
+            # Create test table
+            await session.execute_script("""
+                CREATE TABLE IF NOT EXISTS test_table_async (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    value INTEGER DEFAULT 0
+                )
+            """)
+            yield session
+            # Cleanup
+            try:
+                await session.execute_script("DROP TABLE IF EXISTS test_table_async")
+            except Exception:
+                # Ignore errors during cleanup
+                pass
+    finally:
+        # Ensure pool is closed properly with timeout
+        if config.pool_instance:
+            await config.pool_instance.close(timeout=5.0)
+            config.pool_instance = None
 
 
 @pytest.mark.xdist_group("postgres")

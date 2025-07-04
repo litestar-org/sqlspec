@@ -363,11 +363,15 @@ class ParameterValidator:
             return list
 
         if any(
-            p.name is not None and p.style != ParameterStyle.POSITIONAL_COLON for p in parameters_info
+            p.name is not None and p.style not in {ParameterStyle.POSITIONAL_COLON, ParameterStyle.NUMERIC}
+            for p in parameters_info
         ):  # True for NAMED styles and PYFORMAT_NAMED
             return dict
-        # All parameters must have p.name is None or be ORACLE_NUMERIC (positional styles)
-        if all(p.name is None or p.style == ParameterStyle.POSITIONAL_COLON for p in parameters_info):
+        # All parameters must have p.name is None or be positional styles (POSITIONAL_COLON, NUMERIC)
+        if all(
+            p.name is None or p.style in {ParameterStyle.POSITIONAL_COLON, ParameterStyle.NUMERIC}
+            for p in parameters_info
+        ):
             return list
         # This case implies a mix of parameters where some have names and some don't,
         # but not fitting the clear dict/list categories above.
@@ -495,7 +499,9 @@ class ParameterValidator:
             ExtraParameterError: When extra parameters are provided.
         """
         expected_positional_params_count = sum(
-            1 for p in parameters_info if p.name is None or p.style == ParameterStyle.POSITIONAL_COLON
+            1
+            for p in parameters_info
+            if p.name is None or p.style in {ParameterStyle.POSITIONAL_COLON, ParameterStyle.NUMERIC}
         )
         actual_count = len(provided_params)
 

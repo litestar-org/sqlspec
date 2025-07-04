@@ -1,6 +1,5 @@
 """Pytest configuration for psycopg integration tests."""
 
-import warnings
 from typing import TYPE_CHECKING
 
 import pytest
@@ -10,30 +9,6 @@ from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgSyncConfig
 
 if TYPE_CHECKING:
     from collections.abc import Generator
-
-
-@pytest.fixture(autouse=True)
-def suppress_psycopg_pool_warnings() -> "Generator[None, None, None]":
-    """Suppress psycopg pool __del__ warnings during test teardown."""
-    # Filter out the specific warnings about pool cleanup
-    with warnings.catch_warnings():
-        # Suppress sync pool __del__ warnings
-        warnings.filterwarnings(
-            "ignore",
-            message="Exception ignored in: <function ConnectionPool.__del__",
-            category=pytest.PytestUnraisableExceptionWarning,
-        )
-        # Suppress async pool worker coroutine warnings
-        warnings.filterwarnings(
-            "ignore",
-            message="Exception ignored in: <coroutine object AsyncConnectionPool.worker",
-            category=pytest.PytestUnraisableExceptionWarning,
-        )
-        # Suppress thread join warnings
-        warnings.filterwarnings("ignore", message="cannot join current thread", category=RuntimeWarning)
-        # Suppress event loop closed warnings from async pool cleanup
-        warnings.filterwarnings("ignore", message="Event loop is closed", category=RuntimeWarning)
-        yield
 
 
 @pytest.fixture

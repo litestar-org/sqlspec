@@ -20,7 +20,11 @@ async def test_async_connection(postgres_service: PostgresService) -> None:
             result = await cur.fetchone()
             # The config should set DictRow as the row factory
             assert result == {"id": 1}
-    await async_config.close_pool()
+
+    # Ensure pool is closed properly with timeout
+    if async_config.pool_instance:
+        await async_config.pool_instance.close(timeout=5.0)
+        async_config.pool_instance = None
     # Test connection pool
     another_config = PsycopgAsyncConfig(
         conninfo=f"host={postgres_service.host} port={postgres_service.port} user={postgres_service.user} password={postgres_service.password} dbname={postgres_service.database}",
@@ -35,7 +39,11 @@ async def test_async_connection(postgres_service: PostgresService) -> None:
             await cur.execute("SELECT 1 AS value")
             result = await cur.fetchone()
             assert result == {"value": 1}  # type: ignore[comparison-overlap]
-    await another_config.close_pool()
+
+    # Ensure pool is closed properly with timeout
+    if another_config.pool_instance:
+        await another_config.pool_instance.close(timeout=5.0)
+        another_config.pool_instance = None
 
 
 @pytest.mark.xdist_group("postgres")
