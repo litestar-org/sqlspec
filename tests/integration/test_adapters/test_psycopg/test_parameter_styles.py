@@ -25,32 +25,38 @@ def psycopg_params_session(postgres_service: PostgresService) -> "Generator[Psyc
         statement_config=SQLConfig(strict_mode=False),
     )
 
-    with config.provide_session() as session:
-        # Create test table
-        session.execute_script("""
-            CREATE TABLE IF NOT EXISTS test_params (
-                id SERIAL PRIMARY KEY,
-                name TEXT NOT NULL,
-                value INTEGER DEFAULT 0,
-                description TEXT
-            )
-        """)
-        # Clear any existing data
-        session.execute_script("TRUNCATE TABLE test_params RESTART IDENTITY")
+    try:
+        with config.provide_session() as session:
+            # Create test table
+            session.execute_script("""
+                CREATE TABLE IF NOT EXISTS test_params (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    value INTEGER DEFAULT 0,
+                    description TEXT
+                )
+            """)
+            # Clear any existing data
+            session.execute_script("TRUNCATE TABLE test_params RESTART IDENTITY")
 
-        # Insert test data
-        session.execute(
-            "INSERT INTO test_params (name, value, description) VALUES (%s, %s, %s)", ("test1", 100, "First test")
-        )
-        session.execute(
-            "INSERT INTO test_params (name, value, description) VALUES (%s, %s, %s)", ("test2", 200, "Second test")
-        )
-        session.execute(
-            "INSERT INTO test_params (name, value, description) VALUES (%s, %s, %s)", ("test3", 300, None)
-        )  # NULL description
-        yield session
-        # Cleanup
-        session.execute_script("DROP TABLE IF EXISTS test_params")
+            # Insert test data
+            session.execute(
+                "INSERT INTO test_params (name, value, description) VALUES (%s, %s, %s)", ("test1", 100, "First test")
+            )
+            session.execute(
+                "INSERT INTO test_params (name, value, description) VALUES (%s, %s, %s)", ("test2", 200, "Second test")
+            )
+            session.execute(
+                "INSERT INTO test_params (name, value, description) VALUES (%s, %s, %s)", ("test3", 300, None)
+            )  # NULL description
+            yield session
+            # Cleanup
+            session.execute_script("DROP TABLE IF EXISTS test_params")
+    finally:
+        # Ensure pool is closed properly to avoid "cannot join current thread" warnings
+        if config.pool_instance:
+            config.pool_instance.close(timeout=5.0)
+            config.pool_instance = None
 
 
 @pytest.mark.xdist_group("postgres")

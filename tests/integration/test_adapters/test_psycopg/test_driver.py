@@ -32,30 +32,36 @@ def psycopg_session(postgres_service: PostgresService) -> Generator[PsycopgSyncD
         statement_config=SQLConfig(enable_transformations=False, enable_validation=False, enable_parsing=False),
     )
 
-    with config.provide_session() as session:
-        # Create test table
-        session.execute_script("""
-            CREATE TABLE IF NOT EXISTS test_table (
-                id SERIAL PRIMARY KEY,
-                name TEXT NOT NULL,
-                value INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        yield session
-        # Cleanup - handle potential transaction errors
-        try:
-            session.execute_script("DROP TABLE IF EXISTS test_table")
-        except Exception:
-            # If the transaction is in an error state, rollback first
-            if hasattr(session.connection, "rollback"):
-                session.connection.rollback()
-            # Try again after rollback
+    try:
+        with config.provide_session() as session:
+            # Create test table
+            session.execute_script("""
+                CREATE TABLE IF NOT EXISTS test_table (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    value INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            yield session
+            # Cleanup - handle potential transaction errors
             try:
                 session.execute_script("DROP TABLE IF EXISTS test_table")
             except Exception:
-                # If it still fails, ignore - table might not exist
-                pass
+                # If the transaction is in an error state, rollback first
+                if hasattr(session.connection, "rollback"):
+                    session.connection.rollback()
+                # Try again after rollback
+                try:
+                    session.execute_script("DROP TABLE IF EXISTS test_table")
+                except Exception:
+                    # If it still fails, ignore - table might not exist
+                    pass
+    finally:
+        # Ensure pool is closed properly to avoid "cannot join current thread" warnings
+        if config.pool_instance:
+            config.pool_instance.close(timeout=5.0)
+            config.pool_instance = None
 
 
 @pytest.mark.xdist_group("postgres")

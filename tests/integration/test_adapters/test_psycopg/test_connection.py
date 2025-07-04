@@ -54,26 +54,37 @@ def test_sync_connection(postgres_service: PostgresService) -> None:
         conninfo=f"host={postgres_service.host} port={postgres_service.port} user={postgres_service.user} password={postgres_service.password} dbname={postgres_service.database}"
     )
 
-    with sync_config.create_connection() as conn:
-        assert conn is not None
-        # Test basic query
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1 as id")
-            result = cur.fetchone()
-            assert result == {"id": 1}
-    sync_config.close_pool()
+    try:
+        with sync_config.create_connection() as conn:
+            assert conn is not None
+            # Test basic query
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 as id")
+                result = cur.fetchone()
+                assert result == {"id": 1}
+    finally:
+        # Ensure pool is closed properly with timeout
+        if sync_config.pool_instance:
+            sync_config.pool_instance.close(timeout=5.0)
+            sync_config.pool_instance = None
+
     # Test connection pool
     another_config = PsycopgSyncConfig(
         conninfo=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
         min_size=1,
         max_size=5,
     )
-    # Remove explicit pool creation and manual context management
-    with another_config.provide_connection() as conn:
-        assert conn is not None
-        # Test basic query
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1 AS id")
-            result = cur.fetchone()
-            assert result == {"id": 1}
-    another_config.close_pool()
+    try:
+        # Remove explicit pool creation and manual context management
+        with another_config.provide_connection() as conn:
+            assert conn is not None
+            # Test basic query
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 AS id")
+                result = cur.fetchone()
+                assert result == {"id": 1}
+    finally:
+        # Ensure pool is closed properly with timeout
+        if another_config.pool_instance:
+            another_config.pool_instance.close(timeout=5.0)
+            another_config.pool_instance = None
