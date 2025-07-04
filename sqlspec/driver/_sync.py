@@ -62,7 +62,16 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
                     new_config = replace(new_config, dialect=self.dialect)
                 # Use raw SQL if available to ensure proper parsing with dialect
                 sql_source = statement._raw_sql or statement._statement
-                return SQL(sql_source, *parameters, config=new_config, **kwargs)
+                # Preserve filters and state when creating new SQL object
+                existing_state = {
+                    "is_many": statement._is_many,
+                    "is_script": statement._is_script,
+                    "original_parameters": statement._original_parameters,
+                    "filters": statement._filters,
+                    "positional_params": statement._positional_params,
+                    "named_params": statement._named_params,
+                }
+                return SQL(sql_source, *parameters, config=new_config, _existing_state=existing_state, **kwargs)
             # Even without additional parameters, ensure dialect is set
             if self.dialect and (not statement._config.dialect or statement._config.dialect != self.dialect):
                 new_config = replace(statement._config, dialect=self.dialect)
@@ -74,6 +83,9 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
                     "is_many": statement._is_many,
                     "is_script": statement._is_script,
                     "original_parameters": statement._original_parameters,
+                    "filters": statement._filters,
+                    "positional_params": statement._positional_params,
+                    "named_params": statement._named_params,
                 }
                 if statement.parameters:
                     return SQL(

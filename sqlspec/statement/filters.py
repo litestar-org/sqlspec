@@ -390,14 +390,48 @@ class LimitOffsetFilter(PaginationFilter):
     offset: int
     """Value for ``OFFSET`` clause of query."""
 
+    def __post_init__(self) -> None:
+        """Initialize parameter names."""
+        # Generate unique parameter names to avoid conflicts
+        import uuid
+
+        unique_suffix = str(uuid.uuid4()).replace("-", "")[:8]
+        self._limit_param_name = f"limit_{unique_suffix}"
+        self._offset_param_name = f"offset_{unique_suffix}"
+
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
-        return [], {"limit": self.limit, "offset": self.offset}
+        return [], {self._limit_param_name: self.limit, self._offset_param_name: self.offset}
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
-        return statement.limit(self.limit, use_parameter=True).offset(self.offset, use_parameter=True)
-        # Note: The limit() and offset() methods already add their parameters when use_parameter=True
-        # so we don't need to manually add them here like other filters do
+        # Create limit and offset expressions using our pre-generated parameter names
+        from sqlglot import exp
+
+        limit_placeholder = exp.Placeholder(this=self._limit_param_name)
+        offset_placeholder = exp.Placeholder(this=self._offset_param_name)
+
+        # Apply LIMIT and OFFSET to the statement
+        result = statement
+
+        # Check if the statement supports LIMIT directly
+        if isinstance(result._statement, exp.Select):
+            new_statement = result._statement.limit(limit_placeholder)
+        else:
+            # Wrap in a SELECT if the statement doesn't support LIMIT directly
+            new_statement = exp.Select().from_(result._statement).limit(limit_placeholder)
+
+        # Add OFFSET
+        if isinstance(new_statement, exp.Select):
+            new_statement = new_statement.offset(offset_placeholder)
+
+        result = result.copy(statement=new_statement)
+
+        # Add the parameters to the result
+        _, named_params = self.extract_parameters()
+        for name, value in named_params.items():
+            result = result.add_named_parameter(name, value)
+
+        return result
 
 
 @dataclass
