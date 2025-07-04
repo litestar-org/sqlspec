@@ -523,45 +523,110 @@ def test_psycopg_json_operations(psycopg_session: PsycopgSyncDriver) -> None:
 
 
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_copy_operations(psycopg_session: PsycopgSyncDriver) -> None:
-    """Test PostgreSQL COPY operations with psycopg.
+def test_psycopg_copy_operations_positional(psycopg_session: PsycopgSyncDriver) -> None:
+    """Test PostgreSQL COPY operations with psycopg using positional parameters."""
+    # Create temp table for copy test
+    psycopg_session.execute_script("""
+        DROP TABLE IF EXISTS copy_test_pos;
+        CREATE TABLE copy_test_pos (
+            id INTEGER,
+            name TEXT,
+            value INTEGER
+        )
+    """)
 
-    The SQLSpec psycopg driver implements special handling for COPY commands
-    using cursor.copy() method to support this functionality.
-    """
-    # Test basic COPY functionality if available
-    try:
-        # Create temp table for copy test
-        psycopg_session.execute_script("""
-            CREATE TABLE copy_test (
-                id INTEGER,
-                name TEXT,
-                value INTEGER
-            )
-        """)
+    # Test COPY FROM STDIN with text format using positional parameter
+    copy_data = "1\ttest1\t100\n2\ttest2\t200\n"
+    result = psycopg_session.execute("COPY copy_test_pos FROM STDIN WITH (FORMAT text)", copy_data)
+    assert isinstance(result, SQLResult)
+    assert result.rows_affected >= 0  # May be -1 or actual count
 
-        # Test if COPY is supported (depends on psycopg implementation)
-        copy_data = "1\ttest1\t100\n2\ttest2\t200\n"
+    # Verify data was copied
+    verify_result = psycopg_session.execute("SELECT * FROM copy_test_pos ORDER BY id")
+    assert isinstance(verify_result, SQLResult)
+    assert verify_result.data is not None
+    assert len(verify_result.data) == 2
+    assert verify_result.data[0]["name"] == "test1"
+    assert verify_result.data[1]["value"] == 200
 
-        # Try COPY FROM if supported
-        try:
-            psycopg_session.execute("COPY copy_test FROM STDIN WITH (FORMAT text)", parameters=copy_data)
+    # Clean up
+    psycopg_session.execute_script("DROP TABLE copy_test_pos")
 
-            # Verify data was copied
-            verify_result = psycopg_session.execute("SELECT COUNT(*) as count FROM copy_test")
-            assert isinstance(verify_result, SQLResult)
-            assert verify_result.data[0]["count"] == 2
 
-        except Exception:
-            # COPY might not be supported in this implementation
-            pass
+@pytest.mark.xdist_group("postgres")
+def test_psycopg_copy_operations_keyword(psycopg_session: PsycopgSyncDriver) -> None:
+    """Test PostgreSQL COPY operations with psycopg using keyword parameters."""
+    # Create temp table for copy test
+    psycopg_session.execute_script("""
+        DROP TABLE IF EXISTS copy_test_kw;
+        CREATE TABLE copy_test_kw (
+            id INTEGER,
+            name TEXT,
+            value INTEGER
+        )
+    """)
 
-        # Clean up
-        psycopg_session.execute_script("DROP TABLE copy_test")
+    # Test COPY FROM STDIN with text format using keyword parameter
+    copy_data = "3\ttest3\t300\n4\ttest4\t400\n"
+    result = psycopg_session.execute("COPY copy_test_kw FROM STDIN WITH (FORMAT text)", parameters=copy_data)
+    assert isinstance(result, SQLResult)
+    assert result.rows_affected >= 0  # May be -1 or actual count
 
-    except Exception:
-        # COPY operations might not be supported
-        pytest.skip("COPY operations not supported in this psycopg implementation")
+    # Verify data was copied
+    verify_result = psycopg_session.execute("SELECT * FROM copy_test_kw ORDER BY id")
+    assert isinstance(verify_result, SQLResult)
+    assert verify_result.data is not None
+    assert len(verify_result.data) == 2
+    assert verify_result.data[0]["name"] == "test3"
+    assert verify_result.data[1]["value"] == 400
+
+    # Clean up
+    psycopg_session.execute_script("DROP TABLE copy_test_kw")
+
+
+@pytest.mark.xdist_group("postgres")
+def test_psycopg_copy_csv_format(psycopg_session: PsycopgSyncDriver) -> None:
+    """Test PostgreSQL COPY operations with CSV format."""
+    # Create temp table
+    psycopg_session.execute_script("""
+        DROP TABLE IF EXISTS copy_csv_sync;
+        CREATE TABLE copy_csv_sync (
+            id INTEGER,
+            name TEXT,
+            value INTEGER
+        )
+    """)
+
+    # Test COPY FROM STDIN with CSV format - positional
+    csv_data = "5,test5,500\n6,test6,600\n7,test7,700\n"
+    result_pos = psycopg_session.execute("COPY copy_csv_sync FROM STDIN WITH (FORMAT csv)", csv_data)
+    assert isinstance(result_pos, SQLResult)
+    assert result_pos.rows_affected == 3
+
+    # Verify data
+    verify_result = psycopg_session.execute("SELECT * FROM copy_csv_sync ORDER BY id")
+    assert isinstance(verify_result, SQLResult)
+    assert len(verify_result.data) == 3
+    assert verify_result.data[0]["name"] == "test5"
+    assert verify_result.data[2]["value"] == 700
+
+    # Clear table and test with keyword parameter
+    psycopg_session.execute_script("TRUNCATE TABLE copy_csv_sync")
+
+    csv_data2 = "8,test8,800\n9,test9,900\n"
+    result_kw = psycopg_session.execute("COPY copy_csv_sync FROM STDIN WITH (FORMAT csv)", parameters=csv_data2)
+    assert isinstance(result_kw, SQLResult)
+    assert result_kw.rows_affected == 2
+
+    # Verify data again
+    verify_result2 = psycopg_session.execute("SELECT * FROM copy_csv_sync ORDER BY id")
+    assert isinstance(verify_result2, SQLResult)
+    assert len(verify_result2.data) == 2
+    assert verify_result2.data[0]["name"] == "test8"
+    assert verify_result2.data[1]["value"] == 900
+
+    # Clean up
+    psycopg_session.execute_script("DROP TABLE copy_csv_sync")
 
 
 @pytest.mark.xdist_group("postgres")

@@ -180,6 +180,10 @@ class PsycopgSyncDriver(
         """Handle PostgreSQL COPY commands using cursor.copy() method."""
         sql_upper = sql.strip().upper()
 
+        # Handle case where data is wrapped in a single-element tuple (from positional args)
+        if isinstance(data, tuple) and len(data) == 1:
+            data = data[0]
+
         with connection.cursor() as cursor:
             if "TO STDOUT" in sql_upper:
                 # COPY TO STDOUT - read data from the database
@@ -627,6 +631,10 @@ class PsycopgAsyncDriver(
     async def _handle_copy_command(self, sql: str, data: Any, connection: PsycopgAsyncConnection) -> SQLResult[RowT]:
         """Handle PostgreSQL COPY commands using cursor.copy() method."""
         sql_upper = sql.strip().upper()
+
+        # Handle case where data is wrapped in a single-element tuple (from positional args)
+        if isinstance(data, tuple) and len(data) == 1:
+            data = data[0]
 
         async with connection.cursor() as cursor:
             if "TO STDOUT" in sql_upper:
