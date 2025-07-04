@@ -1,4 +1,3 @@
-# type: ignore
 """Litestar DuckLLM
 
 This example demonstrates how to use the Litestar framework with the DuckLLM extension.
@@ -27,7 +26,8 @@ class ChatMessage(Struct):
 
 @post("/chat", sync_to_thread=True)
 def duckllm_chat(db_session: DuckDBDriver, data: ChatMessage) -> ChatMessage:
-    return db_session.execute("SELECT open_prompt(?)", data.message, schema_type=ChatMessage).get_first()
+    results = db_session.execute("SELECT open_prompt(?)", data.message, schema_type=ChatMessage).get_first()
+    return results or ChatMessage(message="No response from DuckLLM")
 
 
 sqlspec = SQLSpec(

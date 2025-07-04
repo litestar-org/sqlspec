@@ -315,6 +315,19 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
             self.pool_instance = self.create_pool()
         return self.pool_instance
 
+    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+        """Get the signature namespace for OracleDB types.
+
+        This provides all OracleDB-specific types that Litestar needs to recognize
+        to avoid serialization attempts.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+        namespace = super().get_signature_namespace()
+        namespace.update({"OracleSyncConnection": OracleSyncConnection, "OracleAsyncConnection": OracleAsyncConnection})
+        return namespace
+
     @property
     def connection_config_dict(self) -> dict[str, Any]:
         """Return the connection configuration as a dict for Oracle operations.
@@ -624,3 +637,16 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         if not self.pool_instance:
             self.pool_instance = await self.create_pool()
         return self.pool_instance
+
+    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+        """Get the signature namespace for OracleDB async types.
+
+        This provides all OracleDB async-specific types that Litestar needs to recognize
+        to avoid serialization attempts.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+        namespace = super().get_signature_namespace()
+        namespace.update({"OracleSyncConnection": OracleSyncConnection, "OracleAsyncConnection": OracleAsyncConnection})
+        return namespace

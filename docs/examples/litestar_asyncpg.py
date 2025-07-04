@@ -32,13 +32,8 @@ from sqlspec.statement.sql import SQL
 @get("/")
 async def hello_world(db_session: AsyncpgDriver) -> dict[str, Any]:
     """Simple endpoint that returns a greeting from the database."""
-    # Execute a simple query that doesn't require real database tables
     result = await db_session.execute(SQL("SELECT 'Hello from AsyncPG!' as greeting"))
-
-    # Return the first row as a dictionary
-    if result.data:
-        return result.data[0]
-    return {"greeting": "No data returned"}
+    return result.get_first() or {"greeting": "No data returned"}
 
 
 @get("/version")

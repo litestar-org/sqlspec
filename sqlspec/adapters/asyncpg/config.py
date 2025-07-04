@@ -5,8 +5,10 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
-from asyncpg import Record
+from asyncpg import Connection, Record
 from asyncpg import create_pool as asyncpg_create_pool
+from asyncpg.connection import ConnectionMeta
+from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
 from typing_extensions import NotRequired, Unpack
 
 from sqlspec.adapters.asyncpg.driver import AsyncpgConnection, AsyncpgDriver
@@ -18,7 +20,6 @@ from sqlspec.utils.serializers import from_json, to_json
 if TYPE_CHECKING:
     from asyncio.events import AbstractEventLoop
 
-    from asyncpg.pool import Pool
     from sqlglot.dialects.dialect import DialectType
 
 
@@ -347,24 +348,15 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             Dictionary mapping type names to types.
         """
         namespace = super().get_signature_namespace()
-
-        try:
-            from asyncpg import Connection, Record
-            from asyncpg.connection import ConnectionMeta
-            from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
-
-            namespace.update(
-                {
-                    "Connection": Connection,
-                    "Pool": Pool,
-                    "PoolConnectionProxy": PoolConnectionProxy,
-                    "PoolConnectionProxyMeta": PoolConnectionProxyMeta,
-                    "ConnectionMeta": ConnectionMeta,
-                    "Record": Record,
-                    "AsyncpgConnection": type(AsyncpgConnection),  # The Union type alias
-                }
-            )
-        except ImportError:
-            logger.warning("Failed to import AsyncPG types for signature namespace")
-
+        namespace.update(
+            {
+                "Connection": Connection,
+                "Pool": Pool,
+                "PoolConnectionProxy": PoolConnectionProxy,
+                "PoolConnectionProxyMeta": PoolConnectionProxyMeta,
+                "ConnectionMeta": ConnectionMeta,
+                "Record": Record,
+                "AsyncpgConnection": type(AsyncpgConnection),
+            }
+        )
         return namespace

@@ -324,7 +324,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
         return config
 
-    async def _create_pool(self) -> ConnectionPool:
+    async def _create_pool(self) -> "ConnectionPool":
         """Create the actual async connection pool."""
         logger.info("Creating psqlpy connection pool", extra={"adapter": "psqlpy"})
 
@@ -351,7 +351,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             logger.exception("Failed to close psqlpy connection pool", extra={"adapter": "psqlpy", "error": str(e)})
             raise
 
-    async def create_connection(self) -> PsqlpyConnection:
+    async def create_connection(self) -> "PsqlpyConnection":
         """Create a single async connection (not from pool).
 
         Returns:
@@ -413,3 +413,16 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         if not self.pool_instance:
             self.pool_instance = await self.create_pool()
         return self.pool_instance
+
+    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+        """Get the signature namespace for Psqlpy types.
+
+        This provides all Psqlpy-specific types that Litestar needs to recognize
+        to avoid serialization attempts.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+        namespace = super().get_signature_namespace()
+        namespace.update({"PsqlpyConnection": PsqlpyConnection})
+        return namespace
