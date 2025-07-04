@@ -400,6 +400,19 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             self.pool_instance = self.create_pool()
         return self.pool_instance
 
+    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+        """Get the signature namespace for Psycopg types.
+
+        This provides all Psycopg-specific types that Litestar needs to recognize
+        to avoid serialization attempts.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+        namespace = super().get_signature_namespace()
+        namespace.update({"PsycopgSyncConnection": PsycopgSyncConnection})
+        return namespace
+
 
 class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnectionPool, PsycopgAsyncDriver]):
     """Configuration for Psycopg asynchronous database connections with direct field-based configuration."""
@@ -727,3 +740,16 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if not self.pool_instance:
             self.pool_instance = await self.create_pool()
         return self.pool_instance
+
+    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+        """Get the signature namespace for Psycopg async types.
+
+        This provides all Psycopg async-specific types that Litestar needs to recognize
+        to avoid serialization attempts.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+        namespace = super().get_signature_namespace()
+        namespace.update({"PsycopgAsyncConnection": PsycopgAsyncConnection})
+        return namespace

@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
 import asyncmy
+from asyncmy.pool import Pool as AsyncmyPool
 
 from sqlspec.adapters.asyncmy.driver import AsyncmyConnection, AsyncmyDriver
 from sqlspec.config import AsyncDatabaseConfig
@@ -283,3 +284,16 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         if not self.pool_instance:
             self.pool_instance = await self.create_pool()
         return self.pool_instance
+
+    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+        """Get the signature namespace for Asyncmy types.
+
+        This provides all Asyncmy-specific types that Litestar needs to recognize
+        to avoid serialization attempts.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+        namespace = super().get_signature_namespace()
+        namespace.update({"AsyncmyConnection": AsyncmyConnection, "AsyncmyPool": AsyncmyPool})
+        return namespace

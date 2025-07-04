@@ -186,3 +186,16 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
     async def provide_pool(self, *args: Any, **kwargs: Any) -> None:
         """Aiosqlite doesn't support pooling."""
         return
+
+    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+        """Get the signature namespace for Aiosqlite types.
+
+        This provides all Aiosqlite-specific types that Litestar needs to recognize
+        to avoid serialization attempts.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+        namespace = super().get_signature_namespace()
+        namespace.update({"AiosqliteConnection": AiosqliteConnection})
+        return namespace
