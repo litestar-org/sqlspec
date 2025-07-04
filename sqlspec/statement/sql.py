@@ -1110,6 +1110,17 @@ class SQL:
         else:
             param_info = converter.validator.extract_parameters(sql)
 
+        # CRITICAL FIX: For POSITIONAL_COLON, we need to ensure param_info reflects
+        # all placeholders in the current SQL, not just the original ones.
+        # This handles cases where transformers (like ParameterizeLiterals) add new placeholders.
+        if target_style == ParameterStyle.POSITIONAL_COLON and param_info:
+            # Re-extract from current SQL to get all placeholders
+            current_param_info = converter.validator.extract_parameters(sql)
+            if len(current_param_info) > len(param_info):
+                # More placeholders in current SQL means transformers added some
+                # Use the current info to ensure all placeholders get parameters
+                param_info = current_param_info
+
         if not param_info:
             return sql, params
 
@@ -1403,29 +1414,38 @@ class SQL:
             result_dict: dict[str, Any] = {}
 
             if param_info:
+                # Process all parameters in order of their ordinals
                 for p in sorted(param_info, key=lambda x: x.ordinal):
                     oracle_key = str(p.ordinal + 1)
-                    if p.name and p.name in params:
+                    value = None
+
+                    # Try different ways to find the parameter value
+                    if p.name and (
+                        p.name in params
+                        or (p.name.isdigit() and p.name in params)
+                        or (p.name.startswith("param_") and p.name in params)
+                    ):
                         value = params[p.name]
+
+                    # If not found by name, try by ordinal-based keys
+                    if value is None:
+                        # Try param_N format (common for pipeline parameters)
+                        param_key = f"param_{p.ordinal}"
+                        if param_key in params:
+                            value = params[param_key]
+                        # Try arg_N format
+                        elif f"arg_{p.ordinal}" in params:
+                            value = params[f"arg_{p.ordinal}"]
+                        # For positional colon, also check if there's a numeric key
+                        # that matches the ordinal position
+                        elif str(p.ordinal + 1) in params:
+                            value = params[str(p.ordinal + 1)]
+
+                    # Unwrap TypedParameter if needed
+                    if value is not None:
                         if has_parameter_value(value):
-                            result_dict[oracle_key] = value.value
-                        else:
-                            result_dict[oracle_key] = value
-
-                if len(result_dict) < len(param_info):
-                    for p in sorted(param_info, key=lambda x: x.ordinal):
-                        oracle_key = str(p.ordinal + 1)
-                        if oracle_key not in result_dict:
-                            value = None
-                            if f"param_{p.ordinal}" in params:
-                                value = params[f"param_{p.ordinal}"]
-                            elif f"arg_{p.ordinal}" in params:
-                                value = params[f"arg_{p.ordinal}"]
-
-                            if value is not None:
-                                if has_parameter_value(value):
-                                    value = value.value
-                                result_dict[oracle_key] = value
+                            value = value.value
+                        result_dict[oracle_key] = value
 
             return result_dict
 
