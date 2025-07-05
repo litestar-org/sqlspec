@@ -61,6 +61,8 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     driver_type: "type[DriverT]" = field(init=False, repr=False, hash=False, compare=False)
     pool_instance: "Optional[PoolT]" = field(default=None)
     default_row_type: "type[Any]" = field(init=False)
+    migration_config: "dict[str, Any]" = field(default_factory=dict)
+    """Migration configuration settings."""
     _dialect: "DialectType" = field(default=None, init=False, repr=False, hash=False, compare=False)
 
     supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ()

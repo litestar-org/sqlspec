@@ -106,6 +106,9 @@ test = [
   "pytest-xdist>=3.6.1",
 ]
 
+[project.scripts]
+sqlspec = "sqlspec.cli:run_cli"
+
 [build-system]
 build-backend = "hatchling.build"
 requires = ["hatchling"]
