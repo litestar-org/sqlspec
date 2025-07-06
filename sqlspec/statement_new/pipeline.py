@@ -1,10 +1,13 @@
 """SQL Statement Processing Pipeline."""
+
 from typing import Optional
 
 import sqlglot
 
 from sqlspec.exceptions import RiskLevel
 from sqlspec.statement_new.protocols import ProcessorPhase, SQLProcessingContext, SQLProcessor, ValidationError
+
+__all__ = ("SQLPipeline", )
 
 
 class SQLPipeline:

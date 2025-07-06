@@ -96,10 +96,7 @@ class TestSQLProcessor(unittest.TestCase):
 
     def test_process_unprocessed_state(self) -> None:
         """Test processing an unprocessed SQLState."""
-        state = SQLState(
-            original_sql="SELECT * FROM users",
-            processed=False
-        )
+        state = SQLState(original_sql="SELECT * FROM users", processed=False)
         processor = SQLProcessor()
 
         processed_state = processor.process(state)
@@ -109,10 +106,7 @@ class TestSQLProcessor(unittest.TestCase):
 
     def test_process_already_processed_state(self) -> None:
         """Test that already processed state is returned as-is."""
-        state = SQLState(
-            original_sql="SELECT * FROM users",
-            processed=True
-        )
+        state = SQLState(original_sql="SELECT * FROM users", processed=True)
         processor = SQLProcessor()
 
         processed_state = processor.process(state)

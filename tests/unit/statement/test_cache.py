@@ -61,7 +61,7 @@ class TestSQLCache:
 
         assert cache.get("key0") is states[0]  # Still in cache
         assert cache.get("key1") is states[1]  # Still in cache
-        assert cache.get("key2") is None       # Evicted (LRU)
+        assert cache.get("key2") is None  # Evicted (LRU)
         assert cache.get("key3") is states[3]  # New item
 
         # Access key0 again
@@ -71,7 +71,7 @@ class TestSQLCache:
         cache.set("key4", states[4])
 
         assert cache.get("key0") is states[0]  # Still in cache (most recently accessed)
-        assert cache.get("key1") is None       # Evicted
+        assert cache.get("key1") is None  # Evicted
         assert cache.get("key3") is states[3]  # Still in cache
         assert cache.get("key4") is states[4]  # New item
 
@@ -225,8 +225,7 @@ class TestSQLCaching:
         assert key1 != key2  # Different parameter styles
 
         # Test with mixed parameters
-        sql3 = SQL("SELECT * FROM users WHERE id = ? AND name = :name",
-                   1, name="test", _config=config)
+        sql3 = SQL("SELECT * FROM users WHERE id = ? AND name = :name", 1, name="test", _config=config)
         key3 = sql3._cache_key()
         assert key3 != key1
         assert key3 != key2

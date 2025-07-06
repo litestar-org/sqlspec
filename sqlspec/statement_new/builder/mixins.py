@@ -31,6 +31,8 @@ if TYPE_CHECKING:
     from sqlspec.statement_new.builder import case
     from sqlspec.statement_new.builder.column import Column, ColumnExpression, FunctionColumn
 
+__all__ = ("AggregationMixin", "CoreQueryMixin", "DatabaseSpecificMixin", "DeleteOperationsMixin", "InsertOperationsMixin", "JoinOperationsMixin", "MergeOperationsMixin", "UpdateOperationsMixin", )
+
 
 # Constants
 TUPLE_CONDITION_TWO_PARTS = 2

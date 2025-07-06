@@ -1,4 +1,5 @@
 """DML Safety Validator"""
+
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -10,17 +11,21 @@ from sqlspec.statement_new.protocols import ProcessorPhase, SQLProcessingContext
 
 __all__ = ("DMLSafetyConfig", "DMLSafetyValidator", "StatementCategory")
 
+
 class StatementCategory(Enum):
     """Categories for SQL statement types."""
+
     DDL = "ddl"
     DML = "dml"
     DQL = "dql"
     DCL = "dcl"
     TCL = "tcl"
 
+
 @dataclass
 class DMLSafetyConfig:
     """Configuration for DML safety validation."""
+
     prevent_ddl: bool = True
     prevent_dcl: bool = True
     require_where_clause: "set[str]" = field(default_factory=lambda: {"DELETE", "UPDATE"})
@@ -28,8 +33,10 @@ class DMLSafetyConfig:
     migration_mode: bool = False
     max_affected_rows: "Optional[int]" = None
 
+
 class DMLSafetyValidator(SQLProcessor):
     """Unified validator for DML/DDL safety checks."""
+
     phase = ProcessorPhase.VALIDATE
 
     def __init__(self, config: "Optional[DMLSafetyConfig]" = None) -> None:
@@ -54,7 +61,11 @@ class DMLSafetyValidator(SQLProcessor):
                     risk_level=RiskLevel.CRITICAL,
                     expression=expression,
                 )
-        elif category == StatementCategory.DML and operation in self.config.require_where_clause and not self._has_where_clause(expression):
+        elif (
+            category == StatementCategory.DML
+            and operation in self.config.require_where_clause
+            and not self._has_where_clause(expression)
+        ):
             self.add_error(
                 context,
                 message=f"{operation} without WHERE clause affects all rows",

@@ -1,4 +1,5 @@
 """Refactored statement module."""
+
 from sqlspec.statement_new.parameters import ParameterHandler
 from sqlspec.statement_new.pipeline import SQLPipeline
 from sqlspec.statement_new.protocols import ProcessorPhase, SQLProcessingContext, SQLProcessor

@@ -14,6 +14,7 @@ __all__ = ("ParameterizationContext", "ParameterizeLiterals")
 @dataclass
 class ParameterizationContext:
     """Context for tracking parameterization state during AST traversal."""
+
     parent_stack: list[exp.Expression]
     in_function_args: bool = False
     in_case_when: bool = False
@@ -30,6 +31,7 @@ class ParameterizationContext:
 
 class ParameterizeLiterals(SQLProcessor):
     """Advanced literal parameterization using SQLGlot AST analysis."""
+
     phase = ProcessorPhase.TRANSFORM
 
     def __init__(
@@ -71,10 +73,7 @@ class ParameterizeLiterals(SQLProcessor):
             if isinstance(node, exp.Literal):
                 value, type_hint, sqlglot_type, semantic_name = self._extract_literal_value_and_type(node, context)
                 typed_param = TypedParameter(
-                    value=value,
-                    sqlglot_type=sqlglot_type,
-                    type_hint=type_hint,
-                    semantic_name=semantic_name,
+                    value=value, sqlglot_type=sqlglot_type, type_hint=type_hint, semantic_name=semantic_name
                 )
                 self.extracted_parameters.append(typed_param)
                 self._parameter_counter += 1
@@ -83,7 +82,9 @@ class ParameterizeLiterals(SQLProcessor):
 
         return node.transform(replacer, copy=True)
 
-    def _extract_literal_value_and_type(self, literal: exp.Literal, context: ParameterizationContext) -> tuple[Any, str, exp.DataType, Optional[str]]:
+    def _extract_literal_value_and_type(
+        self, literal: exp.Literal, context: ParameterizationContext
+    ) -> tuple[Any, str, exp.DataType, Optional[str]]:
         # Simplified extraction logic
         value = literal.this
         type_hint = "unknown"
@@ -95,6 +96,6 @@ class ParameterizeLiterals(SQLProcessor):
             type_hint = "number"
 
         sqlglot_type = exp.DataType.build(type_hint.upper())
-        semantic_name = None # Would be determined from context
+        semantic_name = None  # Would be determined from context
 
         return value, type_hint, sqlglot_type, semantic_name

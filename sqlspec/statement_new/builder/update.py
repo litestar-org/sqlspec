@@ -9,20 +9,13 @@ from sqlspec.statement_new.builder.mixins import CoreQueryMixin, DatabaseSpecifi
 from sqlspec.statement_new.result import SQLResult
 from sqlspec.typing import RowT
 
+__all__ = ("Update", )
 
-class Update(
-    BaseBuilder[RowT],
-    UpdateOperationsMixin,
-    CoreQueryMixin,
-    DatabaseSpecificMixin,
-):
+
+class Update(BaseBuilder[RowT], UpdateOperationsMixin, CoreQueryMixin, DatabaseSpecificMixin):
     """UPDATE query builder."""
 
-    def __init__(
-        self,
-        table: Optional[str] = None,
-        **kwargs: Any,
-    ) -> None:
+    def __init__(self, table: Optional[str] = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._expression = exp.Update()
         if table:

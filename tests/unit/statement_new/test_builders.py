@@ -1,6 +1,5 @@
 """Test the new builder implementations."""
 
-
 from sqlspec.statement_new.builder import Delete, Insert, Merge, Select, Update
 
 

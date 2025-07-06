@@ -85,5 +85,6 @@ class TestSQLCaching(unittest.TestCase):
         self.assertIsNotNone(sql_cache.get(key2))
         self.assertIsNotNone(sql_cache.get(key3))
 
+
 if __name__ == "__main__":
     unittest.main()

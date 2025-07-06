@@ -1,6 +1,5 @@
 """Integration tests for SQLite driver with query mixin functionality."""
 
-
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteDriver
@@ -146,11 +145,7 @@ class TestSqliteQueryMixin:
 
     def test_paginate_with_where_clause(self, sqlite_driver):
         """Test paginate with filtered query."""
-        result = sqlite_driver.paginate(
-            "SELECT * FROM users WHERE age > 25 ORDER BY age",
-            limit=2,
-            offset=0
-        )
+        result = sqlite_driver.paginate("SELECT * FROM users WHERE age > 25 ORDER BY age", limit=2, offset=0)
 
         assert result.total == 4  # 4 users with age > 25
         assert len(result.items) == 2
@@ -159,11 +154,7 @@ class TestSqliteQueryMixin:
 
     def test_paginate_empty_result(self, sqlite_driver):
         """Test paginate with no matching rows."""
-        result = sqlite_driver.paginate(
-            "SELECT * FROM users WHERE age > 100",
-            limit=10,
-            offset=0
-        )
+        result = sqlite_driver.paginate("SELECT * FROM users WHERE age > 100", limit=10, offset=0)
 
         assert result.total == 0
         assert len(result.items) == 0
@@ -173,15 +164,11 @@ class TestSqliteQueryMixin:
     def test_select_with_parameters(self, sqlite_driver):
         """Test select methods with parameterized queries."""
         # Test with named parameters
-        result = sqlite_driver.select_one(
-            SQL("SELECT * FROM users WHERE email = :email", email="bob@example.com")
-        )
+        result = sqlite_driver.select_one(SQL("SELECT * FROM users WHERE email = :email", email="bob@example.com"))
         assert result["name"] == "Bob Johnson"
 
         # Test with positional parameters
-        results = sqlite_driver.select(
-            SQL("SELECT * FROM users WHERE age > ? ORDER BY age", 30)
-        )
+        results = sqlite_driver.select(SQL("SELECT * FROM users WHERE age > ? ORDER BY age", 30))
         assert len(results) == 2
         assert results[0]["age"] == 32
         assert results[1]["age"] == 35
@@ -214,14 +201,18 @@ class TestSqliteQueryMixin:
         assert result == 2  # Users 1 and 3 have orders > 100
 
         # Test paginated complex query
-        paginated = sqlite_driver.paginate("""
+        paginated = sqlite_driver.paginate(
+            """
             SELECT u.name, SUM(o.total) as total_spent
             FROM users u
             LEFT JOIN orders o ON u.id = o.user_id
             GROUP BY u.id, u.name
             HAVING total_spent IS NOT NULL
             ORDER BY total_spent DESC
-        """, limit=2, offset=0)
+        """,
+            limit=2,
+            offset=0,
+        )
 
         assert paginated.total == 3  # 3 users have orders
         assert len(paginated.items) == 2

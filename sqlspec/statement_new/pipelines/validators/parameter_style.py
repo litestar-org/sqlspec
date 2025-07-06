@@ -1,4 +1,5 @@
 """Parameter style validation for SQL statements."""
+
 import logging
 from typing import TYPE_CHECKING
 
@@ -15,14 +16,18 @@ logger = logging.getLogger("sqlspec.validators.parameter_style")
 
 __all__ = ("ParameterStyleValidator",)
 
+
 class UnsupportedParameterStyleError(SQLValidationError):
     """Raised when a parameter style is not supported by the current database."""
+
 
 class MixedParameterStyleError(SQLValidationError):
     """Raised when mixed parameter styles are detected but not allowed."""
 
+
 class ParameterStyleValidator(SQLProcessor):
     """Validates that parameter styles are supported by the database configuration."""
+
     phase = ProcessorPhase.VALIDATE
 
     def __init__(self, risk_level: "RiskLevel" = RiskLevel.HIGH, fail_on_violation: bool = True) -> None:
@@ -73,7 +78,9 @@ class ParameterStyleValidator(SQLProcessor):
                 self._report_error(context, expression, f"Missing required parameters: {missing}")
         elif isinstance(merged_params, (list, tuple)):
             if len(merged_params) < len(param_info):
-                self._report_error(context, expression, f"Expected {len(param_info)} parameters but got {len(merged_params)}")
+                self._report_error(
+                    context, expression, f"Expected {len(param_info)} parameters but got {len(merged_params)}"
+                )
         elif is_dict(merged_params):
             missing = [p.name for p in param_info if p.name and p.name not in merged_params]
             if missing:

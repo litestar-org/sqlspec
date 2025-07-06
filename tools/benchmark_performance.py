@@ -21,7 +21,6 @@ Usage:
     uv run tools/benchmark_performance.py sql-compilation --iterations 10000
 """
 
-import asyncio
 import gc
 import json
 import time
@@ -34,14 +33,12 @@ import psutil
 import rich_click as click
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeRemainingColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeRemainingColumn
 from rich.table import Table
 from rich.text import Text
 from sqlglot import parse_one
 
-from sqlspec.adapters.sqlite import SQLiteConfig, SQLiteDriver
-from sqlspec.statement.parameters import TypedParameter, wrap_parameters_with_types
-from sqlspec.statement.pipelines.transformers import ParameterizeLiterals
+from sqlspec.statement.parameters import TypedParameter
 from sqlspec.statement.sql import SQL
 
 # Configure rich-click
@@ -60,46 +57,46 @@ RESULTS_DIR.mkdir(exist_ok=True)
 
 class BenchmarkRunner:
     """Runs and tracks benchmark results."""
-    
-    def __init__(self, name: str, iterations: int = 1000):
+
+    def __init__(self, name: str, iterations: int = 1000) -> None:
         self.name = name
         self.iterations = iterations
         self.results: dict[str, list[float]] = defaultdict(list)
         self.memory_before = 0
         self.memory_after = 0
-        
+
     def measure(self, func: Callable, *args, **kwargs) -> tuple[float, Any]:
         """Measure execution time and memory usage of a function."""
         gc.collect()
         process = psutil.Process()
-        
+
         # Memory before
         self.memory_before = process.memory_info().rss / 1024 / 1024  # MB
-        
+
         # Time execution
         start = time.perf_counter()
         result = func(*args, **kwargs)
         elapsed = time.perf_counter() - start
-        
+
         # Memory after
         gc.collect()
         self.memory_after = process.memory_info().rss / 1024 / 1024  # MB
-        
+
         return elapsed, result
-    
+
     def benchmark(self, name: str, func: Callable, *args, **kwargs) -> None:
         """Run a benchmark multiple times and collect results."""
         console.print(f"  [dim]Running {name}...[/dim]")
-        
+
         # Warmup
         for _ in range(min(10, self.iterations // 10)):
             func(*args, **kwargs)
-        
+
         # Actual benchmark
         for _ in range(self.iterations):
             elapsed, _ = self.measure(func, *args, **kwargs)
             self.results[name].append(elapsed * 1000)  # Convert to ms
-    
+
     def report(self) -> Table:
         """Generate a rich table with benchmark results."""
         table = Table(title=f"[bold]{self.name}[/bold]", show_header=True)
@@ -110,7 +107,7 @@ class BenchmarkRunner:
         table.add_column("Max (ms)", justify="right", style="red")
         table.add_column("Std Dev", justify="right")
         table.add_column("Ops/sec", justify="right", style="bold")
-        
+
         for name, times in self.results.items():
             if times:
                 min_time = min(times)
@@ -118,7 +115,7 @@ class BenchmarkRunner:
                 max_time = max(times)
                 std_dev = (sum((t - avg_time) ** 2 for t in times) / len(times)) ** 0.5
                 ops_per_sec = 1000 / avg_time if avg_time > 0 else 0
-                
+
                 table.add_row(
                     name,
                     str(len(times)),
@@ -126,18 +123,18 @@ class BenchmarkRunner:
                     f"{avg_time:.3f}",
                     f"{max_time:.3f}",
                     f"{std_dev:.3f}",
-                    f"{ops_per_sec:.0f}"
+                    f"{ops_per_sec:.0f}",
                 )
-        
+
         return table
-    
+
     def save_results(self, adapter: Optional[str] = None) -> Path:
         """Save results to JSON file."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         adapter_suffix = f"_{adapter}" if adapter else ""
         filename = f"{self.name.lower().replace(' ', '_')}{adapter_suffix}_{timestamp}.json"
         filepath = RESULTS_DIR / filename
-        
+
         data = {
             "name": self.name,
             "timestamp": timestamp,
@@ -149,22 +146,22 @@ class BenchmarkRunner:
                     "min_ms": min(times) if times else 0,
                     "avg_ms": sum(times) / len(times) if times else 0,
                     "max_ms": max(times) if times else 0,
-                    "count": len(times)
+                    "count": len(times),
                 }
                 for name, times in self.results.items()
-            }
+            },
         }
-        
+
         with open(filepath, "w") as f:
             json.dump(data, f, indent=2)
-        
+
         return filepath
 
 
 def benchmark_parameter_styles(adapter: str, iterations: int) -> None:
     """Benchmark different parameter styles."""
     runner = BenchmarkRunner(f"Parameter Styles - {adapter}", iterations)
-    
+
     # Test queries
     queries = {
         "simple": "SELECT * FROM users WHERE id = 1",
@@ -177,12 +174,12 @@ def benchmark_parameter_styles(adapter: str, iterations: int) -> None:
             WHERE u.created_at > '2023-01-01'
             AND u.status = 'active'
             AND p.verified = true
-        """
+        """,
     }
-    
+
     # Parameter styles to test
     styles = ["qmark", "numeric", "named", "format", "pyformat"]
-    
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -191,25 +188,25 @@ def benchmark_parameter_styles(adapter: str, iterations: int) -> None:
         console=console,
     ) as progress:
         task = progress.add_task(f"Benchmarking {adapter}...", total=len(queries) * len(styles))
-        
+
         for query_name, query in queries.items():
             for style in styles:
                 try:
                     sql = SQL(query)
-                    
+
                     def compile_with_style():
                         return sql.compile(placeholder_style=style)
-                    
+
                     runner.benchmark(f"{query_name}_{style}", compile_with_style)
                 except Exception as e:
                     console.print(f"[red]Error with {query_name} + {style}: {e}[/red]")
-                
+
                 progress.advance(task)
-    
+
     # Display results
     console.print("\n")
     console.print(runner.report())
-    
+
     # Save results
     filepath = runner.save_results(adapter)
     console.print(f"\n[green]Results saved to:[/green] {filepath}")
@@ -218,7 +215,7 @@ def benchmark_parameter_styles(adapter: str, iterations: int) -> None:
 def benchmark_sql_compilation(iterations: int) -> None:
     """Benchmark SQL compilation and caching."""
     runner = BenchmarkRunner("SQL Compilation", iterations)
-    
+
     queries = {
         "simple_select": "SELECT id, name FROM users",
         "where_clause": "SELECT * FROM users WHERE status = 'active'",
@@ -232,9 +229,9 @@ def benchmark_sql_compilation(iterations: int) -> None:
             LEFT JOIN orders o ON au.id = o.user_id
             GROUP BY au.id, au.name
             HAVING COUNT(o.id) > 5
-        """
+        """,
     }
-    
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -243,43 +240,43 @@ def benchmark_sql_compilation(iterations: int) -> None:
         console=console,
     ) as progress:
         task = progress.add_task("Benchmarking SQL compilation...", total=len(queries) * 3)
-        
+
         for query_name, query in queries.items():
             # Parse once for reuse
-            parsed = parse_one(query)
-            
+            parse_one(query)
+
             # Benchmark: Create SQL object
             def create_sql():
                 return SQL(query)
-            
+
             runner.benchmark(f"{query_name}_create", create_sql)
             progress.advance(task)
-            
+
             # Benchmark: Compile (no cache)
             sql = SQL(query)
             sql.config.enable_caching = False
-            
+
             def compile_no_cache():
                 return sql.compile()
-            
+
             runner.benchmark(f"{query_name}_compile_nocache", compile_no_cache)
             progress.advance(task)
-            
+
             # Benchmark: Compile (with cache)
             sql_cached = SQL(query)
             sql_cached.config.enable_caching = True
             # Prime the cache
             sql_cached.compile()
-            
+
             def compile_with_cache():
                 return sql_cached.compile()
-            
+
             runner.benchmark(f"{query_name}_compile_cached", compile_with_cache)
             progress.advance(task)
-    
+
     console.print("\n")
     console.print(runner.report())
-    
+
     filepath = runner.save_results()
     console.print(f"\n[green]Results saved to:[/green] {filepath}")
 
@@ -287,14 +284,14 @@ def benchmark_sql_compilation(iterations: int) -> None:
 def benchmark_typed_parameters(iterations: int) -> None:
     """Benchmark TypedParameter wrapping performance."""
     runner = BenchmarkRunner("TypedParameter Performance", iterations)
-    
+
     # Test data
     test_params = {
         "simple": {"id": 1, "name": "test"},
         "mixed": {"id": 1, "price": 19.99, "active": True, "created": "2023-01-01"},
-        "large": {f"param_{i}": i for i in range(100)}
+        "large": {f"param_{i}": i for i in range(100)},
     }
-    
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -303,15 +300,15 @@ def benchmark_typed_parameters(iterations: int) -> None:
         console=console,
     ) as progress:
         task = progress.add_task("Benchmarking TypedParameter...", total=len(test_params) * 2)
-        
+
         for param_name, params in test_params.items():
             # Benchmark: Direct parameter usage (baseline)
             def use_direct():
                 return params
-            
+
             runner.benchmark(f"{param_name}_direct", use_direct)
             progress.advance(task)
-            
+
             # Benchmark: TypedParameter wrapping
             def wrap_typed():
                 # Simulate what wrap_parameters_with_types should do
@@ -326,24 +323,24 @@ def benchmark_typed_parameters(iterations: int) -> None:
                     else:
                         wrapped[key] = value
                 return wrapped
-            
+
             runner.benchmark(f"{param_name}_typed", wrap_typed)
             progress.advance(task)
-    
+
     console.print("\n")
     console.print(runner.report())
-    
+
     filepath = runner.save_results()
     console.print(f"\n[green]Results saved to:[/green] {filepath}")
 
 
 async def benchmark_async_operations(adapter: str, iterations: int) -> None:
     """Benchmark async adapter operations."""
-    runner = BenchmarkRunner(f"Async Operations - {adapter}", iterations)
-    
+    BenchmarkRunner(f"Async Operations - {adapter}", iterations)
+
     # For now, just show a placeholder
     console.print("[yellow]Async benchmarks not yet implemented[/yellow]")
-    
+
     # TODO: Implement async benchmarks for asyncpg, aiosqlite, etc.
 
 
@@ -352,32 +349,34 @@ async def benchmark_async_operations(adapter: str, iterations: int) -> None:
 @click.pass_context
 def cli(ctx: click.Context, version: bool) -> None:
     """[bold]SQLSpec Performance Benchmarking Tool[/bold]
-    
+
     Benchmark various SQLSpec operations to establish baseline metrics
     and track performance improvements.
-    
+
     [dim]Examples:[/dim]
-    
+
         [green]# Run all benchmarks[/green]
         uv run tools/benchmark_performance.py all
-        
+
         [green]# Benchmark parameter styles for SQLite[/green]
         uv run tools/benchmark_performance.py parameter-styles --adapter sqlite
-        
+
         [green]# Benchmark SQL compilation with custom iterations[/green]
         uv run tools/benchmark_performance.py sql-compilation --iterations 10000
     """
     if version:
         console.print("[bold]SQLSpec Benchmark Tool v1.0.0[/bold]")
         ctx.exit()
-    
+
     if ctx.invoked_subcommand is None:
-        console.print(Panel.fit(
-            "[bold yellow]SQLSpec Performance Benchmarking[/bold yellow]\n\n"
-            "Run benchmarks to measure and track SQLSpec performance.\n\n"
-            "Use [bold]--help[/bold] to see available commands.",
-            border_style="yellow"
-        ))
+        console.print(
+            Panel.fit(
+                "[bold yellow]SQLSpec Performance Benchmarking[/bold yellow]\n\n"
+                "Run benchmarks to measure and track SQLSpec performance.\n\n"
+                "Use [bold]--help[/bold] to see available commands.",
+                border_style="yellow",
+            )
+        )
 
 
 @cli.command()
@@ -385,12 +384,14 @@ def cli(ctx: click.Context, version: bool) -> None:
 @click.option("--iterations", default=1000, help="Number of iterations")
 def parameter_styles(adapter: str, iterations: int) -> None:
     """Benchmark parameter style compilation performance."""
-    console.print(Panel.fit(
-        f"[bold]Parameter Styles Benchmark[/bold]\n"
-        f"Adapter: [cyan]{adapter}[/cyan]\n"
-        f"Iterations: [cyan]{iterations:,}[/cyan]",
-        border_style="blue"
-    ))
+    console.print(
+        Panel.fit(
+            f"[bold]Parameter Styles Benchmark[/bold]\n"
+            f"Adapter: [cyan]{adapter}[/cyan]\n"
+            f"Iterations: [cyan]{iterations:,}[/cyan]",
+            border_style="blue",
+        )
+    )
     benchmark_parameter_styles(adapter, iterations)
 
 
@@ -398,23 +399,23 @@ def parameter_styles(adapter: str, iterations: int) -> None:
 @click.option("--iterations", default=1000, help="Number of iterations")
 def sql_compilation(iterations: int) -> None:
     """Benchmark SQL compilation and caching."""
-    console.print(Panel.fit(
-        f"[bold]SQL Compilation Benchmark[/bold]\n"
-        f"Iterations: [cyan]{iterations:,}[/cyan]",
-        border_style="blue"
-    ))
+    console.print(
+        Panel.fit(
+            f"[bold]SQL Compilation Benchmark[/bold]\nIterations: [cyan]{iterations:,}[/cyan]", border_style="blue"
+        )
+    )
     benchmark_sql_compilation(iterations)
 
 
 @cli.command()
-@click.option("--iterations", default=1000, help="Number of iterations") 
+@click.option("--iterations", default=1000, help="Number of iterations")
 def typed_parameters(iterations: int) -> None:
     """Benchmark TypedParameter wrapping overhead."""
-    console.print(Panel.fit(
-        f"[bold]TypedParameter Benchmark[/bold]\n"
-        f"Iterations: [cyan]{iterations:,}[/cyan]",
-        border_style="blue"
-    ))
+    console.print(
+        Panel.fit(
+            f"[bold]TypedParameter Benchmark[/bold]\nIterations: [cyan]{iterations:,}[/cyan]", border_style="blue"
+        )
+    )
     benchmark_typed_parameters(iterations)
 
 
@@ -423,15 +424,12 @@ def typed_parameters(iterations: int) -> None:
 @click.option("--iterations", default=1000, help="Number of iterations")
 def all(adapter: str, iterations: int) -> None:
     """Run all benchmarks."""
-    console.print(Panel.fit(
-        "[bold]Running All Benchmarks[/bold]",
-        border_style="green"
-    ))
-    
+    console.print(Panel.fit("[bold]Running All Benchmarks[/bold]", border_style="green"))
+
     # Run each benchmark
     console.print("\n[bold cyan]1. SQL Compilation[/bold cyan]")
     benchmark_sql_compilation(iterations)
-    
+
     console.print("\n[bold cyan]2. Parameter Styles[/bold cyan]")
     if adapter == "all":
         for adp in ["sqlite", "duckdb"]:  # Add more as needed
@@ -441,10 +439,10 @@ def all(adapter: str, iterations: int) -> None:
                 console.print(f"[red]Skipping {adp}: {e}[/red]")
     else:
         benchmark_parameter_styles(adapter, iterations)
-    
+
     console.print("\n[bold cyan]3. TypedParameter Performance[/bold cyan]")
     benchmark_typed_parameters(iterations)
-    
+
     console.print("\n[bold green]All benchmarks complete![/bold green]")
 
 
@@ -454,7 +452,7 @@ def compare() -> None:
     if not RESULTS_DIR.exists() or not list(RESULTS_DIR.glob("*.json")):
         console.print("[red]No benchmark results found. Run some benchmarks first![/red]")
         return
-    
+
     # Group results by benchmark type
     results_by_type: dict[str, list[Path]] = defaultdict(list)
     for result_file in RESULTS_DIR.glob("*.json"):
@@ -462,22 +460,22 @@ def compare() -> None:
         parts = result_file.stem.split("_")
         bench_type = "_".join(parts[:-2])  # Remove timestamp
         results_by_type[bench_type].append(result_file)
-    
+
     # Show comparison for each type
     for bench_type, files in results_by_type.items():
         if len(files) < 2:
             continue
-            
+
         console.print(f"\n[bold]Comparing: {bench_type}[/bold]")
-        
+
         # Load two most recent results
         files = sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)
-        
+
         with open(files[0]) as f:
             recent = json.load(f)
         with open(files[1]) as f:
             previous = json.load(f)
-        
+
         # Create comparison table
         table = Table(title=f"{bench_type} Comparison", show_header=True)
         table.add_column("Operation", style="cyan")
@@ -485,14 +483,14 @@ def compare() -> None:
         table.add_column("Current (ms)", justify="right")
         table.add_column("Change", justify="right")
         table.add_column("Δ %", justify="right")
-        
+
         for op_name in recent["results"]:
             if op_name in previous["results"]:
                 prev_avg = previous["results"][op_name]["avg_ms"]
                 curr_avg = recent["results"][op_name]["avg_ms"]
                 change = curr_avg - prev_avg
                 pct_change = (change / prev_avg * 100) if prev_avg > 0 else 0
-                
+
                 # Color based on improvement/regression
                 if pct_change < -5:
                     change_style = "green"
@@ -500,15 +498,15 @@ def compare() -> None:
                     change_style = "red"
                 else:
                     change_style = "yellow"
-                
+
                 table.add_row(
                     op_name,
                     f"{prev_avg:.3f}",
                     f"{curr_avg:.3f}",
                     f"{change:+.3f}",
-                    Text(f"{pct_change:+.1f}%", style=change_style)
+                    Text(f"{pct_change:+.1f}%", style=change_style),
                 )
-        
+
         console.print(table)
 
 

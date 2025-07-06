@@ -88,7 +88,7 @@ class SQL:
                     enable_validation=config.enable_validation,
                     enable_transformations=config.enable_transformations,
                     enable_caching=config.enable_caching,
-                    cache_max_size=config.cache_max_size
+                    cache_max_size=config.cache_max_size,
                 )
 
             self._state = SQLState(
@@ -161,6 +161,7 @@ class SQL:
                     from_style = detected_styles.pop()
                     # Convert to target style
                     from sqlspec.statement_new.parameters import ParameterStyle
+
                     try:
                         target_style = ParameterStyle(style)
                         converted = self._parameter_handler.convert_parameters_direct(

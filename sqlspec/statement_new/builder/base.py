@@ -18,6 +18,8 @@ from sqlspec.typing import RowT
 if TYPE_CHECKING:
     from sqlglot import exp
 
+__all__ = ("BaseBuilder", "QueryBuilder", )
+
 
 class QueryBuilder(ABC, Generic[RowT]):
     """Abstract base class for query builders."""

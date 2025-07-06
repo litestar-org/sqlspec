@@ -1,4 +1,5 @@
 """New, refactored SQL statement handling."""
+
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -10,9 +11,11 @@ from sqlspec.utils import hash_expression
 
 __all__ = ("SQLState",)
 
+
 @dataclass
 class SQLState:
     """Encapsulates the immutable state of a SQL query."""
+
     original_sql: str
     expression: Optional[exp.Expression] = None
     parameters: Any = None

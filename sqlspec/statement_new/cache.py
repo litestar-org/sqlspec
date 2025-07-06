@@ -5,6 +5,8 @@ from typing import Any, Optional
 
 from sqlspec.statement_new.config import DEFAULT_CACHE_MAX_SIZE
 
+__all__ = ("SQLCache", )
+
 
 class SQLCache:
     """A thread-safe LRU cache for SQLState objects."""

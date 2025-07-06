@@ -1,4 +1,5 @@
 """Protocols and shared data classes for the statement module."""
+
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Optional, Protocol, runtime_checkable

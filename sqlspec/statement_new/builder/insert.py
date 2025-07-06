@@ -9,19 +9,13 @@ from sqlspec.statement_new.builder.mixins import DatabaseSpecificMixin, InsertOp
 from sqlspec.statement_new.result import SQLResult
 from sqlspec.typing import RowT
 
+__all__ = ("Insert", )
 
-class Insert(
-    BaseBuilder[RowT],
-    InsertOperationsMixin,
-    DatabaseSpecificMixin,
-):
+
+class Insert(BaseBuilder[RowT], InsertOperationsMixin, DatabaseSpecificMixin):
     """INSERT query builder."""
 
-    def __init__(
-        self,
-        table: Optional[str] = None,
-        **kwargs: Any,
-    ) -> None:
+    def __init__(self, table: Optional[str] = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._expression = exp.Insert()
         if table:

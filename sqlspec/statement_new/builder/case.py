@@ -1,4 +1,5 @@
 """CASE expression builder."""
+
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from sqlglot import exp
@@ -8,6 +9,8 @@ from sqlspec.exceptions import SQLBuilderError
 
 if TYPE_CHECKING:
     from sqlspec.protocols import SQLBuilderProtocol
+
+__all__ = ("CaseBuilder", )
 
 
 class CaseBuilder:

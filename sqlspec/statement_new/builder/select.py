@@ -8,15 +8,13 @@ from sqlspec.statement_new.builder.base import BaseBuilder
 from sqlspec.statement_new.result import SQLResult
 from sqlspec.typing import RowT
 
+__all__ = ("Select", )
+
 
 class Select(BaseBuilder[RowT]):
     """SELECT query builder."""
 
-    def __init__(
-        self,
-        *columns: str,
-        **kwargs: Any,
-    ) -> None:
+    def __init__(self, *columns: str, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._expression = exp.Select()
         if columns:

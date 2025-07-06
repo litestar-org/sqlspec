@@ -250,11 +250,7 @@ class ParameterHandler:
         return style_map.get(target_style, param_info.placeholder_text)
 
     def convert_parameters_direct(
-        self,
-        sql: str,
-        from_style: ParameterStyle,
-        to_style: ParameterStyle,
-        use_sqlglot: bool = True,
+        self, sql: str, from_style: ParameterStyle, to_style: ParameterStyle, use_sqlglot: bool = True
     ) -> ConvertedParameters:
         """Converts parameters with an optional SQLGlot bypass."""
         parameters_info = self.extract_parameters(sql)
@@ -267,10 +263,7 @@ class ParameterHandler:
         return self._convert_direct_regex(sql, parameters_info, to_style)
 
     def _convert_direct_regex(
-        self,
-        sql: str,
-        parameters_info: list[ParameterInfo],
-        target_style: ParameterStyle,
+        self, sql: str, parameters_info: list[ParameterInfo], target_style: ParameterStyle
     ) -> ConvertedParameters:
         """Direct parameter conversion without SQLGlot."""
         transformed_sql_parts = []
@@ -286,5 +279,5 @@ class ParameterHandler:
             transformed_sql="".join(transformed_sql_parts),
             parameter_info=parameters_info,
             merged_parameters=None,  # Direct conversion doesn't handle merging
-            transformation_state=ParameterStyleTransformation(was_transformed=True)
+            transformation_state=ParameterStyleTransformation(was_transformed=True),
         )

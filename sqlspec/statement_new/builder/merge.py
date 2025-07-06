@@ -11,6 +11,7 @@ from sqlspec.typing import RowT
 
 __all__ = ("Merge",)
 
+
 class Merge(BaseBuilder[RowT], MergeOperationsMixin):
     """Builder for MERGE statements."""
 

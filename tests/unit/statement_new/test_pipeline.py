@@ -64,11 +64,7 @@ class TestSQLPipeline(unittest.TestCase):
     def test_pipeline_process_no_expression(self) -> None:
         """Test processing with no SQL expression."""
         pipeline = SQLPipeline([MockValidator()])
-        context = SQLProcessingContext(
-            initial_sql_string="",
-            dialect=None,
-            config=SQLConfig(),
-        )
+        context = SQLProcessingContext(initial_sql_string="", dialect=None, config=SQLConfig())
 
         processed = pipeline.process(context)
 
@@ -80,11 +76,7 @@ class TestSQLPipeline(unittest.TestCase):
     def test_pipeline_process_with_expression(self) -> None:
         """Test processing with a valid SQL expression."""
         pipeline = SQLPipeline([MockTransformer()])
-        context = SQLProcessingContext(
-            initial_sql_string="SELECT * FROM users",
-            dialect=None,
-            config=SQLConfig(),
-        )
+        context = SQLProcessingContext(initial_sql_string="SELECT * FROM users", dialect=None, config=SQLConfig())
         context.current_expression = parse_one("SELECT * FROM users")
 
         processed = pipeline.process(context)
@@ -100,11 +92,7 @@ class TestSQLPipeline(unittest.TestCase):
         transformer = MockTransformer()
         pipeline = SQLPipeline([validator, transformer])
 
-        context = SQLProcessingContext(
-            initial_sql_string="SELECT * FROM users",
-            dialect=None,
-            config=SQLConfig(),
-        )
+        context = SQLProcessingContext(initial_sql_string="SELECT * FROM users", dialect=None, config=SQLConfig())
         context.current_expression = parse_one("SELECT * FROM users")
 
         processed = pipeline.process(context)
@@ -124,11 +112,7 @@ class TestSQLPipeline(unittest.TestCase):
                 raise RuntimeError("Processor broke!")
 
         pipeline = SQLPipeline([BrokenProcessor()])
-        context = SQLProcessingContext(
-            initial_sql_string="SELECT * FROM users",
-            dialect=None,
-            config=SQLConfig(),
-        )
+        context = SQLProcessingContext(initial_sql_string="SELECT * FROM users", dialect=None, config=SQLConfig())
         context.current_expression = parse_one("SELECT * FROM users")
 
         processed = pipeline.process(context)
@@ -161,21 +145,13 @@ class TestSQLProcessingContext(unittest.TestCase):
 
     def test_context_has_errors(self) -> None:
         """Test the has_errors property."""
-        context = SQLProcessingContext(
-            initial_sql_string="",
-            dialect=None,
-            config=SQLConfig(),
-        )
+        context = SQLProcessingContext(initial_sql_string="", dialect=None, config=SQLConfig())
 
         self.assertFalse(context.has_errors)
 
         # Add an error
         error = ValidationError(
-            message="Test error",
-            code="test",
-            risk_level=RiskLevel.LOW,
-            processor="Test",
-            expression=None,
+            message="Test error", code="test", risk_level=RiskLevel.LOW, processor="Test", expression=None
         )
         context.validation_errors.append(error)
 
@@ -183,38 +159,20 @@ class TestSQLProcessingContext(unittest.TestCase):
 
     def test_context_highest_risk_level(self) -> None:
         """Test the highest_risk_level property."""
-        context = SQLProcessingContext(
-            initial_sql_string="",
-            dialect=None,
-            config=SQLConfig(),
-        )
+        context = SQLProcessingContext(initial_sql_string="", dialect=None, config=SQLConfig())
 
         # Add errors with different risk levels
         context.validation_errors.append(
+            ValidationError(message="Low risk", code="low", risk_level=RiskLevel.LOW, processor="Test", expression=None)
+        )
+        context.validation_errors.append(
             ValidationError(
-                message="Low risk",
-                code="low",
-                risk_level=RiskLevel.LOW,
-                processor="Test",
-                expression=None,
+                message="High risk", code="high", risk_level=RiskLevel.HIGH, processor="Test", expression=None
             )
         )
         context.validation_errors.append(
             ValidationError(
-                message="High risk",
-                code="high",
-                risk_level=RiskLevel.HIGH,
-                processor="Test",
-                expression=None,
-            )
-        )
-        context.validation_errors.append(
-            ValidationError(
-                message="Medium risk",
-                code="medium",
-                risk_level=RiskLevel.MEDIUM,
-                processor="Test",
-                expression=None,
+                message="Medium risk", code="medium", risk_level=RiskLevel.MEDIUM, processor="Test", expression=None
             )
         )
 

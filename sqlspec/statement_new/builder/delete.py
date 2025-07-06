@@ -9,20 +9,13 @@ from sqlspec.statement_new.builder.mixins import CoreQueryMixin, DatabaseSpecifi
 from sqlspec.statement_new.result import SQLResult
 from sqlspec.typing import RowT
 
+__all__ = ("Delete", )
 
-class Delete(
-    BaseBuilder[RowT],
-    DeleteOperationsMixin,
-    CoreQueryMixin,
-    DatabaseSpecificMixin,
-):
+
+class Delete(BaseBuilder[RowT], DeleteOperationsMixin, CoreQueryMixin, DatabaseSpecificMixin):
     """DELETE query builder."""
 
-    def __init__(
-        self,
-        table: Optional[str] = None,
-        **kwargs: Any,
-    ) -> None:
+    def __init__(self, table: Optional[str] = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._expression = exp.Delete()
         if table:

@@ -70,10 +70,7 @@ class TestParameterHandler(unittest.TestCase):
         sql = "SELECT * FROM users WHERE name = :name"
 
         converted = self.handler.convert_parameters_direct(
-            sql,
-            ParameterStyle.NAMED_COLON,
-            ParameterStyle.QMARK,
-            use_sqlglot=True
+            sql, ParameterStyle.NAMED_COLON, ParameterStyle.QMARK, use_sqlglot=True
         )
 
         self.assertIn("?", converted.transformed_sql)
@@ -84,10 +81,7 @@ class TestParameterHandler(unittest.TestCase):
         sql = "SELECT * FROM users WHERE name = :name"
 
         converted = self.handler.convert_parameters_direct(
-            sql,
-            ParameterStyle.NAMED_COLON,
-            ParameterStyle.QMARK,
-            use_sqlglot=False
+            sql, ParameterStyle.NAMED_COLON, ParameterStyle.QMARK, use_sqlglot=False
         )
 
         self.assertIn("?", converted.transformed_sql)
@@ -112,11 +106,7 @@ class TestParameterInfo(unittest.TestCase):
     def test_parameter_info_creation(self) -> None:
         """Test creating ParameterInfo instances."""
         info = ParameterInfo(
-            name="test",
-            style=ParameterStyle.NAMED_COLON,
-            position=10,
-            ordinal=0,
-            placeholder_text=":test"
+            name="test", style=ParameterStyle.NAMED_COLON, position=10, ordinal=0, placeholder_text=":test"
         )
 
         self.assertEqual(info.name, "test")
@@ -137,7 +127,7 @@ class TestTypedParameter(unittest.TestCase):
             value="test_value",
             sqlglot_type=exp.DataType.build("VARCHAR"),
             type_hint="string",
-            semantic_name="user_name"
+            semantic_name="user_name",
         )
 
         self.assertEqual(param.value, "test_value")
