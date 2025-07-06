@@ -178,17 +178,20 @@ class Select(
             if statement_hints:
                 # Parse each hint and create proper hint expressions
                 hint_expressions = []
-                for hint in statement_hints:
+
+                def parse_hint(hint: Any) -> exp.Expression:
+                    """Parse a single hint with error handling."""
                     try:
                         # Try to parse hint as an expression (e.g., "INDEX(users idx_name)")
                         hint_str = str(hint)  # Ensure hint is a string
                         hint_expr: Optional[exp.Expression] = exp.maybe_parse(hint_str, dialect=self.dialect_name)
                         if hint_expr:
-                            hint_expressions.append(hint_expr)
-                        else:
-                            hint_expressions.append(exp.Anonymous(this=hint_str))
+                            return hint_expr
+                        return exp.Anonymous(this=hint_str)
                     except Exception:
-                        hint_expressions.append(exp.Anonymous(this=str(hint)))
+                        return exp.Anonymous(this=str(hint))
+
+                hint_expressions = [parse_hint(hint) for hint in statement_hints]
 
                 if hint_expressions:
                     hint_node = exp.Hint(expressions=hint_expressions)

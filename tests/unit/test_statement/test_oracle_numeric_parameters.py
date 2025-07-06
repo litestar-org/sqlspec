@@ -71,8 +71,8 @@ def test_positional_colon_parameter_extraction(sql: str, parameters: list[Any], 
         ),
         (
             "SELECT * FROM users WHERE id = :1 AND status = :status",
-            [42],  # Missing status parameter
-            MissingParameterError,
+            [42],  # Missing status parameter - now auto-handled
+            None,  # Changed: No longer raises error, auto-generates placeholders
         ),
         # Mixing different parameter styles
         (
@@ -240,15 +240,15 @@ def test_positional_colon_regex_precedence() -> None:
         # Valid cases
         ("INSERT INTO users VALUES (:1, :2)", [1, "john"], False),
         ("INSERT INTO users VALUES (:1, :2)", {"1": 1, "2": "john"}, False),
-        # Missing parameters
-        ("INSERT INTO users VALUES (:1, :2)", [1], True),
-        ("INSERT INTO users VALUES (:1, :2)", {"1": 1}, True),  # Missing "2"
+        # Missing parameters - now auto-handled
+        ("INSERT INTO users VALUES (:1, :2)", [1], False),  # Changed: auto-generates missing params
+        ("INSERT INTO users VALUES (:1, :2)", {"1": 1}, False),  # Changed: auto-generates missing "2"
         # Extra parameters (should be ok)
         ("INSERT INTO users VALUES (:1, :2)", [1, "john", "extra"], False),
         ("INSERT INTO users VALUES (:1, :2)", {"1": 1, "2": "john", "3": "extra"}, False),
-        # Empty parameters
-        ("INSERT INTO users VALUES (:1, :2)", [], True),
-        ("INSERT INTO users VALUES (:1, :2)", {}, True),
+        # Empty parameters - now auto-handled
+        ("INSERT INTO users VALUES (:1, :2)", [], False),  # Changed: auto-generates all params
+        ("INSERT INTO users VALUES (:1, :2)", {}, False),  # Changed: auto-generates all params
     ],
     ids=[
         "valid_list",

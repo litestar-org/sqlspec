@@ -211,7 +211,7 @@ def test_provide_session_with_custom_config(mock_connect: MagicMock) -> None:
 
     with config.provide_session() as session:
         # Should use the custom config's parameter styles
-        assert session.config.allowed_parameter_styles == ("qmark")
+        assert session.config.allowed_parameter_styles == ("qmark",)
         assert session.config.target_parameter_style == "qmark"
 
 

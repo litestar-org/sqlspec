@@ -1,7 +1,7 @@
 import logging
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from asyncmy import Connection
 from typing_extensions import TypeAlias
@@ -47,9 +47,6 @@ class AsyncmyDriver(
     dialect: "DialectType" = "mysql"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.POSITIONAL_PYFORMAT,)
     default_parameter_style: ParameterStyle = ParameterStyle.POSITIONAL_PYFORMAT
-    __supports_arrow__: ClassVar[bool] = True
-    __supports_parquet__: ClassVar[bool] = False
-    __slots__ = ()
 
     def __init__(
         self,

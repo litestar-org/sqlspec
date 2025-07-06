@@ -12,8 +12,8 @@ from sqlspec.utils.type_guards import has_query_builder_parameters, is_expressio
 
 if TYPE_CHECKING:
     from sqlspec.protocols import SelectBuilderProtocol, SQLBuilderProtocol
-    from sqlspec.statement.builder.base import QueryBuilder
-    from sqlspec.statement.builder.column import Column, FunctionColumn
+    from sqlspec.statement.builder._base import QueryBuilder
+    from sqlspec.statement.builder._column import Column, FunctionColumn
     from sqlspec.typing import RowT
 
 __all__ = ("CaseBuilder", "SelectClauseMixin")
@@ -609,4 +609,4 @@ class CaseBuilder:
             The parent builder instance.
         """
         select_expr = exp.alias_(self._case_expr, self._alias) if self._alias else self._case_expr
-        return cast("QueryBuilder[RowT]", self._parent.select(select_expr))  # type: ignore[attr-defined]
+        return cast("QueryBuilder[RowT]", self._parent.select(select_expr))

@@ -28,7 +28,7 @@ def test_connection(postgres_service: PostgresService) -> None:
         with conn.cursor() as cur:
             cur.execute("SELECT 1")  # pyright: ignore
             result = cur.fetchone()  # pyright: ignore
-            assert result == (1)
+            assert result == (1,)
 
 
 @pytest.mark.xdist_group("adbc_duckdb")
@@ -43,7 +43,7 @@ def test_duckdb_connection() -> None:
         with conn.cursor() as cur:
             cur.execute("SELECT 1")  # pyright: ignore
             result = cur.fetchone()  # pyright: ignore
-            assert result == (1)
+            assert result == (1,)
 
 
 @pytest.mark.xdist_group("adbc_sqlite")
@@ -58,7 +58,7 @@ def test_sqlite_connection() -> None:
         with conn.cursor() as cur:
             cur.execute("SELECT 1")  # pyright: ignore
             result = cur.fetchone()  # pyright: ignore
-            assert result == (1)
+            assert result == (1,)
 
 
 @pytest.mark.skipif(
@@ -82,4 +82,4 @@ def test_bigquery_connection() -> None:
         with conn.cursor() as cur:
             cur.execute("SELECT 1 as test_value")  # pyright: ignore
             result = cur.fetchone()  # pyright: ignore
-            assert result == (1)
+            assert result == (1,)

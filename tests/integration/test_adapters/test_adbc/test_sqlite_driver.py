@@ -53,7 +53,7 @@ def test_connection() -> None:
         with conn.cursor() as cur:
             cur.execute("SELECT 1")  # pyright: ignore
             result = cur.fetchone()  # pyright: ignore
-            assert result == (1)
+            assert result == (1,)
 
     # Test session creation
     with config.provide_session() as session:

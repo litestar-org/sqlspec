@@ -233,7 +233,7 @@ def test_execute_statement_routing(
 def test_execute_select_statement(driver: SqliteDriver, mock_connection: MagicMock) -> None:
     """Test executing a SELECT statement."""
     mock_cursor = mock_connection.cursor.return_value
-    mock_cursor.description = [("id"), ("name"), ("email")]
+    mock_cursor.description = [("id",), ("name",), ("email",)]
     mock_cursor.fetchall.return_value = [
         {"id": 1, "name": "Alice", "email": "alice@example.com"},
         {"id": 2, "name": "Bob", "email": "bob@example.com"},
@@ -321,7 +321,7 @@ def test_execute_many(driver: SqliteDriver, mock_connection: MagicMock) -> None:
     [
         ([[1, "a"], [2, "b"]], [(1, "a"), (2, "b")]),
         ([(1, "a"), (2, "b")], [(1, "a"), (2, "b")]),
-        ([1, 2, 3], [(1), (2), (3)]),
+        ([1, 2, 3], [(1,), (2,), (3,)]),
         ([None, None], [(), ()]),
     ],
     ids=["list_of_lists", "list_of_tuples", "single_values", "none_values"],
@@ -433,7 +433,7 @@ def test_execute_with_no_parameters(driver: SqliteDriver, mock_connection: Magic
 def test_execute_select_with_empty_result(driver: SqliteDriver, mock_connection: MagicMock) -> None:
     """Test SELECT with empty result set."""
     mock_cursor = mock_connection.cursor.return_value
-    mock_cursor.description = [("id"), ("name")]
+    mock_cursor.description = [("id",), ("name",)]
     mock_cursor.fetchall.return_value = []
     mock_cursor.rowcount = 0
 

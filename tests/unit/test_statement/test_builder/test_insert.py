@@ -19,7 +19,7 @@ from sqlglot import exp
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder import Insert, Select
-from sqlspec.statement.builder.base import SafeQuery
+from sqlspec.statement.builder._base import SafeQuery
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL
 

@@ -2,8 +2,8 @@
 
 import pytest
 
-from sqlspec.statement.builder.ddl import CreateTableAsSelect
-from sqlspec.statement.builder.select import Select
+from sqlspec.statement.builder._ddl import CreateTableAsSelect
+from sqlspec.statement.builder._select import Select
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -77,7 +77,7 @@ def test_mixed_parameter_style_normalization() -> None:
 
     # Test just positional - returns tuple
     sql2 = SQL("SELECT * FROM users WHERE id = ?", 123)
-    assert sql2.parameters == (123)
+    assert sql2.parameters == (123,)
 
     # Test just named - returns dict
     sql3 = SQL("SELECT * FROM users WHERE status = :active", active="enabled")

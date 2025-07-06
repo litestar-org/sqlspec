@@ -75,7 +75,7 @@ def test_driver_initialization() -> None:
     assert driver.config is config
     assert driver.dialect == "bigquery"
     assert driver.default_parameter_style == ParameterStyle.NAMED_AT
-    assert driver.supported_parameter_styles == (ParameterStyle.NAMED_AT)
+    assert driver.supported_parameter_styles == (ParameterStyle.NAMED_AT,)
 
 
 def test_driver_default_row_type() -> None:

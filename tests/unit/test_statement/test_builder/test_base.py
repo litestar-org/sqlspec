@@ -35,8 +35,8 @@ from sqlspec.statement.builder._ddl import (
     RenameTable,
     TruncateTable,
 )
-from sqlspec.statement.builder.mixins.where_clause import WhereClauseMixin
-from sqlspec.statement.builder.select import Select
+from sqlspec.statement.builder._select import Select
+from sqlspec.statement.builder.mixins._where_clause import WhereClauseMixin
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
@@ -368,7 +368,7 @@ def test_query_builder_build_expression_not_initialized() -> None:
         builder.build()
 
 
-@patch("sqlspec.statement.builder.base.logger")
+@patch("sqlspec.statement.builder._base.logger")
 def test_query_builder_build_sql_generation_error(mock_logger: Mock, test_builder: MockQueryBuilder) -> None:
     """Test build method handles SQL generation errors."""
 

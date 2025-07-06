@@ -21,11 +21,11 @@ Usage:
     uv run tools/benchmark_performance.py sql-compilation --iterations 10000
 """
 
+import datetime as dt
 import gc
 import json
 import time
 from collections import defaultdict
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -38,7 +38,7 @@ from rich.table import Table
 from rich.text import Text
 from sqlglot import parse_one
 
-from sqlspec.statement.parameters import TypedParameter
+from sqlspec.statement.parameters import ParameterStyle, TypedParameter
 from sqlspec.statement.sql import SQL
 
 # Configure rich-click
@@ -49,6 +49,11 @@ click.rich_click.STYLE_ERRORS_SUGGESTION = "magenta italic"
 click.rich_click.ERRORS_SUGGESTION = "Try running with [bold]--help[/bold] for more information."
 
 console = Console()
+
+# Constants
+MIN_COMPARISON_FILES = 2
+PERFORMANCE_IMPROVEMENT_THRESHOLD = -5  # Negative for improvement
+PERFORMANCE_REGRESSION_THRESHOLD = 5
 
 # Benchmark results storage
 RESULTS_DIR = Path("benchmarks")
@@ -65,7 +70,7 @@ class BenchmarkRunner:
         self.memory_before = 0
         self.memory_after = 0
 
-    def measure(self, func: Callable, *args, **kwargs) -> tuple[float, Any]:
+    def measure(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> tuple[float, Any]:
         """Measure execution time and memory usage of a function."""
         gc.collect()
         process = psutil.Process()
@@ -84,7 +89,7 @@ class BenchmarkRunner:
 
         return elapsed, result
 
-    def benchmark(self, name: str, func: Callable, *args, **kwargs) -> None:
+    def benchmark(self, name: str, func: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
         """Run a benchmark multiple times and collect results."""
         console.print(f"  [dim]Running {name}...[/dim]")
 
@@ -130,7 +135,7 @@ class BenchmarkRunner:
 
     def save_results(self, adapter: Optional[str] = None) -> Path:
         """Save results to JSON file."""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = dt.datetime.now(tz=dt.timezone.utc).strftime("%Y%m%d_%H%M%S")
         adapter_suffix = f"_{adapter}" if adapter else ""
         filename = f"{self.name.lower().replace(' ', '_')}{adapter_suffix}_{timestamp}.json"
         filepath = RESULTS_DIR / filename
@@ -152,8 +157,7 @@ class BenchmarkRunner:
             },
         }
 
-        with open(filepath, "w") as f:
-            json.dump(data, f, indent=2)
+        filepath.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
         return filepath
 
@@ -177,8 +181,18 @@ def benchmark_parameter_styles(adapter: str, iterations: int) -> None:
         """,
     }
 
-    # Parameter styles to test
-    styles = ["qmark", "numeric", "named", "format", "pyformat"]
+    # Parameter styles to test (all ParameterStyle enum values to test regex performance)
+    styles = [
+        ParameterStyle.QMARK,  # SQLGlot compatible
+        ParameterStyle.NUMERIC,  # SQLGlot compatible
+        ParameterStyle.NAMED_COLON,  # SQLGlot compatible
+        ParameterStyle.NAMED_AT,  # SQLGlot compatible
+        ParameterStyle.NAMED_DOLLAR,  # SQLGlot compatible
+        ParameterStyle.POSITIONAL_PYFORMAT,  # SQLGlot incompatible - needs transformation
+        ParameterStyle.NAMED_PYFORMAT,  # SQLGlot incompatible - needs transformation
+        ParameterStyle.POSITIONAL_COLON,  # SQLGlot incompatible - needs transformation
+        # Note: NONE and STATIC are not included as they don't have placeholders to compile
+    ]
 
     with Progress(
         SpinnerColumn(),
@@ -191,16 +205,18 @@ def benchmark_parameter_styles(adapter: str, iterations: int) -> None:
 
         for query_name, query in queries.items():
             for style in styles:
-                try:
-                    stmt = SQL(query)
+                stmt = SQL(query)
 
-                    def compile_with_style() -> tuple[str, Any]:
-                        return stmt.compile(placeholder_style=style)
+                def compile_with_style(
+                    s: SQL = stmt, st: ParameterStyle = style, qn: str = query_name
+                ) -> tuple[str, Any]:
+                    try:
+                        return s.compile(placeholder_style=st)
+                    except Exception as e:
+                        console.print(f"[red]Error with {qn} + {st}: {e}[/red]")
+                        return "", []
 
-                    runner.benchmark(f"{query_name}_{style}", compile_with_style)
-                except Exception as e:
-                    console.print(f"[red]Error with {query_name} + {style}: {e}[/red]")
-
+                runner.benchmark(f"{query_name}_{style}", compile_with_style)
                 progress.advance(task)
 
     # Display results
@@ -246,8 +262,8 @@ def benchmark_sql_compilation(iterations: int) -> None:
             parse_one(query)
 
             # Benchmark: Create SQL object
-            def create_sql() -> SQL:
-                return SQL(query)
+            def create_sql(q: str = query) -> SQL:
+                return SQL(q)
 
             runner.benchmark(f"{query_name}_create", create_sql)
             progress.advance(task)
@@ -256,8 +272,8 @@ def benchmark_sql_compilation(iterations: int) -> None:
             sql = SQL(query)
             sql.config.enable_caching = False
 
-            def compile_no_cache():
-                return sql.compile()
+            def compile_no_cache(s: SQL = sql) -> tuple[str, Any]:
+                return s.compile()
 
             runner.benchmark(f"{query_name}_compile_nocache", compile_no_cache)
             progress.advance(task)
@@ -268,8 +284,8 @@ def benchmark_sql_compilation(iterations: int) -> None:
             # Prime the cache
             sql_cached.compile()
 
-            def compile_with_cache():
-                return sql_cached.compile()
+            def compile_with_cache(s: SQL = sql_cached) -> tuple[str, Any]:
+                return s.compile()
 
             runner.benchmark(f"{query_name}_compile_cached", compile_with_cache)
             progress.advance(task)
@@ -303,17 +319,17 @@ def benchmark_typed_parameters(iterations: int) -> None:
 
         for param_name, params in test_params.items():
             # Benchmark: Direct parameter usage (baseline)
-            def use_direct():
-                return params
+            def use_direct(p: dict[str, Any] = params) -> dict[str, Any]:
+                return p
 
             runner.benchmark(f"{param_name}_direct", use_direct)
             progress.advance(task)
 
             # Benchmark: TypedParameter wrapping
-            def wrap_typed():
+            def wrap_typed(p: dict[str, Any] = params) -> dict[str, Any]:
                 # Simulate what wrap_parameters_with_types should do
                 wrapped = {}
-                for key, value in params.items():
+                for key, value in p.items():
                     if isinstance(value, (int, float)):
                         wrapped[key] = TypedParameter(value, "numeric")
                     elif isinstance(value, bool):
@@ -419,6 +435,14 @@ def typed_parameters(iterations: int) -> None:
     benchmark_typed_parameters(iterations)
 
 
+def _safe_benchmark_adapter(adapter_name: str, iterations: int) -> None:
+    """Safely benchmark an adapter, handling exceptions."""
+    try:
+        benchmark_parameter_styles(adapter_name, iterations)
+    except Exception as e:
+        console.print(f"[red]Skipping {adapter_name}: {e}[/red]")
+
+
 @cli.command()
 @click.option("--adapter", default="all", help="Adapter to test or 'all'")
 @click.option("--iterations", default=1000, help="Number of iterations")
@@ -432,11 +456,9 @@ def run_all(adapter: str, iterations: int) -> None:
 
     console.print("\n[bold cyan]2. Parameter Styles[/bold cyan]")
     if adapter == "all":
-        for adp in ["sqlite", "duckdb"]:  # Add more as needed
-            try:
-                benchmark_parameter_styles(adp, iterations)
-            except Exception as e:
-                console.print(f"[red]Skipping {adp}: {e}[/red]")
+        adapters_to_test = ["sqlite", "duckdb"]  # Add more as needed
+        for adp in adapters_to_test:
+            _safe_benchmark_adapter(adp, iterations)
     else:
         benchmark_parameter_styles(adapter, iterations)
 
@@ -463,7 +485,7 @@ def compare() -> None:
 
     # Show comparison for each type
     for bench_type, files in results_by_type.items():
-        if len(files) < 2:
+        if len(files) < MIN_COMPARISON_FILES:
             continue
 
         console.print(f"\n[bold]Comparing: {bench_type}[/bold]")
@@ -471,10 +493,8 @@ def compare() -> None:
         # Load two most recent results
         files = sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)
 
-        with open(files[0]) as f:
-            recent = json.load(f)
-        with open(files[1]) as f:
-            previous = json.load(f)
+        recent = json.loads(files[0].read_text(encoding="utf-8"))
+        previous = json.loads(files[1].read_text(encoding="utf-8"))
 
         # Create comparison table
         table = Table(title=f"{bench_type} Comparison", show_header=True)
@@ -492,9 +512,9 @@ def compare() -> None:
                 pct_change = (change / prev_avg * 100) if prev_avg > 0 else 0
 
                 # Color based on improvement/regression
-                if pct_change < -5:
+                if pct_change < PERFORMANCE_IMPROVEMENT_THRESHOLD:
                     change_style = "green"
-                elif pct_change > 5:
+                elif pct_change > PERFORMANCE_REGRESSION_THRESHOLD:
                     change_style = "red"
                 else:
                     change_style = "yellow"

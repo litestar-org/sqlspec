@@ -48,7 +48,6 @@ class AiosqliteDriver(
     dialect: "DialectType" = "sqlite"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK, ParameterStyle.NAMED_COLON)
     default_parameter_style: ParameterStyle = ParameterStyle.QMARK
-    __slots__ = ()
 
     def __init__(
         self,

@@ -239,7 +239,7 @@ class SQL:
         self._is_script: bool = False
 
         if isinstance(statement, SQL):
-            self._init_from_sql_object(statement, _dialect, _config, _builder_result_type)
+            self._init_from_sql_object(statement, _dialect, _config or SQLConfig(), _builder_result_type)
         else:
             self._init_from_str_or_expression(statement)
 
@@ -506,7 +506,9 @@ class SQL:
             if hasattr(context, "initial_expression") and context.initial_expression != processed_expr:
                 # Check if LIMIT/OFFSET was stripped during processing
                 has_limit_in_initial = (
-                    hasattr(context.initial_expression, "args") and "limit" in context.initial_expression.args
+                    context.initial_expression is not None
+                    and hasattr(context.initial_expression, "args")
+                    and "limit" in context.initial_expression.args
                 )
                 has_limit_in_processed = hasattr(processed_expr, "args") and "limit" in processed_expr.args
 

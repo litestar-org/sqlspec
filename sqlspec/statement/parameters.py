@@ -890,21 +890,21 @@ class ParameterConverter:
         # Handle different parameter structures
         if isinstance(parameters, dict):
             # Wrap dict values selectively
-            wrapped = {}
+            wrapped_dict = {}
             for key, value in parameters.items():
-                wrapped[key] = wrap_value(value, semantic_name=key)
-            return wrapped
+                wrapped_dict[key] = wrap_value(value, semantic_name=key)
+            return wrapped_dict
 
         if isinstance(parameters, (list, tuple)):
             # Wrap list/tuple values selectively
-            wrapped: list[Any] = []
+            wrapped_list: list[Any] = []
             for i, value in enumerate(parameters):
                 # Try to get semantic name from parameters_info if available
                 semantic_name = None
                 if parameters_info and i < len(parameters_info) and parameters_info[i].name:
                     semantic_name = parameters_info[i].name
-                wrapped.append(wrap_value(value, semantic_name=semantic_name))
-            return wrapped if isinstance(parameters, list) else tuple(wrapped)
+                wrapped_list.append(wrap_value(value, semantic_name=semantic_name))
+            return wrapped_list if isinstance(parameters, list) else tuple(wrapped_list)
 
         # Single scalar parameter
         semantic_name = None

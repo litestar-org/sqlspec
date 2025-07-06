@@ -249,7 +249,7 @@ def test_provide_session() -> None:
             assert config.dataset_id == "test_dataset"
 
             # Check parameter style injection
-            assert session.config.allowed_parameter_styles == ("named_at")
+            assert session.config.allowed_parameter_styles == ("named_at",)
             assert session.config.target_parameter_style == "named_at"
 
             # BigQuery client doesn't have a close method to assert on
@@ -289,7 +289,7 @@ def test_supports_connection_pooling() -> None:
 # Parameter Style Tests
 def test_supported_parameter_styles() -> None:
     """Test supported parameter styles class attribute."""
-    assert BigQueryConfig.supported_parameter_styles == ("named_at")
+    assert BigQueryConfig.supported_parameter_styles == ("named_at",)
 
 
 def test_preferred_parameter_style() -> None:

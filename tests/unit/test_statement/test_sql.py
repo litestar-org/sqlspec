@@ -22,11 +22,11 @@ if TYPE_CHECKING:
     [
         (
             {},  # Default values
-            {"dialect": None, "cache_parsed_expression": True},
+            {"dialect": None, "enable_caching": True},
         ),
         (
-            {"dialect": "duckdb", "cache_parsed_expression": False},
-            {"dialect": "duckdb", "cache_parsed_expression": False},
+            {"dialect": "duckdb", "enable_caching": False},
+            {"dialect": "duckdb", "enable_caching": False},
         ),
     ],
     ids=["defaults", "custom"],
@@ -152,7 +152,7 @@ def test_sql_parameters_property() -> None:
 
     # With positional parameters - returns the original tuple
     stmt2 = SQL("SELECT * FROM users WHERE id = ?", 1)
-    assert stmt2.parameters == (1)
+    assert stmt2.parameters == (1,)
 
     # With tuple of parameters
     stmt2b = SQL("SELECT * FROM users WHERE id = ? AND name = ?", 1, "test")
@@ -365,7 +365,7 @@ def test_sql_whitespace_only() -> None:
 # Test SQL caching behavior
 def test_sql_expression_caching() -> None:
     """Test SQL expression caching when enabled."""
-    config = SQLConfig(cache_parsed_expression=True)
+    config = SQLConfig(enable_caching=True)
     stmt = SQL("SELECT * FROM users", config=config)
 
     # First access
@@ -378,7 +378,7 @@ def test_sql_expression_caching() -> None:
 
 def test_sql_no_expression_caching() -> None:
     """Test SQL expression not cached when disabled."""
-    config = SQLConfig(cache_parsed_expression=False)
+    config = SQLConfig(enable_caching=False)
     stmt = SQL("SELECT * FROM users", config=config)
 
     # Access expression multiple times

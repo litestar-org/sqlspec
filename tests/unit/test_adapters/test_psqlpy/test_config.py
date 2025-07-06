@@ -127,7 +127,7 @@ async def test_psqlpy_config_provide_session() -> None:
         async with config.provide_session() as session:
             assert isinstance(session, PsqlpyDriver)
             # Check that parameter styles were set
-            assert session.config.allowed_parameter_styles == ("numeric")
+            assert session.config.allowed_parameter_styles == ("numeric",)
             assert session.config.target_parameter_style == "numeric"
 
 

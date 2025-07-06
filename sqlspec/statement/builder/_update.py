@@ -23,7 +23,7 @@ from sqlspec.statement.result import SQLResult
 from sqlspec.typing import RowT
 
 if TYPE_CHECKING:
-    from sqlspec.statement.builder.select import Select
+    from sqlspec.statement.builder._select import Select
 
 __all__ = ("Update",)
 

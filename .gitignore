@@ -51,3 +51,5 @@ GEMINI.*.md
 CLAUDE*.md
 *CLAUDE*.md
 requirements/*
+tools/*.json
+benchmarks/

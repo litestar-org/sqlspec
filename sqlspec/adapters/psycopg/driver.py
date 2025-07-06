@@ -60,7 +60,6 @@ class PsycopgSyncDriver(
         ParameterStyle.NAMED_PYFORMAT,
     )
     default_parameter_style: ParameterStyle = ParameterStyle.POSITIONAL_PYFORMAT
-    __slots__ = ()
 
     def __init__(
         self,
@@ -489,7 +488,6 @@ class PsycopgAsyncDriver(
         ParameterStyle.NAMED_PYFORMAT,
     )
     default_parameter_style: ParameterStyle = ParameterStyle.POSITIONAL_PYFORMAT
-    __slots__ = ()
 
     def __init__(
         self,

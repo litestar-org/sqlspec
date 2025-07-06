@@ -237,7 +237,7 @@ def test_adbc_driver_execute_statement_select(adbc_driver: AdbcDriver, mock_curs
 
     # Setup mock cursor for fetchall
     mock_cursor.fetchall.return_value = [(1, "John Doe", "john@example.com")]
-    mock_cursor.description = [("id"), ("name"), ("email")]
+    mock_cursor.description = [("id",), ("name",), ("email",)]
 
     # Use PostgreSQL-style placeholders since the mock connection is PostgreSQL
     statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[123])
@@ -462,7 +462,7 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
     built_stmt_with_params = adbc_driver._build_statement(string_sql_with_params, params_for_string, _config=sql_config)
     assert isinstance(built_stmt_with_params, SQL)
     assert built_stmt_with_params.sql == string_sql_with_params
-    assert built_stmt_with_params.parameters == (1)  # Parameters wrapped as tuple by SQL constructor
+    assert built_stmt_with_params.parameters == (1,)  # Parameters wrapped as tuple by SQL constructor
 
 
 def test_adbc_driver_fetch_arrow_table_native(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:

@@ -158,7 +158,7 @@ def test_execute_select_statement(driver: DuckDBDriver, mock_connection: MagicMo
         {"id": 1, "name": "Alice", "email": "alice@example.com"},
         {"id": 2, "name": "Bob", "email": "bob@example.com"},
     ]
-    mock_result.description = [("id"), ("name"), ("email")]
+    mock_result.description = [("id",), ("name",), ("email",)]
 
     statement = SQL("SELECT * FROM users")
     result = driver._execute_statement(statement)
@@ -213,7 +213,7 @@ def test_parameter_style_handling(
     # Mock execute to avoid actual execution
     mock_result = MagicMock()
     mock_result.fetchall.return_value = []
-    mock_result.description = [("id")]
+    mock_result.description = [("id",)]
     mock_connection.execute.return_value = mock_result
 
     driver._execute_statement(statement)
@@ -529,7 +529,7 @@ def test_execute_select_with_empty_result(driver: DuckDBDriver, mock_connection:
     """Test SELECT with empty result set."""
     mock_result = mock_connection.execute.return_value
     mock_result.fetchall.return_value = []
-    mock_result.description = [("id"), ("name")]
+    mock_result.description = [("id",), ("name",)]
 
     statement = SQL("SELECT * FROM users WHERE 1=0")
     result = driver._execute_statement(statement)

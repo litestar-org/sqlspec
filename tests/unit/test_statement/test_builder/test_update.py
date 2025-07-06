@@ -20,7 +20,7 @@ from sqlglot import exp
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder import Select, Update
-from sqlspec.statement.builder.base import SafeQuery
+from sqlspec.statement.builder._base import SafeQuery
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL
 
@@ -133,14 +133,14 @@ def test_update_set_with_expression_value() -> None:
 @pytest.mark.parametrize(
     "method,args,expected_sql_parts",
     [
-        ("where", (("status", "active")), ["WHERE"]),
-        ("where", ("id = 1"), ["WHERE", "id = 1"]),
+        ("where", (("status", "active"),), ["WHERE"]),
+        ("where", ("id = 1",), ["WHERE", "id = 1"]),
         ("where_like", ("name", "%John%"), ["LIKE"]),
         ("where_between", ("age", 18, 65), ["BETWEEN"]),
         ("where_in", ("status", ["active", "pending"]), ["IN"]),
         ("where_not_in", ("status", ["deleted", "banned"]), ["NOT IN", "NOT", "IN"]),
-        ("where_null", ("deleted_at"), ["IS NULL"]),
-        ("where_not_null", ("email"), ["IS NOT NULL", "NOT", "IS NULL"]),
+        ("where_null", ("deleted_at",), ["IS NULL"]),
+        ("where_not_null", ("email",), ["IS NOT NULL", "NOT", "IS NULL"]),
     ],
     ids=["where_tuple", "where_string", "like", "between", "in", "not_in", "null", "not_null"],
 )

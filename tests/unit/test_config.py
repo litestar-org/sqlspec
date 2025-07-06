@@ -307,7 +307,7 @@ def test_sync_config_parameter_styles() -> None:
 def test_async_config_parameter_styles() -> None:
     """Test async config parameter style attributes."""
     config = MockAsyncTestConfig()
-    assert config.supported_parameter_styles == ("numeric")
+    assert config.supported_parameter_styles == ("numeric",)
     assert config.preferred_parameter_style == "numeric"
 
 

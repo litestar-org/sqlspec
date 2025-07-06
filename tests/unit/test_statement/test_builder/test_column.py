@@ -132,12 +132,12 @@ class TestColumn:
         # Test lower
         func_col = col.lower()
         assert isinstance(func_col, FunctionColumn)
-        assert isinstance(func_col._expr, exp.Lower)
+        assert isinstance(func_col._expression, exp.Lower)
 
         # Test upper
         func_col = col.upper()
         assert isinstance(func_col, FunctionColumn)
-        assert isinstance(func_col._expr, exp.Upper)
+        assert isinstance(func_col._expression, exp.Upper)
 
     def test_column_hash(self) -> None:
         """Test column hashing."""

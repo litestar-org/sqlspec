@@ -12,7 +12,7 @@ from sqlspec.utils.type_guards import has_query_builder_parameters, has_sqlglot_
 
 if TYPE_CHECKING:
     from sqlspec.protocols import SQLBuilderProtocol
-    from sqlspec.statement.builder.column import ColumnExpression
+    from sqlspec.statement.builder._column import ColumnExpression
 
 __all__ = ("HavingClauseMixin", "WhereClauseMixin")
 
@@ -24,8 +24,7 @@ class WhereClauseMixin:
         """Create a handler that properly parameterizes values."""
 
         def handler(self: "SQLBuilderProtocol", column_exp: exp.Expression, value: Any) -> exp.Expression:
-            builder = cast("SQLBuilderProtocol", self)
-            _, param_name = builder.add_parameter(value)
+            _, param_name = self.add_parameter(value)
             return operator_class(this=column_exp, expression=exp.Placeholder(this=param_name))
 
         return handler
@@ -34,8 +33,7 @@ class WhereClauseMixin:
         """Create LIKE handler."""
 
         def handler(self: "SQLBuilderProtocol", column_exp: exp.Expression, value: Any) -> exp.Expression:
-            builder = cast("SQLBuilderProtocol", self)
-            _, param_name = builder.add_parameter(value)
+            _, param_name = self.add_parameter(value)
             return exp.Like(this=column_exp, expression=exp.Placeholder(this=param_name))
 
         return handler
@@ -44,8 +42,7 @@ class WhereClauseMixin:
         """Create NOT LIKE handler."""
 
         def handler(self: "SQLBuilderProtocol", column_exp: exp.Expression, value: Any) -> exp.Expression:
-            builder = cast("SQLBuilderProtocol", self)
-            _, param_name = builder.add_parameter(value)
+            _, param_name = self.add_parameter(value)
             return exp.Not(this=exp.Like(this=column_exp, expression=exp.Placeholder(this=param_name)))
 
         return handler
@@ -455,7 +452,7 @@ class WhereClauseMixin:
             return self.where(condition)
         if isinstance(values, str):
             try:
-                parsed_expr = exp.maybe_parse(values)
+                parsed_expr: Optional[exp.Expression] = exp.maybe_parse(values)
                 if isinstance(parsed_expr, (exp.Select, exp.Union, exp.Subquery)):
                     subquery_exp = exp.paren(parsed_expr)
                     condition = exp.EQ(this=col_expr, expression=exp.Any(this=subquery_exp))
@@ -491,7 +488,7 @@ class WhereClauseMixin:
             return self.where(condition)
         if isinstance(values, str):
             try:
-                parsed_expr = exp.maybe_parse(values)
+                parsed_expr: Optional[exp.Expression] = exp.maybe_parse(values)
                 if isinstance(parsed_expr, (exp.Select, exp.Union, exp.Subquery)):
                     subquery_exp = exp.paren(parsed_expr)
                     condition = exp.NEQ(this=col_expr, expression=exp.Any(this=subquery_exp))

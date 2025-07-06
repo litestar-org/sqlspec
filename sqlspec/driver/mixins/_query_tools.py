@@ -49,7 +49,7 @@ class QueryBase(ABC, Generic[ConnectionT]):
 
     @classmethod
     def new(cls, connection: "ConnectionT") -> Self:
-        return cls(connection=connection)
+        return cls(connection)
 
     def _transform_to_sql(
         self,
@@ -110,7 +110,7 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "RowT": ...
+    ) -> "RowT": ...  # type: ignore[type-var]
 
     def select_one(
         self,
@@ -254,7 +254,7 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
         Expects exactly one row with one column.
         Raises an exception if no rows or more than one row/column is returned.
         """
-        result = self.execute(statement, *parameters, _connection=_connection, _config=_config, **kwargs)
+        result = self.execute(statement, *parameters, _connection=_connection, _config=_config, **kwargs)  # type: ignore[attr-defined]
         data = result.get_data()
         # For select operations, data should be a list
         if not isinstance(data, list):
@@ -295,7 +295,7 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
         Expects at most one row with one column.
         Raises an exception if more than one row is returned.
         """
-        result = self.execute(statement, *parameters, _connection=_connection, _config=_config, **kwargs)
+        result = self.execute(statement, *parameters, _connection=_connection, _config=_config, **kwargs)  # type: ignore[attr-defined]
         data = result.get_data()
         # For select operations, data should be a list
         if not isinstance(data, list):
@@ -445,7 +445,7 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
             msg = "Pagination requires either a LimitOffsetFilter in parameters or 'limit' and 'offset' in kwargs."
             raise ValueError(msg)
 
-        base_stmt = self._transform_to_sql(statement, params, _config)
+        base_stmt = self._transform_to_sql(statement, params, _config)  # type: ignore[arg-type]
 
         filtered_stmt = base_stmt
         for filter_obj in other_filters:
@@ -464,7 +464,7 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
         # Execute count query
         total = self.select_value(count_stmt, _connection=_connection, _config=_config, **kwargs)
 
-        data_stmt = self._transform_to_sql(statement, params, _config)
+        data_stmt = self._transform_to_sql(statement, params, _config)  # type: ignore[arg-type]
 
         for filter_obj in other_filters:
             data_stmt = filter_obj.append_to_statement(data_stmt)
@@ -506,7 +506,7 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "RowT": ...
+    ) -> "RowT": ...  # type: ignore[type-var]
 
     async def select_one(
         self,
@@ -768,7 +768,7 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
             msg = "Pagination requires either a LimitOffsetFilter in parameters or 'limit' and 'offset' in kwargs."
             raise ValueError(msg)
 
-        base_stmt = self._transform_to_sql(statement, params, _config)
+        base_stmt = self._transform_to_sql(statement, params, _config)  # type: ignore[arg-type]
 
         filtered_stmt = base_stmt
         for filter_obj in other_filters:
@@ -785,7 +785,7 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         # Execute count query
         total = await self.select_value(count_stmt, _connection=_connection, _config=_config, **kwargs)
 
-        data_stmt = self._transform_to_sql(statement, params, _config)
+        data_stmt = self._transform_to_sql(statement, params, _config)  # type: ignore[arg-type]
 
         for filter_obj in other_filters:
             data_stmt = filter_obj.append_to_statement(data_stmt)

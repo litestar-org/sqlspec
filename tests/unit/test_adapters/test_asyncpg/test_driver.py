@@ -57,7 +57,7 @@ def test_driver_initialization() -> None:
     assert driver.config is config
     assert driver.dialect == "postgres"
     assert driver.default_parameter_style == ParameterStyle.NUMERIC
-    assert driver.supported_parameter_styles == (ParameterStyle.NUMERIC)
+    assert driver.supported_parameter_styles == (ParameterStyle.NUMERIC,)
 
 
 def test_driver_default_row_type() -> None:
