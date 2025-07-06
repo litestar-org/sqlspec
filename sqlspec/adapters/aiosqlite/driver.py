@@ -10,6 +10,7 @@ import aiosqlite
 from sqlspec.driver import AsyncDriverAdapterProtocol
 from sqlspec.driver.connection import managed_transaction_async
 from sqlspec.driver.mixins import (
+    AsyncAdapterCacheMixin,
     AsyncPipelinedExecutionMixin,
     AsyncStorageMixin,
     SQLTranslatorMixin,
@@ -35,6 +36,7 @@ AiosqliteConnection = aiosqlite.Connection
 
 class AiosqliteDriver(
     AsyncDriverAdapterProtocol[AiosqliteConnection, RowT],
+    AsyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
     AsyncStorageMixin,
@@ -101,7 +103,7 @@ class AiosqliteDriver(
         self, statement: SQL, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         if statement.is_script:
-            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
         detected_styles = set()
@@ -124,13 +126,13 @@ class AiosqliteDriver(
                     break
 
         if statement.is_many:
-            sql, params = statement.compile(placeholder_style=target_style)
+            sql, params = self._get_compiled_sql(statement, target_style)
 
             params = self._process_parameters(params)
 
             return await self._execute_many(sql, params, connection=connection, **kwargs)
 
-        sql, params = statement.compile(placeholder_style=target_style)
+        sql, params = self._get_compiled_sql(statement, target_style)
 
         params = self._process_parameters(params)
 

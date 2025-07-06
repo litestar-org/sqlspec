@@ -12,6 +12,7 @@ from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
+    SyncAdapterCacheMixin,
     SyncPipelinedExecutionMixin,
     SyncQueryMixin,
     SyncStorageMixin,
@@ -38,6 +39,7 @@ SqliteConnection: TypeAlias = sqlite3.Connection
 
 class SqliteDriver(
     SyncDriverAdapterProtocol[SqliteConnection, RowT],
+    SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
     SyncStorageMixin,
@@ -108,7 +110,7 @@ class SqliteDriver(
         self, statement: SQL, connection: Optional[SqliteConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         if statement.is_script:
-            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, statement=statement, **kwargs)
 
         detected_styles = set()
@@ -135,10 +137,10 @@ class SqliteDriver(
                 target_style = self.default_parameter_style
 
         if statement.is_many:
-            sql, params = statement.compile(placeholder_style=target_style)
+            sql, params = self._get_compiled_sql(statement, target_style)
             return self._execute_many(sql, params, connection=connection, statement=statement, **kwargs)
 
-        sql, params = statement.compile(placeholder_style=target_style)
+        sql, params = self._get_compiled_sql(statement, target_style)
 
         params = self._process_parameters(params)
 

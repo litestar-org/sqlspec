@@ -18,6 +18,11 @@ class SQLCache:
         self.max_size = max_size
         self.lock = threading.Lock()
 
+    @property
+    def size(self) -> int:
+        """Get current cache size."""
+        return len(self.cache)
+
     def get(self, key: str) -> Optional[Any]:
         """Get an item from the cache, marking it as recently used."""
         with self.lock:

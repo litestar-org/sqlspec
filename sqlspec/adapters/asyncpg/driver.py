@@ -8,6 +8,7 @@ from typing_extensions import TypeAlias
 from sqlspec.driver import AsyncDriverAdapterProtocol
 from sqlspec.driver.connection import managed_transaction_async
 from sqlspec.driver.mixins import (
+    AsyncAdapterCacheMixin,
     AsyncPipelinedExecutionMixin,
     AsyncStorageMixin,
     SQLTranslatorMixin,
@@ -50,6 +51,7 @@ class AsyncpgDriver(
     TypeCoercionMixin,
     AsyncStorageMixin,
     AsyncPipelinedExecutionMixin,
+    AsyncAdapterCacheMixin,
     ToSchemaMixin,
 ):
     """AsyncPG PostgreSQL Driver Adapter. Modern protocol implementation."""
@@ -91,7 +93,7 @@ class AsyncpgDriver(
         self, statement: SQL, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         if statement.is_script:
-            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
         detected_styles = set()
@@ -112,10 +114,10 @@ class AsyncpgDriver(
                     break
 
         if statement.is_many:
-            sql, params = statement.compile(placeholder_style=target_style)
+            sql, params = self._get_compiled_sql(statement, target_style)
             return await self._execute_many(sql, params, connection=connection, **kwargs)
 
-        sql, params = statement.compile(placeholder_style=target_style)
+        sql, params = self._get_compiled_sql(statement, target_style)
         return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
     async def _execute(

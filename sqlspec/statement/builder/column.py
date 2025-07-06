@@ -200,6 +200,36 @@ class Column:
         """SQL CAST() function."""
         return FunctionColumn(exp.Cast(this=self._expr, to=exp.DataType.build(data_type)))
 
+    # Aggregate functions
+    def count(self) -> "FunctionColumn":
+        """SQL COUNT() function."""
+        return FunctionColumn(exp.Count(this=self._expr))
+
+    def sum(self) -> "FunctionColumn":
+        """SQL SUM() function."""
+        return FunctionColumn(exp.Sum(this=self._expr))
+
+    def avg(self) -> "FunctionColumn":
+        """SQL AVG() function."""
+        return FunctionColumn(exp.Avg(this=self._expr))
+
+    def min(self) -> "FunctionColumn":
+        """SQL MIN() function."""
+        return FunctionColumn(exp.Min(this=self._expr))
+
+    def max(self) -> "FunctionColumn":
+        """SQL MAX() function."""
+        return FunctionColumn(exp.Max(this=self._expr))
+
+    def count_distinct(self) -> "FunctionColumn":
+        """SQL COUNT(DISTINCT column) function."""
+        return FunctionColumn(exp.Count(this=exp.Distinct(expressions=[self._expr])))
+
+    @staticmethod
+    def count_all() -> "FunctionColumn":
+        """SQL COUNT(*) function."""
+        return FunctionColumn(exp.Count(this=exp.Star()))
+
     def alias(self, alias_name: str) -> exp.Expression:
         """Create an aliased column expression."""
         return exp.Alias(this=self._expr, alias=alias_name)

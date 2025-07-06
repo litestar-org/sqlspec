@@ -12,6 +12,7 @@ from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
+    SyncAdapterCacheMixin,
     SyncPipelinedExecutionMixin,
     SyncStorageMixin,
     ToSchemaMixin,
@@ -38,6 +39,7 @@ logger = get_logger("adapters.duckdb")
 
 class DuckDBDriver(
     SyncDriverAdapterProtocol["DuckDBConnection", RowT],
+    SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
     SyncStorageMixin,
@@ -86,10 +88,10 @@ class DuckDBDriver(
         self, statement: SQL, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         if statement.is_script:
-            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
-        sql, params = statement.compile(placeholder_style=self.default_parameter_style)
+        sql, params = self._get_compiled_sql(statement, self.default_parameter_style)
         params = self._process_parameters(params)
 
         if statement.is_many:
@@ -214,7 +216,7 @@ class DuckDBDriver(
     def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
         """Enhanced DuckDB native Arrow table fetching with streaming support."""
         conn = self._connection(connection)
-        sql_string, parameters = sql.compile(placeholder_style=self.default_parameter_style)
+        sql_string, parameters = self._get_compiled_sql(sql, self.default_parameter_style)
         parameters = self._process_parameters(parameters)
         result = conn.execute(sql_string, parameters or [])
 

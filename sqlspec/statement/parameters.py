@@ -20,6 +20,9 @@ from sqlspec.typing import SQLParameterType
 if TYPE_CHECKING:
     from sqlglot import exp
 
+# Constants
+MAX_32BIT_INT: Final[int] = 2147483647
+
 __all__ = (
     "ConvertedParameters",
     "ParameterConverter",
@@ -819,7 +822,7 @@ class ParameterConverter:
 
             # Integer types
             if isinstance(value, int) and not isinstance(value, bool):
-                if abs(value) > 2147483647:  # Max 32-bit int
+                if abs(value) > MAX_32BIT_INT:
                     return "bigint", exp.DataType.build("BIGINT")
                 return "integer", exp.DataType.build("INT")
 
@@ -845,7 +848,6 @@ class ParameterConverter:
             if isinstance(value, (list, tuple)):
                 return "array", exp.DataType.build("ARRAY")
 
-            # String (default)
             if isinstance(value, str):
                 return "string", exp.DataType.build("VARCHAR")
 
@@ -866,7 +868,7 @@ class ParameterConverter:
             if isinstance(value, (str, int, float)) and not isinstance(value, bool):
                 # For simple types, only wrap if we have special type needs
                 # (e.g., bigint, decimal precision, etc.)
-                if isinstance(value, int) and abs(value) > 2147483647:
+                if isinstance(value, int) and abs(value) > MAX_32BIT_INT:
                     # Wrap large integers as bigint
                     type_hint, sqlglot_type = infer_type_from_value(value)
                     return TypedParameter(
@@ -895,7 +897,7 @@ class ParameterConverter:
 
         if isinstance(parameters, (list, tuple)):
             # Wrap list/tuple values selectively
-            wrapped = []
+            wrapped: list[Any] = []
             for i, value in enumerate(parameters):
                 # Try to get semantic name from parameters_info if available
                 semantic_name = None

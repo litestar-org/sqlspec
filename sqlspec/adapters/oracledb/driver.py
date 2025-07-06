@@ -8,9 +8,11 @@ from sqlglot.dialects.dialect import DialectType
 from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
 from sqlspec.driver.connection import managed_transaction_async, managed_transaction_sync
 from sqlspec.driver.mixins import (
+    AsyncAdapterCacheMixin,
     AsyncPipelinedExecutionMixin,
     AsyncStorageMixin,
     SQLTranslatorMixin,
+    SyncAdapterCacheMixin,
     SyncPipelinedExecutionMixin,
     SyncStorageMixin,
     ToSchemaMixin,
@@ -63,6 +65,7 @@ def _process_oracle_parameters(params: Any) -> Any:
 
 class OracleSyncDriver(
     SyncDriverAdapterProtocol[OracleSyncConnection, RowT],
+    SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
     SyncStorageMixin,
@@ -109,7 +112,7 @@ class OracleSyncDriver(
         self, statement: SQL, connection: Optional[OracleSyncConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         if statement.is_script:
-            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
         detected_styles = set()
@@ -132,11 +135,11 @@ class OracleSyncDriver(
                     break
 
         if statement.is_many:
-            sql, params = statement.compile(placeholder_style=target_style)
+            sql, params = self._get_compiled_sql(statement, target_style)
             params = self._process_parameters(params)
             return self._execute_many(sql, params, connection=connection, **kwargs)
 
-        sql, params = statement.compile(placeholder_style=target_style)
+        sql, params = self._get_compiled_sql(statement, target_style)
         return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
@@ -306,6 +309,7 @@ class OracleSyncDriver(
 
 class OracleAsyncDriver(
     AsyncDriverAdapterProtocol[OracleAsyncConnection, RowT],
+    AsyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
     AsyncStorageMixin,
@@ -355,7 +359,7 @@ class OracleAsyncDriver(
         self, statement: SQL, connection: Optional[OracleAsyncConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         if statement.is_script:
-            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
         detected_styles = set()
@@ -378,7 +382,7 @@ class OracleAsyncDriver(
                     break
 
         if statement.is_many:
-            sql, params = statement.compile(placeholder_style=target_style)
+            sql, params = self._get_compiled_sql(statement, target_style)
             params = self._process_parameters(params)
             # Oracle doesn't like underscores in bind parameter names
             if isinstance(params, list) and params and isinstance(params[0], dict):
@@ -392,7 +396,7 @@ class OracleAsyncDriver(
                                 param_set[new_key] = param_set.pop(key)
             return await self._execute_many(sql, params, connection=connection, **kwargs)
 
-        sql, params = statement.compile(placeholder_style=target_style)
+        sql, params = self._get_compiled_sql(statement, target_style)
         return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
     async def _execute(

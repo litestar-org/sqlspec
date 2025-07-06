@@ -64,6 +64,16 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     """Migration configuration settings."""
     _dialect: "DialectType" = field(default=None, init=False, repr=False, hash=False, compare=False)
 
+    # Adapter-level cache configuration
+    enable_adapter_cache: bool = field(default=True)
+    """Enable adapter-level SQL compilation caching."""
+    adapter_cache_size: int = field(default=500)
+    """Maximum number of compiled SQL statements to cache per adapter."""
+    enable_prepared_statements: bool = field(default=False)
+    """Enable prepared statement pooling for supported databases."""
+    prepared_statement_cache_size: int = field(default=100)
+    """Maximum number of prepared statements to maintain."""
+
     supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ()
     """Parameter styles supported by this database adapter (e.g., ('qmark', 'named_colon'))."""
 

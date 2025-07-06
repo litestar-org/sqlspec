@@ -224,6 +224,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         super().__init__()
 
+        # Override prepared statements to True for PostgreSQL since it supports them well
+        self.enable_prepared_statements = kwargs.get("enable_prepared_statements", True)
+
         if pool_instance_from_kwargs is not None:
             self.pool_instance = pool_instance_from_kwargs
 

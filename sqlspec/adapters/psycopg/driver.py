@@ -13,9 +13,11 @@ from sqlglot.dialects.dialect import DialectType
 from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
 from sqlspec.driver.connection import managed_transaction_async, managed_transaction_sync
 from sqlspec.driver.mixins import (
+    AsyncAdapterCacheMixin,
     AsyncPipelinedExecutionMixin,
     AsyncStorageMixin,
     SQLTranslatorMixin,
+    SyncAdapterCacheMixin,
     SyncPipelinedExecutionMixin,
     SyncStorageMixin,
     ToSchemaMixin,
@@ -43,6 +45,7 @@ PsycopgAsyncConnection = AsyncConnection[PsycopgDictRow]
 
 class PsycopgSyncDriver(
     SyncDriverAdapterProtocol[PsycopgSyncConnection, RowT],
+    SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
     SyncStorageMixin,
@@ -77,7 +80,7 @@ class PsycopgSyncDriver(
         self, statement: SQL, connection: Optional[PsycopgSyncConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         if statement.is_script:
-            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
         detected_styles = set()
@@ -105,7 +108,7 @@ class PsycopgSyncDriver(
                 sql = statement.to_sql(placeholder_style=target_style)
                 params = kwargs_params
             else:
-                sql, params = statement.compile(placeholder_style=target_style)
+                sql, params = self._get_compiled_sql(statement, target_style)
             if params is not None:
                 processed_params = [self._process_parameters(param_set) for param_set in params]
                 params = processed_params
@@ -120,7 +123,7 @@ class PsycopgSyncDriver(
             sql = statement.to_sql(placeholder_style=target_style)
             params = kwargs_params
         else:
-            sql, params = statement.compile(placeholder_style=target_style)
+            sql, params = self._get_compiled_sql(statement, target_style)
         params = self._process_parameters(params)
 
         # Fix over-nested parameters for Psycopg
@@ -471,6 +474,7 @@ class PsycopgSyncDriver(
 
 class PsycopgAsyncDriver(
     AsyncDriverAdapterProtocol[PsycopgAsyncConnection, RowT],
+    AsyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
     AsyncStorageMixin,
@@ -505,7 +509,7 @@ class PsycopgAsyncDriver(
         self, statement: SQL, connection: Optional[PsycopgAsyncConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         if statement.is_script:
-            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
         detected_styles = set()
@@ -535,8 +539,7 @@ class PsycopgAsyncDriver(
                 sql = statement.to_sql(placeholder_style=target_style)
                 params = kwargs_params
             else:
-                sql, _ = statement.compile(placeholder_style=target_style)
-                params = statement.parameters
+                sql, params = self._get_compiled_sql(statement, target_style)
             if params is not None:
                 processed_params = [self._process_parameters(param_set) for param_set in params]
                 params = processed_params
@@ -560,7 +563,7 @@ class PsycopgAsyncDriver(
             sql = statement.to_sql(placeholder_style=target_style)
             params = kwargs_params
         else:
-            sql, params = statement.compile(placeholder_style=target_style)
+            sql, params = self._get_compiled_sql(statement, target_style)
         params = self._process_parameters(params)
 
         # Fix over-nested parameters for Psycopg

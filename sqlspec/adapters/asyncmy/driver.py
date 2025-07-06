@@ -9,6 +9,7 @@ from typing_extensions import TypeAlias
 from sqlspec.driver import AsyncDriverAdapterProtocol
 from sqlspec.driver.connection import managed_transaction_async
 from sqlspec.driver.mixins import (
+    AsyncAdapterCacheMixin,
     AsyncPipelinedExecutionMixin,
     AsyncStorageMixin,
     SQLTranslatorMixin,
@@ -34,6 +35,7 @@ AsyncmyConnection: TypeAlias = Connection
 
 class AsyncmyDriver(
     AsyncDriverAdapterProtocol[AsyncmyConnection, RowT],
+    AsyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
     AsyncStorageMixin,
@@ -72,7 +74,7 @@ class AsyncmyDriver(
         self, statement: SQL, connection: "Optional[AsyncmyConnection]" = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         if statement.is_script:
-            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
         # Detect parameter styles in the SQL
@@ -99,7 +101,7 @@ class AsyncmyDriver(
                     break
 
         # Compile with the determined style
-        sql, params = statement.compile(placeholder_style=target_style)
+        sql, params = self._get_compiled_sql(statement, target_style)
 
         if statement.is_many:
             params = self._process_parameters(params)

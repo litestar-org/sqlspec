@@ -7,7 +7,6 @@ from sqlglot import exp, parse_one
 from typing_extensions import Self
 
 from sqlspec.exceptions import NotFoundError
-from sqlspec.statement import SQL
 from sqlspec.statement.filters import OffsetPagination
 from sqlspec.statement.sql import SQL
 from sqlspec.typing import ConnectionT

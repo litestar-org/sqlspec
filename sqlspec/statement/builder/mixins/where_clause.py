@@ -23,7 +23,7 @@ class WhereClauseMixin:
     def _create_operator_handler(self, operator_class: type[exp.Expression]) -> Callable:
         """Create a handler that properly parameterizes values."""
 
-        def handler(self, column_exp: exp.Expression, value: Any) -> exp.Expression:
+        def handler(self: "SQLBuilderProtocol", column_exp: exp.Expression, value: Any) -> exp.Expression:
             builder = cast("SQLBuilderProtocol", self)
             _, param_name = builder.add_parameter(value)
             return operator_class(this=column_exp, expression=exp.Placeholder(this=param_name))
@@ -33,7 +33,7 @@ class WhereClauseMixin:
     def _create_like_handler(self) -> Callable:
         """Create LIKE handler."""
 
-        def handler(self, column_exp: exp.Expression, value: Any) -> exp.Expression:
+        def handler(self: "SQLBuilderProtocol", column_exp: exp.Expression, value: Any) -> exp.Expression:
             builder = cast("SQLBuilderProtocol", self)
             _, param_name = builder.add_parameter(value)
             return exp.Like(this=column_exp, expression=exp.Placeholder(this=param_name))
@@ -43,7 +43,7 @@ class WhereClauseMixin:
     def _create_not_like_handler(self) -> Callable:
         """Create NOT LIKE handler."""
 
-        def handler(self, column_exp: exp.Expression, value: Any) -> exp.Expression:
+        def handler(self: "SQLBuilderProtocol", column_exp: exp.Expression, value: Any) -> exp.Expression:
             builder = cast("SQLBuilderProtocol", self)
             _, param_name = builder.add_parameter(value)
             return exp.Not(this=exp.Like(this=column_exp, expression=exp.Placeholder(this=param_name)))

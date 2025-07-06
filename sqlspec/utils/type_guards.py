@@ -898,27 +898,27 @@ def is_object_store_item(obj: Any) -> "TypeGuard[ObjectStoreItemProtocol]":
 
 def has_sqlglot_expression(obj: Any) -> "TypeGuard[Any]":
     """Check if an object has a sqlglot_expression property."""
-    from sqlspec.statement_new.protocols import HasSQLGlotExpressionProtocol
+    from sqlspec.protocols import HasSQLGlotExpressionProtocol
 
     return isinstance(obj, HasSQLGlotExpressionProtocol)
 
 
 def has_parameter_builder(obj: Any) -> "TypeGuard[Any]":
     """Check if an object has an add_parameter method."""
-    from sqlspec.statement_new.protocols import HasParameterBuilderProtocol
+    from sqlspec.protocols import HasParameterBuilderProtocol
 
     return isinstance(obj, HasParameterBuilderProtocol)
 
 
 def has_expression_attr(obj: Any) -> "TypeGuard[Any]":
     """Check if an object has an _expression attribute."""
-    from sqlspec.statement_new.protocols import HasExpressionProtocol
+    from sqlspec.protocols import HasExpressionProtocol
 
     return isinstance(obj, HasExpressionProtocol)
 
 
 def has_to_statement(obj: Any) -> "TypeGuard[Any]":
     """Check if an object has a to_statement method."""
-    from sqlspec.statement_new.protocols import HasToStatementProtocol
+    from sqlspec.protocols import HasToStatementProtocol
 
     return isinstance(obj, HasToStatementProtocol)

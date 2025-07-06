@@ -12,6 +12,7 @@ from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
+    SyncAdapterCacheMixin,
     SyncPipelinedExecutionMixin,
     SyncStorageMixin,
     ToSchemaMixin,
@@ -37,6 +38,7 @@ AdbcConnection = Connection
 
 class AdbcDriver(
     SyncDriverAdapterProtocol["AdbcConnection", RowT],
+    SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
     SyncStorageMixin,
@@ -181,7 +183,7 @@ class AdbcDriver(
         self, statement: SQL, connection: Optional["AdbcConnection"] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         if statement.is_script:
-            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
         detected_styles = {p.style for p in statement.parameter_info}
@@ -197,7 +199,7 @@ class AdbcDriver(
                     target_style = style
                     break
 
-        sql, params = statement.compile(placeholder_style=target_style)
+        sql, params = self._get_compiled_sql(statement, target_style)
         params = self._process_parameters(params)
         if statement.is_many:
             return self._execute_many(sql, params, connection=connection, **kwargs)

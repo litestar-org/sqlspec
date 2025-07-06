@@ -213,7 +213,7 @@ class SQL:
         if "config" in kwargs and _config is None:
             _config = kwargs.pop("config")
         self._config = _config or SQLConfig()
-        self._dialect = _dialect or (self._config.dialect if self._config else None)
+        self._dialect = _dialect or self._config.dialect
         self._builder_result_type = _builder_result_type
         self._processed_state: Optional[_ProcessedState] = None
         self._processing_context: Optional[SQLProcessingContext] = None
@@ -243,13 +243,9 @@ class SQL:
         self._process_parameters(*parameters, **kwargs)
 
     def _init_from_sql_object(
-        self,
-        statement: "SQL",
-        dialect: "DialectType",
-        config: "Optional[SQLConfig]",
-        builder_result_type: "Optional[type]",
+        self, statement: "SQL", dialect: "DialectType", config: "SQLConfig", builder_result_type: "Optional[type]"
     ) -> None:
-        """Initialize attributes from an existing SQL object."""
+        """Initialize from an existing SQL object."""
         self._statement = statement._statement
         self._dialect = dialect or statement._dialect
         self._config = config or statement._config
@@ -266,12 +262,12 @@ class SQL:
         self._filters.extend(statement._filters)
 
     def _init_from_str_or_expression(self, statement: "Union[str, exp.Expression]") -> None:
-        """Initialize attributes from a SQL string or expression."""
+        """Initialize from a string or expression."""
         if isinstance(statement, str):
             self._raw_sql = statement
             self._statement = self._to_expression(statement)
         else:
-            self._raw_sql = statement.sql(dialect=self._dialect)  # pyright: ignore
+            self._raw_sql = statement.sql(dialect=self._dialect)
             self._statement = statement
 
     def _load_from_existing_state(self, existing_state: "dict[str, Any]") -> None:
@@ -285,8 +281,8 @@ class SQL:
         self._original_parameters = existing_state.get("original_parameters", self._original_parameters)
 
     def _set_original_parameters(self, *parameters: Any) -> None:
-        """Store the original parameters for compatibility."""
-        if len(parameters) == 0 or (len(parameters) == 1 and is_statement_filter(parameters[0])):
+        """Set the original parameters."""
+        if not parameters or (len(parameters) == 1 and is_statement_filter(parameters[0])):
             self._original_parameters = None
         elif len(parameters) == 1 and isinstance(parameters[0], (list, tuple)):
             self._original_parameters = parameters[0]
@@ -294,7 +290,7 @@ class SQL:
             self._original_parameters = parameters
 
     def _process_parameters(self, *parameters: Any, **kwargs: Any) -> None:
-        """Process positional and keyword arguments for parameters and filters."""
+        """Process and categorize parameters."""
         for param in parameters:
             self._process_parameter_item(param)
 
@@ -307,9 +303,7 @@ class SQL:
             else:
                 self._positional_params.append(param_value)
 
-        for key, value in kwargs.items():
-            if not key.startswith("_"):
-                self._named_params[key] = value
+        self._named_params.update({k: v for k, v in kwargs.items() if not k.startswith("_")})
 
     def _cache_key(self) -> str:
         """Generate a cache key for the current SQL state."""
@@ -553,12 +547,6 @@ class SQL:
                 and is_dict(result.context.merged_parameters)
             ):
                 result.context.merged_parameters = self._denormalize_colon_params(result.context.merged_parameters)
-        else:
-            logger.debug(
-                "No denormalization needed: mapping=%s, original=%s",
-                bool(self._placeholder_mapping),
-                bool(self._original_sql),
-            )
 
         return processed_sql, result
 

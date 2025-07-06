@@ -60,6 +60,7 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             config: SQL statement configuration
             default_row_type: Default row type for results (DictRow, TupleRow, etc.)
         """
+        super().__init__()
         self.connection = connection
         self.config = config or SQLConfig()
         self.default_row_type = default_row_type or dict[str, Any]

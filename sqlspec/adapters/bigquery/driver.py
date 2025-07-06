@@ -24,6 +24,7 @@ from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
+    SyncAdapterCacheMixin,
     SyncPipelinedExecutionMixin,
     SyncStorageMixin,
     ToSchemaMixin,
@@ -57,6 +58,7 @@ TIMESTAMP_ERROR_MSG_LENGTH = 189  # Length check for timestamp parsing error
 
 class BigQueryDriver(
     SyncDriverAdapterProtocol["BigQueryConnection", RowT],
+    SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
     SyncStorageMixin,
@@ -342,7 +344,7 @@ class BigQueryDriver(
         This is now just a pass-through since the core parameter generation
         has been fixed to generate BigQuery-compatible parameter names.
         """
-        return statement.compile(placeholder_style=target_style)
+        return self._get_compiled_sql(statement, target_style)
 
     def _execute_statement(
         self, statement: SQL, connection: Optional[BigQueryConnection] = None, **kwargs: Any
