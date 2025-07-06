@@ -29,7 +29,7 @@ async def test_async_connection(oracle_23ai_service: OracleService) -> None:
             async with conn.cursor() as cur:
                 await cur.execute("SELECT 1 FROM dual")  # Oracle uses FROM dual
                 result = await cur.fetchone()
-                assert result == (1,)
+                assert result == (1)
     finally:
         await pool.close()
 
@@ -51,7 +51,7 @@ async def test_async_connection(oracle_23ai_service: OracleService) -> None:
             async with conn.cursor() as cur:
                 await cur.execute("SELECT 1 FROM dual")
                 result = await cur.fetchone()
-                assert result == (1,)
+                assert result == (1)
     finally:
         await pool.close()
 
@@ -77,7 +77,7 @@ def test_sync_connection(oracle_23ai_service: OracleService) -> None:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1 FROM dual")  # Oracle uses FROM dual
                 result = cur.fetchone()
-                assert result == (1,)
+                assert result == (1)
     finally:
         pool.close()
 
@@ -99,6 +99,6 @@ def test_sync_connection(oracle_23ai_service: OracleService) -> None:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1 FROM dual")
                 result = cur.fetchone()
-                assert result == (1,)
+                assert result == (1)
     finally:
         pool.close()

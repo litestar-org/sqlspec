@@ -22,7 +22,7 @@ def test_ctas_preserves_parameter_names() -> None:
     # Build and check
     safe_query = ctas_builder.build()
     # Disable validation for DDL operations
-    config = SQLConfig(enable_validation=False, strict_mode=False)
+    config = SQLConfig(enable_validation=False)
     sql_statement = SQL(safe_query.sql, parameters=safe_query.parameters, config=config)
 
     # Parameters should preserve original names
@@ -77,7 +77,7 @@ def test_mixed_parameter_style_normalization() -> None:
 
     # Test just positional - returns tuple
     sql2 = SQL("SELECT * FROM users WHERE id = ?", 123)
-    assert sql2.parameters == (123,)
+    assert sql2.parameters == (123)
 
     # Test just named - returns dict
     sql3 = SQL("SELECT * FROM users WHERE status = :active", active="enabled")

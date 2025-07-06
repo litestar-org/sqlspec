@@ -115,7 +115,7 @@ def test_extras_handling(init_kwargs: dict[str, Any], expected_extras: dict[str,
 
 @pytest.mark.parametrize(
     "statement_config,expected_type",
-    [(None, SQLConfig), (SQLConfig(), SQLConfig), (SQLConfig(strict_mode=True), SQLConfig)],
+    [(None, SQLConfig), (SQLConfig(), SQLConfig), (SQLConfig(parse_errors_as_warnings=False), SQLConfig)],
     ids=["default", "empty", "custom"],
 )
 def test_statement_config_initialization(statement_config: "SQLConfig | None", expected_type: type[SQLConfig]) -> None:
@@ -206,12 +206,12 @@ def test_provide_session_with_custom_config(mock_connect: MagicMock) -> None:
     mock_connect.return_value = mock_connection
 
     # Custom statement config with parameter styles already set
-    custom_config = SQLConfig(allowed_parameter_styles=("qmark",), target_parameter_style="qmark")
+    custom_config = SQLConfig(allowed_parameter_styles=("qmark"), target_parameter_style="qmark")
     config = SqliteConfig(database=":memory:", statement_config=custom_config)
 
     with config.provide_session() as session:
         # Should use the custom config's parameter styles
-        assert session.config.allowed_parameter_styles == ("qmark",)
+        assert session.config.allowed_parameter_styles == ("qmark")
         assert session.config.target_parameter_style == "qmark"
 
 

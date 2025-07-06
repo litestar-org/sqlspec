@@ -21,7 +21,7 @@ def adbc_postgresql_batch_session(postgres_service: PostgresService) -> Generato
     config = AdbcConfig(
         uri=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
         driver_name="adbc_driver_postgresql",
-        statement_config=SQLConfig(strict_mode=False),
+        statement_config=SQLConfig(),
     )
 
     with config.provide_session() as session:
@@ -42,7 +42,7 @@ def adbc_postgresql_batch_session(postgres_service: PostgresService) -> Generato
 @pytest.fixture
 def adbc_sqlite_batch_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session for batch operation testing."""
-    config = AdbcConfig(uri=":memory:", driver_name="adbc_driver_sqlite", statement_config=SQLConfig(strict_mode=False))
+    config = AdbcConfig(uri=":memory:", driver_name="adbc_driver_sqlite", statement_config=SQLConfig())
 
     with config.provide_session() as session:
         # Create test table
@@ -186,7 +186,7 @@ def test_postgresql_execute_many_transaction(adbc_postgresql_batch_session: Adbc
 
         # Verify within transaction
         result = adbc_postgresql_batch_session.execute(
-            "SELECT COUNT(*) as count FROM test_batch WHERE category = $1", ("T",)
+            "SELECT COUNT(*) as count FROM test_batch WHERE category = $1", ("T")
         )
         assert result.data[0]["count"] == 3
 

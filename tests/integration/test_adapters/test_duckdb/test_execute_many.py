@@ -12,7 +12,7 @@ from sqlspec.statement.sql import SQLConfig
 @pytest.fixture
 def duckdb_batch_session() -> "Generator[DuckDBDriver, None, None]":
     """Create a DuckDB session for batch operation testing."""
-    config = DuckDBConfig(database=":memory:", statement_config=SQLConfig(strict_mode=False))
+    config = DuckDBConfig(database=":memory:", statement_config=SQLConfig())
 
     with config.provide_session() as session:
         # Create test table
@@ -108,7 +108,7 @@ def test_duckdb_execute_many_mixed_types(duckdb_batch_session: DuckDBDriver) -> 
     assert null_result.data[0]["name"] == "Another Item"
 
     # Verify float value was stored correctly
-    float_result = duckdb_batch_session.execute("SELECT * FROM test_batch WHERE name = ?", ("Float Item",))
+    float_result = duckdb_batch_session.execute("SELECT * FROM test_batch WHERE name = ?", ("Float Item"))
     assert len(float_result.data) == 1
     assert float_result.data[0]["value"] == 78  # DuckDB converts float to int for INTEGER column
 
@@ -128,7 +128,7 @@ def test_duckdb_execute_many_delete(duckdb_batch_session: DuckDBDriver) -> None:
     )
 
     # Delete specific items by name
-    delete_params = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
+    delete_params = [("Delete 1"), ("Delete 2"), ("Delete 4")]
 
     result = duckdb_batch_session.execute_many("DELETE FROM test_batch WHERE name = ?", delete_params)
 
@@ -185,7 +185,7 @@ def test_duckdb_execute_many_with_sql_object(duckdb_batch_session: DuckDBDriver)
     assert result.rows_affected == 3
 
     # Verify data
-    check_result = duckdb_batch_session.execute("SELECT COUNT(*) as count FROM test_batch WHERE category = ?", ("SOB",))
+    check_result = duckdb_batch_session.execute("SELECT COUNT(*) as count FROM test_batch WHERE category = ?", ("SOB"))
     assert check_result.data[0]["count"] == 3
 
 

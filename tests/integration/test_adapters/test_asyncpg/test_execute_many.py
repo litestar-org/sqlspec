@@ -19,7 +19,7 @@ async def asyncpg_batch_session(postgres_service: PostgresService) -> "AsyncGene
         user=postgres_service.user,
         password=postgres_service.password,
         database=postgres_service.database,
-        statement_config=SQLConfig(strict_mode=False, enable_validation=False),
+        statement_config=SQLConfig(enable_validation=False),
     )
 
     async with config.provide_session() as session:
@@ -149,7 +149,7 @@ async def test_asyncpg_execute_many_delete(asyncpg_batch_session: AsyncpgDriver)
     )
 
     # Delete specific items by name
-    delete_params = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
+    delete_params = [("Delete 1"), ("Delete 2"), ("Delete 4")]
 
     result = await asyncpg_batch_session.execute_many("DELETE FROM test_batch WHERE name = $1", delete_params)
 
@@ -184,7 +184,7 @@ async def test_asyncpg_execute_many_large_batch(asyncpg_batch_session: AsyncpgDr
 
     # Verify some specific values
     sample_result = await asyncpg_batch_session.execute(
-        "SELECT * FROM test_batch WHERE name = ANY($1) ORDER BY value", (["Item 100", "Item 500", "Item 999"],)
+        "SELECT * FROM test_batch WHERE name = ANY($1) ORDER BY value", (["Item 100", "Item 500", "Item 999"])
     )
     assert len(sample_result) == 3
     assert sample_result[0]["value"] == 1000  # Item 100
@@ -208,7 +208,7 @@ async def test_asyncpg_execute_many_with_sql_object(asyncpg_batch_session: Async
 
     # Verify data
     check_result = await asyncpg_batch_session.execute(
-        "SELECT COUNT(*) as count FROM test_batch WHERE category = $1", ("SOB",)
+        "SELECT COUNT(*) as count FROM test_batch WHERE category = $1", ("SOB")
     )
     assert check_result[0]["count"] == 3
 
@@ -240,7 +240,7 @@ async def test_asyncpg_execute_many_with_returning(asyncpg_batch_session: Asyncp
         )
 
         check_result = await asyncpg_batch_session.execute(
-            "SELECT COUNT(*) as count FROM test_batch WHERE category = $1", ("RET",)
+            "SELECT COUNT(*) as count FROM test_batch WHERE category = $1", ("RET")
         )
         assert check_result[0]["count"] == 3
 

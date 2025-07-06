@@ -97,8 +97,8 @@ class TestSQLCache:
         # Start threads
         threads = []
         for i in range(5):
-            t1 = threading.Thread(target=writer, args=(i,))
-            t2 = threading.Thread(target=reader, args=(i,))
+            t1 = threading.Thread(target=writer, args=(i))
+            t2 = threading.Thread(target=reader, args=(i))
             threads.extend([t1, t2])
             t1.start()
             t2.start()

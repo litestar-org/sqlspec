@@ -511,7 +511,7 @@ def test_thread_safety() -> None:
     def worker(worker_id: int) -> None:
         try:
             # Create unique config class per thread
-            config_class = type(f"ThreadConfig{worker_id}", (MockSyncConfig,), {})
+            config_class = type(f"ThreadConfig{worker_id}", (MockSyncConfig), {})
             config = config_class(f"thread_{worker_id}")
 
             # Add config
@@ -523,7 +523,7 @@ def test_thread_safety() -> None:
         except Exception as e:
             errors.append((worker_id, e))
 
-    threads = [threading.Thread(target=worker, args=(i,)) for i in range(10)]
+    threads = [threading.Thread(target=worker, args=(i)) for i in range(10)]
 
     for thread in threads:
         thread.start()

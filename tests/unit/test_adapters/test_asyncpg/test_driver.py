@@ -57,7 +57,7 @@ def test_driver_initialization() -> None:
     assert driver.config is config
     assert driver.dialect == "postgres"
     assert driver.default_parameter_style == ParameterStyle.NUMERIC
-    assert driver.supported_parameter_styles == (ParameterStyle.NUMERIC,)
+    assert driver.supported_parameter_styles == (ParameterStyle.NUMERIC)
 
 
 def test_driver_default_row_type() -> None:
@@ -293,7 +293,7 @@ async def test_execute_many(driver: AsyncpgDriver, mock_connection: AsyncMock) -
     [
         ([[1, "a"], [2, "b"]], [(1, "a"), (2, "b")]),
         ([(1, "a"), (2, "b")], [(1, "a"), (2, "b")]),
-        ([1, 2, 3], [(1,), (2,), (3,)]),
+        ([1, 2, 3], [(1), (2), (3)]),
         ([None, None], [(), ()]),
     ],
     ids=["list_of_lists", "list_of_tuples", "single_values", "none_values"],
@@ -337,7 +337,7 @@ async def test_execute_script(driver: AsyncpgDriver, mock_connection: AsyncMock)
     [
         ([1, "test"], (1, "test")),
         ((1, "test"), (1, "test")),
-        ({"key": "value"}, ("value",)),  # Dict converted to positional
+        ({"key": "value"}, ("value")),  # Dict converted to positional
         ({"param_0": "test", "param_1": 123}, ("test", 123)),  # param_N style dict
         ([], ()),
         (None, ()),
@@ -456,7 +456,7 @@ async def test_as_many_parameter_conversion(driver: AsyncpgDriver, mock_connecti
     statement = SQL("INSERT INTO users (name) VALUES ($1)").as_many([["Alice"], ["Bob"]])
     await driver._execute_statement(statement)
 
-    mock_connection.executemany.assert_called_once_with("INSERT INTO users (name) VALUES ($1)", [("Alice",), ("Bob",)])
+    mock_connection.executemany.assert_called_once_with("INSERT INTO users (name) VALUES ($1)", [("Alice"), ("Bob")])
 
 
 @pytest.mark.asyncio

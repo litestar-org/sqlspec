@@ -33,7 +33,7 @@ def mock_asyncmy_connection() -> AsyncMock:
 @pytest.fixture
 def asyncmy_driver(mock_asyncmy_connection: AsyncMock) -> AsyncmyDriver:
     """Create an Asyncmy driver with mocked connection."""
-    config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
+    config = SQLConfig()  # Disable strict mode for unit tests
     return AsyncmyDriver(connection=mock_asyncmy_connection, config=config)
 
 
@@ -102,7 +102,7 @@ async def test_asyncmy_driver_execute_statement_select(
     # Get the mock cursor from the fixture and configure it
     mock_cursor = mock_asyncmy_connection.cursor()
     mock_cursor.fetchall.return_value = [(1, "test", "test@example.com")]  # Match the 3 columns
-    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
+    mock_cursor.description = ["id", "name", "email"]
 
     # Reset call count after setup
     mock_asyncmy_connection.cursor.reset_mock()
@@ -129,7 +129,7 @@ async def test_asyncmy_driver_fetch_arrow_table_with_parameters(
     """Test Asyncmy driver fetch_arrow_table method with parameters."""
     # Get the mock cursor from the fixture and configure it
     mock_cursor = mock_asyncmy_connection.cursor()
-    mock_cursor.description = [(col,) for col in ["id", "name"]]  # Match the SELECT query
+    mock_cursor.description = ["id", "name"]  # Match the SELECT query
     mock_cursor.fetchall.return_value = [(42, "Test User")]
 
     # Reset call count after setup
@@ -168,7 +168,7 @@ async def test_asyncmy_driver_to_parquet(
 ) -> None:
     """Test to_parquet writes correct data to a Parquet file (async)."""
     mock_cursor = AsyncMock()
-    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
+    mock_cursor.description = ["id", "name", "email"]
     mock_cursor.fetchall.return_value = [(1, "Alice"), (2, "Bob")]
 
     # cursor() in asyncmy is synchronous and returns the cursor directly

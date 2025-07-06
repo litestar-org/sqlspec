@@ -102,7 +102,7 @@ def test_select(duckdb_session: DuckDBDriver, params: Any, style: ParamStyle) ->
     # Test select with a WHERE clause
     if style == "tuple_binds":
         select_where_sql = "SELECT id FROM test_table WHERE name = ?"
-        where_params = ("test_name",)
+        where_params = "test_name"
     else:
         select_where_sql = "SELECT id FROM test_table WHERE name = :name"
         where_params = {"name": "test_name"}
@@ -139,7 +139,7 @@ def test_select_value(duckdb_session: DuckDBDriver, params: Any, style: ParamSty
     # Test select value
     if style == "tuple_binds":
         value_sql = "SELECT name FROM test_table WHERE id = ?"
-        value_params = (1,)
+        value_params = 1
     else:
         value_sql = "SELECT name FROM test_table WHERE id = :id"
         value_params = {"id": 1}
@@ -245,7 +245,7 @@ def test_update_operation(duckdb_session: DuckDBDriver) -> None:
     assert update_result.rows_affected == 1
 
     # Verify the update
-    select_result = duckdb_session.execute("SELECT name FROM test_table WHERE id = ?", (42,))
+    select_result = duckdb_session.execute("SELECT name FROM test_table WHERE id = ?", (42))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert select_result.data[0]["name"] == "updated_name"
@@ -260,7 +260,7 @@ def test_delete_operation(duckdb_session: DuckDBDriver) -> None:
     assert insert_result.rows_affected == 1
 
     # Delete the record
-    delete_result = duckdb_session.execute("DELETE FROM test_table WHERE id = ?", (99,))
+    delete_result = duckdb_session.execute("DELETE FROM test_table WHERE id = ?", (99))
     assert isinstance(delete_result, SQLResult)
     assert delete_result.rows_affected == 1
 

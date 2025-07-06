@@ -30,7 +30,7 @@ def mock_adbc_connection() -> Mock:
 def mock_cursor() -> Mock:
     """Create a mock ADBC cursor."""
     mock_cursor = Mock(spec=Cursor)
-    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
+    mock_cursor.description = ["id", "name", "email"]
     mock_cursor.rowcount = 1
     mock_cursor.fetchall.return_value = [(1, "John Doe", "john@example.com"), (2, "Jane Smith", "jane@example.com")]
     return mock_cursor
@@ -39,7 +39,7 @@ def mock_cursor() -> Mock:
 @pytest.fixture
 def adbc_driver(mock_adbc_connection: Mock) -> AdbcDriver:
     """Create an ADBC driver with mock connection."""
-    return AdbcDriver(connection=mock_adbc_connection, config=SQLConfig(strict_mode=False))
+    return AdbcDriver(connection=mock_adbc_connection, config=SQLConfig())
 
 
 def test_adbc_driver_initialization(mock_adbc_connection: Mock) -> None:
@@ -56,12 +56,12 @@ def test_adbc_driver_initialization(mock_adbc_connection: Mock) -> None:
 
 def test_adbc_driver_initialization_with_config(mock_adbc_connection: Mock) -> None:
     """Test AdbcDriver initialization with custom configuration."""
-    config = SQLConfig(strict_mode=False)
+    config = SQLConfig()
 
     driver = AdbcDriver(connection=mock_adbc_connection, config=config)
 
     # The driver updates the config to include the dialect
-    assert driver.config.strict_mode == config.strict_mode
+    assert driver.config.parse_errors_as_warnings == config.parse_errors_as_warnings
     assert driver.config.dialect == "postgres"  # Added by driver
 
 
@@ -237,7 +237,7 @@ def test_adbc_driver_execute_statement_select(adbc_driver: AdbcDriver, mock_curs
 
     # Setup mock cursor for fetchall
     mock_cursor.fetchall.return_value = [(1, "John Doe", "john@example.com")]
-    mock_cursor.description = [("id",), ("name",), ("email",)]
+    mock_cursor.description = [("id"), ("name"), ("email")]
 
     # Use PostgreSQL-style placeholders since the mock connection is PostgreSQL
     statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[123])
@@ -390,7 +390,7 @@ def test_adbc_driver_instrumentation_logging(mock_adbc_connection: Mock, mock_cu
 
     mock_adbc_connection.cursor.return_value = mock_cursor
     mock_cursor.fetchall.return_value = [(1, "John")]
-    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
+    mock_cursor.description = ["id", "name", "email"]
 
     statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[123])
     # Parameters argument removed from _execute_statement call
@@ -462,7 +462,7 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
     built_stmt_with_params = adbc_driver._build_statement(string_sql_with_params, params_for_string, _config=sql_config)
     assert isinstance(built_stmt_with_params, SQL)
     assert built_stmt_with_params.sql == string_sql_with_params
-    assert built_stmt_with_params.parameters == (1,)  # Parameters wrapped as tuple by SQL constructor
+    assert built_stmt_with_params.parameters == (1)  # Parameters wrapped as tuple by SQL constructor
 
 
 def test_adbc_driver_fetch_arrow_table_native(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:

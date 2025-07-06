@@ -134,7 +134,7 @@ def test_extras_handling(init_kwargs: dict[str, Any], expected_extras: dict[str,
 
 @pytest.mark.parametrize(
     "statement_config,expected_type",
-    [(None, SQLConfig), (SQLConfig(), SQLConfig), (SQLConfig(strict_mode=True), SQLConfig)],
+    [(None, SQLConfig), (SQLConfig(), SQLConfig), (SQLConfig(parse_errors_as_warnings=False), SQLConfig)],
     ids=["default", "empty", "custom"],
 )
 def test_statement_config_initialization(statement_config: "SQLConfig | None", expected_type: type[SQLConfig]) -> None:

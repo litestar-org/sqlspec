@@ -39,7 +39,7 @@ def oracle_async_session(oracle_23ai_service: OracleService) -> OracleAsyncConfi
 @pytest.mark.parametrize(
     ("params", "style"),
     [
-        pytest.param(("test_name",), "positional_binds", id="positional_binds"),
+        pytest.param(("test_name"), "positional_binds", id="positional_binds"),
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
@@ -81,7 +81,7 @@ async def test_async_insert_returning(oracle_async_session: OracleAsyncConfig, p
 @pytest.mark.parametrize(
     ("params", "style"),
     [
-        pytest.param(("test_name",), "positional_binds", id="positional_binds"),
+        pytest.param(("test_name"), "positional_binds", id="positional_binds"),
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
@@ -126,7 +126,7 @@ async def test_async_select(oracle_async_session: OracleAsyncConfig, params: Any
 @pytest.mark.parametrize(
     ("params", "style"),  # Keep parametrization for structure
     [
-        pytest.param(("test_name",), "positional_binds", id="positional_binds"),
+        pytest.param(("test_name"), "positional_binds", id="positional_binds"),
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
@@ -190,14 +190,14 @@ async def test_async_select_arrow(oracle_async_session: OracleAsyncConfig) -> No
 
         # Insert test record using positional binds
         insert_sql = "INSERT INTO test_table (id, name) VALUES (1, ?)"
-        insert_result = await driver.execute(insert_sql, ("arrow_name",))
+        insert_result = await driver.execute(insert_sql, ("arrow_name"))
         assert isinstance(insert_result, SQLResult)
         assert insert_result.rows_affected == 1
 
         # Test fetch_arrow_table using mixins
         if hasattr(driver, "fetch_arrow_table"):
             select_sql = "SELECT name, id FROM test_table WHERE name = ?"
-            arrow_result = await driver.fetch_arrow_table(select_sql, ("arrow_name",))
+            arrow_result = await driver.fetch_arrow_table(select_sql, ("arrow_name"))
 
             # ArrowResult stores the table in the 'data' attribute, not 'arrow_table'
             assert hasattr(arrow_result, "data")
@@ -299,7 +299,7 @@ async def test_update_operation(oracle_async_session: OracleAsyncConfig) -> None
         await driver.execute_script(sql)
 
         # Insert a record first
-        insert_result = await driver.execute("INSERT INTO test_table (id, name) VALUES (1, ?)", ("original_name",))
+        insert_result = await driver.execute("INSERT INTO test_table (id, name) VALUES (1, ?)", ("original_name"))
         assert isinstance(insert_result, SQLResult)
         assert insert_result.rows_affected == 1
 
@@ -311,7 +311,7 @@ async def test_update_operation(oracle_async_session: OracleAsyncConfig) -> None
         assert update_result.rows_affected == 1
 
         # Verify the update
-        select_result = await driver.execute("SELECT name FROM test_table WHERE name = ?", ("updated_name",))
+        select_result = await driver.execute("SELECT name FROM test_table WHERE name = ?", ("updated_name"))
         assert isinstance(select_result, SQLResult)
         assert select_result.data is not None
         assert select_result.data[0]["NAME"] == "updated_name"  # Oracle returns uppercase column names
@@ -336,12 +336,12 @@ async def test_delete_operation(oracle_async_session: OracleAsyncConfig) -> None
         await driver.execute_script(sql)
 
         # Insert a record first
-        insert_result = await driver.execute("INSERT INTO test_table (id, name) VALUES (1, ?)", ("to_delete",))
+        insert_result = await driver.execute("INSERT INTO test_table (id, name) VALUES (1, ?)", ("to_delete"))
         assert isinstance(insert_result, SQLResult)
         assert insert_result.rows_affected == 1
 
         # Delete the record
-        delete_result = await driver.execute("DELETE FROM test_table WHERE name = ?", ("to_delete",))
+        delete_result = await driver.execute("DELETE FROM test_table WHERE name = ?", ("to_delete"))
         assert isinstance(delete_result, SQLResult)
         assert delete_result.rows_affected == 1
 

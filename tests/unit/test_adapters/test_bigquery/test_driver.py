@@ -59,11 +59,7 @@ def mock_connection() -> MagicMock:
 @pytest.fixture
 def driver(mock_connection: MagicMock) -> BigQueryDriver:
     """Create a BigQuery driver with mocked connection."""
-    config = SQLConfig(
-        allowed_parameter_styles=("named_at", "named_colon", "qmark"),
-        target_parameter_style="named_at",
-        strict_mode=False,
-    )
+    config = SQLConfig(allowed_parameter_styles=("named_at", "named_colon", "qmark"), target_parameter_style="named_at")
     return BigQueryDriver(connection=mock_connection, config=config)
 
 
@@ -79,7 +75,7 @@ def test_driver_initialization() -> None:
     assert driver.config is config
     assert driver.dialect == "bigquery"
     assert driver.default_parameter_style == ParameterStyle.NAMED_AT
-    assert driver.supported_parameter_styles == (ParameterStyle.NAMED_AT,)
+    assert driver.supported_parameter_styles == (ParameterStyle.NAMED_AT)
 
 
 def test_driver_default_row_type() -> None:

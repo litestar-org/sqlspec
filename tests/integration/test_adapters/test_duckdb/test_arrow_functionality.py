@@ -16,7 +16,7 @@ from sqlspec.statement.sql import SQLConfig
 @pytest.fixture
 def duckdb_arrow_session() -> "Generator[DuckDBDriver, None, None]":
     """Create a DuckDB session for Arrow testing."""
-    config = DuckDBConfig(database=":memory:", statement_config=SQLConfig(strict_mode=False))
+    config = DuckDBConfig(database=":memory:", statement_config=SQLConfig())
 
     with config.provide_session() as session:
         # Create test table with various data types
@@ -102,7 +102,7 @@ def test_duckdb_arrow_with_parameters(duckdb_arrow_session: DuckDBDriver) -> Non
 
 def test_duckdb_arrow_empty_result(duckdb_arrow_session: DuckDBDriver) -> None:
     """Test fetch_arrow_table with empty result on DuckDB."""
-    result = duckdb_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow WHERE value > ?", (1000,))
+    result = duckdb_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow WHERE value > ?", (1000))
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows == 0

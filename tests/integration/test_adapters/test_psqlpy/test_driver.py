@@ -56,7 +56,7 @@ async def _manage_table(psqlpy_config: PsqlpyConfig) -> AsyncGenerator[None, Non
 @pytest.mark.parametrize(
     ("params", "style"),
     [
-        pytest.param(("test_name",), "tuple_binds", id="tuple_binds"),
+        pytest.param(("test_name"), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
@@ -80,7 +80,7 @@ async def test_insert_returning_param_styles(psqlpy_config: PsqlpyConfig, params
 @pytest.mark.parametrize(
     ("params", "style"),
     [
-        pytest.param(("test_name",), "tuple_binds", id="tuple_binds"),
+        pytest.param(("test_name"), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
@@ -89,7 +89,7 @@ async def test_select_param_styles(psqlpy_config: PsqlpyConfig, params: Any, sty
     # Insert test data first (using tuple style for simplicity here)
     insert_sql = "INSERT INTO test_table (name) VALUES (?)"
     async with psqlpy_config.provide_session() as driver:
-        insert_result = await driver.execute(insert_sql, ("test_name",))
+        insert_result = await driver.execute(insert_sql, ("test_name"))
         assert isinstance(insert_result, SQLResult)
         assert insert_result.rows_affected == -1  # psqlpy doesn't provide this info
 
@@ -114,7 +114,7 @@ async def test_insert_update_delete(psqlpy_config: PsqlpyConfig) -> None:
     async with psqlpy_config.provide_session() as driver:
         # Insert
         insert_sql = "INSERT INTO test_table (name) VALUES (?)"
-        insert_result = await driver.execute(insert_sql, ("initial_name",))
+        insert_result = await driver.execute(insert_sql, ("initial_name"))
         assert isinstance(insert_result, SQLResult)
         # Note: psqlpy may not report rows_affected for simple INSERT
         # psqlpy doesn't provide rows_affected for DML operations (returns -1)
@@ -122,7 +122,7 @@ async def test_insert_update_delete(psqlpy_config: PsqlpyConfig) -> None:
 
         # Verify Insert
         select_sql = "SELECT name FROM test_table WHERE name = ?"
-        select_result = await driver.execute(select_sql, ("initial_name",))
+        select_result = await driver.execute(select_sql, ("initial_name"))
         assert isinstance(select_result, SQLResult)
         assert select_result.data is not None
         assert len(select_result.data) == 1
@@ -135,26 +135,26 @@ async def test_insert_update_delete(psqlpy_config: PsqlpyConfig) -> None:
         assert update_result.rows_affected == -1  # psqlpy limitation
 
         # Verify Update
-        updated_result = await driver.execute(select_sql, ("updated_name",))
+        updated_result = await driver.execute(select_sql, ("updated_name"))
         assert isinstance(updated_result, SQLResult)
         assert updated_result.data is not None
         assert len(updated_result.data) == 1
         assert updated_result.data[0]["name"] == "updated_name"
 
         # Verify old name no longer exists
-        old_result = await driver.execute(select_sql, ("initial_name",))
+        old_result = await driver.execute(select_sql, ("initial_name"))
         assert isinstance(old_result, SQLResult)
         assert old_result.data is not None
         assert len(old_result.data) == 0
 
         # Delete
         delete_sql = "DELETE FROM test_table WHERE name = ?"
-        delete_result = await driver.execute(delete_sql, ("updated_name",))
+        delete_result = await driver.execute(delete_sql, ("updated_name"))
         assert isinstance(delete_result, SQLResult)
         assert delete_result.rows_affected == -1  # psqlpy limitation
 
         # Verify Delete
-        final_result = await driver.execute(select_sql, ("updated_name",))
+        final_result = await driver.execute(select_sql, ("updated_name"))
         assert isinstance(final_result, SQLResult)
         assert final_result.data is not None
         assert len(final_result.data) == 0
@@ -165,7 +165,7 @@ async def test_select_methods(psqlpy_config: PsqlpyConfig) -> None:
     async with psqlpy_config.provide_session() as driver:
         # Insert multiple records using execute_many
         insert_sql = "INSERT INTO test_table (name) VALUES ($1)"
-        params_list = [("name1",), ("name2",)]
+        params_list = [("name1"), ("name2")]
         many_result = await driver.execute_many(insert_sql, params_list)
         assert isinstance(many_result, SQLResult)
         assert many_result.rows_affected == -1  # psqlpy doesn't provide this for execute_many
@@ -179,7 +179,7 @@ async def test_select_methods(psqlpy_config: PsqlpyConfig) -> None:
         assert select_result.data[1]["name"] == "name2"
 
         # Test select one (using get_first helper)
-        single_result = await driver.execute("SELECT name FROM test_table WHERE name = ?", ("name1",))
+        single_result = await driver.execute("SELECT name FROM test_table WHERE name = ?", ("name1"))
         assert isinstance(single_result, SQLResult)
         assert single_result.data is not None
         assert len(single_result.data) == 1
@@ -188,7 +188,7 @@ async def test_select_methods(psqlpy_config: PsqlpyConfig) -> None:
         assert first_row["name"] == "name1"
 
         # Test select one or none (found)
-        found_result = await driver.execute("SELECT name FROM test_table WHERE name = ?", ("name2",))
+        found_result = await driver.execute("SELECT name FROM test_table WHERE name = ?", ("name2"))
         assert isinstance(found_result, SQLResult)
         assert found_result.data is not None
         assert len(found_result.data) == 1
@@ -197,14 +197,14 @@ async def test_select_methods(psqlpy_config: PsqlpyConfig) -> None:
         assert found_first["name"] == "name2"
 
         # Test select one or none (not found)
-        missing_result = await driver.execute("SELECT name FROM test_table WHERE name = ?", ("missing",))
+        missing_result = await driver.execute("SELECT name FROM test_table WHERE name = ?", ("missing"))
         assert isinstance(missing_result, SQLResult)
         assert missing_result.data is not None
         assert len(missing_result.data) == 0
         assert missing_result.get_first() is None
 
         # Test select value
-        value_result = await driver.execute("SELECT id FROM test_table WHERE name = ?", ("name1",))
+        value_result = await driver.execute("SELECT id FROM test_table WHERE name = ?", ("name1"))
         assert isinstance(value_result, SQLResult)
         assert value_result.data is not None
         assert len(value_result.data) == 1
@@ -233,7 +233,7 @@ async def test_multiple_positional_parameters(psqlpy_config: PsqlpyConfig) -> No
     async with psqlpy_config.provide_session() as driver:
         # Insert multiple records using execute_many
         insert_sql = "INSERT INTO test_table (name) VALUES (?)"
-        params_list = [("param1",), ("param2",)]
+        params_list = [("param1"), ("param2")]
         many_result = await driver.execute_many(insert_sql, params_list)
         assert isinstance(many_result, SQLResult)
         assert many_result.rows_affected == -1  # psqlpy doesn't provide this for execute_many
@@ -357,7 +357,7 @@ async def test_regex_parameter_binding_complex_case(psqlpy_config: PsqlpyConfig)
     async with psqlpy_config.provide_session() as driver:
         # Insert test records using execute_many
         insert_sql = "INSERT INTO test_table (name) VALUES (?)"
-        params_list = [("complex1",), ("complex2",), ("complex3",)]
+        params_list = [("complex1"), ("complex2"), ("complex3")]
         many_result = await driver.execute_many(insert_sql, params_list)
         assert isinstance(many_result, SQLResult)
         assert many_result.rows_affected == -1  # psqlpy limitation
@@ -412,7 +412,7 @@ async def test_execute_many_insert(psqlpy_config: PsqlpyConfig) -> None:
     """Test execute_many functionality for batch inserts."""
     async with psqlpy_config.provide_session() as driver:
         insert_sql = "INSERT INTO test_table (name) VALUES (?)"
-        params_list = [("many_name1",), ("many_name2",), ("many_name3",)]
+        params_list = [("many_name1"), ("many_name2"), ("many_name3")]
 
         result = await driver.execute_many(insert_sql, params_list)
         assert isinstance(result, SQLResult)
@@ -429,7 +429,7 @@ async def test_update_operation(psqlpy_config: PsqlpyConfig) -> None:
     """Test UPDATE operations."""
     async with psqlpy_config.provide_session() as driver:
         # Insert a record first
-        insert_result = await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("original_name",))
+        insert_result = await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("original_name"))
         assert isinstance(insert_result, SQLResult)
         assert insert_result.rows_affected == -1  # psqlpy limitation
 
@@ -439,7 +439,7 @@ async def test_update_operation(psqlpy_config: PsqlpyConfig) -> None:
         assert update_result.rows_affected == -1  # psqlpy limitation
 
         # Verify the update
-        select_result = await driver.execute("SELECT name FROM test_table WHERE id = ?", (1,))
+        select_result = await driver.execute("SELECT name FROM test_table WHERE id = ?", (1))
         assert isinstance(select_result, SQLResult)
         assert select_result.data is not None
         assert select_result.data[0]["name"] == "updated_name"
@@ -449,12 +449,12 @@ async def test_delete_operation(psqlpy_config: PsqlpyConfig) -> None:
     """Test DELETE operations."""
     async with psqlpy_config.provide_session() as driver:
         # Insert a record first
-        insert_result = await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("to_delete",))
+        insert_result = await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("to_delete"))
         assert isinstance(insert_result, SQLResult)
         assert insert_result.rows_affected == -1  # psqlpy limitation
 
         # Delete the record
-        delete_result = await driver.execute("DELETE FROM test_table WHERE id = ?", (1,))
+        delete_result = await driver.execute("DELETE FROM test_table WHERE id = ?", (1))
         assert isinstance(delete_result, SQLResult)
         assert delete_result.rows_affected == -1  # psqlpy limitation
 
@@ -469,8 +469,8 @@ async def test_delete_operation(psqlpy_config: PsqlpyConfig) -> None:
 async def test_psqlpy_fetch_arrow_table(psqlpy_config: PsqlpyConfig) -> None:
     """Integration test: fetch_arrow_table returns ArrowResult with correct pyarrow.Table."""
     async with psqlpy_config.provide_session() as driver:
-        await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("arrow1",))
-        await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("arrow2",))
+        await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("arrow1"))
+        await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("arrow2"))
         statement = SQL("SELECT name FROM test_table ORDER BY name")
         result = await driver.fetch_arrow_table(statement)
         assert isinstance(result, ArrowResult)
@@ -485,8 +485,8 @@ async def test_psqlpy_fetch_arrow_table(psqlpy_config: PsqlpyConfig) -> None:
 async def test_psqlpy_to_parquet(psqlpy_config: PsqlpyConfig) -> None:
     """Integration test: to_parquet writes correct data to a Parquet file."""
     async with psqlpy_config.provide_session() as driver:
-        await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("pq1",))
-        await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("pq2",))
+        await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("pq1"))
+        await driver.execute("INSERT INTO test_table (name) VALUES (?)", ("pq2"))
         statement = SQL("SELECT name FROM test_table ORDER BY name")
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = Path(tmpdir) / "partitioned_data"

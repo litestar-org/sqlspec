@@ -158,7 +158,7 @@ def test_feature_flags(feature_flag: str, value: bool) -> None:
 
 @pytest.mark.parametrize(
     "statement_config,expected_type",
-    [(None, SQLConfig), (SQLConfig(), SQLConfig), (SQLConfig(strict_mode=True), SQLConfig)],
+    [(None, SQLConfig), (SQLConfig(), SQLConfig), (SQLConfig(parse_errors_as_warnings=False), SQLConfig)],
     ids=["default", "empty", "custom"],
 )
 def test_statement_config_initialization(statement_config: "SQLConfig | None", expected_type: type[SQLConfig]) -> None:
@@ -249,7 +249,7 @@ def test_provide_session() -> None:
             assert config.dataset_id == "test_dataset"
 
             # Check parameter style injection
-            assert session.config.allowed_parameter_styles == ("named_at",)
+            assert session.config.allowed_parameter_styles == ("named_at")
             assert session.config.target_parameter_style == "named_at"
 
             # BigQuery client doesn't have a close method to assert on
@@ -289,7 +289,7 @@ def test_supports_connection_pooling() -> None:
 # Parameter Style Tests
 def test_supported_parameter_styles() -> None:
     """Test supported parameter styles class attribute."""
-    assert BigQueryConfig.supported_parameter_styles == ("named_at",)
+    assert BigQueryConfig.supported_parameter_styles == ("named_at")
 
 
 def test_preferred_parameter_style() -> None:

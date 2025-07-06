@@ -47,7 +47,7 @@ async def test_aiosqlite_basic_crud(aiosqlite_session: AiosqliteDriver) -> None:
     assert insert_result.rows_affected == 1
 
     # SELECT
-    select_result = await aiosqlite_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_name",))
+    select_result = await aiosqlite_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_name"))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
@@ -62,13 +62,13 @@ async def test_aiosqlite_basic_crud(aiosqlite_session: AiosqliteDriver) -> None:
     assert update_result.rows_affected == 1
 
     # Verify UPDATE
-    verify_result = await aiosqlite_session.execute("SELECT value FROM test_table WHERE name = ?", ("test_name",))
+    verify_result = await aiosqlite_session.execute("SELECT value FROM test_table WHERE name = ?", ("test_name"))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
 
     # DELETE
-    delete_result = await aiosqlite_session.execute("DELETE FROM test_table WHERE name = ?", ("test_name",))
+    delete_result = await aiosqlite_session.execute("DELETE FROM test_table WHERE name = ?", ("test_name"))
     assert isinstance(delete_result, SQLResult)
     assert delete_result.rows_affected == 1
 
@@ -82,7 +82,7 @@ async def test_aiosqlite_basic_crud(aiosqlite_session: AiosqliteDriver) -> None:
 @pytest.mark.parametrize(
     ("params", "style"),
     [
-        pytest.param(("test_value",), "tuple_binds", id="tuple_binds"),
+        pytest.param(("test_value"), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
     ],
 )
@@ -90,7 +90,7 @@ async def test_aiosqlite_basic_crud(aiosqlite_session: AiosqliteDriver) -> None:
 async def test_aiosqlite_parameter_styles(aiosqlite_session: AiosqliteDriver, params: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles."""
     # Insert test data
-    await aiosqlite_session.execute("INSERT INTO test_table (name) VALUES (?)", ("test_value",))
+    await aiosqlite_session.execute("INSERT INTO test_table (name) VALUES (?)", ("test_value"))
 
     # Test parameter style
     if style == "tuple_binds":
@@ -180,7 +180,7 @@ async def test_aiosqlite_result_methods(aiosqlite_session: AiosqliteDriver) -> N
     assert not result.is_empty()
 
     # Test empty result
-    empty_result = await aiosqlite_session.execute("SELECT * FROM test_table WHERE name = ?", ("nonexistent",))
+    empty_result = await aiosqlite_session.execute("SELECT * FROM test_table WHERE name = ?", ("nonexistent"))
     assert isinstance(empty_result, SQLResult)
     assert empty_result.is_empty()
     assert empty_result.get_first() is None
@@ -255,7 +255,7 @@ async def test_aiosqlite_transactions(aiosqlite_session: AiosqliteDriver) -> Non
 
     # Verify data is committed
     result = await aiosqlite_session.execute(
-        "SELECT COUNT(*) as count FROM test_table WHERE name = ?", ("transaction_test",)
+        "SELECT COUNT(*) as count FROM test_table WHERE name = ?", ("transaction_test")
     )
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -329,7 +329,7 @@ async def test_aiosqlite_schema_operations(aiosqlite_session: AiosqliteDriver) -
 
     # Insert data into new table
     insert_result = await aiosqlite_session.execute(
-        "INSERT INTO schema_test (description) VALUES (?)", ("test description",)
+        "INSERT INTO schema_test (description) VALUES (?)", ("test description")
     )
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
@@ -354,7 +354,7 @@ async def test_aiosqlite_column_names_and_metadata(aiosqlite_session: AiosqliteD
 
     # Test column names
     result = await aiosqlite_session.execute(
-        "SELECT id, name, value, created_at FROM test_table WHERE name = ?", ("metadata_test",)
+        "SELECT id, name, value, created_at FROM test_table WHERE name = ?", ("metadata_test")
     )
     assert isinstance(result, SQLResult)
     assert result.column_names == ["id", "name", "value", "created_at"]
@@ -385,7 +385,7 @@ async def test_aiosqlite_with_schema_type(aiosqlite_session: AiosqliteDriver) ->
 
     # Query with schema type
     result = await aiosqlite_session.execute(
-        "SELECT id, name, value FROM test_table WHERE name = ?", ("schema_test",), schema_type=TestRecord
+        "SELECT id, name, value FROM test_table WHERE name = ?", ("schema_test"), schema_type=TestRecord
     )
 
     assert isinstance(result, SQLResult)
@@ -447,10 +447,7 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDr
     except Exception:
         # JSON1 extension might not be available
         pass
-
-    # Test ATTACH/DETACH database (in-memory) with non-strict mode
-    # Use a config with strict_mode disabled, parsing and validation disabled for statements that SQLGlot can't parse
-    non_strict_config = SQLConfig(strict_mode=False, enable_parsing=False, enable_validation=False)
+    non_strict_config = SQLConfig(enable_parsing=False, enable_validation=False)
 
     await aiosqlite_session.execute("ATTACH DATABASE ':memory:' AS temp_db", _config=non_strict_config)
     await aiosqlite_session.execute(

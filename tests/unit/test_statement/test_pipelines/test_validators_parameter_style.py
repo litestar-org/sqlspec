@@ -68,10 +68,10 @@ def setup_test_context(
     [
         ("SELECT * FROM users WHERE id = ?", ("qmark", "named_colon"), True, None),
         ("SELECT * FROM users WHERE id = :user_id", ("qmark", "named_colon"), True, None),
-        ("SELECT * FROM users WHERE id = $1", ("numeric",), True, None),
-        ("SELECT * FROM users WHERE id = @user_id", ("named_at",), True, None),
-        ("SELECT * FROM users WHERE id = :user_id", ("qmark",), False, RiskLevel.HIGH),
-        ("SELECT * FROM users WHERE id = $1", ("qmark",), False, RiskLevel.HIGH),
+        ("SELECT * FROM users WHERE id = $1", ("numeric"), True, None),
+        ("SELECT * FROM users WHERE id = @user_id", ("named_at"), True, None),
+        ("SELECT * FROM users WHERE id = :user_id", ("qmark"), False, RiskLevel.HIGH),
+        ("SELECT * FROM users WHERE id = $1", ("qmark"), False, RiskLevel.HIGH),
     ],
     ids=[
         "qmark_allowed",
@@ -118,7 +118,7 @@ def test_parameter_style_validation(
             False,
             "Mixed parameter styles detected",
         ),
-        ("SELECT * FROM users WHERE id = $1 AND name = $2", ("numeric",), False, True, None),  # Same style, no mixing
+        ("SELECT * FROM users WHERE id = $1 AND name = $2", ("numeric"), False, True, None),  # Same style, no mixing
     ],
     ids=["mixed_allowed", "mixed_disallowed", "same_style_ok"],
 )
@@ -153,8 +153,8 @@ def test_mixed_parameter_styles(
 @pytest.mark.parametrize(
     "sql,style_name,allowed_styles",
     [
-        ("SELECT * FROM users WHERE id = $1 AND name = $2", "numeric", ("numeric",)),
-        ("SELECT * FROM users WHERE id = @user_id AND name = @user_name", "named_at", ("named_at",)),
+        ("SELECT * FROM users WHERE id = $1 AND name = $2", "numeric", ("numeric")),
+        ("SELECT * FROM users WHERE id = @user_id AND name = @user_name", "named_at", ("named_at")),
     ],
     ids=["numeric_style", "named_at_style"],
 )
@@ -179,7 +179,7 @@ def test_specific_parameter_styles(
 def test_pyformat_positional_style(context: SQLProcessingContext, param_validator: ParameterValidator) -> None:
     """Test detection of pyformat positional style (%s)."""
     validator = create_validator()
-    context.config.allowed_parameter_styles = ("pyformat_positional",)
+    context.config.allowed_parameter_styles = "pyformat_positional"
 
     # %s style requires special handling as SQLGlot may not parse it directly
     sql = "SELECT * FROM users WHERE id = %s AND name = %s"
@@ -198,7 +198,7 @@ def test_pyformat_positional_style(context: SQLProcessingContext, param_validato
 def test_pyformat_named_style(context: SQLProcessingContext, param_validator: ParameterValidator) -> None:
     """Test detection of pyformat named style (%(name)s)."""
     validator = create_validator()
-    context.config.allowed_parameter_styles = ("pyformat_named",)
+    context.config.allowed_parameter_styles = "pyformat_named"
 
     # %(name)s style requires special handling as SQLGlot may not parse it directly
     sql = "SELECT * FROM users WHERE id = %(user_id)s AND name = %(user_name)s"
@@ -218,7 +218,7 @@ def test_pyformat_named_style(context: SQLProcessingContext, param_validator: Pa
 def test_no_parameters_in_sql(context: SQLProcessingContext, param_validator: ParameterValidator) -> None:
     """Test that SQL without parameters passes validation."""
     validator = create_validator()
-    context.config.allowed_parameter_styles = ("qmark",)
+    context.config.allowed_parameter_styles = "qmark"
 
     sql = "SELECT * FROM users WHERE id = 1"
     setup_test_context(context, sql, param_validator)
@@ -265,7 +265,7 @@ def test_configuration_edge_cases(
 def test_multiple_style_violations(context: SQLProcessingContext, param_validator: ParameterValidator) -> None:
     """Test detection of multiple parameter style violations."""
     validator = create_validator()
-    context.config.allowed_parameter_styles = ("qmark",)
+    context.config.allowed_parameter_styles = "qmark"
     context.config.allow_mixed_parameter_styles = False
 
     # Multiple different disallowed styles - use simplified SQL for parsing
@@ -367,9 +367,9 @@ def test_target_style_suggestion(context: SQLProcessingContext, param_validator:
 @pytest.mark.parametrize(
     "sql,config_setup,expected_errors,description",
     [
-        ("SELECT id FROM users", {"allowed_parameter_styles": ("qmark",)}, 0, "no_parameters"),
-        ("SELECT * FROM users WHERE id = ?", {"allowed_parameter_styles": ("qmark",)}, 0, "single_allowed_style"),
-        ("SELECT * FROM users WHERE id = :id", {"allowed_parameter_styles": ("qmark",)}, 1, "single_disallowed_style"),
+        ("SELECT id FROM users", {"allowed_parameter_styles": ("qmark")}, 0, "no_parameters"),
+        ("SELECT * FROM users WHERE id = ?", {"allowed_parameter_styles": ("qmark")}, 0, "single_allowed_style"),
+        ("SELECT * FROM users WHERE id = :id", {"allowed_parameter_styles": ("qmark")}, 1, "single_disallowed_style"),
         (
             "SELECT * FROM users WHERE id = ? AND name = :name",
             {"allowed_parameter_styles": ("qmark", "named_colon"), "allow_mixed_parameter_styles": True},
@@ -413,7 +413,7 @@ def test_fail_on_violation_enabled(context: SQLProcessingContext, param_validato
     from sqlspec.statement.pipelines.validators._parameter_style import UnsupportedParameterStyleError
 
     validator = create_validator(fail_on_violation=True)
-    context.config.allowed_parameter_styles = ("qmark",)
+    context.config.allowed_parameter_styles = "qmark"
 
     # Disallowed style
     sql = "SELECT * FROM users WHERE id = :user_id"
@@ -427,7 +427,7 @@ def test_fail_on_violation_enabled(context: SQLProcessingContext, param_validato
 def test_validator_handles_parsing_errors(context: SQLProcessingContext, param_validator: ParameterValidator) -> None:
     """Test that validator handles edge cases gracefully."""
     validator = create_validator()
-    context.config.allowed_parameter_styles = ("qmark",)
+    context.config.allowed_parameter_styles = "qmark"
 
     # Valid SQL that might have parsing edge cases
     sql = "SELECT * FROM users WHERE name LIKE '?%' AND id = ?"

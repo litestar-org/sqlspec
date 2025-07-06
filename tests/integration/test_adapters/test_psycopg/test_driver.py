@@ -75,7 +75,7 @@ def test_psycopg_basic_crud(psycopg_session: PsycopgSyncDriver) -> None:
     assert insert_result.rows_affected == 1
 
     # SELECT
-    select_result = psycopg_session.execute("SELECT name, value FROM test_table WHERE name = %s", ("test_name",))
+    select_result = psycopg_session.execute("SELECT name, value FROM test_table WHERE name = %s", ("test_name"))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
@@ -88,13 +88,13 @@ def test_psycopg_basic_crud(psycopg_session: PsycopgSyncDriver) -> None:
     assert update_result.rows_affected == 1
 
     # Verify UPDATE
-    verify_result = psycopg_session.execute("SELECT value FROM test_table WHERE name = %s", ("test_name",))
+    verify_result = psycopg_session.execute("SELECT value FROM test_table WHERE name = %s", ("test_name"))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
 
     # DELETE
-    delete_result = psycopg_session.execute("DELETE FROM test_table WHERE name = %s", ("test_name",))
+    delete_result = psycopg_session.execute("DELETE FROM test_table WHERE name = %s", ("test_name"))
     assert isinstance(delete_result, SQLResult)
     assert delete_result.rows_affected == 1
 
@@ -108,7 +108,7 @@ def test_psycopg_basic_crud(psycopg_session: PsycopgSyncDriver) -> None:
 @pytest.mark.parametrize(
     ("params", "style"),
     [
-        pytest.param(("test_value",), "tuple_binds", id="tuple_binds"),
+        pytest.param(("test_value"), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
     ],
 )
@@ -116,7 +116,7 @@ def test_psycopg_basic_crud(psycopg_session: PsycopgSyncDriver) -> None:
 def test_psycopg_parameter_styles(psycopg_session: PsycopgSyncDriver, params: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles."""
     # Insert test data
-    psycopg_session.execute("INSERT INTO test_table (name) VALUES (%s)", parameters=("test_value",))
+    psycopg_session.execute("INSERT INTO test_table (name) VALUES (%s)", parameters=("test_value"))
 
     # Test parameter style
     if style == "tuple_binds":
@@ -209,7 +209,7 @@ def test_psycopg_result_methods(psycopg_session: PsycopgSyncDriver) -> None:
     assert not result.is_empty()
 
     # Test empty result
-    empty_result = psycopg_session.execute("SELECT * FROM test_table WHERE name = %s", ("nonexistent",))
+    empty_result = psycopg_session.execute("SELECT * FROM test_table WHERE name = %s", ("nonexistent"))
     assert isinstance(empty_result, SQLResult)
     assert empty_result.is_empty()
     assert empty_result.get_first() is None
@@ -299,7 +299,7 @@ def test_psycopg_transactions(psycopg_session: PsycopgSyncDriver) -> None:
     )
 
     # Verify data is committed
-    result = psycopg_session.execute("SELECT COUNT(*) as count FROM test_table WHERE name = %s", ("transaction_test",))
+    result = psycopg_session.execute("SELECT COUNT(*) as count FROM test_table WHERE name = %s", ("transaction_test"))
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert result.data[0]["count"] == 1
@@ -370,7 +370,7 @@ def test_psycopg_schema_operations(psycopg_session: PsycopgSyncDriver) -> None:
 
     # Insert data into new table
     insert_result = psycopg_session.execute(
-        "INSERT INTO schema_test (description) VALUES (%s)", parameters=("test description",)
+        "INSERT INTO schema_test (description) VALUES (%s)", parameters=("test description")
     )
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
@@ -398,7 +398,7 @@ def test_psycopg_column_names_and_metadata(psycopg_session: PsycopgSyncDriver) -
 
     # Test column names
     result = psycopg_session.execute(
-        "SELECT id, name, value, created_at FROM test_table WHERE name = %s", ("metadata_test",)
+        "SELECT id, name, value, created_at FROM test_table WHERE name = %s", ("metadata_test")
     )
     assert isinstance(result, SQLResult)
     assert result.column_names == ["id", "name", "value", "created_at"]
@@ -429,7 +429,7 @@ def test_psycopg_with_schema_type(psycopg_session: PsycopgSyncDriver) -> None:
 
     # Query with schema type
     result = psycopg_session.execute(
-        "SELECT id, name, value FROM test_table WHERE name = %s", ("schema_test",), schema_type=TestRecord
+        "SELECT id, name, value FROM test_table WHERE name = %s", ("schema_test"), schema_type=TestRecord
     )
 
     assert isinstance(result, SQLResult)
@@ -515,7 +515,7 @@ def test_psycopg_json_operations(psycopg_session: PsycopgSyncDriver) -> None:
 
     # Insert JSON data
     json_data = '{"name": "test", "age": 30, "tags": ["postgres", "json"]}'
-    psycopg_session.execute("INSERT INTO json_test (data) VALUES (%s)", parameters=(json_data,))
+    psycopg_session.execute("INSERT INTO json_test (data) VALUES (%s)", parameters=(json_data))
 
     # Test JSON queries
     json_result = psycopg_session.execute("SELECT data->>'name' as name, data->>'age' as age FROM json_test")

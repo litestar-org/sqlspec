@@ -171,7 +171,7 @@ def test_bigquery_to_arrow_with_sql_object(
     sql_obj = SQL(
         f"SELECT name, value FROM {table_name} WHERE is_active = @active",
         parameters={"active": True},
-        config=SQLConfig(strict_mode=False, dialect="bigquery"),
+        config=SQLConfig(dialect="bigquery"),
     )
     result = bigquery_arrow_session.fetch_arrow_table(sql_obj)
 
@@ -334,7 +334,7 @@ def test_bigquery_parquet_export_with_partitioning(
             WHERE is_active = @active
             """,
             parameters={"active": True},
-            config=SQLConfig(strict_mode=False, dialect="bigquery"),
+            config=SQLConfig(dialect="bigquery"),
         )
 
         bigquery_arrow_session.export_to_storage(

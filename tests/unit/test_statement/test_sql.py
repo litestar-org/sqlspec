@@ -69,9 +69,9 @@ def test_sql_initialization_with_parameters() -> None:
 @pytest.mark.parametrize(
     "sql,params,expected_sql",
     [
-        ("SELECT * FROM users WHERE id = ?", (1,), "SELECT * FROM users WHERE id = ?"),
+        ("SELECT * FROM users WHERE id = ?", (1), "SELECT * FROM users WHERE id = ?"),
         ("SELECT * FROM users WHERE id = :id", {"id": 1}, "SELECT * FROM users WHERE id = :id"),
-        ("SELECT * FROM users WHERE id = $1", (1,), "SELECT * FROM users WHERE id = $1"),
+        ("SELECT * FROM users WHERE id = $1", (1), "SELECT * FROM users WHERE id = $1"),
     ],
 )
 def test_sql_with_different_parameter_styles(sql: str, params: "SQLParameterType", expected_sql: str) -> None:
@@ -152,7 +152,7 @@ def test_sql_parameters_property() -> None:
 
     # With positional parameters - returns the original tuple
     stmt2 = SQL("SELECT * FROM users WHERE id = ?", 1)
-    assert stmt2.parameters == (1,)
+    assert stmt2.parameters == (1)
 
     # With tuple of parameters
     stmt2b = SQL("SELECT * FROM users WHERE id = ? AND name = ?", 1, "test")

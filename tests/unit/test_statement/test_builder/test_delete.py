@@ -53,15 +53,15 @@ def test_delete_from_returns_self() -> None:
 @pytest.mark.parametrize(
     "method,args,expected_sql_parts",
     [
-        ("where", (("status", "inactive"),), ["WHERE"]),
-        ("where", ("id = 1",), ["WHERE", "id = 1"]),
+        ("where", (("status", "inactive")), ["WHERE"]),
+        ("where", ("id = 1"), ["WHERE", "id = 1"]),
         ("where_eq", ("id", 123), ["WHERE", "="]),
         ("where_like", ("name", "%test%"), ["LIKE"]),
         ("where_between", ("age", 0, 17), ["BETWEEN"]),
         ("where_in", ("status", ["deleted", "banned"]), ["IN"]),
         ("where_not_in", ("role", ["admin", "moderator"]), ["NOT IN", "NOT", "IN"]),
-        ("where_null", ("deleted_at",), ["IS NULL"]),
-        ("where_not_null", ("verified_at",), ["IS NOT NULL", "NOT", "IS NULL"]),
+        ("where_null", ("deleted_at"), ["IS NULL"]),
+        ("where_not_null", ("verified_at"), ["IS NOT NULL", "NOT", "IS NULL"]),
     ],
     ids=["where_tuple", "where_string", "where_eq", "like", "between", "in", "not_in", "null", "not_null"],
 )

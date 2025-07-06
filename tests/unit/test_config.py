@@ -159,7 +159,7 @@ class MockAsyncTestConfig(NoPoolAsyncConfig["MockConnection", "MockAsyncDriver"]
     connection_type: "type[MockConnection]" = MockConnection
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = False
-    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("numeric",)
+    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = "numeric"
     preferred_parameter_style: "ClassVar[str]" = "numeric"
     default_row_type: "type[Any]" = dict
 
@@ -193,7 +193,7 @@ class MockSyncPoolTestConfig(SyncDatabaseConfig["MockConnection", "MockPool", "M
     connection_type: "type[MockConnection]" = MockConnection
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = True
-    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("qmark",)
+    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = "qmark"
     preferred_parameter_style: "ClassVar[str]" = "qmark"
     default_row_type: "type[Any]" = dict
 
@@ -234,7 +234,7 @@ class MockAsyncPoolTestConfig(AsyncDatabaseConfig["MockConnection", "MockPool", 
     connection_type: "type[MockConnection]" = MockConnection
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = True
-    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("numeric",)
+    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = "numeric"
     preferred_parameter_style: "ClassVar[str]" = "numeric"
     default_row_type: "type[Any]" = dict
 
@@ -307,7 +307,7 @@ def test_sync_config_parameter_styles() -> None:
 def test_async_config_parameter_styles() -> None:
     """Test async config parameter style attributes."""
     config = MockAsyncTestConfig()
-    assert config.supported_parameter_styles == ("numeric",)
+    assert config.supported_parameter_styles == ("numeric")
     assert config.preferred_parameter_style == "numeric"
 
 

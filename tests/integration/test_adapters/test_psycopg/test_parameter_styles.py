@@ -22,7 +22,7 @@ def psycopg_params_session(postgres_service: PostgresService) -> "Generator[Psyc
         password=postgres_service.password,
         dbname=postgres_service.database,
         autocommit=True,  # Enable autocommit for tests
-        statement_config=SQLConfig(strict_mode=False),
+        statement_config=SQLConfig(),
     )
 
     try:
@@ -63,7 +63,7 @@ def psycopg_params_session(postgres_service: PostgresService) -> "Generator[Psyc
 @pytest.mark.parametrize(
     "params,expected_count",
     [
-        (("test1",), 1),  # Tuple parameter
+        (("test1"), 1),  # Tuple parameter
         (["test1"], 1),  # List parameter
     ],
 )
@@ -84,7 +84,7 @@ def test_psycopg_pyformat_parameter_types(
 @pytest.mark.parametrize(
     "params,style,query",
     [
-        (("test1",), "pyformat_positional", "SELECT * FROM test_params WHERE name = %s"),
+        (("test1"), "pyformat_positional", "SELECT * FROM test_params WHERE name = %s"),
         ({"name": "test1"}, "pyformat_named", "SELECT * FROM test_params WHERE name = %(name)s"),
     ],
 )
@@ -144,7 +144,7 @@ def test_psycopg_null_parameters(psycopg_params_session: PsycopgSyncDriver) -> N
         "INSERT INTO test_params (name, value, description) VALUES (%s, %s, %s)", ("null_param_test", 400, None)
     )
 
-    null_result = psycopg_params_session.execute("SELECT * FROM test_params WHERE name = %s", ("null_param_test",))
+    null_result = psycopg_params_session.execute("SELECT * FROM test_params WHERE name = %s", ("null_param_test"))
     assert len(null_result.data) == 1
     assert null_result.data[0]["description"] is None
 
@@ -155,7 +155,7 @@ def test_psycopg_parameter_escaping(psycopg_params_session: PsycopgSyncDriver) -
     # This should safely search for a literal string with quotes
     malicious_input = "'; DROP TABLE test_params; --"
 
-    result = psycopg_params_session.execute("SELECT * FROM test_params WHERE name = %s", (malicious_input,))
+    result = psycopg_params_session.execute("SELECT * FROM test_params WHERE name = %s", (malicious_input))
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -169,7 +169,7 @@ def test_psycopg_parameter_escaping(psycopg_params_session: PsycopgSyncDriver) -
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_with_like(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test parameters with LIKE operations."""
-    result = psycopg_params_session.execute("SELECT * FROM test_params WHERE name LIKE %s", ("test%",))
+    result = psycopg_params_session.execute("SELECT * FROM test_params WHERE name LIKE %s", ("test%"))
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -194,7 +194,7 @@ def test_psycopg_parameter_with_any_array(psycopg_params_session: PsycopgSyncDri
 
     # Test ANY with array parameter
     result = psycopg_params_session.execute(
-        "SELECT * FROM test_params WHERE name = ANY(%s) ORDER BY name", (["alpha", "beta", "test1"],)
+        "SELECT * FROM test_params WHERE name = ANY(%s) ORDER BY name", (["alpha", "beta", "test1"])
     )
 
     assert isinstance(result, SQLResult)
@@ -264,7 +264,7 @@ def test_psycopg_parameter_data_types(psycopg_params_session: PsycopgSyncDriver)
     assert len(all_data_result.data) == 3  # We inserted 3 rows
 
     # Now test with specific parameters - use int comparison only to avoid float precision issues
-    result = psycopg_params_session.execute("SELECT * FROM test_types WHERE int_val = %s", (42,))
+    result = psycopg_params_session.execute("SELECT * FROM test_types WHERE int_val = %s", (42))
 
     assert len(result.data) == 1
     assert result.data[0]["text_val"] == "hello"
@@ -281,7 +281,7 @@ def test_psycopg_parameter_edge_cases(psycopg_params_session: PsycopgSyncDriver)
         "INSERT INTO test_params (name, value, description) VALUES (%s, %s, %s)", ("", 999, "Empty name test")
     )
 
-    empty_result = psycopg_params_session.execute("SELECT * FROM test_params WHERE name = %s", ("",))
+    empty_result = psycopg_params_session.execute("SELECT * FROM test_params WHERE name = %s", (""))
     assert len(empty_result.data) == 1
     assert empty_result.data[0]["value"] == 999
 
@@ -291,7 +291,7 @@ def test_psycopg_parameter_edge_cases(psycopg_params_session: PsycopgSyncDriver)
         "INSERT INTO test_params (name, value, description) VALUES (%s, %s, %s)", ("long_test", 1000, long_string)
     )
 
-    long_result = psycopg_params_session.execute("SELECT * FROM test_params WHERE description = %s", (long_string,))
+    long_result = psycopg_params_session.execute("SELECT * FROM test_params WHERE description = %s", (long_string))
     assert len(long_result.data) == 1
     assert len(long_result.data[0]["description"]) == 1000
 
@@ -350,7 +350,7 @@ def test_psycopg_parameter_with_json(psycopg_params_session: PsycopgSyncDriver) 
     # Test querying JSON with parameters
     result = psycopg_params_session.execute(
         "SELECT name, metadata->>'type' as type, (metadata->>'value')::INTEGER as value FROM test_json WHERE metadata->>'type' = %s",
-        ("test",),
+        ("test"),
     )
 
     assert len(result.data) == 2  # JSON 1 and JSON 3
@@ -390,7 +390,7 @@ def test_psycopg_parameter_with_arrays(psycopg_params_session: PsycopgSyncDriver
         )
 
     # Test querying arrays with parameters
-    result = psycopg_params_session.execute("SELECT name FROM test_arrays WHERE %s = ANY(tags)", ("tag2",))
+    result = psycopg_params_session.execute("SELECT name FROM test_arrays WHERE %s = ANY(tags)", ("tag2"))
 
     assert len(result.data) == 1
     assert result.data[0]["name"] == "Array 1"
@@ -428,7 +428,7 @@ def test_psycopg_parameter_with_window_functions(psycopg_params_session: Psycopg
         WHERE value > %s
         ORDER BY description, value
     """,
-        (30,),
+        (30),
     )
 
     assert len(result.data) >= 4
@@ -443,9 +443,7 @@ def test_psycopg_parameter_with_window_functions(psycopg_params_session: Psycopg
 def test_psycopg_parameter_with_copy_operations(psycopg_params_session: PsycopgSyncDriver) -> None:
     """Test parameters in queries alongside COPY operations."""
     # First use parameters to find specific data
-    filter_result = psycopg_params_session.execute(
-        "SELECT COUNT(*) as count FROM test_params WHERE value >= %s", (100,)
-    )
+    filter_result = psycopg_params_session.execute("SELECT COUNT(*) as count FROM test_params WHERE value >= %s", (100))
     filter_result.data[0]["count"]
 
     # Insert data that would be suitable for COPY operations

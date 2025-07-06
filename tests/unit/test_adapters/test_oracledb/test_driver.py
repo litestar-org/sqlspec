@@ -24,14 +24,14 @@ def mock_oracle_async_connection() -> AsyncMock:
 @pytest.fixture
 def oracle_sync_driver(mock_oracle_sync_connection: Mock) -> OracleSyncDriver:
     """Create an Oracle sync driver with mocked connection."""
-    config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
+    config = SQLConfig()  # Disable strict mode for unit tests
     return OracleSyncDriver(connection=mock_oracle_sync_connection, config=config)
 
 
 @pytest.fixture
 def oracle_async_driver(mock_oracle_async_connection: Mock) -> OracleAsyncDriver:
     """Create an Oracle async driver with mocked connection."""
-    config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
+    config = SQLConfig()  # Disable strict mode for unit tests
     return OracleAsyncDriver(connection=mock_oracle_async_connection, config=config)
 
 

@@ -234,7 +234,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
     ) -> "SQLResult[RowT]":
         script_config = _config or self.config
         if script_config.enable_validation:
-            script_config = replace(script_config, enable_validation=False, strict_mode=False)
+            script_config = replace(script_config, enable_validation=False)
 
         sql_statement = self._build_statement(statement, *parameters, _config=script_config, **kwargs)
         sql_statement = sql_statement.as_script()

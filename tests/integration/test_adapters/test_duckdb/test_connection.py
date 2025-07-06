@@ -12,7 +12,7 @@ from sqlspec.statement.sql import SQLConfig
 # Helper function to create permissive config
 def create_permissive_config(**kwargs: Any) -> DuckDBConfig:
     """Create a DuckDB config with permissive SQL settings."""
-    statement_config = SQLConfig(strict_mode=False, enable_validation=False)
+    statement_config = SQLConfig(enable_validation=False)
     if "statement_config" not in kwargs:
         kwargs["statement_config"] = statement_config
     if "database" not in kwargs:
@@ -108,12 +108,12 @@ def test_connection_with_data_processing_settings() -> None:
 @pytest.mark.xdist_group("duckdb")
 def test_connection_with_instrumentation() -> None:
     """Test DuckDB connection with instrumentation configuration."""
-    statement_config = SQLConfig(strict_mode=False, enable_validation=False)
+    statement_config = SQLConfig(enable_validation=False)
     config = DuckDBConfig(database=":memory:", statement_config=statement_config)
 
     with config.provide_session() as session:
         # Test that instrumentation doesn't interfere with operations
-        result = session.execute("SELECT ? as test_value", (42,))
+        result = session.execute("SELECT ? as test_value", (42))
         assert result.data is not None
         assert result.data[0]["test_value"] == 42
 
@@ -129,7 +129,7 @@ def test_connection_with_hook() -> None:
         # Set a custom setting via the hook
         conn.execute("SET threads = 1")
 
-    statement_config = SQLConfig(strict_mode=False, enable_validation=False)
+    statement_config = SQLConfig(enable_validation=False)
     config = DuckDBConfig(database=":memory:", statement_config=statement_config, on_connection_create=connection_hook)
 
     with config.provide_session() as session:
@@ -228,8 +228,8 @@ def test_multiple_concurrent_connections() -> None:
         session2.execute_script("CREATE TABLE session2_table (id INTEGER)")
 
         # Insert data in each session - use tuples for positional parameters
-        session1.execute("INSERT INTO session1_table VALUES (?)", (1,))
-        session2.execute("INSERT INTO session2_table VALUES (?)", (2,))
+        session1.execute("INSERT INTO session1_table VALUES (?)", (1))
+        session2.execute("INSERT INTO session2_table VALUES (?)", (2))
 
         # Verify data isolation
         result1 = session1.execute("SELECT id FROM session1_table")

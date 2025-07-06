@@ -20,7 +20,7 @@ def psycopg_batch_session(postgres_service: PostgresService) -> "Generator[Psyco
         password=postgres_service.password,
         dbname=postgres_service.database,
         autocommit=True,  # Enable autocommit for tests
-        statement_config=SQLConfig(strict_mode=False),
+        statement_config=SQLConfig(),
     )
 
     try:
@@ -153,7 +153,7 @@ def test_psycopg_execute_many_delete(psycopg_batch_session: PsycopgSyncDriver) -
     )
 
     # Delete specific items by name
-    delete_params = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
+    delete_params = [("Delete 1"), ("Delete 2"), ("Delete 4")]
 
     result = psycopg_batch_session.execute_many("DELETE FROM test_batch WHERE name = %s", delete_params)
 
@@ -189,7 +189,7 @@ def test_psycopg_execute_many_large_batch(psycopg_batch_session: PsycopgSyncDriv
 
     # Verify some specific values using ANY for efficient querying
     sample_result = psycopg_batch_session.execute(
-        "SELECT * FROM test_batch WHERE name = ANY(%s) ORDER BY value", (["Item 100", "Item 500", "Item 999"],)
+        "SELECT * FROM test_batch WHERE name = ANY(%s) ORDER BY value", (["Item 100", "Item 500", "Item 999"])
     )
     assert len(sample_result.data) == 3
     assert sample_result.data[0]["value"] == 1000  # Item 100
@@ -213,7 +213,7 @@ def test_psycopg_execute_many_with_sql_object(psycopg_batch_session: PsycopgSync
 
     # Verify data
     check_result = psycopg_batch_session.execute(
-        "SELECT COUNT(*) as count FROM test_batch WHERE category = %s", ("SOB",)
+        "SELECT COUNT(*) as count FROM test_batch WHERE category = %s", ("SOB")
     )
     assert check_result.data[0]["count"] == 3
 
@@ -244,7 +244,7 @@ def test_psycopg_execute_many_with_returning(psycopg_batch_session: PsycopgSyncD
         )
 
         check_result = psycopg_batch_session.execute(
-            "SELECT COUNT(*) as count FROM test_batch WHERE category = %s", ("RET",)
+            "SELECT COUNT(*) as count FROM test_batch WHERE category = %s", ("RET")
         )
         assert check_result.data[0]["count"] == 3
 

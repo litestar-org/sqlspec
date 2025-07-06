@@ -42,7 +42,7 @@ def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[Adbc
     config = AdbcConfig(
         uri=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
         driver_name="adbc_driver_postgresql.dbapi.connect",
-        statement_config=SQLConfig(strict_mode=False),  # Allow DDL statements for tests
+        statement_config=SQLConfig(),  # Allow DDL statements for tests
     )
 
     with config.provide_session() as session:
@@ -76,7 +76,7 @@ def test_connection(postgres_service: PostgresService) -> None:
         with conn.cursor() as cur:
             cur.execute("SELECT 1")  # pyright: ignore
             result = cur.fetchone()  # pyright: ignore
-            assert result == (1,)
+            assert result == (1)
 
     # Test session creation
     with config.provide_session() as session:
@@ -100,9 +100,7 @@ def test_basic_crud(adbc_postgresql_session: AdbcDriver) -> None:
     assert insert_result.rows_affected in (-1, 1)
 
     # SELECT
-    select_result = adbc_postgresql_session.execute(
-        "SELECT name, value FROM test_table WHERE name = $1", ("test_name",)
-    )
+    select_result = adbc_postgresql_session.execute("SELECT name, value FROM test_table WHERE name = $1", ("test_name"))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
@@ -118,13 +116,13 @@ def test_basic_crud(adbc_postgresql_session: AdbcDriver) -> None:
     assert update_result.rows_affected in (-1, 1)
 
     # Verify UPDATE
-    verify_result = adbc_postgresql_session.execute("SELECT value FROM test_table WHERE name = $1", ("test_name",))
+    verify_result = adbc_postgresql_session.execute("SELECT value FROM test_table WHERE name = $1", ("test_name"))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
 
     # DELETE
-    delete_result = adbc_postgresql_session.execute("DELETE FROM test_table WHERE name = $1", ("test_name",))
+    delete_result = adbc_postgresql_session.execute("DELETE FROM test_table WHERE name = $1", ("test_name"))
     assert isinstance(delete_result, SQLResult)
     # ADBC PostgreSQL driver may return -1 for rowcount on DML operations
     assert delete_result.rows_affected in (-1, 1)
@@ -139,7 +137,7 @@ def test_basic_crud(adbc_postgresql_session: AdbcDriver) -> None:
 @pytest.mark.parametrize(
     ("params", "style"),
     [
-        pytest.param(("test_value",), "tuple_binds", id="tuple_binds"),
+        pytest.param(("test_value"), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
     ],
 )
@@ -147,14 +145,14 @@ def test_basic_crud(adbc_postgresql_session: AdbcDriver) -> None:
 def test_parameter_styles(adbc_postgresql_session: AdbcDriver, params: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles with ADBC PostgreSQL."""
     # Insert test data
-    adbc_postgresql_session.execute(SQL("INSERT INTO test_table (name) VALUES ($1)"), ("test_value",))
+    adbc_postgresql_session.execute(SQL("INSERT INTO test_table (name) VALUES ($1)"), ("test_value"))
 
     # Test parameter style
     if style == "tuple_binds":
         sql = SQL("SELECT name FROM test_table WHERE name = $1")
     else:  # dict_binds - PostgreSQL uses numbered parameters
         sql = SQL("SELECT name FROM test_table WHERE name = $1")
-        params = (params["name"],) if isinstance(params, dict) else params
+        params = (params["name"]) if isinstance(params, dict) else params
 
     result = adbc_postgresql_session.execute(sql, params)
     assert isinstance(result, SQLResult)
@@ -516,7 +514,7 @@ def test_result_methods(adbc_postgresql_session: AdbcDriver) -> None:
     assert not result.is_empty()
 
     # Test empty result
-    empty_result = adbc_postgresql_session.execute("SELECT * FROM test_table WHERE name = $1", ("nonexistent",))
+    empty_result = adbc_postgresql_session.execute("SELECT * FROM test_table WHERE name = $1", ("nonexistent"))
     assert isinstance(empty_result, SQLResult)
     assert empty_result.is_empty()
     assert empty_result.get_first() is None
@@ -897,7 +895,7 @@ def test_arrow_with_parameters(adbc_postgresql_session: AdbcDriver) -> None:
 
     # Test fetch_arrow_table with parameters
     result = adbc_postgresql_session.fetch_arrow_table(
-        "SELECT name, value FROM test_table WHERE value > $1 ORDER BY value", (15,)
+        "SELECT name, value FROM test_table WHERE value > $1 ORDER BY value", (15)
     )
 
     assert isinstance(result, ArrowResult)
@@ -914,7 +912,7 @@ def test_arrow_empty_result(adbc_postgresql_session: AdbcDriver) -> None:
     """Test Arrow functionality with empty result set."""
     # Query that returns no rows
     result = adbc_postgresql_session.fetch_arrow_table(
-        "SELECT name, value FROM test_table WHERE name = $1", ("nonexistent",)
+        "SELECT name, value FROM test_table WHERE name = $1", ("nonexistent")
     )
 
     assert isinstance(result, ArrowResult)
@@ -999,7 +997,7 @@ def test_schema_operations(adbc_postgresql_session: AdbcDriver) -> None:
 
     # Insert data into new table
     insert_result = adbc_postgresql_session.execute(
-        "INSERT INTO schema_test (description) VALUES ($1)", ("test description",)
+        "INSERT INTO schema_test (description) VALUES ($1)", ("test description")
     )
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected in (1, -1)
@@ -1027,7 +1025,7 @@ def test_column_names_and_metadata(adbc_postgresql_session: AdbcDriver) -> None:
 
     # Test column names
     result = adbc_postgresql_session.execute(
-        "SELECT id, name, value, created_at FROM test_table WHERE name = $1", ("metadata_test",)
+        "SELECT id, name, value, created_at FROM test_table WHERE name = $1", ("metadata_test")
     )
     assert isinstance(result, SQLResult)
     assert result.column_names == ["id", "name", "value", "created_at"]
@@ -1057,7 +1055,7 @@ def test_with_schema_type(adbc_postgresql_session: AdbcDriver) -> None:
 
     # Query with schema type
     result = adbc_postgresql_session.execute(
-        "SELECT id, name, value FROM test_table WHERE name = $1", ("schema_test",), schema_type=TestRecord
+        "SELECT id, name, value FROM test_table WHERE name = $1", ("schema_test"), schema_type=TestRecord
     )
 
     assert isinstance(result, SQLResult)
@@ -1116,7 +1114,7 @@ def test_insert_returning(adbc_postgresql_session: AdbcDriver) -> None:
     returned_id = result.data[0]["id"]
 
     # Verify the record was actually inserted
-    verify_result = adbc_postgresql_session.execute("SELECT * FROM test_table WHERE id = $1", (returned_id,))
+    verify_result = adbc_postgresql_session.execute("SELECT * FROM test_table WHERE id = $1", (returned_id))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 1
@@ -1151,7 +1149,7 @@ def test_delete_returning(adbc_postgresql_session: AdbcDriver) -> None:
     adbc_postgresql_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", test_data)
 
     # Delete with RETURNING
-    result = adbc_postgresql_session.execute("DELETE FROM test_table WHERE value > $1 RETURNING name, value", (15,))
+    result = adbc_postgresql_session.execute("DELETE FROM test_table WHERE value > $1 RETURNING name, value", (15))
 
     assert isinstance(result, SQLResult)
     assert result.data is not None

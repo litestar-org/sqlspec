@@ -211,7 +211,7 @@ class SyncStorageMixin(StorageMixinBase):
         # disable parameter validation entirely to allow transformer-added parameters
         if params is None and _config and _config.enable_transformations:
             # Disable validation entirely for transformer-generated parameters
-            _config = replace(_config, strict_mode=False, enable_validation=False)
+            _config = replace(_config, enable_validation=False)
 
         # Only pass params if it's not None to avoid adding None as a parameter
         if params is not None:
@@ -650,7 +650,7 @@ class AsyncStorageMixin(StorageMixinBase):
         # disable parameter validation entirely to allow transformer-added parameters
         if params is None and _config and _config.enable_transformations:
             # Disable validation entirely for transformer-generated parameters
-            _config = replace(_config, strict_mode=False, enable_validation=False)
+            _config = replace(_config, enable_validation=False)
 
         # Only pass params if it's not None to avoid adding None as a parameter
         if params is not None:

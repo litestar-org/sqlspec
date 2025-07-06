@@ -35,7 +35,7 @@ def oracle_sync_session(oracle_23ai_service: OracleService) -> OracleSyncConfig:
 @pytest.mark.parametrize(
     ("params", "style"),
     [
-        pytest.param(("test_name",), "positional_binds", id="positional_binds"),
+        pytest.param(("test_name"), "positional_binds", id="positional_binds"),
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
@@ -79,7 +79,7 @@ def test_sync_insert_returning(oracle_sync_session: OracleSyncConfig, params: An
         else:  # dict_binds
             # Workaround: Use positional binds due to DPY-4009
             sql = "INSERT INTO test_table (id, name) VALUES (1, :1) RETURNING id, name"
-            exec_params = (params["name"],)
+            exec_params = params["name"]
 
         # This would fail with Oracle error because RETURNING requires INTO clause
         result = driver.execute(sql, exec_params)
@@ -98,7 +98,7 @@ def test_sync_insert_returning(oracle_sync_session: OracleSyncConfig, params: An
 @pytest.mark.parametrize(
     ("params", "style"),
     [
-        pytest.param(("test_name",), "positional_binds", id="positional_binds"),
+        pytest.param(("test_name"), "positional_binds", id="positional_binds"),
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
@@ -146,7 +146,7 @@ def test_sync_select(oracle_sync_session: OracleSyncConfig, params: Any, style: 
 @pytest.mark.parametrize(
     ("params", "style"),  # Keep parametrization for structure, even if params unused for select_value
     [
-        pytest.param(("test_name",), "positional_binds", id="positional_binds"),
+        pytest.param(("test_name"), "positional_binds", id="positional_binds"),
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
@@ -208,7 +208,7 @@ def test_sync_select_arrow(oracle_sync_session: OracleSyncConfig) -> None:
 
         # Insert test record using positional binds
         insert_sql = "INSERT INTO test_table (id, name) VALUES (1, :1)"
-        insert_result = driver.execute(insert_sql, ("arrow_name",))
+        insert_result = driver.execute(insert_sql, ("arrow_name"))
         assert isinstance(insert_result, SQLResult)
         assert insert_result.rows_affected == 1
 
@@ -283,7 +283,7 @@ def test_sync_insert_with_sequence(oracle_sync_session: OracleSyncConfig) -> Non
         """)
 
         # Insert using sequence
-        driver.execute("INSERT INTO test_table (id, name) VALUES (test_seq.NEXTVAL, :1)", ("test_name",))
+        driver.execute("INSERT INTO test_table (id, name) VALUES (test_seq.NEXTVAL, :1)", ("test_name"))
 
         # Get the last inserted ID using CURRVAL
         result = driver.execute("SELECT test_seq.CURRVAL as last_id FROM dual")
@@ -293,7 +293,7 @@ def test_sync_insert_with_sequence(oracle_sync_session: OracleSyncConfig) -> Non
         last_id = result.data[0]["LAST_ID"]
 
         # Verify the inserted record
-        verify_result = driver.execute("SELECT id, name FROM test_table WHERE id = :1", (last_id,))
+        verify_result = driver.execute("SELECT id, name FROM test_table WHERE id = :1", (last_id))
         assert isinstance(verify_result, SQLResult)
         assert verify_result.data is not None
         assert len(verify_result.data) == 1
@@ -330,7 +330,6 @@ def test_oracle_ddl_script_parsing(oracle_sync_session: OracleSyncConfig) -> Non
     config = SQLConfig(
         enable_parsing=True,
         enable_validation=False,  # Disable validation to focus on script handling
-        strict_mode=False,
     )
 
     with oracle_sync_session.provide_session():

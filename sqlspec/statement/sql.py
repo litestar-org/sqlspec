@@ -75,19 +75,27 @@ class _ProcessedState:
 class SQLConfig:
     """Configuration for SQL statement behavior.
 
-    Uses conservative defaults that prioritize compatibility and robustness
-    over strict enforcement, making it easier to work with diverse SQL dialects
-    and complex queries.
+    Uses conservative defaults that prioritize compatibility and robustness,
+    making it easier to work with diverse SQL dialects and complex queries.
 
-    Component Lists:
+    Pipeline Configuration:
+        enable_parsing: Parse SQL strings using sqlglot (default: True)
+        enable_validation: Run SQL validators to check for safety issues (default: True)
+        enable_transformations: Apply SQL transformers like literal parameterization (default: True)
+        enable_analysis: Run SQL analyzers for metadata extraction (default: False)
+        enable_expression_simplification: Apply expression simplification transformer (default: False)
+        enable_parameter_type_wrapping: Wrap parameters with type information (default: True)
+        parse_errors_as_warnings: Treat parse errors as warnings instead of failures (default: True)
+        enable_caching: Cache processed SQL statements (default: True)
+
+    Component Lists (Advanced):
         transformers: Optional list of SQL transformers for explicit staging
         validators: Optional list of SQL validators for explicit staging
         analyzers: Optional list of SQL analyzers for explicit staging
 
-    Configuration Options:
+    Internal Configuration:
         parameter_converter: Handles parameter style conversions
         parameter_validator: Validates parameter usage and styles
-        analysis_cache_size: Cache size for analysis results
         input_sql_had_placeholders: Populated by SQL.__init__ to track original SQL state
         dialect: SQL dialect to use for parsing and generation
 
@@ -101,13 +109,10 @@ class SQLConfig:
     enable_validation: bool = True
     enable_transformations: bool = True
     enable_analysis: bool = False
-    enable_normalization: bool = True
+    enable_expression_simplification: bool = False
     enable_parameter_type_wrapping: bool = True
-    strict_mode: bool = False
     parse_errors_as_warnings: bool = True
-    cache_parsed_expression: bool = True
     enable_caching: bool = True
-    cache_max_size: int = DEFAULT_CACHE_SIZE
 
     transformers: "Optional[list[Any]]" = None
     validators: "Optional[list[Any]]" = None
@@ -115,7 +120,6 @@ class SQLConfig:
 
     parameter_converter: ParameterConverter = field(default_factory=ParameterConverter)
     parameter_validator: ParameterValidator = field(default_factory=ParameterValidator)
-    analysis_cache_size: int = 1000
     input_sql_had_placeholders: bool = False
     dialect: "Optional[DialectType]" = None
 
@@ -149,13 +153,17 @@ class SQLConfig:
         elif self.enable_transformations:
             placeholder_style = self.target_parameter_style or "?"
             transformers = [CommentAndHintRemover(), ParameterizeLiterals(placeholder_style=placeholder_style)]
+            if self.enable_expression_simplification:
+                from sqlspec.statement.pipelines.transformers import ExpressionSimplifier
+
+                transformers.append(ExpressionSimplifier())
 
         validators = []
         if self.validators is not None:
             validators = list(self.validators)
         elif self.enable_validation:
             validators = [
-                ParameterStyleValidator(fail_on_violation=self.strict_mode),
+                ParameterStyleValidator(fail_on_violation=not self.parse_errors_as_warnings),
                 DMLSafetyValidator(),
                 SecurityValidator(),
             ]
@@ -630,7 +638,7 @@ class SQL:
             transformation_results={},
         )
 
-        if self._config.strict_mode and self._processed_state.validation_errors:
+        if not self._config.parse_errors_as_warnings and self._processed_state.validation_errors:
             highest_risk_error = max(
                 self._processed_state.validation_errors, key=lambda e: e.risk_level.value if has_risk_level(e) else 0
             )
@@ -872,6 +880,11 @@ class SQL:
             msg = "Failed to process SQL statement"
             raise RuntimeError(msg)
         return self._processed_state.processed_sql
+
+    @property
+    def config(self) -> "SQLConfig":
+        """Get the SQL configuration."""
+        return self._config
 
     @property
     def expression(self) -> "Optional[exp.Expression]":

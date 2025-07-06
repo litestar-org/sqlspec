@@ -192,10 +192,10 @@ def benchmark_parameter_styles(adapter: str, iterations: int) -> None:
         for query_name, query in queries.items():
             for style in styles:
                 try:
-                    sql = SQL(query)
+                    stmt = SQL(query)
 
-                    def compile_with_style():
-                        return sql.compile(placeholder_style=style)
+                    def compile_with_style() -> tuple[str, Any]:
+                        return stmt.compile(placeholder_style=style)
 
                     runner.benchmark(f"{query_name}_{style}", compile_with_style)
                 except Exception as e:
@@ -246,7 +246,7 @@ def benchmark_sql_compilation(iterations: int) -> None:
             parse_one(query)
 
             # Benchmark: Create SQL object
-            def create_sql():
+            def create_sql() -> SQL:
                 return SQL(query)
 
             runner.benchmark(f"{query_name}_create", create_sql)
@@ -422,7 +422,7 @@ def typed_parameters(iterations: int) -> None:
 @cli.command()
 @click.option("--adapter", default="all", help="Adapter to test or 'all'")
 @click.option("--iterations", default=1000, help="Number of iterations")
-def all(adapter: str, iterations: int) -> None:
+def run_all(adapter: str, iterations: int) -> None:
     """Run all benchmarks."""
     console.print(Panel.fit("[bold]Running All Benchmarks[/bold]", border_style="green"))
 

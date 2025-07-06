@@ -59,7 +59,7 @@ def test_bigquery_basic_crud(bigquery_session: BigQueryDriver, bigquery_service:
     assert insert_result.rows_affected == 1
 
     # SELECT
-    select_result = bigquery_session.execute(f"SELECT name, value FROM {table_name} WHERE name = ?", ("test_name",))
+    select_result = bigquery_session.execute(f"SELECT name, value FROM {table_name} WHERE name = ?", ("test_name"))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
@@ -72,13 +72,13 @@ def test_bigquery_basic_crud(bigquery_session: BigQueryDriver, bigquery_service:
     assert update_result.rows_affected == 1
 
     # Verify UPDATE
-    verify_result = bigquery_session.execute(f"SELECT value FROM {table_name} WHERE name = ?", ("test_name",))
+    verify_result = bigquery_session.execute(f"SELECT value FROM {table_name} WHERE name = ?", ("test_name"))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
 
     # DELETE
-    delete_result = bigquery_session.execute(f"DELETE FROM {table_name} WHERE name = ?", ("test_name",))
+    delete_result = bigquery_session.execute(f"DELETE FROM {table_name} WHERE name = ?", ("test_name"))
     assert isinstance(delete_result, SQLResult)
     assert delete_result.rows_affected == 1
 
@@ -92,7 +92,7 @@ def test_bigquery_basic_crud(bigquery_session: BigQueryDriver, bigquery_service:
 @pytest.mark.parametrize(
     ("params", "style"),
     [
-        pytest.param(("test_value",), "tuple_binds", id="tuple_binds"),
+        pytest.param(("test_value"), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
     ],
 )
@@ -200,7 +200,7 @@ def test_bigquery_result_methods(bigquery_session: BigQueryDriver, bigquery_serv
     assert not result.is_empty()
 
     # Test empty result
-    empty_result = bigquery_session.execute(f"SELECT * FROM {table_name} WHERE name = ?", ("nonexistent",))
+    empty_result = bigquery_session.execute(f"SELECT * FROM {table_name} WHERE name = ?", ("nonexistent"))
     assert isinstance(empty_result, SQLResult)
     assert empty_result.is_empty()
     assert empty_result.get_first() is None
@@ -381,7 +381,7 @@ def test_bigquery_column_names_and_metadata(
 
     # Test column names
     result = bigquery_session.execute(
-        f"SELECT id, name, value, created_at FROM {table_name} WHERE name = ?", ("metadata_test",)
+        f"SELECT id, name, value, created_at FROM {table_name} WHERE name = ?", ("metadata_test")
     )
     assert isinstance(result, SQLResult)
     assert result.column_names == ["id", "name", "value", "created_at"]
@@ -415,7 +415,7 @@ def test_bigquery_with_schema_type(bigquery_session: BigQueryDriver, bigquery_se
 
     # Query with schema type
     result = bigquery_session.execute(
-        f"SELECT id, name, value FROM {table_name} WHERE name = ?", ("schema_test",), schema_type=TestRecord
+        f"SELECT id, name, value FROM {table_name} WHERE name = ?", ("schema_test"), schema_type=TestRecord
     )
 
     assert isinstance(result, SQLResult)

@@ -92,11 +92,9 @@ def test_mixed_parameter_styles(
     config = SQLConfig(
         allowed_parameter_styles=("positional_colon", "qmark", "named_colon"),
         allow_mixed_parameter_styles=True,  # Allow mixed styles for these tests
-        strict_mode=True,  # Enable strict mode to raise validation errors
     )
     if error_type:
         stmt = SQL(sql, parameters=parameters, _config=config)
-        # In strict mode, validation errors are wrapped in SQLValidationError
         with pytest.raises((error_type, SQLValidationError)):
             # Trigger validation by accessing property
             _ = stmt.to_sql()
@@ -268,10 +266,7 @@ def test_positional_colon_parameter_validation(
 ) -> None:
     """Test parameter validation for Oracle numeric style."""
     # Enable parameter validation by setting allowed_parameter_styles
-    config = SQLConfig(
-        allowed_parameter_styles=("positional_colon", "positional_colon"),
-        strict_mode=True,  # Enable strict mode to raise validation errors
-    )
+    config = SQLConfig(allowed_parameter_styles=("positional_colon", "positional_colon"))
     stmt = SQL(sql, parameters=parameters, _config=config)
 
     if should_fail:
@@ -296,8 +291,7 @@ def test_positional_colon_in_strings_and_comments() -> None:
         :5 as real_param
     FROM dual
     """
-    # Create SQL with strict mode disabled to avoid validation errors
-    config = SQLConfig(strict_mode=False)
+    config = SQLConfig()
     stmt = SQL(sql, parameters=[42], _config=config)
 
     # Should only find :5 as a real parameter
