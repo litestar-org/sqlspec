@@ -1,3 +1,5 @@
+"""Delete operation mixins for SQL builders."""
+
 from typing import Optional
 
 from sqlglot import exp

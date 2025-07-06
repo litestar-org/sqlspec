@@ -1,3 +1,5 @@
+"""Merge operation mixins for SQL builders."""
+
 from typing import Any, Optional, Union
 
 from sqlglot import exp

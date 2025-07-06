@@ -1,18 +1,14 @@
 """SQL statement builder mixins."""
 
-from sqlspec.statement.builder.mixins._aggregate_functions import AggregateFunctionsMixin
-from sqlspec.statement.builder.mixins._case_builder import CaseBuilderMixin
-from sqlspec.statement.builder.mixins._common_table_expr import CommonTableExpressionMixin
-from sqlspec.statement.builder.mixins._delete_from import DeleteFromClauseMixin
-from sqlspec.statement.builder.mixins._from import FromClauseMixin
-from sqlspec.statement.builder.mixins._group_by import GroupByClauseMixin
-from sqlspec.statement.builder.mixins._having import HavingClauseMixin
-from sqlspec.statement.builder.mixins._insert_from_select import InsertFromSelectMixin
-from sqlspec.statement.builder.mixins._insert_into import InsertIntoClauseMixin
-from sqlspec.statement.builder.mixins._insert_values import InsertValuesMixin
-from sqlspec.statement.builder.mixins._join import JoinClauseMixin
-from sqlspec.statement.builder.mixins._limit_offset import LimitOffsetClauseMixin
-from sqlspec.statement.builder.mixins._merge_clauses import (
+from sqlspec.statement.builder.mixins.cte_and_set_ops import CommonTableExpressionMixin, SetOperationMixin
+from sqlspec.statement.builder.mixins.delete_operations import DeleteFromClauseMixin
+from sqlspec.statement.builder.mixins.insert_operations import (
+    InsertFromSelectMixin,
+    InsertIntoClauseMixin,
+    InsertValuesMixin,
+)
+from sqlspec.statement.builder.mixins.join_operations import JoinClauseMixin
+from sqlspec.statement.builder.mixins.merge_operations import (
     MergeIntoClauseMixin,
     MergeMatchedClauseMixin,
     MergeNotMatchedBySourceClauseMixin,
@@ -20,25 +16,24 @@ from sqlspec.statement.builder.mixins._merge_clauses import (
     MergeOnClauseMixin,
     MergeUsingClauseMixin,
 )
-from sqlspec.statement.builder.mixins._order_by import OrderByClauseMixin
-from sqlspec.statement.builder.mixins._pivot import PivotClauseMixin
-from sqlspec.statement.builder.mixins._returning import ReturningClauseMixin
-from sqlspec.statement.builder.mixins._select_columns import SelectColumnsMixin
-from sqlspec.statement.builder.mixins._set_ops import SetOperationMixin
-from sqlspec.statement.builder.mixins._unpivot import UnpivotClauseMixin
-from sqlspec.statement.builder.mixins._update_from import UpdateFromClauseMixin
-from sqlspec.statement.builder.mixins._update_set import UpdateSetClauseMixin
-from sqlspec.statement.builder.mixins._update_table import UpdateTableClauseMixin
-from sqlspec.statement.builder.mixins._where import WhereClauseMixin
-from sqlspec.statement.builder.mixins._window_functions import WindowFunctionsMixin
+from sqlspec.statement.builder.mixins.order_limit_operations import (
+    LimitOffsetClauseMixin,
+    OrderByClauseMixin,
+    ReturningClauseMixin,
+)
+from sqlspec.statement.builder.mixins.pivot_operations import PivotClauseMixin, UnpivotClauseMixin
+from sqlspec.statement.builder.mixins.select_operations import CaseBuilder, SelectClauseMixin
+from sqlspec.statement.builder.mixins.update_operations import (
+    UpdateFromClauseMixin,
+    UpdateSetClauseMixin,
+    UpdateTableClauseMixin,
+)
+from sqlspec.statement.builder.mixins.where_clause import HavingClauseMixin, WhereClauseMixin
 
 __all__ = (
-    "AggregateFunctionsMixin",
-    "CaseBuilderMixin",
+    "CaseBuilder",
     "CommonTableExpressionMixin",
     "DeleteFromClauseMixin",
-    "FromClauseMixin",
-    "GroupByClauseMixin",
     "HavingClauseMixin",
     "InsertFromSelectMixin",
     "InsertIntoClauseMixin",
@@ -54,12 +49,11 @@ __all__ = (
     "OrderByClauseMixin",
     "PivotClauseMixin",
     "ReturningClauseMixin",
-    "SelectColumnsMixin",
+    "SelectClauseMixin",
     "SetOperationMixin",
     "UnpivotClauseMixin",
     "UpdateFromClauseMixin",
     "UpdateSetClauseMixin",
     "UpdateTableClauseMixin",
     "WhereClauseMixin",
-    "WindowFunctionsMixin",
 )

@@ -40,7 +40,7 @@ from sqlspec.utils.type_guards import (
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.statement.parameters import ParameterNormalizationState
+    from sqlspec.statement.parameters import ParameterStyleTransformationState
 
 __all__ = ("SQL", "SQLConfig", "Statement")
 
@@ -105,6 +105,7 @@ class SQLConfig:
     enable_transformations: bool = True
     enable_analysis: bool = False
     enable_normalization: bool = True
+    enable_parameter_type_wrapping: bool = True
     strict_mode: bool = False
     cache_parsed_expression: bool = True
     parse_errors_as_warnings: bool = True
@@ -224,7 +225,7 @@ class SQL:
         self._original_parameters: Any = None
         self._original_sql: str = ""
         self._placeholder_mapping: dict[str, Union[str, int]] = {}
-        self._parameter_normalization_state: Optional[ParameterNormalizationState] = None
+        self._parameter_normalization_state: Optional[ParameterStyleTransformationState] = None
         self._is_many: bool = False
         self._is_script: bool = False
 
@@ -318,9 +319,24 @@ class SQL:
         # Include parameters in the cache key
         param_hash = 0
         if self._positional_params:
-            param_hash ^= hash(tuple(self._positional_params))
+            # Handle unhashable types like lists
+            hashable_params = []
+            for param in self._positional_params:
+                if isinstance(param, (list, dict)):
+                    # Convert unhashable types to hashable representations
+                    hashable_params.append(repr(param))
+                else:
+                    hashable_params.append(param)
+            param_hash ^= hash(tuple(hashable_params))
         if self._named_params:
-            param_hash ^= hash(tuple(sorted(self._named_params.items())))
+            # Handle unhashable types in named params
+            hashable_items = []
+            for key, value in sorted(self._named_params.items()):
+                if isinstance(value, (list, dict)):
+                    hashable_items.append((key, repr(value)))
+                else:
+                    hashable_items.append((key, value))
+            param_hash ^= hash(tuple(hashable_items))
         if self._filters:
             filter_hashes = [f.__class__.__name__ for f in self._filters]
             param_hash ^= hash(tuple(filter_hashes))
@@ -482,9 +498,20 @@ class SQL:
         if isinstance(processed_expr, exp.Anonymous):
             processed_sql = self._raw_sql or context.initial_sql_string
         else:
-            processed_sql = processed_expr.sql(dialect=self._dialect or self._config.dialect, comments=False)
-            logger.debug("Processed expression SQL: '%s'", processed_sql)
+            # Use the initial expression that includes filters, not the processed one
+            # The processed expression may have lost LIMIT/OFFSET during pipeline processing
+            if hasattr(context, "initial_expression") and context.initial_expression != processed_expr:
+                # Check if LIMIT/OFFSET was stripped during processing
+                has_limit_in_initial = (
+                    hasattr(context.initial_expression, "args") and "limit" in context.initial_expression.args
+                )
+                has_limit_in_processed = hasattr(processed_expr, "args") and "limit" in processed_expr.args
 
+                if has_limit_in_initial and not has_limit_in_processed:
+                    # Restore LIMIT/OFFSET from initial expression
+                    processed_expr = context.initial_expression
+
+            processed_sql = processed_expr.sql(dialect=self._dialect or self._config.dialect, comments=False)
             if self._placeholder_mapping and self._original_sql:
                 processed_sql, result = self._denormalize_sql(processed_sql, result)
 
@@ -498,22 +525,14 @@ class SQL:
         original_sql = self._original_sql
         param_info = self._config.parameter_validator.extract_parameters(original_sql)
         target_styles = {p.style for p in param_info}
-
-        logger.debug(
-            "Denormalizing SQL: before='%s', original='%s', styles=%s", processed_sql, original_sql, target_styles
-        )
-
         if ParameterStyle.POSITIONAL_PYFORMAT in target_styles:
             processed_sql = self._config.parameter_converter._convert_sql_placeholders(
                 processed_sql, param_info, ParameterStyle.POSITIONAL_PYFORMAT
             )
-            logger.debug("Denormalized SQL to: '%s'", processed_sql)
         elif ParameterStyle.NAMED_PYFORMAT in target_styles:
             processed_sql = self._config.parameter_converter._convert_sql_placeholders(
                 processed_sql, param_info, ParameterStyle.NAMED_PYFORMAT
             )
-            logger.debug("Denormalized SQL to: '%s'", processed_sql)
-            # Also denormalize the parameters back to their original names
             if (
                 self._placeholder_mapping
                 and result.context.merged_parameters
@@ -524,13 +543,10 @@ class SQL:
             processed_param_info = self._config.parameter_validator.extract_parameters(processed_sql)
             has_param_placeholders = any(p.name and p.name.startswith(PARAM_PREFIX) for p in processed_param_info)
 
-            if has_param_placeholders:
-                logger.debug("Skipping denormalization for param_N placeholders")
-            else:
+            if not has_param_placeholders:
                 processed_sql = self._config.parameter_converter._convert_sql_placeholders(
                     processed_sql, param_info, ParameterStyle.POSITIONAL_COLON
                 )
-                logger.debug("Denormalized SQL to: '%s'", processed_sql)
             if (
                 self._placeholder_mapping
                 and result.context.merged_parameters
@@ -606,6 +622,16 @@ class SQL:
 
     def _finalize_processed_state(self, result: Any, processed_sql: str, merged_params: Any) -> None:
         """Finalize the processed state."""
+        # Wrap parameters with type information if enabled
+        if self._config.enable_parameter_type_wrapping and merged_params is not None:
+            # Get parameter info from the processed SQL
+            validator = self._config.parameter_validator
+            param_info = validator.extract_parameters(processed_sql)
+
+            # Wrap parameters with type information
+            converter = self._config.parameter_converter
+            merged_params = converter.wrap_parameters_with_types(merged_params, param_info)
+
         self._processed_state = _ProcessedState(
             processed_expression=result.expression,
             processed_sql=processed_sql,
@@ -654,12 +680,12 @@ class SQL:
             self._placeholder_mapping = placeholder_mapping
 
             # Create normalization state
-            from sqlspec.statement.parameters import ParameterNormalizationState
+            from sqlspec.statement.parameters import ParameterStyleTransformationState
 
-            self._parameter_normalization_state = ParameterNormalizationState(
-                was_normalized=True,
+            self._parameter_normalization_state = ParameterStyleTransformationState(
+                was_transformed=True,
                 original_styles=list({p.style for p in param_info}),
-                normalized_style=ParameterStyle.NAMED_COLON,
+                transformation_style=ParameterStyle.NAMED_COLON,
                 placeholder_map=placeholder_mapping,
                 original_param_info=param_info,
             )
@@ -1001,7 +1027,7 @@ class SQL:
 
             # If original SQL had incompatible styles, denormalize back to the original style
             # when no specific style requested OR when the requested style matches the original
-            if norm_state.was_normalized and norm_state.original_styles:
+            if norm_state.was_transformed and norm_state.original_styles:
                 original_style = norm_state.original_styles[0]
                 should_denormalize = placeholder_style is None or (
                     placeholder_style and ParameterStyle(placeholder_style) == original_style

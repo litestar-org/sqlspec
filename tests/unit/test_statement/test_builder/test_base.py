@@ -35,7 +35,7 @@ from sqlspec.statement.builder.ddl import (
     RenameTable,
     TruncateTable,
 )
-from sqlspec.statement.builder.mixins._where import WhereClauseMixin
+from sqlspec.statement.builder.mixins.where_clause import WhereClauseMixin
 from sqlspec.statement.builder.select import Select
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig

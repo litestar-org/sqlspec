@@ -24,7 +24,7 @@ from sqlglot.errors import ParseError
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder import Select
-from sqlspec.statement.builder.mixins._case_builder import CaseBuilder
+from sqlspec.statement.builder.mixins import CaseBuilder
 
 if TYPE_CHECKING:
     pass

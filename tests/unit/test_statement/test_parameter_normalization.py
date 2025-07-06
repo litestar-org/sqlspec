@@ -21,7 +21,7 @@ class TestParameterNormalization:
         result = converter.convert_parameters(sql, params)
 
         # Check that normalization occurred
-        assert result.normalization_state.was_normalized is True
+        assert result.normalization_state.was_transformed is True
         assert ":param_0" in result.transformed_sql
         assert ":param_1" in result.transformed_sql
         assert "%s" not in result.transformed_sql
@@ -34,7 +34,7 @@ class TestParameterNormalization:
         converter = ParameterConverter()
         result = converter.convert_parameters(sql, params)
 
-        assert result.normalization_state.was_normalized is True
+        assert result.normalization_state.was_transformed is True
         assert ":param_0" in result.transformed_sql
         assert ":param_1" in result.transformed_sql
         assert "%(name)s" not in result.transformed_sql
@@ -53,7 +53,7 @@ class TestParameterNormalization:
         for sql, params, expected_style in test_cases:
             result = converter.convert_parameters(sql, params)
             # Should not be normalized
-            assert result.normalization_state.was_normalized is False
+            assert result.normalization_state.was_transformed is False
             assert result.transformed_sql == sql
             assert result.parameter_info[0].style == expected_style
 
@@ -78,7 +78,7 @@ class TestParameterNormalization:
         converter = ParameterConverter()
         result = converter.convert_parameters(sql, params)
 
-        assert result.normalization_state.was_normalized is True
+        assert result.normalization_state.was_transformed is True
 
     def test_sqlglot_incompatible_styles_constant(self) -> None:
         """Test that SQLGLOT_INCOMPATIBLE_STYLES contains the correct styles."""
@@ -115,7 +115,7 @@ class TestParameterNormalization:
         result = converter.convert_parameters(sql, params)
 
         # Oracle numeric is incompatible with SQLGlot, so it should be normalized
-        assert result.normalization_state.was_normalized is True
+        assert result.normalization_state.was_transformed is True
         assert ":param_0" in result.transformed_sql
         assert ":param_1" in result.transformed_sql
         assert ":1" not in result.transformed_sql

@@ -13,26 +13,25 @@ from typing_extensions import Self
 
 from sqlspec.statement.builder.base import QueryBuilder, SafeQuery
 from sqlspec.statement.builder.mixins import (
-    AggregateFunctionsMixin,
-    CaseBuilderMixin,
     CommonTableExpressionMixin,
-    FromClauseMixin,
-    GroupByClauseMixin,
     HavingClauseMixin,
     JoinClauseMixin,
     LimitOffsetClauseMixin,
     OrderByClauseMixin,
     PivotClauseMixin,
-    SelectColumnsMixin,
+    SelectClauseMixin,
     SetOperationMixin,
     UnpivotClauseMixin,
     WhereClauseMixin,
-    WindowFunctionsMixin,
 )
 from sqlspec.statement.result import SQLResult
 from sqlspec.typing import RowT
 
 __all__ = ("Select",)
+
+
+# This pattern is formatted with the table name and compiled for each hint.
+TABLE_HINT_PATTERN = r"\b{}\b(\s+AS\s+\w+)?"
 
 
 @dataclass
@@ -41,16 +40,11 @@ class Select(
     WhereClauseMixin,
     OrderByClauseMixin,
     LimitOffsetClauseMixin,
-    SelectColumnsMixin,
+    SelectClauseMixin,
     JoinClauseMixin,
-    FromClauseMixin,
-    GroupByClauseMixin,
     HavingClauseMixin,
     SetOperationMixin,
     CommonTableExpressionMixin,
-    AggregateFunctionsMixin,
-    WindowFunctionsMixin,
-    CaseBuilderMixin,
     PivotClauseMixin,
     UnpivotClauseMixin,
 ):
@@ -95,14 +89,14 @@ class Select(
         """
         super().__init__(**kwargs)
 
-        # Initialize fields from dataclass
+        # Manually initialize dataclass fields here because a custom __init__ is defined.
+        # This is necessary to support the `Select("col1", "col2")` shorthand initialization.
         self._with_parts = {}
         self._expression = None
         self._schema = None
         self._hints = []
 
-        if self._expression is None:
-            self._create_base_expression()
+        self._create_base_expression()
 
         # Add columns if provided - just a shorthand for .select()
         if columns:
@@ -174,48 +168,49 @@ class Select(
         """
         safe_query = super().build()
 
-        if hasattr(self, "_hints") and self._hints:
-            modified_expr = self._expression.copy() if self._expression else None
+        if not self._hints:
+            return safe_query
 
-            if modified_expr and isinstance(modified_expr, exp.Select):
-                statement_hints = [h["hint"] for h in self._hints if h.get("location") == "statement"]
-                if statement_hints:
-                    # Parse each hint and create proper hint expressions
-                    hint_expressions = []
-                    for hint in statement_hints:
-                        try:
-                            # Try to parse hint as an expression (e.g., "INDEX(users idx_name)")
-                            hint_str = str(hint)  # Ensure hint is a string
-                            hint_expr: Optional[exp.Expression] = exp.maybe_parse(hint_str, dialect=self.dialect_name)
-                            if hint_expr:
-                                hint_expressions.append(hint_expr)
-                            else:
-                                hint_expressions.append(exp.Anonymous(this=hint_str))
-                        except Exception:  # noqa: PERF203
-                            hint_expressions.append(exp.Anonymous(this=str(hint)))
+        modified_expr = self._expression.copy() if self._expression else self._create_base_expression()
 
-                    if hint_expressions:
-                        hint_node = exp.Hint(expressions=hint_expressions)
-                        modified_expr.set("hint", hint_node)
+        if isinstance(modified_expr, exp.Select):
+            statement_hints = [h["hint"] for h in self._hints if h.get("location") == "statement"]
+            if statement_hints:
+                # Parse each hint and create proper hint expressions
+                hint_expressions = []
+                for hint in statement_hints:
+                    try:
+                        # Try to parse hint as an expression (e.g., "INDEX(users idx_name)")
+                        hint_str = str(hint)  # Ensure hint is a string
+                        hint_expr: Optional[exp.Expression] = exp.maybe_parse(hint_str, dialect=self.dialect_name)
+                        if hint_expr:
+                            hint_expressions.append(hint_expr)
+                        else:
+                            hint_expressions.append(exp.Anonymous(this=hint_str))
+                    except Exception:
+                        hint_expressions.append(exp.Anonymous(this=str(hint)))
 
-                # For table-level hints, we'll fall back to comment injection in SQL
-                # since SQLGlot doesn't have a standard way to attach hints to individual tables
-                modified_sql = modified_expr.sql(dialect=self.dialect_name, pretty=True)
+                if hint_expressions:
+                    hint_node = exp.Hint(expressions=hint_expressions)
+                    modified_expr.set("hint", hint_node)
 
-                table_hints = [h for h in self._hints if h.get("location") == "table" and h.get("table")]
-                if table_hints:
-                    for th in table_hints:
-                        table = str(th["table"])
-                        hint = th["hint"]
-                        # More precise regex that captures the table and optional alias
-                        pattern = rf"\b{re.escape(table)}\b(\s+AS\s+\w+)?"
+        # For table-level hints, we'll fall back to comment injection in SQL
+        # since SQLGlot doesn't have a standard way to attach hints to individual tables
+        modified_sql = modified_expr.sql(dialect=self.dialect_name, pretty=True)
 
-                        def replacement_func(match: re.Match[str]) -> str:
-                            alias_part = match.group(1) or ""
-                            return f"/*+ {hint} */ {table}{alias_part}"  # noqa: B023
+        table_hints = [h for h in self._hints if h.get("location") == "table" and h.get("table")]
+        if table_hints:
+            for th in table_hints:
+                table = str(th["table"])
+                hint = th["hint"]
+                # More precise regex that captures the table and optional alias
+                pattern = TABLE_HINT_PATTERN.format(re.escape(table))
+                compiled_pattern = re.compile(pattern, re.IGNORECASE)
 
-                        modified_sql = re.sub(pattern, replacement_func, modified_sql, flags=re.IGNORECASE, count=1)
+                def replacement_func(match: re.Match[str]) -> str:
+                    alias_part = match.group(1) or ""
+                    return f"/*+ {hint} */ {table}{alias_part}"  # noqa: B023
 
-                return SafeQuery(sql=modified_sql, parameters=safe_query.parameters, dialect=safe_query.dialect)
+                modified_sql = compiled_pattern.sub(replacement_func, modified_sql, count=1)
 
-        return safe_query
+        return SafeQuery(sql=modified_sql, parameters=safe_query.parameters, dialect=safe_query.dialect)

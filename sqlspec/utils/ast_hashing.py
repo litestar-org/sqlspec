@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 from sqlglot import exp
 
-__all__ = ("hash_expression", )
+__all__ = ("hash_expression",)
 
 
 def hash_expression(expr: Optional[exp.Expression], _seen: Optional[set[int]] = None) -> int:

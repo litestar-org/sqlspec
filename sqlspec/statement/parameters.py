@@ -24,8 +24,8 @@ __all__ = (
     "ConvertedParameters",
     "ParameterConverter",
     "ParameterInfo",
-    "ParameterNormalizationState",
     "ParameterStyle",
+    "ParameterStyleTransformationState",
     "ParameterValidator",
     "SQLParameterType",
     "TypedParameter",
@@ -140,9 +140,25 @@ class TypedParameter:
     semantic_name: "Optional[str]" = None
     """Optional semantic name derived from SQL context (e.g., 'user_id', 'email')."""
 
+    def __hash__(self) -> int:
+        """Make TypedParameter hashable for use in cache keys.
 
-class NormalizationInfo(TypedDict, total=False):
-    """Information about SQL parameter normalization."""
+        We hash based on the value and type_hint, which are the key attributes
+        that affect SQL compilation and parameter handling.
+        """
+        if isinstance(self.value, (list, dict)):
+            value_hash = hash(repr(self.value))
+        else:
+            try:
+                value_hash = hash(self.value)
+            except TypeError:
+                value_hash = hash(repr(self.value))
+
+        return hash((value_hash, self.type_hint, self.semantic_name))
+
+
+class ParameterStyleInfo(TypedDict, total=False):
+    """Information about SQL parameter style transformation."""
 
     was_normalized: bool
     placeholder_map: dict[str, Union[str, int]]
@@ -150,24 +166,24 @@ class NormalizationInfo(TypedDict, total=False):
 
 
 @dataclass
-class ParameterNormalizationState:
-    """Encapsulates all information about parameter normalization.
+class ParameterStyleTransformationState:
+    """Encapsulates all information about parameter style transformation.
 
     This class provides a single source of truth for parameter style conversions,
-    making it easier to track and reverse normalizations applied for SQLGlot compatibility.
+    making it easier to track and reverse transformations applied for SQLGlot compatibility.
     """
 
-    was_normalized: bool = False
-    """Whether parameter normalization was applied."""
+    was_transformed: bool = False
+    """Whether parameter transformation was applied."""
 
     original_styles: list[ParameterStyle] = field(default_factory=list)
     """Original parameter style(s) detected in the SQL."""
 
-    normalized_style: Optional[ParameterStyle] = None
-    """Target style used for normalization (if normalized)."""
+    transformation_style: Optional[ParameterStyle] = None
+    """Target style used for transformation (if transformed)."""
 
     placeholder_map: dict[str, Union[str, int]] = field(default_factory=dict)
-    """Mapping from normalized names to original names/positions."""
+    """Mapping from transformed names to original names/positions."""
 
     reverse_map: dict[Union[str, int], str] = field(default_factory=dict)
     """Reverse mapping for quick lookups."""
@@ -194,7 +210,7 @@ class ConvertedParameters:
     merged_parameters: "SQLParameterType"
     """Parameters after merging from various sources."""
 
-    normalization_state: ParameterNormalizationState
+    normalization_state: ParameterStyleTransformationState
     """Complete normalization state for tracking conversions."""
 
 
@@ -688,17 +704,17 @@ class ParameterConverter:
             self.validator.validate_parameters(parameters_info, merged_params, sql)
         if needs_normalization:
             transformed_sql, placeholder_map = self._transform_sql_for_parsing(sql, parameters_info)
-            normalization_state = ParameterNormalizationState(
-                was_normalized=True,
+            normalization_state = ParameterStyleTransformationState(
+                was_transformed=True,
                 original_styles=list({p.style for p in parameters_info}),
-                normalized_style=ParameterStyle.NAMED_COLON,
+                transformation_style=ParameterStyle.NAMED_COLON,
                 placeholder_map=placeholder_map,
                 original_param_info=parameters_info,
             )
         else:
             transformed_sql = sql
-            normalization_state = ParameterNormalizationState(
-                was_normalized=False,
+            normalization_state = ParameterStyleTransformationState(
+                was_transformed=False,
                 original_styles=list({p.style for p in parameters_info}),
                 original_param_info=parameters_info,
             )
@@ -781,7 +797,118 @@ class ParameterConverter:
         Returns:
             Parameters with TypedParameter wrapping where appropriate
         """
-        return None if parameters is None else parameters
+        if parameters is None:
+            return None
+
+        # Import here to avoid circular imports
+        from datetime import date, datetime, time
+        from decimal import Decimal
+
+        def infer_type_from_value(value: Any) -> tuple[str, "exp.DataType"]:
+            """Infer SQL type hint and SQLGlot DataType from Python value."""
+            # Import here to avoid issues
+            from sqlglot import exp
+
+            # None/NULL
+            if value is None:
+                return "null", exp.DataType.build("NULL")
+
+            # Boolean
+            if isinstance(value, bool):
+                return "boolean", exp.DataType.build("BOOLEAN")
+
+            # Integer types
+            if isinstance(value, int) and not isinstance(value, bool):
+                if abs(value) > 2147483647:  # Max 32-bit int
+                    return "bigint", exp.DataType.build("BIGINT")
+                return "integer", exp.DataType.build("INT")
+
+            # Float/Decimal
+            if isinstance(value, float):
+                return "float", exp.DataType.build("FLOAT")
+            if isinstance(value, Decimal):
+                return "decimal", exp.DataType.build("DECIMAL")
+
+            # Date/Time types
+            if isinstance(value, datetime):
+                return "timestamp", exp.DataType.build("TIMESTAMP")
+            if isinstance(value, date):
+                return "date", exp.DataType.build("DATE")
+            if isinstance(value, time):
+                return "time", exp.DataType.build("TIME")
+
+            # JSON/Dict
+            if isinstance(value, dict):
+                return "json", exp.DataType.build("JSON")
+
+            # Array/List
+            if isinstance(value, (list, tuple)):
+                return "array", exp.DataType.build("ARRAY")
+
+            # String (default)
+            if isinstance(value, str):
+                return "string", exp.DataType.build("VARCHAR")
+
+            # Bytes
+            if isinstance(value, bytes):
+                return "binary", exp.DataType.build("BINARY")
+
+            # Default fallback
+            return "string", exp.DataType.build("VARCHAR")
+
+        def wrap_value(value: Any, semantic_name: Optional[str] = None) -> Any:
+            """Wrap a single value with TypedParameter if beneficial."""
+            # Don't wrap if already a TypedParameter
+            if hasattr(value, "__class__") and value.__class__.__name__ == "TypedParameter":
+                return value
+
+            # Don't wrap simple scalar types unless they need special handling
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                # For simple types, only wrap if we have special type needs
+                # (e.g., bigint, decimal precision, etc.)
+                if isinstance(value, int) and abs(value) > 2147483647:
+                    # Wrap large integers as bigint
+                    type_hint, sqlglot_type = infer_type_from_value(value)
+                    return TypedParameter(
+                        value=value, sqlglot_type=sqlglot_type, type_hint=type_hint, semantic_name=semantic_name
+                    )
+                # Otherwise, return unwrapped for performance
+                return value
+
+            # Wrap complex types and types needing special handling
+            if isinstance(value, (datetime, date, time, Decimal, dict, list, tuple, bytes, bool, type(None))):
+                type_hint, sqlglot_type = infer_type_from_value(value)
+                return TypedParameter(
+                    value=value, sqlglot_type=sqlglot_type, type_hint=type_hint, semantic_name=semantic_name
+                )
+
+            # Default: return unwrapped
+            return value
+
+        # Handle different parameter structures
+        if isinstance(parameters, dict):
+            # Wrap dict values selectively
+            wrapped = {}
+            for key, value in parameters.items():
+                wrapped[key] = wrap_value(value, semantic_name=key)
+            return wrapped
+
+        if isinstance(parameters, (list, tuple)):
+            # Wrap list/tuple values selectively
+            wrapped = []
+            for i, value in enumerate(parameters):
+                # Try to get semantic name from parameters_info if available
+                semantic_name = None
+                if parameters_info and i < len(parameters_info) and parameters_info[i].name:
+                    semantic_name = parameters_info[i].name
+                wrapped.append(wrap_value(value, semantic_name=semantic_name))
+            return wrapped if isinstance(parameters, list) else tuple(wrapped)
+
+        # Single scalar parameter
+        semantic_name = None
+        if parameters_info and parameters_info[0].name:
+            semantic_name = parameters_info[0].name
+        return wrap_value(parameters, semantic_name=semantic_name)
 
     def _convert_sql_placeholders(
         self, rendered_sql: str, final_parameter_info: "list[ParameterInfo]", target_style: "ParameterStyle"
