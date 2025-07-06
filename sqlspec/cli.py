@@ -1,12 +1,11 @@
 import sys
 from collections.abc import Sequence
-from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 if TYPE_CHECKING:
     from click import Group
 
-    from sqlspec.config import SQLAlchemyAsyncConfig, SQLAlchemySyncConfig
+    from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 
 __all__ = ("add_migration_commands", "get_sqlspec_group")
 
@@ -59,7 +58,7 @@ def get_sqlspec_group() -> "Group":
     return sqlspec_group
 
 
-def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":  # noqa: C901
+def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
     """Add migration commands to the database group.
 
     Args:
@@ -103,7 +102,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
 
     def get_config_by_bind_key(
         ctx: "click.Context", bind_key: Optional[str]
-    ) -> "Union[SQLAlchemyAsyncConfig, SQLAlchemySyncConfig]":
+    ) -> "Union[AsyncDatabaseConfig[Any, Any, Any], SyncDatabaseConfig[Any, Any, Any]]":
         """Get the SQLAlchemy config for the specified bind key.
 
         Args:
@@ -115,11 +114,13 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         """
         configs = ctx.obj["configs"]
         if bind_key is None:
-            return cast("Union[SQLAlchemyAsyncConfig, SQLAlchemySyncConfig]", configs[0])
+            return cast("Union[AsyncDatabaseConfig[Any, Any, Any], SyncDatabaseConfig[Any, Any, Any]]", configs[0])
 
         for config in configs:
-            if config.bind_key == bind_key:
-                return cast("Union[SQLAlchemyAsyncConfig, SQLAlchemySyncConfig]", config)
+            # Check if config has a name or identifier attribute
+            config_name = getattr(config, "name", None) or getattr(config, "bind_key", None)
+            if config_name == bind_key:
+                return cast("Union[AsyncDatabaseConfig[Any, Any, Any], SyncDatabaseConfig[Any, Any, Any]]", config)
 
         console.print(f"[red]No config found for bind key: {bind_key}[/]")
         sys.exit(1)
@@ -134,7 +135,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         ctx = click.get_current_context()
         console.rule("[yellow]Listing current revision[/]", align="left")
         sqlspec_config = get_config_by_bind_key(ctx, bind_key)
-        migration_commands = MigrationCommands(sqlspec_config=sqlspec_config)
+        migration_commands = MigrationCommands(config=sqlspec_config)
         migration_commands.current(verbose=verbose)
 
     @database_group.command(name="downgrade", help="Downgrade database to a specific revision.")
@@ -158,7 +159,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         )
         if input_confirmed:
             sqlspec_config = get_config_by_bind_key(ctx, bind_key)
-            migration_commands = MigrationCommands(sqlspec_config=sqlspec_config)
+            migration_commands = MigrationCommands(config=sqlspec_config)
             migration_commands.downgrade(revision=revision)
 
     @database_group.command(name="upgrade", help="Upgrade database to a specific revision.")
@@ -182,7 +183,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         )
         if input_confirmed:
             sqlspec_config = get_config_by_bind_key(ctx, bind_key)
-            migration_commands = MigrationCommands(sqlspec_config=sqlspec_config)
+            migration_commands = MigrationCommands(config=sqlspec_config)
             migration_commands.upgrade(revision=revision)
 
     @database_group.command(help="Stamp the revision table with the given revision")
@@ -194,7 +195,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
 
         ctx = click.get_current_context()
         sqlspec_config = get_config_by_bind_key(ctx, bind_key)
-        migration_commands = MigrationCommands(sqlspec_config=sqlspec_config)
+        migration_commands = MigrationCommands(config=sqlspec_config)
         migration_commands.stamp(revision=revision)
 
     @database_group.command(name="init", help="Initialize migrations for the project.")
@@ -218,8 +219,9 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         if input_confirmed:
             configs = [get_config_by_bind_key(ctx, bind_key)] if bind_key is not None else ctx.obj["configs"]
             for config in configs:
-                directory = config.alembic_config.script_location if directory is None else directory
-                migration_commands = MigrationCommands(sqlspec_config=config)
+                migration_config = getattr(config, "migration_config", {})
+                directory = migration_config.get("script_location", "migrations") if directory is None else directory
+                migration_commands = MigrationCommands(config=config)
                 migration_commands.init(directory=cast("str", directory), package=package)
 
     @database_group.command(name="make-migrations", help="Create a new migration revision.")
@@ -240,91 +242,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
             message = "new migration" if no_prompt else Prompt.ask("Please enter a message describing this revision")
 
         sqlspec_config = get_config_by_bind_key(ctx, bind_key)
-        migration_commands = MigrationCommands(sqlspec_config=sqlspec_config)
+        migration_commands = MigrationCommands(config=sqlspec_config)
         migration_commands.revision(message=message)
-
-    @database_group.command(name="drop-all", help="Drop all tables from the database.")
-    @bind_key_option
-    @no_prompt_option
-    def drop_all(bind_key: Optional[str], no_prompt: bool) -> None:  # pyright: ignore[reportUnusedFunction]
-        """Drop all tables from the database."""
-        from anyio import run
-        from rich.prompt import Confirm
-
-        from sqlspec.base import metadata_registry
-        from sqlspec.migrations.utils import drop_all
-
-        ctx = click.get_current_context()
-        console.rule("[yellow]Dropping all tables from the database[/]", align="left")
-        input_confirmed = no_prompt or Confirm.ask(
-            "[bold red]Are you sure you want to drop all tables from the database?"
-        )
-
-        async def _drop_all(configs: "Sequence[Union[SQLAlchemyAsyncConfig, SQLAlchemySyncConfig]]") -> None:
-            for config in configs:
-                engine = config.get_engine()
-                await drop_all(engine, config.alembic_config.version_table_name, metadata_registry.get(config.bind_key))
-
-        if input_confirmed:
-            configs = [get_config_by_bind_key(ctx, bind_key)] if bind_key is not None else ctx.obj["configs"]
-            run(_drop_all, configs)
-
-    @database_group.command(name="dump-data", help="Dump specified tables from the database to JSON files.")
-    @bind_key_option
-    @click.option(
-        "--table",
-        "table_names",
-        help="Name of the table to dump. Multiple tables can be specified. Use '*' to dump all tables.",
-        type=str,
-        required=True,
-        multiple=True,
-    )
-    @click.option(
-        "--dir",
-        "dump_dir",
-        help="Directory to save the JSON files. Defaults to WORKDIR/fixtures",
-        type=click.Path(path_type=Path),
-        default=Path.cwd() / "fixtures",
-        required=False,
-    )
-    def dump_table_data(bind_key: Optional[str], table_names: tuple[str, ...], dump_dir: Path) -> None:  # pyright: ignore[reportUnusedFunction]
-        """Dump table data to JSON files."""
-        from anyio import run
-        from rich.prompt import Confirm
-
-        from sqlspec.alembic.utils import dump_tables
-        from sqlspec.base import metadata_registry, orm_registry
-
-        ctx = click.get_current_context()
-        all_tables = "*" in table_names
-
-        if all_tables and not Confirm.ask(
-            "[yellow bold]You have specified '*'. Are you sure you want to dump all tables from the database?"
-        ):
-            return console.rule("[red bold]No data was dumped.", style="red", align="left")
-
-        async def _dump_tables() -> None:
-            configs = [get_config_by_bind_key(ctx, bind_key)] if bind_key is not None else ctx.obj["configs"]
-            for config in configs:
-                target_tables = set(metadata_registry.get(config.bind_key).tables)
-
-                if not all_tables:
-                    for table_name in set(table_names) - target_tables:
-                        console.rule(
-                            f"[red bold]Skipping table '{table_name}' because it is not available in the default registry",
-                            style="red",
-                            align="left",
-                        )
-                    target_tables.intersection_update(table_names)
-                else:
-                    console.rule("[yellow bold]Dumping all tables", style="yellow", align="left")
-
-                models = [
-                    mapper.class_ for mapper in orm_registry.mappers if mapper.class_.__table__.name in target_tables
-                ]
-                await dump_tables(dump_dir, config.get_session(), models)
-                console.rule("[green bold]Data dump complete", align="left")
-
-        return run(_dump_tables)
 
     return database_group

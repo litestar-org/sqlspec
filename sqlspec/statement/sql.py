@@ -10,6 +10,7 @@ from sqlglot.errors import ParseError
 from typing_extensions import TypeAlias
 
 from sqlspec.exceptions import RiskLevel, SQLParsingError, SQLValidationError
+from sqlspec.statement.cache import sql_cache
 from sqlspec.statement.filters import StatementFilter
 from sqlspec.statement.parameters import (
     SQLGLOT_INCOMPATIBLE_STYLES,
@@ -20,6 +21,7 @@ from sqlspec.statement.parameters import (
 from sqlspec.statement.pipelines import SQLProcessingContext, StatementPipeline
 from sqlspec.statement.pipelines.transformers import CommentAndHintRemover, ParameterizeLiterals
 from sqlspec.statement.pipelines.validators import DMLSafetyValidator, ParameterStyleValidator
+from sqlspec.utils import hash_expression
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import (
     can_append_to_statement,
@@ -106,6 +108,8 @@ class SQLConfig:
     strict_mode: bool = False
     cache_parsed_expression: bool = True
     parse_errors_as_warnings: bool = True
+    enable_caching: bool = True
+    cache_max_size: int = DEFAULT_CACHE_SIZE
 
     transformers: "Optional[list[Any]]" = None
     validators: "Optional[list[Any]]" = None
@@ -306,6 +310,25 @@ class SQL:
             if not key.startswith("_"):
                 self._named_params[key] = value
 
+    def _cache_key(self) -> str:
+        """Generate a cache key for the current SQL state."""
+        # Build cache key from expression, parameters, and dialect
+        expr_hash = hash_expression(self._statement) if is_expression(self._statement) else hash(self._raw_sql)
+
+        # Include parameters in the cache key
+        param_hash = 0
+        if self._positional_params:
+            param_hash ^= hash(tuple(self._positional_params))
+        if self._named_params:
+            param_hash ^= hash(tuple(sorted(self._named_params.items())))
+        if self._filters:
+            filter_hashes = [f.__class__.__name__ for f in self._filters]
+            param_hash ^= hash(tuple(filter_hashes))
+
+        dialect_str = str(self._dialect) if self._dialect else "default"
+
+        return f"sql:{expr_hash}:{param_hash}:{dialect_str}"
+
     def _process_parameter_item(self, item: Any) -> None:
         """Process a single item from the parameters list."""
         if is_statement_filter(item):
@@ -332,6 +355,16 @@ class SQL:
         if self._processed_state is not None:
             return
 
+        # Check cache first if caching is enabled
+        cache_key = None
+        if self._config.enable_caching:
+            cache_key = self._cache_key()
+            cached_state = sql_cache.get(cache_key)
+
+            if cached_state is not None:
+                self._processed_state = cached_state
+                return
+
         final_expr, final_params = self._build_final_state()
         has_placeholders = self._detect_placeholders()
         initial_sql_for_context, final_params = self._prepare_context_sql(final_expr, final_params)
@@ -342,6 +375,10 @@ class SQL:
         processed_sql, merged_params = self._process_pipeline_result(result, final_params, context)
 
         self._finalize_processed_state(result, processed_sql, merged_params)
+
+        # Store in cache if caching is enabled
+        if self._config.enable_caching and cache_key is not None and self._processed_state is not None:
+            sql_cache.set(cache_key, self._processed_state)
 
     def _detect_placeholders(self) -> bool:
         """Detect if the raw SQL has placeholders."""

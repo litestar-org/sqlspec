@@ -11,6 +11,9 @@ from sqlspec.loader import SQLFileLoader
 from sqlspec.statement.sql import SQL
 from sqlspec.utils.logging import get_logger
 
+__all__ = ("BaseMigrationCommands", "BaseMigrationRunner", "BaseMigrationTracker")
+
+
 logger = get_logger("migrations.base")
 
 # Type variables for generic driver and config types
@@ -21,7 +24,7 @@ ConfigT = TypeVar("ConfigT")
 class BaseMigrationTracker(ABC, Generic[DriverT]):
     """Base class for migration version tracking."""
 
-    def __init__(self, version_table_name: str = "sqlspec_migrations") -> None:
+    def __init__(self, version_table_name: str = "ddl_migrations") -> None:
         """Initialize the migration tracker.
 
         Args:
@@ -45,8 +48,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
                 checksum VARCHAR(64),
                 applied_by VARCHAR(255)
             )
-        """,
-            _dialect="postgresql",
+        """
         )
 
     def _get_current_version_sql(self) -> SQL:
@@ -81,10 +83,12 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
             SQL object for insert.
         """
         return SQL(
-            f"INSERT INTO {self.version_table} "
-            f"(version_num, description, execution_time_ms, checksum, applied_by) "
-            f"VALUES (?, ?, ?, ?, ?)",
-            parameters=[version, description, execution_time_ms, checksum, applied_by],
+            f"INSERT INTO {self.version_table} (version_num, description, execution_time_ms, checksum, applied_by) VALUES (?, ?, ?, ?, ?)",
+            version,
+            description,
+            execution_time_ms,
+            checksum,
+            applied_by,
         )
 
     def _get_remove_migration_sql(self, version: str) -> SQL:
@@ -96,7 +100,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         Returns:
             SQL object for delete.
         """
-        return SQL(f"DELETE FROM {self.version_table} WHERE version_num = ?", parameters=[version])
+        return SQL(f"DELETE FROM {self.version_table} WHERE version_num = ?", version)
 
     @abstractmethod
     def ensure_tracking_table(self, driver: DriverT) -> Any:
@@ -270,26 +274,18 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
 class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
     """Base class for migration commands."""
 
-    def __init__(self, sqlspec_config: ConfigT) -> None:
+    def __init__(self, config: ConfigT) -> None:
         """Initialize migration commands.
 
         Args:
-            sqlspec_config: The SQLSpec configuration.
+            config: The SQLSpec configuration.
         """
-        self.config = sqlspec_config
+        self.config = config
 
-        # Get migration settings from config (check both alembic_config and migration_config)
-        migration_config = getattr(self.config, "migration_config", None)
+        # Get migration settings from config
+        migration_config = getattr(self.config, "migration_config", {})
         if migration_config is None:
-            # Check for alembic_config for compatibility
-            alembic_config = getattr(self.config, "alembic_config", None)
-            if alembic_config:
-                migration_config = {
-                    "version_table_name": getattr(alembic_config, "version_table_name", "sqlspec_migrations"),
-                    "script_location": getattr(alembic_config, "script_location", "migrations"),
-                }
-            else:
-                migration_config = {}
+            migration_config = {}
 
         self.version_table = migration_config.get("version_table_name", "sqlspec_migrations")
         self.migrations_path = Path(migration_config.get("script_location", "migrations"))

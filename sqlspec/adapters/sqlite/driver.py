@@ -13,6 +13,7 @@ from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
     SyncPipelinedExecutionMixin,
+    SyncQueryMixin,
     SyncStorageMixin,
     ToSchemaMixin,
     TypeCoercionMixin,
@@ -41,6 +42,7 @@ class SqliteDriver(
     TypeCoercionMixin,
     SyncStorageMixin,
     SyncPipelinedExecutionMixin,
+    SyncQueryMixin,
     ToSchemaMixin,
 ):
     """SQLite Sync Driver Adapter with Arrow/Parquet export support.

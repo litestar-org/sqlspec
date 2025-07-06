@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from collections import abc
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Generic, Literal, Optional, Protocol, Union, runtime_checkable
@@ -25,6 +26,7 @@ __all__ = (
     "NotAnyCollectionFilter",
     "NotInCollectionFilter",
     "NotInSearchFilter",
+    "OffsetPagination",
     "OnBeforeAfterFilter",
     "OrderByFilter",
     "PaginationFilter",
@@ -566,6 +568,25 @@ class NotInSearchFilter(SearchFilter):
         for name, value in named_params.items():
             result = result.add_named_parameter(name, value)
         return result
+
+
+@dataclass
+class OffsetPagination(Generic[T]):
+    """Container for data returned using limit/offset pagination."""
+
+    __slots__ = ("items", "limit", "offset", "total")
+
+    items: Sequence[T]
+    """List of data being sent as part of the response."""
+    limit: int
+    """Maximal number of items to send."""
+    offset: int
+    """Offset from the beginning of the query.
+
+    Identical to an index.
+    """
+    total: int
+    """Total number of items."""
 
 
 def apply_filter(statement: "SQL", filter_obj: StatementFilter) -> "SQL":

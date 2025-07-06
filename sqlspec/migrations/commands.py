@@ -3,8 +3,7 @@
 This module provides the main command interface for database migrations.
 """
 
-import inspect
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Union, cast
 
 from rich.console import Console
 from rich.table import Table
@@ -29,13 +28,13 @@ console = Console()
 class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
     """SQLSpec native migration commands (sync version)."""
 
-    def __init__(self, sqlspec_config: "SyncConfigT") -> None:
+    def __init__(self, config: "SyncConfigT") -> None:
         """Initialize migration commands.
 
         Args:
-            sqlspec_config: The SQLSpec configuration.
+            config: The SQLSpec configuration.
         """
-        super().__init__(sqlspec_config)
+        super().__init__(config)
         self.tracker = SyncMigrationTracker(self.version_table)
         self.runner = SyncMigrationRunner(self.migrations_path)
 
@@ -439,29 +438,22 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         console.print(f"[green]Created migration:[/] {file_path}")
 
 
-
 class MigrationCommands:
     """Unified migration commands that adapt to sync/async configs."""
 
-    def __init__(self, sqlspec_config: "Union[SyncConfigT, AsyncConfigT]") -> None:
+    def __init__(self, config: "Union[SyncConfigT, AsyncConfigT]") -> None:
         """Initialize migration commands with appropriate sync/async implementation.
 
         Args:
-            sqlspec_config: The SQLSpec configuration (sync or async).
+            config: The SQLSpec configuration (sync or async).
         """
-        # Detect if this is an async config by checking for async methods
-        is_async = hasattr(sqlspec_config, "provide_session") and inspect.iscoroutinefunction(
-            sqlspec_config.provide_session
-        )
 
-        if is_async:
-            # Use async implementation directly
-            self._impl = AsyncMigrationCommands(sqlspec_config)
+        if config.is_async:
+            self._impl = AsyncMigrationCommands(cast("AsyncConfigT", config))
         else:
-            # Use sync implementation
-            self._impl = SyncMigrationCommands(sqlspec_config)
-        
-        self._is_async = is_async
+            self._impl = SyncMigrationCommands(cast("SyncConfigT", config))
+
+        self._is_async = config.is_async
 
     def init(self, directory: str, package: bool = True) -> None:
         """Initialize migration directory structure.
@@ -471,8 +463,7 @@ class MigrationCommands:
             package: Whether to create __init__.py file.
         """
         if self._is_async:
-            # Run async method synchronously
-            await_(self._impl.init, raise_sync_error=False)(directory, package=package)
+            await_(self._impl.init)(directory, package=package)
         else:
             self._impl.init(directory, package=package)
 
@@ -530,4 +521,3 @@ class MigrationCommands:
             await_(self._impl.revision, raise_sync_error=False)(message)
         else:
             self._impl.revision(message)
-
