@@ -3,7 +3,7 @@
 import pytest
 from sqlglot import exp
 
-from sqlspec.statement.builder.column import Column, ColumnExpression, FunctionColumn
+from sqlspec.statement.builder._column import Column, ColumnExpression, FunctionColumn
 
 
 class TestColumn:
@@ -251,7 +251,7 @@ class TestColumnIntegration:
 
     def test_column_with_select(self) -> None:
         """Test using Column with Select builder."""
-        from sqlspec.statement.builder.select import Select
+        from sqlspec.statement.builder._select import Select
 
         age = Column("age")
         status = Column("status")
@@ -265,7 +265,7 @@ class TestColumnIntegration:
 
     def test_column_complex_where(self) -> None:
         """Test complex WHERE conditions."""
-        from sqlspec.statement.builder.select import Select
+        from sqlspec.statement.builder._select import Select
 
         age = Column("age")
         status = Column("status")
@@ -283,7 +283,7 @@ class TestColumnIntegration:
 
     def test_column_with_table_qualification(self) -> None:
         """Test columns with table qualifiers."""
-        from sqlspec.statement.builder.select import Select
+        from sqlspec.statement.builder._select import Select
 
         u_name = Column("name", "u")
         p_name = Column("name", "p")

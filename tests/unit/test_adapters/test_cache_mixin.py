@@ -1,6 +1,5 @@
 """Tests for adapter-level caching functionality."""
 
-
 from sqlspec.driver.mixins._cache import AsyncAdapterCacheMixin, SyncAdapterCacheMixin
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL

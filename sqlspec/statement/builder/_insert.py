@@ -11,7 +11,7 @@ from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder.base import QueryBuilder
+from sqlspec.statement.builder._base import QueryBuilder
 from sqlspec.statement.builder.mixins import (
     InsertFromSelectMixin,
     InsertIntoClauseMixin,

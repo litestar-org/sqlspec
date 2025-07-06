@@ -7,7 +7,7 @@ from sqlglot import exp
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.statement.builder.select import Select
+    from sqlspec.statement.builder._select import Select
 
 __all__ = ("PivotClauseMixin", "UnpivotClauseMixin")
 

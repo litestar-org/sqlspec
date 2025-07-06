@@ -19,8 +19,8 @@ from sqlglot import exp
 from sqlglot.dialects.dialect import Dialect
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder.base import QueryBuilder, SafeQuery
-from sqlspec.statement.builder.ddl import (
+from sqlspec.statement.builder._base import QueryBuilder, SafeQuery
+from sqlspec.statement.builder._ddl import (
     AlterTable,
     CommentOn,
     CreateIndex,

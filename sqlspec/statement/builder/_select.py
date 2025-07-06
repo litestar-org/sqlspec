@@ -11,7 +11,7 @@ from typing import Any, Optional, Union, cast
 from sqlglot import exp
 from typing_extensions import Self
 
-from sqlspec.statement.builder.base import QueryBuilder, SafeQuery
+from sqlspec.statement.builder._base import QueryBuilder, SafeQuery
 from sqlspec.statement.builder.mixins import (
     CommonTableExpressionMixin,
     HavingClauseMixin,

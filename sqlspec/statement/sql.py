@@ -20,7 +20,7 @@ from sqlspec.statement.parameters import (
 )
 from sqlspec.statement.pipelines import SQLProcessingContext, StatementPipeline
 from sqlspec.statement.pipelines.transformers import CommentAndHintRemover, ParameterizeLiterals
-from sqlspec.statement.pipelines.validators import DMLSafetyValidator, ParameterStyleValidator
+from sqlspec.statement.pipelines.validators import DMLSafetyValidator, ParameterStyleValidator, SecurityValidator
 from sqlspec.utils import hash_expression
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import (
@@ -31,9 +31,6 @@ from sqlspec.utils.type_guards import (
     is_dict,
     is_expression,
     is_statement_filter,
-    supports_limit,
-    supports_offset,
-    supports_order_by,
     supports_where,
 )
 
@@ -107,8 +104,8 @@ class SQLConfig:
     enable_normalization: bool = True
     enable_parameter_type_wrapping: bool = True
     strict_mode: bool = False
-    cache_parsed_expression: bool = True
     parse_errors_as_warnings: bool = True
+    cache_parsed_expression: bool = True
     enable_caching: bool = True
     cache_max_size: int = DEFAULT_CACHE_SIZE
 
@@ -157,7 +154,11 @@ class SQLConfig:
         if self.validators is not None:
             validators = list(self.validators)
         elif self.enable_validation:
-            validators = [ParameterStyleValidator(fail_on_violation=self.strict_mode), DMLSafetyValidator()]
+            validators = [
+                ParameterStyleValidator(fail_on_violation=self.strict_mode),
+                DMLSafetyValidator(),
+                SecurityValidator(),
+            ]
 
         analyzers = []
         if self.analyzers is not None:
@@ -1711,45 +1712,3 @@ class SQL:
     def statement(self) -> exp.Expression:
         """Get statement for compatibility."""
         return self._statement
-
-    def limit(self, count: int, use_parameter: bool = False) -> "SQL":
-        """Add LIMIT clause."""
-        if use_parameter:
-            param_name = self.get_unique_parameter_name("limit")
-            result = self
-            result = result.add_named_parameter(param_name, count)
-            if supports_limit(result._statement):
-                new_statement = result._statement.limit(exp.Placeholder(this=param_name))  # pyright: ignore
-            else:
-                new_statement = exp.Select().from_(result._statement).limit(exp.Placeholder(this=param_name))  # pyright: ignore
-            return result.copy(statement=new_statement)
-        if supports_limit(self._statement):
-            new_statement = self._statement.limit(count)  # pyright: ignore
-        else:
-            new_statement = exp.Select().from_(self._statement).limit(count)  # pyright: ignore
-        return self.copy(statement=new_statement)
-
-    def offset(self, count: int, use_parameter: bool = False) -> "SQL":
-        """Add OFFSET clause."""
-        if use_parameter:
-            param_name = self.get_unique_parameter_name("offset")
-            result = self
-            result = result.add_named_parameter(param_name, count)
-            if supports_offset(result._statement):
-                new_statement = result._statement.offset(exp.Placeholder(this=param_name))  # pyright: ignore
-            else:
-                new_statement = exp.Select().from_(result._statement).offset(exp.Placeholder(this=param_name))  # pyright: ignore
-            return result.copy(statement=new_statement)
-        if supports_offset(self._statement):
-            new_statement = self._statement.offset(count)  # pyright: ignore
-        else:
-            new_statement = exp.Select().from_(self._statement).offset(count)  # pyright: ignore
-        return self.copy(statement=new_statement)
-
-    def order_by(self, expression: exp.Expression) -> "SQL":
-        """Add ORDER BY clause."""
-        if supports_order_by(self._statement):
-            new_statement = self._statement.order_by(expression)  # pyright: ignore
-        else:
-            new_statement = exp.Select().from_(self._statement).order_by(expression)  # pyright: ignore
-        return self.copy(statement=new_statement)

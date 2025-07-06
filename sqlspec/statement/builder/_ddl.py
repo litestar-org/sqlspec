@@ -7,12 +7,12 @@ from sqlglot import exp
 from sqlglot.dialects.dialect import DialectType
 from typing_extensions import Self
 
+from sqlspec.statement.builder._base import QueryBuilder, SafeQuery
 from sqlspec.statement.builder._ddl_utils import build_column_expression, build_constraint_expression
-from sqlspec.statement.builder.base import QueryBuilder, SafeQuery
 from sqlspec.statement.result import SQLResult
 
 if TYPE_CHECKING:
-    from sqlspec.statement.builder.column import ColumnExpression
+    from sqlspec.statement.builder._column import ColumnExpression
     from sqlspec.statement.sql import SQL, SQLConfig
 
 __all__ = (
@@ -792,7 +792,7 @@ class CreateTableAsSelect(DDLBuilder):
 
         select_expr = None
         select_params = None
-        from sqlspec.statement.builder.select import Select
+        from sqlspec.statement.builder._select import Select
         from sqlspec.statement.sql import SQL
 
         if isinstance(self._select_query, SQL):
@@ -909,7 +909,7 @@ class CreateMaterializedView(DDLBuilder):
 
         select_expr = None
         select_params = None
-        from sqlspec.statement.builder.select import Select
+        from sqlspec.statement.builder._select import Select
         from sqlspec.statement.sql import SQL
 
         if isinstance(self._select_query, SQL):
@@ -1008,7 +1008,7 @@ class CreateView(DDLBuilder):
 
         select_expr = None
         select_params = None
-        from sqlspec.statement.builder.select import Select
+        from sqlspec.statement.builder._select import Select
         from sqlspec.statement.sql import SQL
 
         if isinstance(self._select_query, SQL):

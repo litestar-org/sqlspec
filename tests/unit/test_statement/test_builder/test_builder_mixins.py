@@ -27,10 +27,10 @@ import pytest
 from sqlglot import exp
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder.mixins.cte_and_set_ops import SetOperationMixin
-from sqlspec.statement.builder.mixins.insert_operations import InsertFromSelectMixin, InsertValuesMixin
-from sqlspec.statement.builder.mixins.join_operations import JoinClauseMixin
-from sqlspec.statement.builder.mixins.merge_operations import (
+from sqlspec.statement.builder.mixins._cte_and_set_ops import SetOperationMixin
+from sqlspec.statement.builder.mixins._insert_operations import InsertFromSelectMixin, InsertValuesMixin
+from sqlspec.statement.builder.mixins._join_operations import JoinClauseMixin
+from sqlspec.statement.builder.mixins._merge_operations import (
     MergeIntoClauseMixin,
     MergeMatchedClauseMixin,
     MergeNotMatchedBySourceClauseMixin,
@@ -38,15 +38,15 @@ from sqlspec.statement.builder.mixins.merge_operations import (
     MergeOnClauseMixin,
     MergeUsingClauseMixin,
 )
-from sqlspec.statement.builder.mixins.order_limit_operations import (
+from sqlspec.statement.builder.mixins._order_limit_operations import (
     LimitOffsetClauseMixin,
     OrderByClauseMixin,
     ReturningClauseMixin,
 )
-from sqlspec.statement.builder.mixins.pivot_operations import PivotClauseMixin, UnpivotClauseMixin
-from sqlspec.statement.builder.mixins.select_operations import SelectClauseMixin
-from sqlspec.statement.builder.mixins.update_operations import UpdateFromClauseMixin, UpdateSetClauseMixin
-from sqlspec.statement.builder.mixins.where_clause import HavingClauseMixin, WhereClauseMixin
+from sqlspec.statement.builder.mixins._pivot_operations import PivotClauseMixin, UnpivotClauseMixin
+from sqlspec.statement.builder.mixins._select_operations import SelectClauseMixin
+from sqlspec.statement.builder.mixins._update_operations import UpdateFromClauseMixin, UpdateSetClauseMixin
+from sqlspec.statement.builder.mixins._where_clause import HavingClauseMixin, WhereClauseMixin
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType

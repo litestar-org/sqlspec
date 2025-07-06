@@ -454,9 +454,18 @@ class OrderByFilter(StatementFilter):
         normalized_sort_order = self.sort_order.lower()
         if normalized_sort_order not in {"asc", "desc"}:
             normalized_sort_order = "asc"
-        if normalized_sort_order == "desc":
-            return statement.order_by(exp.column(self.field_name).desc())
-        return statement.order_by(exp.column(self.field_name).asc())
+
+        col_expr = exp.column(self.field_name)
+        order_expr = col_expr.desc() if normalized_sort_order == "desc" else col_expr.asc()
+
+        # Check if the statement supports ORDER BY directly
+        if isinstance(statement._statement, exp.Select):
+            new_statement = statement._statement.order_by(order_expr)
+        else:
+            # Wrap in a SELECT if the statement doesn't support ORDER BY directly
+            new_statement = exp.Select().from_(statement._statement).order_by(order_expr)
+
+        return statement.copy(statement=new_statement)
 
 
 @dataclass

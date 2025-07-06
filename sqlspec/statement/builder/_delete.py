@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 from sqlglot import exp
 
-from sqlspec.statement.builder.base import QueryBuilder, SafeQuery
+from sqlspec.statement.builder._base import QueryBuilder, SafeQuery
 from sqlspec.statement.builder.mixins import DeleteFromClauseMixin, ReturningClauseMixin, WhereClauseMixin
 from sqlspec.statement.result import SQLResult
 from sqlspec.typing import RowT

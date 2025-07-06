@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from sqlglot import exp
 
-from sqlspec.statement.builder.base import QueryBuilder
+from sqlspec.statement.builder._base import QueryBuilder
 from sqlspec.statement.builder.mixins import (
     MergeIntoClauseMixin,
     MergeMatchedClauseMixin,
