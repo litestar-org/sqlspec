@@ -395,7 +395,7 @@ def test_configuration_metadata() -> None:
     assert "literal_folding" in optimizations
     assert "boolean_optimization" not in optimizations
     assert "connector_optimization" not in optimizations
-    assert "equality_normalization" in optimizations
+    assert "equality_conversion" in optimizations
     assert "complement_removal" not in optimizations
 
 
