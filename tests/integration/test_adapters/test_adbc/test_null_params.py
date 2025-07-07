@@ -40,9 +40,7 @@ def adbc_postgresql_null_session(postgres_service: PostgresService) -> Generator
 @xfail_if_driver_missing
 def test_postgresql_single_null_parameter(adbc_postgresql_null_session: AdbcDriver) -> None:
     """Test executing with a single NULL parameter."""
-    result = adbc_postgresql_null_session.execute(
-        "INSERT INTO test_null_params (col1) VALUES ($1)", None
-    )
+    result = adbc_postgresql_null_session.execute("INSERT INTO test_null_params (col1) VALUES ($1)", None)
     assert result.rows_affected in (-1, 1)
 
     # Verify data
@@ -56,8 +54,7 @@ def test_postgresql_single_null_parameter(adbc_postgresql_null_session: AdbcDriv
 def test_postgresql_all_null_parameters(adbc_postgresql_null_session: AdbcDriver) -> None:
     """Test executing with all NULL parameters."""
     result = adbc_postgresql_null_session.execute(
-        "INSERT INTO test_null_params (col1, col2, col3) VALUES ($1, $2, $3)",
-        None, None, None
+        "INSERT INTO test_null_params (col1, col2, col3) VALUES ($1, $2, $3)", None, None, None
     )
     assert result.rows_affected in (-1, 1)
 
@@ -74,8 +71,7 @@ def test_postgresql_all_null_parameters(adbc_postgresql_null_session: AdbcDriver
 def test_postgresql_mixed_null_parameters(adbc_postgresql_null_session: AdbcDriver) -> None:
     """Test executing with mixed NULL and non-NULL parameters."""
     result = adbc_postgresql_null_session.execute(
-        "INSERT INTO test_null_params (col1, col2, col3) VALUES ($1, $2, $3)",
-        "value1", None, "value3"
+        "INSERT INTO test_null_params (col1, col2, col3) VALUES ($1, $2, $3)", "value1", None, "value3"
     )
     assert result.rows_affected in (-1, 1)
 
@@ -99,15 +95,12 @@ def test_postgresql_execute_many_with_nulls(adbc_postgresql_null_session: AdbcDr
     ]
 
     result = adbc_postgresql_null_session.execute_many(
-        "INSERT INTO test_null_params (col1, col2, col3) VALUES ($1, $2, $3)",
-        parameters
+        "INSERT INTO test_null_params (col1, col2, col3) VALUES ($1, $2, $3)", parameters
     )
     assert result.rows_affected in (-1, 4, 1)
 
     # Verify data
-    result = adbc_postgresql_null_session.execute(
-        "SELECT * FROM test_null_params ORDER BY id"
-    )
+    result = adbc_postgresql_null_session.execute("SELECT * FROM test_null_params ORDER BY id")
     assert len(result.data) == 4
 
     # Check each row

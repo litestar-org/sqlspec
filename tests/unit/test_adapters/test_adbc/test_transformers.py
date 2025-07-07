@@ -17,7 +17,7 @@ def test_adbc_postgres_transformer_empty_params() -> None:
         initial_sql_string=sql,
         dialect="postgres",
         config=config,
-        merged_parameters=[]  # Empty parameter list
+        merged_parameters=[],  # Empty parameter list
     )
 
     transformer = AdbcPostgresTransformer()
@@ -41,7 +41,7 @@ def test_adbc_postgres_transformer_all_null_params() -> None:
         initial_sql_string=sql,
         dialect="postgres",
         config=config,
-        merged_parameters=[None, None, None]  # All NULL parameters
+        merged_parameters=[None, None, None],  # All NULL parameters
     )
 
     transformer = AdbcPostgresTransformer()
@@ -71,7 +71,7 @@ def test_adbc_postgres_transformer_mixed_params() -> None:
         initial_sql_string=sql,
         dialect="postgres",
         config=config,
-        merged_parameters=["value1", None]  # Mixed parameters
+        merged_parameters=["value1", None],  # Mixed parameters
     )
 
     transformer = AdbcPostgresTransformer()
@@ -102,7 +102,7 @@ def test_adbc_postgres_transformer_dict_params_all_null() -> None:
         initial_sql_string=sql,
         dialect="postgres",
         config=config,
-        merged_parameters={"param1": None, "param2": None}  # All NULL dict params
+        merged_parameters={"param1": None, "param2": None},  # All NULL dict params
     )
 
     transformer = AdbcPostgresTransformer()
@@ -124,7 +124,7 @@ def test_adbc_postgres_transformer_complex_mixed_nulls() -> None:
         initial_sql_string=sql,
         dialect="postgres",
         config=config,
-        merged_parameters=["value1", None, "value3", None, "value5"]  # Mixed NULLs
+        merged_parameters=["value1", None, "value3", None, "value5"],  # Mixed NULLs
     )
 
     transformer = AdbcPostgresTransformer()
