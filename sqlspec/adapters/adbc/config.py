@@ -114,7 +114,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark",)
     """ADBC parameter styles depend on the underlying driver."""
 
-    preferred_parameter_style: ClassVar[str] = "qmark"
+    default_parameter_style: ClassVar[str] = "qmark"
     """ADBC default parameter style is ? (qmark)."""
 
     def __init__(
@@ -381,7 +381,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         """Get parameter styles based on the underlying driver.
 
         Returns:
-            Tuple of (supported_parameter_styles, preferred_parameter_style)
+            Tuple of (supported_parameter_styles, default_parameter_style)
         """
         try:
             driver_path = self._resolve_driver_name()
@@ -400,7 +400,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
         except Exception:
             # If we can't determine driver, use defaults
-            return (self.supported_parameter_styles, self.preferred_parameter_style)
+            return (self.supported_parameter_styles, self.default_parameter_style)
         return (("qmark",), "qmark")
 
     def create_connection(self) -> AdbcConnection:
@@ -467,7 +467,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                         statement_config = replace(
                             statement_config,
                             allowed_parameter_styles=supported_styles,
-                            target_parameter_style=preferred_style,
+                            default_parameter_style=preferred_style,
                         )
 
                 driver = self.driver_type(connection=connection, config=statement_config)

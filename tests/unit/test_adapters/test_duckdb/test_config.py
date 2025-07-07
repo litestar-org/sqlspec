@@ -322,7 +322,7 @@ def test_provide_session(mock_connect: MagicMock) -> None:
 
         # Check parameter style injection
         assert session.config.allowed_parameter_styles == ("qmark", "numeric")
-        assert session.config.target_parameter_style == "qmark"
+        assert session.config.default_parameter_style == "qmark"
 
         mock_connection.close.assert_not_called()
 
@@ -366,9 +366,9 @@ def test_supported_parameter_styles() -> None:
     assert DuckDBConfig.supported_parameter_styles == ("qmark", "numeric")
 
 
-def test_preferred_parameter_style() -> None:
+def test_default_parameter_style() -> None:
     """Test preferred parameter style class attribute."""
-    assert DuckDBConfig.preferred_parameter_style == "qmark"
+    assert DuckDBConfig.default_parameter_style == "qmark"
 
 
 # Database Path Tests

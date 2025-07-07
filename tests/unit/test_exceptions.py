@@ -86,10 +86,10 @@ def test_sqlspec_error_none_args() -> None:
 @pytest.mark.parametrize(
     ("args", "detail", "expected_detail"),
     [
-        (("First error"), "", "First error"),
+        (("First error",), "", "First error"),
         (("First", "Second"), "", "First"),
         ((), "Explicit detail", "Explicit detail"),
-        (("Main message"), "Override detail", "Override detail"),
+        (("Main message",), "Override detail", "Override detail"),
         ((), "", ""),
     ],
     ids=["single_arg", "multiple_args", "explicit_detail", "detail_override", "empty"],

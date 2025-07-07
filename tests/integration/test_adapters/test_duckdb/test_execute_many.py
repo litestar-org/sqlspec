@@ -108,7 +108,7 @@ def test_duckdb_execute_many_mixed_types(duckdb_batch_session: DuckDBDriver) -> 
     assert null_result.data[0]["name"] == "Another Item"
 
     # Verify float value was stored correctly
-    float_result = duckdb_batch_session.execute("SELECT * FROM test_batch WHERE name = ?", ("Float Item"))
+    float_result = duckdb_batch_session.execute("SELECT * FROM test_batch WHERE name = ?", ("Float Item",))
     assert len(float_result.data) == 1
     assert float_result.data[0]["value"] == 78  # DuckDB converts float to int for INTEGER column
 
@@ -128,7 +128,7 @@ def test_duckdb_execute_many_delete(duckdb_batch_session: DuckDBDriver) -> None:
     )
 
     # Delete specific items by name
-    delete_params = [("Delete 1"), ("Delete 2"), ("Delete 4")]
+    delete_params = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
 
     result = duckdb_batch_session.execute_many("DELETE FROM test_batch WHERE name = ?", delete_params)
 

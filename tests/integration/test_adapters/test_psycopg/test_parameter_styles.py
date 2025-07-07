@@ -194,7 +194,7 @@ def test_psycopg_parameter_with_any_array(psycopg_params_session: PsycopgSyncDri
 
     # Test ANY with array parameter
     result = psycopg_params_session.execute(
-        "SELECT * FROM test_params WHERE name = ANY(%s) ORDER BY name", (["alpha", "beta", "test1"])
+        "SELECT * FROM test_params WHERE name = ANY(%s) ORDER BY name", (["alpha", "beta", "test1"],)
     )
 
     assert isinstance(result, SQLResult)

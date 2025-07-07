@@ -14,7 +14,7 @@ def test_no_duplication_with_reordering() -> None:
     # Create config with input_sql_had_placeholders=True to trigger reordering
     config = SQLConfig(
         enable_transformations=True,
-        target_parameter_style="?",
+        default_parameter_style="?",
         input_sql_had_placeholders=True,  # This triggers the reordering logic
     )
 
@@ -39,7 +39,7 @@ def test_normal_operation_without_reordering() -> None:
     # Create config without input_sql_had_placeholders
     config = SQLConfig(
         enable_transformations=True,
-        target_parameter_style="?",
+        default_parameter_style="?",
         # input_sql_had_placeholders defaults to False
     )
 
@@ -62,7 +62,7 @@ def test_normal_operation_without_reordering() -> None:
 def test_reordering_with_existing_parameters() -> None:
     """Test reordering when SQL already has user-provided parameters."""
     # First process a SQL with placeholders to set input_sql_had_placeholders
-    config = SQLConfig(enable_transformations=True, target_parameter_style="?")
+    config = SQLConfig(enable_transformations=True, default_parameter_style="?")
 
     # Process SQL with existing placeholders
     sql1 = "SELECT * FROM users WHERE id = ?"
@@ -88,7 +88,7 @@ def test_reordering_with_existing_parameters() -> None:
 
 def test_mixed_parameters_and_literals() -> None:
     """Test SQL with both user parameters and literals to be parameterized."""
-    config = SQLConfig(enable_transformations=True, target_parameter_style="?")
+    config = SQLConfig(enable_transformations=True, default_parameter_style="?")
 
     # SQL with both placeholders and literals
     sql = "SELECT * FROM orders WHERE user_id = ? AND status IN ('pending', 'processing') AND amount > 50.0"

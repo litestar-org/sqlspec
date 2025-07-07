@@ -403,7 +403,7 @@ async def test_provide_session() -> None:
 
             # Check parameter style injection
             assert session.config.allowed_parameter_styles == ("numeric",)
-            assert session.config.target_parameter_style == "numeric"
+            assert session.config.default_parameter_style == "numeric"
 
             mock_pool.release.assert_not_called()
 
@@ -492,9 +492,9 @@ def test_supported_parameter_styles() -> None:
     assert AsyncpgConfig.supported_parameter_styles == ("numeric",)
 
 
-def test_preferred_parameter_style() -> None:
+def test_default_parameter_style() -> None:
     """Test preferred parameter style class attribute."""
-    assert AsyncpgConfig.preferred_parameter_style == "numeric"
+    assert AsyncpgConfig.default_parameter_style == "numeric"
 
 
 # JSON Serialization Tests

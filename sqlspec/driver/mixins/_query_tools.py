@@ -7,7 +7,7 @@ from sqlglot import exp, parse_one
 from typing_extensions import Self
 
 from sqlspec.exceptions import NotFoundError
-from sqlspec.statement.filters import OffsetPagination
+from sqlspec.statement.filters import LimitOffsetFilter, OffsetPagination
 from sqlspec.statement.sql import SQL
 from sqlspec.typing import ConnectionT
 from sqlspec.utils.type_guards import (
@@ -65,7 +65,7 @@ class QueryBase(ABC, Generic[ConnectionT]):
             config: Optional SQL configuration
 
         Returns:
-            A normalized SQL object
+            A converted SQL object
         """
 
         if is_select_builder(statement):
@@ -420,7 +420,6 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
         params: list[Any] = []
 
         for p in parameters:
-            # Use type guard to check if it implements the StatementFilter protocol
             if is_statement_filter(p):
                 filters.append(p)
             else:
@@ -476,7 +475,9 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
         data_stmt = limit_offset.append_to_statement(data_stmt)
 
         # Execute data query
-        items = self.select(data_stmt, schema_type=schema_type, _connection=_connection, _config=_config, **kwargs)
+        items = self.select(
+            data_stmt, params, schema_type=schema_type, _connection=_connection, _config=_config, **kwargs
+        )
 
         return OffsetPagination(items=items, limit=limit, offset=offset, total=total)
 
@@ -639,14 +640,10 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         Raises an exception if no rows or more than one row/column is returned.
         """
         result = await self.execute(statement, *parameters, _connection=_connection, _config=_config, **kwargs)
-        data = result.one()
-        if not data:
+        row = result.one()
+        if not row:
             msg = "No rows found"
             raise NotFoundError(msg)
-        if len(data) > 1:
-            msg = f"Expected exactly one row, found {len(data)}"
-            raise ValueError(msg)
-        row = data[0]
         if is_dict_row(row):
             if not row:
                 msg = "Row has no columns"
@@ -780,7 +777,7 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         count_ast = exp.Select().select(exp.func("COUNT", exp.Star()).as_("total")).from_(subquery)
 
         # Preserve parameters from the original statement
-        count_stmt = SQL(count_ast, parameters=filtered_stmt.parameters, _config=_config)
+        count_stmt = SQL(count_ast, *filtered_stmt.parameters, _config=_config)
 
         # Execute count query
         total = await self.select_value(count_stmt, _connection=_connection, _config=_config, **kwargs)
@@ -790,15 +787,12 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         for filter_obj in other_filters:
             data_stmt = filter_obj.append_to_statement(data_stmt)
 
-        # Apply limit and offset using LimitOffsetFilter
-        from sqlspec.statement.filters import LimitOffsetFilter
-
         limit_offset = LimitOffsetFilter(limit=limit, offset=offset)
         data_stmt = limit_offset.append_to_statement(data_stmt)
 
         # Execute data query
         items = await self.select(
-            data_stmt, schema_type=schema_type, _connection=_connection, _config=_config, **kwargs
+            data_stmt, *params, schema_type=schema_type, _connection=_connection, _config=_config, **kwargs
         )
 
         return OffsetPagination(items=items, limit=limit, offset=offset, total=total)

@@ -18,7 +18,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import normalize_parameter_sequence
+from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -105,9 +105,9 @@ class DuckDBDriver(
         conn = connection if connection is not None else self._connection(None)
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # Normalize parameters using consolidated utility
-            normalized_params = normalize_parameter_sequence(parameters)
-            final_params = normalized_params or []
+            # Convert parameters using consolidated utility
+            converted_params = convert_parameter_sequence(parameters)
+            final_params = converted_params or []
 
             if self.returns_rows(statement.expression):
                 result = txn_conn.execute(sql, final_params)
@@ -158,8 +158,8 @@ class DuckDBDriver(
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # Normalize parameter list using consolidated utility
-            normalized_param_list = normalize_parameter_sequence(param_list)
-            final_param_list = normalized_param_list or []
+            converted_param_list = convert_parameter_sequence(param_list)
+            final_param_list = converted_param_list or []
 
             # DuckDB throws an error if executemany is called with empty parameter list
             if not final_param_list:

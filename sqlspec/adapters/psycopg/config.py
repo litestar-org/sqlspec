@@ -110,7 +110,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional", "pyformat_named")
     """Psycopg supports %s (positional) and %(name)s (named) parameter styles."""
 
-    preferred_parameter_style: ClassVar[str] = "pyformat_positional"
+    default_parameter_style: ClassVar[str] = "pyformat_positional"
     """Psycopg's native parameter style is %s (pyformat positional)."""
 
     def __init__(
@@ -385,7 +385,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
-                    target_parameter_style=self.preferred_parameter_style,
+                    default_parameter_style=self.default_parameter_style,
                 )
             driver = self.driver_type(connection=conn, config=statement_config)
             yield driver
@@ -461,7 +461,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional", "pyformat_named")
     """Psycopg supports %s (pyformat_positional) and %(name)s (pyformat_named) parameter styles."""
 
-    preferred_parameter_style: ClassVar[str] = "pyformat_positional"
+    default_parameter_style: ClassVar[str] = "pyformat_positional"
     """Psycopg's preferred parameter style is %s (pyformat_positional)."""
 
     def __init__(
@@ -726,7 +726,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
-                    target_parameter_style=self.preferred_parameter_style,
+                    default_parameter_style=self.default_parameter_style,
                 )
             driver = self.driver_type(connection=conn, config=statement_config)
             yield driver

@@ -165,7 +165,7 @@ async def test_select_methods(psqlpy_config: PsqlpyConfig) -> None:
     async with psqlpy_config.provide_session() as driver:
         # Insert multiple records using execute_many
         insert_sql = "INSERT INTO test_table (name) VALUES ($1)"
-        params_list = [("name1"), ("name2")]
+        params_list = [("name1",), ("name2",)]
         many_result = await driver.execute_many(insert_sql, params_list)
         assert isinstance(many_result, SQLResult)
         assert many_result.rows_affected == -1  # psqlpy doesn't provide this for execute_many
@@ -179,7 +179,7 @@ async def test_select_methods(psqlpy_config: PsqlpyConfig) -> None:
         assert select_result.data[1]["name"] == "name2"
 
         # Test select one (using get_first helper)
-        single_result = await driver.execute("SELECT name FROM test_table WHERE name = ?", ("name1"))
+        single_result = await driver.execute("SELECT name FROM test_table WHERE name = ?", ("name1",))
         assert isinstance(single_result, SQLResult)
         assert single_result.data is not None
         assert len(single_result.data) == 1

@@ -18,7 +18,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import normalize_parameter_sequence
+from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -193,19 +193,19 @@ class OracleSyncDriver(
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # Normalize parameter list using consolidated utility
-            normalized_param_list = normalize_parameter_sequence(param_list)
+            converted_param_list = convert_parameter_sequence(param_list)
 
             # Process parameters for Oracle
-            if normalized_param_list is None:
+            if converted_param_list is None:
                 processed_param_list = []
-            elif normalized_param_list and not isinstance(normalized_param_list, list):
+            elif converted_param_list and not isinstance(converted_param_list, list):
                 # Single parameter set, wrap it
-                processed_param_list = [normalized_param_list]
-            elif normalized_param_list and not isinstance(normalized_param_list[0], (list, tuple, dict)):
+                processed_param_list = [converted_param_list]
+            elif converted_param_list and not isinstance(converted_param_list[0], (list, tuple, dict)):
                 # Already a flat list, likely from incorrect usage
-                processed_param_list = [normalized_param_list]
+                processed_param_list = [converted_param_list]
             else:
-                processed_param_list = normalized_param_list
+                processed_param_list = converted_param_list
 
             # Parameters have already been processed in _execute_statement
             with self._get_cursor(txn_conn) as cursor:
@@ -453,19 +453,19 @@ class OracleAsyncDriver(
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
             # Normalize parameter list using consolidated utility
-            normalized_param_list = normalize_parameter_sequence(param_list)
+            converted_param_list = convert_parameter_sequence(param_list)
 
             # Process parameters for Oracle
-            if normalized_param_list is None:
+            if converted_param_list is None:
                 processed_param_list = []
-            elif normalized_param_list and not isinstance(normalized_param_list, list):
+            elif converted_param_list and not isinstance(converted_param_list, list):
                 # Single parameter set, wrap it
-                processed_param_list = [normalized_param_list]
-            elif normalized_param_list and not isinstance(normalized_param_list[0], (list, tuple, dict)):
+                processed_param_list = [converted_param_list]
+            elif converted_param_list and not isinstance(converted_param_list[0], (list, tuple, dict)):
                 # Already a flat list, likely from incorrect usage
-                processed_param_list = [normalized_param_list]
+                processed_param_list = [converted_param_list]
             else:
-                processed_param_list = normalized_param_list
+                processed_param_list = converted_param_list
 
             # Parameters have already been processed in _execute_statement
             async with self._get_cursor(txn_conn) as cursor:

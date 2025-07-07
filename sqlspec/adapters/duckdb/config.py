@@ -162,7 +162,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark", "numeric")
     """DuckDB supports ? (qmark) and $1, $2 (numeric) parameter styles."""
 
-    preferred_parameter_style: ClassVar[str] = "qmark"
+    default_parameter_style: ClassVar[str] = "qmark"
     """DuckDB's native parameter style is ? (qmark)."""
 
     def __init__(
@@ -479,7 +479,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                     statement_config = replace(
                         statement_config,
                         allowed_parameter_styles=self.supported_parameter_styles,
-                        target_parameter_style=self.preferred_parameter_style,
+                        default_parameter_style=self.default_parameter_style,
                     )
                 driver = self.driver_type(connection=connection, config=statement_config)
                 yield driver

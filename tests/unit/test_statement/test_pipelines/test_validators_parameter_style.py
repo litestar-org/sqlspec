@@ -351,7 +351,7 @@ def test_target_style_suggestion(context: SQLProcessingContext, param_validator:
     """Test that target style is configured but doesn't cause errors."""
     validator = create_validator()
     context.config.allowed_parameter_styles = ("qmark", "numeric")
-    context.config.target_parameter_style = "numeric"
+    context.config.default_parameter_style = "numeric"
 
     # Using qmark instead of preferred numeric
     sql = "SELECT * FROM users WHERE id = ?"

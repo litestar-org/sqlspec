@@ -59,7 +59,7 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark", "named_colon")
     """AIOSQLite supports ? (qmark) and :name (named_colon) parameter styles."""
 
-    preferred_parameter_style: ClassVar[str] = "qmark"
+    default_parameter_style: ClassVar[str] = "qmark"
     """AIOSQLite's native parameter style is ? (qmark)."""
 
     def __init__(
@@ -179,7 +179,7 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
-                    target_parameter_style=self.preferred_parameter_style,
+                    default_parameter_style=self.default_parameter_style,
                 )
             yield self.driver_type(connection=connection, config=statement_config)
 

@@ -250,7 +250,7 @@ def test_provide_session() -> None:
 
             # Check parameter style injection
             assert session.config.allowed_parameter_styles == ("named_at",)
-            assert session.config.target_parameter_style == "named_at"
+            assert session.config.default_parameter_style == "named_at"
 
             # BigQuery client doesn't have a close method to assert on
 
@@ -292,9 +292,9 @@ def test_supported_parameter_styles() -> None:
     assert BigQueryConfig.supported_parameter_styles == ("named_at",)
 
 
-def test_preferred_parameter_style() -> None:
+def test_default_parameter_style() -> None:
     """Test preferred parameter style class attribute."""
-    assert BigQueryConfig.preferred_parameter_style == "named_at"
+    assert BigQueryConfig.default_parameter_style == "named_at"
 
 
 # Advanced Configuration Tests

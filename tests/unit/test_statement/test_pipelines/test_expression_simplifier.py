@@ -178,7 +178,7 @@ def test_custom_simplification_config() -> None:
         enable_literal_folding=True,
         enable_boolean_optimization=False,
         enable_connector_optimization=True,
-        enable_equality_normalization=True,
+        enable_equality_conversion=True,
         enable_complement_removal=True,
     )
 
@@ -202,7 +202,7 @@ def test_all_optimizations_disabled() -> None:
         enable_literal_folding=False,
         enable_boolean_optimization=False,
         enable_connector_optimization=False,
-        enable_equality_normalization=False,
+        enable_equality_conversion=False,
         enable_complement_removal=False,
     )
 
@@ -379,7 +379,7 @@ def test_configuration_metadata() -> None:
         enable_literal_folding=True,
         enable_boolean_optimization=False,
         enable_connector_optimization=False,
-        enable_equality_normalization=True,
+        enable_equality_conversion=True,
         enable_complement_removal=False,
     )
 

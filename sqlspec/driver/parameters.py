@@ -13,8 +13,8 @@ if TYPE_CHECKING:
     from sqlspec.typing import StatementParameters
 
 __all__ = (
+    "convert_parameter_sequence",
     "convert_parameters_to_positional",
-    "normalize_parameter_sequence",
     "process_execute_many_parameters",
     "separate_filters_and_parameters",
     "should_use_transaction",
@@ -62,19 +62,19 @@ def process_execute_many_parameters(
     param_sequence = param_values[0] if param_values else None
 
     # Normalize the parameter sequence
-    param_sequence = normalize_parameter_sequence(param_sequence)
+    param_sequence = convert_parameter_sequence(param_sequence)
 
     return filters, param_sequence
 
 
-def normalize_parameter_sequence(params: Any) -> Optional[list[Any]]:
+def convert_parameter_sequence(params: Any) -> Optional[list[Any]]:
     """Normalize a parameter sequence to a list format.
 
     Args:
         params: Parameter sequence in various formats
 
     Returns:
-        Normalized list of parameters or None
+        converted list of parameters or None
     """
     if params is None:
         return None

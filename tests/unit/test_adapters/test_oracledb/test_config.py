@@ -122,7 +122,7 @@ def test_oracledb_config_provide_session() -> None:
             assert isinstance(session, OracleSyncDriver)
             # Check that parameter styles were set
             assert session.config.allowed_parameter_styles == ("named_colon", "positional_colon")
-            assert session.config.target_parameter_style == "named_colon"
+            assert session.config.default_parameter_style == "named_colon"
 
 
 def test_oracledb_config_driver_type() -> None:

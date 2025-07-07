@@ -115,7 +115,7 @@ def test_parameter_styles(adbc_sqlite_session: AdbcDriver) -> None:
     adbc_sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("test_value", 42))
 
     # Test positional parameters
-    result = adbc_sqlite_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_value"))
+    result = adbc_sqlite_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_value",))
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert result.get_count() == 1

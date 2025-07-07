@@ -35,7 +35,7 @@ def oracle_sync_session(oracle_23ai_service: OracleService) -> OracleSyncConfig:
 @pytest.mark.parametrize(
     ("params", "style"),
     [
-        pytest.param(("test_name"), "positional_binds", id="positional_binds"),
+        pytest.param(("test_name",), "positional_binds", id="positional_binds"),
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
@@ -98,7 +98,7 @@ def test_sync_insert_returning(oracle_sync_session: OracleSyncConfig, params: An
 @pytest.mark.parametrize(
     ("params", "style"),
     [
-        pytest.param(("test_name"), "positional_binds", id="positional_binds"),
+        pytest.param(("test_name",), "positional_binds", id="positional_binds"),
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
@@ -146,7 +146,7 @@ def test_sync_select(oracle_sync_session: OracleSyncConfig, params: Any, style: 
 @pytest.mark.parametrize(
     ("params", "style"),  # Keep parametrization for structure, even if params unused for select_value
     [
-        pytest.param(("test_name"), "positional_binds", id="positional_binds"),
+        pytest.param(("test_name",), "positional_binds", id="positional_binds"),
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )

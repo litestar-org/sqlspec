@@ -24,9 +24,10 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast
 from unittest.mock import Mock
 
 import pytest
-from sqlglot import exp
+from sqlglot import Expression, exp
 
 from sqlspec.exceptions import SQLBuilderError
+from sqlspec.statement.builder import Column, FunctionColumn
 from sqlspec.statement.builder.mixins._cte_and_set_ops import SetOperationMixin
 from sqlspec.statement.builder.mixins._insert_operations import InsertFromSelectMixin, InsertValuesMixin
 from sqlspec.statement.builder.mixins._join_operations import JoinClauseMixin
@@ -940,19 +941,19 @@ def test_unpivot_wrong_expression_type() -> None:
         builder.unpivot(value_column_name="value", name_column_name="name", columns_to_unpivot=["col1"])
 
 
-class AggregateTestBuilder(MockBuilder, SelectClauseMixin):
+class AggregateTestBuilder(MockBuilder, SelectClauseMixin):  # pyright: ignore
     """Test builder with aggregate functions mixin."""
 
-    def select(self, expr: Any) -> "AggregateTestBuilder":
+    def select(self, *columns: Union[str, Expression, Column, FunctionColumn]) -> "AggregateTestBuilder":
         """Mock select method to add expressions."""
         if self._expression is None:
             self._expression = exp.Select()
 
         exprs = self._expression.args.get("expressions")
         if exprs is None:
-            self._expression.set("expressions", [expr])
+            self._expression.set("expressions", [*columns])
         else:
-            exprs.append(expr)
+            exprs.extend(columns)
         return self
 
 

@@ -294,12 +294,8 @@ class SyncStorageMixin(StorageMixinBase):
             _config = self.config
             if _config and not _config.dialect:
                 _config = replace(_config, dialect=self.dialect)
-        if _config and _config.enable_transformations:
-            _config = replace(_config, enable_transformations=False)
 
-        sql = (
-            SQL(statement, parameters=params, config=_config) if params is not None else SQL(statement, config=_config)
-        )
+        sql = SQL(statement, *params, config=_config) if params else SQL(statement, config=_config)
         for filter_ in filters:
             sql = sql.filter(filter_)
 
@@ -703,12 +699,8 @@ class AsyncStorageMixin(StorageMixinBase):
             _config = self.config
             if _config and not _config.dialect:
                 _config = replace(_config, dialect=self.dialect)
-        if _config and _config.enable_transformations:
-            _config = replace(_config, enable_transformations=False)
 
-        sql = (
-            SQL(statement, parameters=params, config=_config) if params is not None else SQL(statement, config=_config)
-        )
+        sql = SQL(statement, *params, config=_config) if params else SQL(statement, config=_config)
         for filter_ in filters:
             sql = sql.filter(filter_)
 

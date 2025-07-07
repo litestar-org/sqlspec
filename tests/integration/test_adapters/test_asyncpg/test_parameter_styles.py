@@ -171,7 +171,7 @@ async def test_asyncpg_parameter_with_any_array(asyncpg_params_session: AsyncpgD
 
     # Test ANY with array parameter - use names we know exist
     result = await asyncpg_params_session.execute(
-        "SELECT * FROM test_params WHERE name = ANY($1) ORDER BY name", (["alpha", "beta", "test1"])
+        "SELECT * FROM test_params WHERE name = ANY($1) ORDER BY name", (["alpha", "beta", "test1"],)
     )
 
     assert isinstance(result, SQLResult)

@@ -548,9 +548,9 @@ def test_instrumentation_write_logging(caplog: LogCaptureFixture) -> None:
 @pytest.mark.parametrize(
     "method_name,args,error_msg",
     [
-        ("read_bytes", ("test.txt"), "Permission denied"),
+        ("read_bytes", ("test.txt",), "Permission denied"),
         ("write_bytes", ("test.txt", b"data"), "Disk full"),
-        ("delete", ("test.txt"), "File not found"),
+        ("delete", ("test.txt",), "File not found"),
         ("copy", ("src.txt", "dst.txt"), "Source not found"),
         ("move", ("old.txt", "new.txt"), "Access denied"),
     ],

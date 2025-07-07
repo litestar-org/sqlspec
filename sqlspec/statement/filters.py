@@ -432,8 +432,7 @@ class LimitOffsetFilter(PaginationFilter):
         _, named_params = self.extract_parameters()
         for name, value in named_params.items():
             result = result.add_named_parameter(name, value)
-
-        return result
+        return result.filter(self)
 
 
 @dataclass
@@ -451,12 +450,12 @@ class OrderByFilter(StatementFilter):
         return [], {}
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
-        normalized_sort_order = self.sort_order.lower()
-        if normalized_sort_order not in {"asc", "desc"}:
-            normalized_sort_order = "asc"
+        converted_sort_order = self.sort_order.lower()
+        if converted_sort_order not in {"asc", "desc"}:
+            converted_sort_order = "asc"
 
         col_expr = exp.column(self.field_name)
-        order_expr = col_expr.desc() if normalized_sort_order == "desc" else col_expr.asc()
+        order_expr = col_expr.desc() if converted_sort_order == "desc" else col_expr.asc()
 
         # Check if the statement supports ORDER BY directly
         if isinstance(statement._statement, exp.Select):

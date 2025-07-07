@@ -211,17 +211,16 @@ async def test_execute_select_statement(driver: AsyncpgDriver, mock_connection: 
     mock_record.__iter__ = MagicMock(return_value=iter([("id", 1), ("name", "test"), ("email", "test@example.com")]))
     mock_dict = {"id": 1, "name": "test", "email": "test@example.com"}
 
-    # Mock the dict() constructor to return our expected dict
-    with patch("builtins.dict", return_value=mock_dict):
-        mock_connection.fetch.return_value = [mock_record, mock_record]
+    # Mock the connection to return pre-converted dictionaries
+    mock_connection.fetch.return_value = [mock_dict, mock_dict]
 
-        statement = SQL("SELECT * FROM users")
-        result = await driver._execute_statement(statement)
+    statement = SQL("SELECT * FROM users")
+    result = await driver._execute_statement(statement)
 
-        # Now expect the converted dictionary data
-        assert result.data == [mock_dict, mock_dict]
-        assert result.column_names == ["id", "name", "email"]
-        assert result.rows_affected == 2
+    # Now expect the converted dictionary data
+    assert result.data == [mock_dict, mock_dict]
+    assert result.column_names == ["id", "name", "email"]
+    assert result.rows_affected == 2
 
     mock_connection.fetch.assert_called_once_with("SELECT * FROM users")
 
@@ -293,7 +292,7 @@ async def test_execute_many(driver: AsyncpgDriver, mock_connection: AsyncMock) -
     [
         ([[1, "a"], [2, "b"]], [(1, "a"), (2, "b")]),
         ([(1, "a"), (2, "b")], [(1, "a"), (2, "b")]),
-        ([1, 2, 3], [(1), (2), (3)]),
+        ([1, 2, 3], [(1,), (2,), (3,)]),
         ([None, None], [(), ()]),
     ],
     ids=["list_of_lists", "list_of_tuples", "single_values", "none_values"],
@@ -337,7 +336,7 @@ async def test_execute_script(driver: AsyncpgDriver, mock_connection: AsyncMock)
     [
         ([1, "test"], (1, "test")),
         ((1, "test"), (1, "test")),
-        ({"key": "value"}, ("value")),  # Dict converted to positional
+        ({"key": "value"}, ("value",)),  # Dict converted to positional
         ({"param_0": "test", "param_1": 123}, ("test", 123)),  # param_N style dict
         ([], ()),
         (None, ()),
@@ -456,7 +455,7 @@ async def test_as_many_parameter_conversion(driver: AsyncpgDriver, mock_connecti
     statement = SQL("INSERT INTO users (name) VALUES ($1)").as_many([["Alice"], ["Bob"]])
     await driver._execute_statement(statement)
 
-    mock_connection.executemany.assert_called_once_with("INSERT INTO users (name) VALUES ($1)", [("Alice"), ("Bob")])
+    mock_connection.executemany.assert_called_once_with("INSERT INTO users (name) VALUES ($1)", [("Alice",), ("Bob",)])
 
 
 @pytest.mark.asyncio

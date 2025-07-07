@@ -40,7 +40,7 @@ def _normalize_query_name(name: str) -> str:
         name: Raw query name from SQL file
 
     Returns:
-        Normalized query name suitable as Python identifier
+        converted query name suitable as Python identifier
     """
     # Strip trailing non-alphanumeric characters (excluding underscore) and replace hyphens
     return TRIM_TRAILING_SPECIAL_CHARS.sub("", name).replace("-", "_")

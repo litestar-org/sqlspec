@@ -87,7 +87,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional",)
     """AsyncMy only supports %s (pyformat_positional) parameter style."""
 
-    preferred_parameter_style: ClassVar[str] = "pyformat_positional"
+    default_parameter_style: ClassVar[str] = "pyformat_positional"
     """AsyncMy's native parameter style is %s (pyformat_positional)."""
 
     def __init__(
@@ -271,7 +271,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
-                    target_parameter_style=self.preferred_parameter_style,
+                    default_parameter_style=self.default_parameter_style,
                 )
             yield self.driver_type(connection=connection, config=statement_config)
 

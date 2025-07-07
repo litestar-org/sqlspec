@@ -192,7 +192,7 @@ def test_provide_session(mock_connect: MagicMock) -> None:
 
         # Check parameter style injection
         assert session.config.allowed_parameter_styles == ("qmark", "named_colon")
-        assert session.config.target_parameter_style == "qmark"
+        assert session.config.default_parameter_style == "qmark"
 
         mock_connection.close.assert_not_called()
 
@@ -206,13 +206,13 @@ def test_provide_session_with_custom_config(mock_connect: MagicMock) -> None:
     mock_connect.return_value = mock_connection
 
     # Custom statement config with parameter styles already set
-    custom_config = SQLConfig(allowed_parameter_styles=("qmark"), target_parameter_style="qmark")
+    custom_config = SQLConfig(allowed_parameter_styles=("qmark",), default_parameter_style="qmark")
     config = SqliteConfig(database=":memory:", statement_config=custom_config)
 
     with config.provide_session() as session:
         # Should use the custom config's parameter styles
         assert session.config.allowed_parameter_styles == ("qmark",)
-        assert session.config.target_parameter_style == "qmark"
+        assert session.config.default_parameter_style == "qmark"
 
 
 # Property Tests
@@ -295,9 +295,9 @@ def test_supported_parameter_styles() -> None:
     assert SqliteConfig.supported_parameter_styles == ("qmark", "named_colon")
 
 
-def test_preferred_parameter_style() -> None:
+def test_default_parameter_style() -> None:
     """Test preferred parameter style class attribute."""
-    assert SqliteConfig.preferred_parameter_style == "qmark"
+    assert SqliteConfig.default_parameter_style == "qmark"
 
 
 # Slots Test

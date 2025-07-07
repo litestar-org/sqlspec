@@ -207,17 +207,23 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
     ) -> "SQLResult[RowT]":
-        _filters, param_sequence = process_execute_many_parameters(parameters)
+        """Execute statement multiple times with different parameters.
 
-        # For execute_many, disable transformations to prevent literal extraction
-        # since the SQL already has placeholders for bulk operations
-        many_config = _config or self.config
-        if many_config.enable_transformations:
-            from dataclasses import replace
+        Now passes first parameter set through pipeline to enable
+        literal extraction and consistent parameter processing.
+        """
+        filters, param_sequence = process_execute_many_parameters(parameters)
 
-            many_config = replace(many_config, enable_transformations=False)
+        # Process first parameter set through pipeline for literal extraction
+        first_params = param_sequence[0] if param_sequence else None
 
-        sql_statement = self._build_statement(statement, _config=many_config, **kwargs).as_many(param_sequence)
+        # Build statement with first params to trigger pipeline processing
+        sql_statement = self._build_statement(
+            statement, first_params, *filters, _config=_config or self.config, **kwargs
+        )
+
+        # Mark as many with full sequence
+        sql_statement = sql_statement.as_many(param_sequence)
 
         return await self._execute_statement(
             statement=sql_statement, connection=self._connection(_connection), **kwargs
@@ -230,14 +236,26 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
         *parameters: "Union[StatementParameters, StatementFilter]",
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
+        _suppress_warnings: bool = False,  # New parameter for migrations
         **kwargs: Any,
     ) -> "SQLResult[RowT]":
+        """Execute a multi-statement script.
+
+        By default, validates each statement and logs warnings for dangerous
+        operations. Use _suppress_warnings=True for migrations and admin scripts.
+        """
         script_config = _config or self.config
-        if script_config.enable_validation:
-            script_config = replace(script_config, enable_validation=False)
+
+        # Keep validation enabled by default
+        # Validators will log warnings for dangerous operations
 
         sql_statement = self._build_statement(statement, *parameters, _config=script_config, **kwargs)
         sql_statement = sql_statement.as_script()
+
+        # Pass suppress warnings flag to execution
+        if _suppress_warnings:
+            kwargs["_suppress_warnings"] = True
+
         return await self._execute_statement(
             statement=sql_statement, connection=self._connection(_connection), **kwargs
         )

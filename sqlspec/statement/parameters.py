@@ -163,7 +163,7 @@ class TypedParameter:
 class ParameterStyleInfo(TypedDict, total=False):
     """Information about SQL parameter style transformation."""
 
-    was_normalized: bool
+    was_converted: bool
     placeholder_map: dict[str, Union[str, int]]
     original_styles: list[ParameterStyle]
 
@@ -192,7 +192,7 @@ class ParameterStyleTransformationState:
     """Reverse mapping for quick lookups."""
 
     original_param_info: list["ParameterInfo"] = field(default_factory=list)
-    """Original parameter info before normalization."""
+    """Original parameter info before conversion."""
 
     def __post_init__(self) -> None:
         """Build reverse map if not provided."""
@@ -213,8 +213,8 @@ class ConvertedParameters:
     merged_parameters: "SQLParameterType"
     """Parameters after merging from various sources."""
 
-    normalization_state: ParameterStyleTransformationState
-    """Complete normalization state for tracking conversions."""
+    conversion_state: ParameterStyleTransformationState
+    """Complete conversion state for tracking conversions."""
 
 
 @dataclass
@@ -692,7 +692,7 @@ class ParameterConverter:
         """
         parameters_info = self.validator.extract_parameters(sql)
 
-        needs_normalization = any(p.style in SQLGLOT_INCOMPATIBLE_STYLES for p in parameters_info)
+        needs_conversion = any(p.style in SQLGLOT_INCOMPATIBLE_STYLES for p in parameters_info)
 
         has_positional = any(p.name is None for p in parameters_info)
         has_named = any(p.name is not None for p in parameters_info)
@@ -705,9 +705,9 @@ class ParameterConverter:
 
         if validate:
             self.validator.validate_parameters(parameters_info, merged_params, sql)
-        if needs_normalization:
+        if needs_conversion:
             transformed_sql, placeholder_map = self._transform_sql_for_parsing(sql, parameters_info)
-            normalization_state = ParameterStyleTransformationState(
+            conversion_state = ParameterStyleTransformationState(
                 was_transformed=True,
                 original_styles=list({p.style for p in parameters_info}),
                 transformation_style=ParameterStyle.NAMED_COLON,
@@ -716,7 +716,7 @@ class ParameterConverter:
             )
         else:
             transformed_sql = sql
-            normalization_state = ParameterStyleTransformationState(
+            conversion_state = ParameterStyleTransformationState(
                 was_transformed=False,
                 original_styles=list({p.style for p in parameters_info}),
                 original_param_info=parameters_info,
@@ -726,7 +726,7 @@ class ParameterConverter:
             transformed_sql=transformed_sql,
             parameter_info=parameters_info,
             merged_parameters=merged_params,
-            normalization_state=normalization_state,
+            conversion_state=conversion_state,
         )
 
     @staticmethod
@@ -945,7 +945,7 @@ class ParameterConverter:
             from sqlspec.exceptions import SQLTransformationError
 
             msg = (
-                f"Parameter count mismatch during denormalization. "
+                f"Parameter count mismatch during deconversion. "
                 f"Expected at least {len(final_parameter_info)} parameters, "
                 f"found {len(canonical_params)} in SQL"
             )

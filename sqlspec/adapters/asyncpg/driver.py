@@ -15,7 +15,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import normalize_parameter_sequence
+from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -130,13 +130,13 @@ class AsyncpgDriver(
             return await self._execute_many(sql, parameters, connection=connection, **kwargs)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # Normalize parameters using consolidated utility
-            normalized_params = normalize_parameter_sequence(parameters)
+            # Convert parameters using consolidated utility
+            converted_params = convert_parameter_sequence(parameters)
             # AsyncPG expects parameters as *args, not a single list
             args_for_driver: list[Any] = []
-            if normalized_params:
-                # normalized_params is already a list, just use it directly
-                args_for_driver = normalized_params
+            if converted_params:
+                # converted_params is already a list, just use it directly
+                args_for_driver = converted_params
 
             if self.returns_rows(statement.expression):
                 records = await txn_conn.fetch(sql, *args_for_driver)
@@ -175,12 +175,12 @@ class AsyncpgDriver(
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
             # Normalize parameter list using consolidated utility
-            normalized_param_list = normalize_parameter_sequence(param_list)
+            converted_param_list = convert_parameter_sequence(param_list)
 
             params_list: list[tuple[Any, ...]] = []
             rows_affected = 0
-            if normalized_param_list:
-                for param_set in normalized_param_list:
+            if converted_param_list:
+                for param_set in converted_param_list:
                     if isinstance(param_set, (list, tuple)):
                         params_list.append(tuple(param_set))
                     elif param_set is None:

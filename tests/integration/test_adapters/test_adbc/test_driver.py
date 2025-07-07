@@ -131,7 +131,9 @@ def test_adbc_postgresql_basic_crud(adbc_postgresql_session: AdbcDriver) -> None
     assert insert_result.rows_affected in (-1, 0, 1)
 
     # SELECT
-    select_result = adbc_postgresql_session.execute("SELECT name, value FROM test_table WHERE name = $1", ("test_name"))
+    select_result = adbc_postgresql_session.execute(
+        "SELECT name, value FROM test_table WHERE name = $1", ("test_name",)
+    )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
@@ -147,13 +149,13 @@ def test_adbc_postgresql_basic_crud(adbc_postgresql_session: AdbcDriver) -> None
     assert update_result.rows_affected in (-1, 0, 1)
 
     # Verify UPDATE
-    verify_result = adbc_postgresql_session.execute("SELECT value FROM test_table WHERE name = $1", ("test_name"))
+    verify_result = adbc_postgresql_session.execute("SELECT value FROM test_table WHERE name = $1", ("test_name",))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
 
     # DELETE
-    delete_result = adbc_postgresql_session.execute("DELETE FROM test_table WHERE name = $1", ("test_name"))
+    delete_result = adbc_postgresql_session.execute("DELETE FROM test_table WHERE name = $1", ("test_name",))
     assert isinstance(delete_result, SQLResult)
     # ADBC drivers may not support rowcount and return -1 or 0
     assert delete_result.rows_affected in (-1, 0, 1)
@@ -175,7 +177,7 @@ def test_adbc_sqlite_basic_crud(adbc_sqlite_session: AdbcDriver) -> None:
     assert insert_result.rows_affected in (-1, 0, 1)
 
     # SELECT
-    select_result = adbc_sqlite_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_name"))
+    select_result = adbc_sqlite_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_name",))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
@@ -189,13 +191,13 @@ def test_adbc_sqlite_basic_crud(adbc_sqlite_session: AdbcDriver) -> None:
     assert update_result.rows_affected in (-1, 0, 1)
 
     # Verify UPDATE
-    verify_result = adbc_sqlite_session.execute("SELECT value FROM test_table WHERE name = ?", ("test_name"))
+    verify_result = adbc_sqlite_session.execute("SELECT value FROM test_table WHERE name = ?", ("test_name",))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
 
     # DELETE
-    delete_result = adbc_sqlite_session.execute("DELETE FROM test_table WHERE name = ?", ("test_name"))
+    delete_result = adbc_sqlite_session.execute("DELETE FROM test_table WHERE name = ?", ("test_name",))
     assert isinstance(delete_result, SQLResult)
     # ADBC drivers may not support rowcount and return -1 or 0
     assert delete_result.rows_affected in (-1, 0, 1)
@@ -220,7 +222,7 @@ def test_adbc_duckdb_basic_crud(adbc_duckdb_session: AdbcDriver) -> None:
     assert insert_result.rows_affected in (-1, 0, 1)
 
     # SELECT
-    select_result = adbc_duckdb_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_name"))
+    select_result = adbc_duckdb_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_name",))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
@@ -234,13 +236,13 @@ def test_adbc_duckdb_basic_crud(adbc_duckdb_session: AdbcDriver) -> None:
     assert update_result.rows_affected in (-1, 0, 1)
 
     # Verify UPDATE
-    verify_result = adbc_duckdb_session.execute("SELECT value FROM test_table WHERE name = ?", ("test_name"))
+    verify_result = adbc_duckdb_session.execute("SELECT value FROM test_table WHERE name = ?", ("test_name",))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
 
     # DELETE
-    delete_result = adbc_duckdb_session.execute("DELETE FROM test_table WHERE name = ?", ("test_name"))
+    delete_result = adbc_duckdb_session.execute("DELETE FROM test_table WHERE name = ?", ("test_name",))
     assert isinstance(delete_result, SQLResult)
     # ADBC drivers may not support rowcount and return -1 or 0
     assert delete_result.rows_affected in (-1, 0, 1)
@@ -526,7 +528,7 @@ def test_adbc_bigquery_data_types() -> None:
 @pytest.mark.parametrize(
     ("params", "style"),
     [
-        pytest.param(("test_value"), "tuple_binds", id="tuple_binds"),
+        pytest.param(("test_value",), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
     ],
 )
@@ -534,14 +536,14 @@ def test_adbc_bigquery_data_types() -> None:
 def test_adbc_postgresql_parameter_styles(adbc_postgresql_session: AdbcDriver, params: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles with ADBC PostgreSQL."""
     # Insert test data
-    adbc_postgresql_session.execute("INSERT INTO test_table (name) VALUES ($1)", ("test_value"))
+    adbc_postgresql_session.execute("INSERT INTO test_table (name) VALUES ($1)", ("test_value",))
 
     # Test parameter style
     if style == "tuple_binds":
         sql = "SELECT name FROM test_table WHERE name = $1"
     else:  # dict_binds - PostgreSQL uses numbered parameters
         sql = "SELECT name FROM test_table WHERE name = $1"
-        params = (params["name"]) if isinstance(params, dict) else params
+        params = (params["name"],) if isinstance(params, dict) else params
 
     result = adbc_postgresql_session.execute(sql, params)
     assert isinstance(result, SQLResult)
@@ -624,7 +626,7 @@ def test_adbc_postgresql_result_methods(adbc_postgresql_session: AdbcDriver) -> 
     assert not result.is_empty()
 
     # Test empty result
-    empty_result = adbc_postgresql_session.execute("SELECT * FROM test_table WHERE name = $1", ("nonexistent"))
+    empty_result = adbc_postgresql_session.execute("SELECT * FROM test_table WHERE name = $1", ("nonexistent",))
     assert isinstance(empty_result, SQLResult)
     assert empty_result.is_empty()
     assert empty_result.get_first() is None

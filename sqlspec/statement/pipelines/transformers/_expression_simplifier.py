@@ -21,7 +21,7 @@ class SimplificationConfig:
     enable_literal_folding: bool = True
     enable_boolean_optimization: bool = True
     enable_connector_optimization: bool = True
-    enable_equality_normalization: bool = True
+    enable_equality_conversion: bool = True
     enable_complement_removal: bool = True
 
 
@@ -74,8 +74,8 @@ class ExpressionSimplifier(ProcessorProtocol):
                 optimizations.append("boolean_optimization")
             if self.config.enable_connector_optimization:
                 optimizations.append("connector_optimization")
-            if self.config.enable_equality_normalization:
-                optimizations.append("equality_normalization")
+            if self.config.enable_equality_conversion:
+                optimizations.append("equality_conversion")
             if self.config.enable_complement_removal:
                 optimizations.append("complement_removal")
 

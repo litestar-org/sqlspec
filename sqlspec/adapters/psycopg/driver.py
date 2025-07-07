@@ -23,7 +23,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import normalize_parameter_sequence
+from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.exceptions import PipelineExecutionError
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import ArrowResult, SQLResult
@@ -233,8 +233,8 @@ class PsycopgSyncDriver(
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # Normalize parameter list using consolidated utility
-            normalized_param_list = normalize_parameter_sequence(param_list)
-            final_param_list = normalized_param_list or []
+            converted_param_list = convert_parameter_sequence(param_list)
+            final_param_list = converted_param_list or []
 
             with self._get_cursor(txn_conn) as cursor:
                 cursor.executemany(sql, final_param_list)
@@ -684,8 +684,8 @@ class PsycopgAsyncDriver(
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
             # Normalize parameter list using consolidated utility
-            normalized_param_list = normalize_parameter_sequence(param_list)
-            final_param_list = normalized_param_list or []
+            converted_param_list = convert_parameter_sequence(param_list)
+            final_param_list = converted_param_list or []
 
             async with txn_conn.cursor() as cursor:
                 await cursor.executemany(cast("Query", sql), final_param_list)

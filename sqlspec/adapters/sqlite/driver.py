@@ -19,7 +19,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import normalize_parameter_sequence
+from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -128,9 +128,9 @@ class SqliteDriver(
             target_style = self.default_parameter_style
         elif detected_styles:
             # Single style detected - use it if supported
-            single_style = next(iter(detected_styles))
-            if single_style in self.supported_parameter_styles:
-                target_style = single_style
+            detected_style = next(iter(detected_styles))
+            if detected_style.value in self.supported_parameter_styles:
+                target_style = detected_style
             else:
                 target_style = self.default_parameter_style
 
@@ -155,18 +155,18 @@ class SqliteDriver(
         # Use provided connection or driver's default connection
         conn = connection if connection is not None else self._connection(None)
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
-            # Normalize parameters using consolidated utility
-            normalized_params_list = normalize_parameter_sequence(parameters)
+            # Convert parameters using consolidated utility
+            converted_params_list = convert_parameter_sequence(parameters)
             params_for_execute: Any
-            if normalized_params_list and len(normalized_params_list) == 1:
+            if converted_params_list and len(converted_params_list) == 1:
                 # Single parameter should be tuple for SQLite
-                if not isinstance(normalized_params_list[0], (tuple, list, dict)):
-                    params_for_execute = (normalized_params_list[0],)
+                if not isinstance(converted_params_list[0], (tuple, list, dict)):
+                    params_for_execute = (converted_params_list[0],)
                 else:
-                    params_for_execute = normalized_params_list[0]
+                    params_for_execute = converted_params_list[0]
             else:
                 # Multiple parameters
-                params_for_execute = tuple(normalized_params_list) if normalized_params_list else ()
+                params_for_execute = tuple(converted_params_list) if converted_params_list else ()
 
             cursor.execute(sql, params_for_execute)
             if self.returns_rows(statement.expression):
@@ -201,10 +201,10 @@ class SqliteDriver(
         conn = connection if connection is not None else self._connection(None)
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # Normalize parameter list using consolidated utility
-            normalized_param_list = normalize_parameter_sequence(param_list)
+            converted_param_list = convert_parameter_sequence(param_list)
             formatted_params: list[tuple[Any, ...]] = []
-            if normalized_param_list:
-                for param_set in normalized_param_list:
+            if converted_param_list:
+                for param_set in converted_param_list:
                     if isinstance(param_set, (list, tuple)):
                         formatted_params.append(tuple(param_set))
                     elif param_set is None:
@@ -229,12 +229,34 @@ class SqliteDriver(
     def _execute_script(
         self, script: str, connection: Optional[SqliteConnection] = None, statement: Optional[SQL] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
-        """Execute a script on the SQLite connection."""
-        # Use provided connection or driver's default connection
+        """Execute script using splitter for per-statement validation."""
+        from sqlspec.statement.splitter import split_sql_script
+
         conn = connection if connection is not None else self._connection(None)
+        statements = split_sql_script(script, dialect="sqlite")
+
+        total_rows = 0
+        successful = 0
+        suppress_warnings = kwargs.get("_suppress_warnings", False)
+
         with self._get_cursor(conn) as cursor:
-            cursor.executescript(script)
-        # executescript doesn't auto-commit in some cases - force commit
+            for stmt in statements:
+                try:
+                    # Validate each statement unless warnings suppressed
+                    if not suppress_warnings and statement:
+                        # Run validation through pipeline
+                        temp_sql = SQL(stmt, config=statement._config)
+                        temp_sql._ensure_processed()
+                        # Validation errors are logged as warnings by default
+
+                    cursor.execute(stmt)
+                    successful += 1
+                    total_rows += cursor.rowcount or 0
+                except Exception as e:  # noqa: PERF203
+                    if not kwargs.get("continue_on_error", False):
+                        raise
+                    logger.warning("Script statement failed: %s", e)
+
         conn.commit()
 
         if statement is None:
@@ -243,10 +265,10 @@ class SqliteDriver(
         return SQLResult(
             statement=statement,
             data=[],
-            rows_affected=-1,  # Unknown for scripts
+            rows_affected=total_rows,
             operation_type="SCRIPT",
-            total_statements=-1,  # SQLite doesn't provide this info
-            successful_statements=-1,
+            total_statements=len(statements),
+            successful_statements=successful,
             metadata={"status_message": "SCRIPT EXECUTED"},
         )
 

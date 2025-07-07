@@ -55,7 +55,7 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
     driver_type: type[SqliteDriver] = SqliteDriver
     connection_type: type[SqliteConnection] = SqliteConnection
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark", "named_colon")
-    preferred_parameter_style: ClassVar[str] = "qmark"
+    default_parameter_style: ClassVar[str] = "qmark"
 
     def __init__(
         self,
@@ -65,7 +65,7 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
         # SQLite connection parameters
         timeout: Optional[float] = None,
         detect_types: Optional[int] = None,
-        isolation_level: Optional[Union[str, None]] = None,
+        isolation_level: Union[None, str] = None,
         check_same_thread: Optional[bool] = None,
         factory: Optional[type[SqliteConnection]] = None,
         cached_statements: Optional[int] = None,
@@ -169,6 +169,6 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
-                    target_parameter_style=self.preferred_parameter_style,
+                    default_parameter_style=self.default_parameter_style,
                 )
             yield self.driver_type(connection=connection, config=statement_config)

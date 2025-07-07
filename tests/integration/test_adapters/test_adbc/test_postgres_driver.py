@@ -137,7 +137,7 @@ def test_basic_crud(adbc_postgresql_session: AdbcDriver) -> None:
 @pytest.mark.parametrize(
     ("params", "style"),
     [
-        pytest.param(("test_value"), "tuple_binds", id="tuple_binds"),
+        pytest.param(("test_value",), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
     ],
 )
@@ -145,7 +145,7 @@ def test_basic_crud(adbc_postgresql_session: AdbcDriver) -> None:
 def test_parameter_styles(adbc_postgresql_session: AdbcDriver, params: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles with ADBC PostgreSQL."""
     # Insert test data
-    adbc_postgresql_session.execute(SQL("INSERT INTO test_table (name) VALUES ($1)"), ("test_value"))
+    adbc_postgresql_session.execute(SQL("INSERT INTO test_table (name) VALUES ($1)"), ("test_value",))
 
     # Test parameter style
     if style == "tuple_binds":
@@ -514,7 +514,7 @@ def test_result_methods(adbc_postgresql_session: AdbcDriver) -> None:
     assert not result.is_empty()
 
     # Test empty result
-    empty_result = adbc_postgresql_session.execute("SELECT * FROM test_table WHERE name = $1", ("nonexistent"))
+    empty_result = adbc_postgresql_session.execute("SELECT * FROM test_table WHERE name = $1", ("nonexistent",))
     assert isinstance(empty_result, SQLResult)
     assert empty_result.is_empty()
     assert empty_result.get_first() is None
@@ -912,7 +912,7 @@ def test_arrow_empty_result(adbc_postgresql_session: AdbcDriver) -> None:
     """Test Arrow functionality with empty result set."""
     # Query that returns no rows
     result = adbc_postgresql_session.fetch_arrow_table(
-        "SELECT name, value FROM test_table WHERE name = $1", ("nonexistent")
+        "SELECT name, value FROM test_table WHERE name = $1", ("nonexistent",)
     )
 
     assert isinstance(result, ArrowResult)

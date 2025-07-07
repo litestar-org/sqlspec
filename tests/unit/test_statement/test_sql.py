@@ -24,10 +24,7 @@ if TYPE_CHECKING:
             {},  # Default values
             {"dialect": None, "enable_caching": True},
         ),
-        (
-            {"dialect": "duckdb", "enable_caching": False},
-            {"dialect": "duckdb", "enable_caching": False},
-        ),
+        ({"dialect": "duckdb", "enable_caching": False}, {"dialect": "duckdb", "enable_caching": False}),
     ],
     ids=["defaults", "custom"],
 )

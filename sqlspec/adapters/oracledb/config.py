@@ -120,7 +120,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_colon", "positional_colon")
     """OracleDB supports :name (named_colon) and :1 (positional_colon) parameter styles."""
 
-    preferred_parameter_style: ClassVar[str] = "named_colon"
+    default_parameter_style: ClassVar[str] = "named_colon"
     """OracleDB's preferred parameter style is :name (named_colon)."""
 
     def __init__(
@@ -300,7 +300,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
-                    target_parameter_style=self.preferred_parameter_style,
+                    default_parameter_style=self.default_parameter_style,
                 )
             driver = self.driver_type(connection=conn, config=statement_config)
             yield driver
@@ -415,7 +415,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_colon", "positional_colon")
     """OracleDB supports :name (named_colon) and :1 (positional_colon) parameter styles."""
 
-    preferred_parameter_style: ClassVar[str] = "named_colon"
+    default_parameter_style: ClassVar[str] = "named_colon"
     """OracleDB's preferred parameter style is :name (named_colon)."""
 
     def __init__(
@@ -623,7 +623,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
-                    target_parameter_style=self.preferred_parameter_style,
+                    default_parameter_style=self.default_parameter_style,
                 )
             driver = self.driver_type(connection=conn, config=statement_config)
             yield driver

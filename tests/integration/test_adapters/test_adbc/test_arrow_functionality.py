@@ -192,7 +192,7 @@ def test_postgresql_arrow_with_parameters(adbc_postgresql_arrow_session: AdbcDri
 @xfail_if_driver_missing
 def test_postgresql_arrow_empty_result(adbc_postgresql_arrow_session: AdbcDriver) -> None:
     """Test fetch_arrow_table with empty result on PostgreSQL."""
-    result = adbc_postgresql_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow WHERE value > $1", (1000))
+    result = adbc_postgresql_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow WHERE value > $1", (1000,))
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows == 0

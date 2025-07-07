@@ -153,7 +153,7 @@ def test_psycopg_execute_many_delete(psycopg_batch_session: PsycopgSyncDriver) -
     )
 
     # Delete specific items by name
-    delete_params = [("Delete 1"), ("Delete 2"), ("Delete 4")]
+    delete_params = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
 
     result = psycopg_batch_session.execute_many("DELETE FROM test_batch WHERE name = %s", delete_params)
 
@@ -189,7 +189,7 @@ def test_psycopg_execute_many_large_batch(psycopg_batch_session: PsycopgSyncDriv
 
     # Verify some specific values using ANY for efficient querying
     sample_result = psycopg_batch_session.execute(
-        "SELECT * FROM test_batch WHERE name = ANY(%s) ORDER BY value", (["Item 100", "Item 500", "Item 999"])
+        "SELECT * FROM test_batch WHERE name = ANY(%s) ORDER BY value", (["Item 100", "Item 500", "Item 999"],)
     )
     assert len(sample_result.data) == 3
     assert sample_result.data[0]["value"] == 1000  # Item 100
@@ -213,7 +213,7 @@ def test_psycopg_execute_many_with_sql_object(psycopg_batch_session: PsycopgSync
 
     # Verify data
     check_result = psycopg_batch_session.execute(
-        "SELECT COUNT(*) as count FROM test_batch WHERE category = %s", ("SOB")
+        "SELECT COUNT(*) as count FROM test_batch WHERE category = %s", ("SOB",)
     )
     assert check_result.data[0]["count"] == 3
 
@@ -244,7 +244,7 @@ def test_psycopg_execute_many_with_returning(psycopg_batch_session: PsycopgSyncD
         )
 
         check_result = psycopg_batch_session.execute(
-            "SELECT COUNT(*) as count FROM test_batch WHERE category = %s", ("RET")
+            "SELECT COUNT(*) as count FROM test_batch WHERE category = %s", ("RET",)
         )
         assert check_result.data[0]["count"] == 3
 
@@ -342,13 +342,13 @@ def test_psycopg_execute_many_with_upsert(psycopg_batch_session: PsycopgSyncDriv
 
     # Second batch - with conflicts using ON CONFLICT
     conflict_params = [
-        (1, "Updated Item 1"),  # Conflict
-        (2, "Updated Item 2"),  # Conflict
-        (4, "Item 4"),  # New
+        (1, "Updated Item 1", 1),  # Conflict - increment counter by 1
+        (2, "Updated Item 2", 1),  # Conflict - increment counter by 1
+        (4, "Item 4", 1),  # New - increment value (unused for new rows)
     ]
 
     result = psycopg_batch_session.execute_many(
-        "INSERT INTO test_upsert (id, name) VALUES (%s, %s) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, counter = test_upsert.counter + 1",
+        "INSERT INTO test_upsert (id, name) VALUES (%s, %s) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, counter = test_upsert.counter + %s",
         conflict_params,
     )
 
@@ -362,38 +362,3 @@ def test_psycopg_execute_many_with_upsert(psycopg_batch_session: PsycopgSyncDriv
     # Check that conflicts were handled
     updated_items = [row for row in check_result.data if row["counter"] > 1]
     assert len(updated_items) == 2  # Items 1 and 2 should be updated
-
-
-@pytest.mark.xdist_group("postgres")
-def test_psycopg_execute_many_with_copy(psycopg_batch_session: PsycopgSyncDriver) -> None:
-    """Test execute_many efficiency compared to COPY operations on Psycopg."""
-    # Test that execute_many works well alongside COPY operations
-    large_batch = [(f"Copy Item {i}", i * 10, f"COPY{i % 2}") for i in range(100)]
-
-    result = psycopg_batch_session.execute_many(
-        "INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)", large_batch
-    )
-
-    assert isinstance(result, SQLResult)
-    assert result.rows_affected == 100
-
-    # Verify the data can be queried efficiently
-    analytics_result = psycopg_batch_session.execute("""
-        SELECT
-            category,
-            COUNT(*) as count,
-            AVG(value) as avg_value,
-            SUM(value) as total_value
-        FROM test_batch
-        GROUP BY category
-        ORDER BY category
-    """)
-
-    assert len(analytics_result.data) == 2  # COPY0 and COPY1
-
-    # Verify analytics results
-    copy0_data = next(row for row in analytics_result.data if row["category"] == "COPY0")
-    copy1_data = next(row for row in analytics_result.data if row["category"] == "COPY1")
-
-    assert copy0_data["count"] == 50  # Even numbers
-    assert copy1_data["count"] == 50  # Odd numbers

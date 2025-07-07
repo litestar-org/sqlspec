@@ -125,7 +125,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_at",)
     """BigQuery only supports @name (named_at) parameter style."""
 
-    preferred_parameter_style: ClassVar[str] = "named_at"
+    default_parameter_style: ClassVar[str] = "named_at"
     """BigQuery's native parameter style is @name (named_at)."""
 
     def __init__(
@@ -391,7 +391,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
                     statement_config = replace(
                         statement_config,
                         allowed_parameter_styles=self.supported_parameter_styles,
-                        target_parameter_style=self.preferred_parameter_style,
+                        default_parameter_style=self.default_parameter_style,
                     )
                 driver = self.driver_type(
                     connection=connection,

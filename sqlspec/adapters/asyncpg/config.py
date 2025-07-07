@@ -145,7 +145,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
     driver_type: type[AsyncpgDriver] = AsyncpgDriver
     connection_type: type[AsyncpgConnection] = type(AsyncpgConnection)  # type: ignore[assignment]
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("numeric",)
-    preferred_parameter_style: ClassVar[str] = "numeric"
+    default_parameter_style: ClassVar[str] = "numeric"
 
     def __init__(self, **kwargs: "Unpack[DriverParameters]") -> None:
         """Initialize AsyncPG configuration."""
@@ -225,7 +225,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         super().__init__()
 
         # Override prepared statements to True for PostgreSQL since it supports them well
-        self.enable_prepared_statements = kwargs.get("enable_prepared_statements", True)
+        self.enable_prepared_statements = kwargs.get("enable_prepared_statements", True)  # type: ignore[assignment]
 
         if pool_instance_from_kwargs is not None:
             self.pool_instance = pool_instance_from_kwargs
@@ -327,7 +327,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
-                    target_parameter_style=self.preferred_parameter_style,
+                    default_parameter_style=self.default_parameter_style,
                 )
             yield self.driver_type(connection=connection, config=statement_config)
 

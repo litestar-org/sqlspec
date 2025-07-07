@@ -149,7 +149,7 @@ async def test_asyncpg_execute_many_delete(asyncpg_batch_session: AsyncpgDriver)
     )
 
     # Delete specific items by name
-    delete_params = [("Delete 1"), ("Delete 2"), ("Delete 4")]
+    delete_params = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
 
     result = await asyncpg_batch_session.execute_many("DELETE FROM test_batch WHERE name = $1", delete_params)
 
@@ -184,7 +184,7 @@ async def test_asyncpg_execute_many_large_batch(asyncpg_batch_session: AsyncpgDr
 
     # Verify some specific values
     sample_result = await asyncpg_batch_session.execute(
-        "SELECT * FROM test_batch WHERE name = ANY($1) ORDER BY value", (["Item 100", "Item 500", "Item 999"])
+        "SELECT * FROM test_batch WHERE name = ANY($1) ORDER BY value", (["Item 100", "Item 500", "Item 999"],)
     )
     assert len(sample_result) == 3
     assert sample_result[0]["value"] == 1000  # Item 100

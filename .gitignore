@@ -53,3 +53,4 @@ CLAUDE*.md
 requirements/*
 tools/*.json
 benchmarks/
+.benchmark

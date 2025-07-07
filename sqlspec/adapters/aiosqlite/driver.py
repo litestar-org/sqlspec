@@ -17,7 +17,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import normalize_parameter_sequence
+from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -143,13 +143,10 @@ class AiosqliteDriver(
         conn = self._connection(connection)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            normalized_params = normalize_parameter_sequence(parameters)
+            converted_params = convert_parameter_sequence(parameters)
 
-            # Extract the actual parameters from the normalized list
-            if normalized_params and len(normalized_params) == 1:
-                actual_params = normalized_params[0]
-            else:
-                actual_params = normalized_params
+            # Extract the actual parameters from the converted list
+            actual_params = converted_params[0] if converted_params and len(converted_params) == 1 else converted_params
 
             # AIOSQLite expects tuple or dict - handle parameter conversion
             if ":param_" in sql or (isinstance(actual_params, dict)):
@@ -194,11 +191,11 @@ class AiosqliteDriver(
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
             # Normalize parameter list using consolidated utility
-            normalized_param_list = normalize_parameter_sequence(param_list)
+            converted_param_list = convert_parameter_sequence(param_list)
 
             params_list: list[tuple[Any, ...]] = []
-            if normalized_param_list and isinstance(normalized_param_list, Sequence):
-                for param_set in normalized_param_list:
+            if converted_param_list and isinstance(converted_param_list, Sequence):
+                for param_set in converted_param_list:
                     if isinstance(param_set, (list, tuple)):
                         params_list.append(tuple(param_set))
                     elif param_set is None:

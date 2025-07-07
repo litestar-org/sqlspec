@@ -77,7 +77,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ()
     """Parameter styles supported by this database adapter (e.g., ('qmark', 'named_colon'))."""
 
-    preferred_parameter_style: "ClassVar[str]" = "none"
+    default_parameter_style: "ClassVar[str]" = "none"
     """The preferred/native parameter style for this database."""
 
     def __hash__(self) -> int:

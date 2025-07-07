@@ -128,7 +128,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("numeric",)
     """Psqlpy only supports $1, $2, ... (numeric) parameter style."""
 
-    preferred_parameter_style: ClassVar[str] = "numeric"
+    default_parameter_style: ClassVar[str] = "numeric"
     """Psqlpy's native parameter style is $1, $2, ... (numeric)."""
 
     def __init__(
@@ -399,7 +399,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
-                    target_parameter_style=self.preferred_parameter_style,
+                    default_parameter_style=self.default_parameter_style,
                 )
             driver = self.driver_type(connection=conn, config=statement_config)
             yield driver

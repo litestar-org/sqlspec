@@ -601,11 +601,7 @@ class PerformanceValidator(ProcessorProtocol):
                 ),
                 ("join_optimization", optimize_joins.optimize_joins, "Optimize join order and conditions"),
                 ("simplification", simplify.simplify, "Simplify expressions and conditions"),
-                (
-                    "identifier_normalization",
-                    normalize_identifiers.normalize_identifiers,
-                    "Normalize identifier casing",
-                ),
+                ("identifier_conversion", normalize_identifiers.normalize_identifiers, "Normalize identifier casing"),
             ]
 
             best_optimized = expression.copy()

@@ -30,7 +30,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import normalize_parameter_sequence
+from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import ArrowResult, SQLResult
@@ -389,14 +389,14 @@ class BigQueryDriver(
         # BigQuery doesn't have traditional transactions, but we'll use the pattern for consistency
         # The managed_transaction_sync will just pass through for BigQuery Client objects
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # Normalize parameters using consolidated utility
-            normalized_params = normalize_parameter_sequence(parameters)
+            # Convert parameters using consolidated utility
+            converted_params = convert_parameter_sequence(parameters)
             param_dict: dict[str, Any] = {}
-            if normalized_params:
-                if isinstance(normalized_params[0], dict):
-                    param_dict = normalized_params[0]
+            if converted_params:
+                if isinstance(converted_params[0], dict):
+                    param_dict = converted_params[0]
                 else:
-                    param_dict = {f"param_{i}": val for i, val in enumerate(normalized_params)}
+                    param_dict = {f"param_{i}": val for i, val in enumerate(converted_params)}
 
             bq_params = self._prepare_bq_query_parameters(param_dict)
 
@@ -415,14 +415,14 @@ class BigQueryDriver(
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # Normalize parameter list using consolidated utility
-            normalized_param_list = normalize_parameter_sequence(param_list)
+            converted_param_list = convert_parameter_sequence(param_list)
 
             # Use a multi-statement script for batch execution
             script_parts = []
             all_params: dict[str, Any] = {}
             param_counter = 0
 
-            for params in normalized_param_list or []:
+            for params in converted_param_list or []:
                 if isinstance(params, dict):
                     param_dict = params
                 elif isinstance(params, (list, tuple)):
