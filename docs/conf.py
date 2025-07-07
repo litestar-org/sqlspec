@@ -76,7 +76,7 @@ autodoc_default_options = {"special-members": "__init__", "show-inheritance": Tr
 autodoc_member_order = "bysource"
 autodoc_typehints_format = "short"
 autodoc_type_aliases: dict[str, str] = {}
-autodoc_mock_imports = []
+autodoc_mock_imports: list[str] = []
 
 autosectionlabel_prefix_document = True
 

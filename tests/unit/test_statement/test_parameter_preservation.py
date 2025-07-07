@@ -2,8 +2,8 @@
 
 import pytest
 
-from sqlspec.statement.builder.ddl import CreateTableAsSelect
-from sqlspec.statement.builder.select import Select
+from sqlspec.statement.builder._ddl import CreateTableAsSelect
+from sqlspec.statement.builder._select import Select
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -22,7 +22,7 @@ def test_ctas_preserves_parameter_names() -> None:
     # Build and check
     safe_query = ctas_builder.build()
     # Disable validation for DDL operations
-    config = SQLConfig(enable_validation=False, strict_mode=False)
+    config = SQLConfig(enable_validation=False)
     sql_statement = SQL(safe_query.sql, parameters=safe_query.parameters, config=config)
 
     # Parameters should preserve original names

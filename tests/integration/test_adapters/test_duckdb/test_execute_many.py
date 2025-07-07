@@ -12,7 +12,7 @@ from sqlspec.statement.sql import SQLConfig
 @pytest.fixture
 def duckdb_batch_session() -> "Generator[DuckDBDriver, None, None]":
     """Create a DuckDB session for batch operation testing."""
-    config = DuckDBConfig(database=":memory:", statement_config=SQLConfig(strict_mode=False))
+    config = DuckDBConfig(database=":memory:", statement_config=SQLConfig())
 
     with config.provide_session() as session:
         # Create test table
@@ -185,7 +185,7 @@ def test_duckdb_execute_many_with_sql_object(duckdb_batch_session: DuckDBDriver)
     assert result.rows_affected == 3
 
     # Verify data
-    check_result = duckdb_batch_session.execute("SELECT COUNT(*) as count FROM test_batch WHERE category = ?", ("SOB",))
+    check_result = duckdb_batch_session.execute("SELECT COUNT(*) as count FROM test_batch WHERE category = ?", ("SOB"))
     assert check_result.data[0]["count"] == 3
 
 

@@ -13,15 +13,17 @@ from sqlglot.dialects.dialect import DialectType
 from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
 from sqlspec.driver.connection import managed_transaction_async, managed_transaction_sync
 from sqlspec.driver.mixins import (
+    AsyncAdapterCacheMixin,
     AsyncPipelinedExecutionMixin,
     AsyncStorageMixin,
     SQLTranslatorMixin,
+    SyncAdapterCacheMixin,
     SyncPipelinedExecutionMixin,
     SyncStorageMixin,
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import normalize_parameter_sequence
+from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.exceptions import PipelineExecutionError
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import ArrowResult, SQLResult
@@ -43,6 +45,7 @@ PsycopgAsyncConnection = AsyncConnection[PsycopgDictRow]
 
 class PsycopgSyncDriver(
     SyncDriverAdapterProtocol[PsycopgSyncConnection, RowT],
+    SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
     SyncStorageMixin,
@@ -57,7 +60,6 @@ class PsycopgSyncDriver(
         ParameterStyle.NAMED_PYFORMAT,
     )
     default_parameter_style: ParameterStyle = ParameterStyle.POSITIONAL_PYFORMAT
-    __slots__ = ()
 
     def __init__(
         self,
@@ -77,7 +79,7 @@ class PsycopgSyncDriver(
         self, statement: SQL, connection: Optional[PsycopgSyncConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         if statement.is_script:
-            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
         detected_styles = set()
@@ -105,7 +107,7 @@ class PsycopgSyncDriver(
                 sql = statement.to_sql(placeholder_style=target_style)
                 params = kwargs_params
             else:
-                sql, params = statement.compile(placeholder_style=target_style)
+                sql, params = self._get_compiled_sql(statement, target_style)
             if params is not None:
                 processed_params = [self._process_parameters(param_set) for param_set in params]
                 params = processed_params
@@ -120,7 +122,7 @@ class PsycopgSyncDriver(
             sql = statement.to_sql(placeholder_style=target_style)
             params = kwargs_params
         else:
-            sql, params = statement.compile(placeholder_style=target_style)
+            sql, params = self._get_compiled_sql(statement, target_style)
         params = self._process_parameters(params)
 
         # Fix over-nested parameters for Psycopg
@@ -231,8 +233,8 @@ class PsycopgSyncDriver(
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # Normalize parameter list using consolidated utility
-            normalized_param_list = normalize_parameter_sequence(param_list)
-            final_param_list = normalized_param_list or []
+            converted_param_list = convert_parameter_sequence(param_list)
+            final_param_list = converted_param_list or []
 
             with self._get_cursor(txn_conn) as cursor:
                 cursor.executemany(sql, final_param_list)
@@ -256,15 +258,37 @@ class PsycopgSyncDriver(
         conn = connection if connection is not None else self._connection(None)
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
-            cursor.execute(script)
+            # Split script into individual statements for validation
+            statements = self._split_script_statements(script)
+            suppress_warnings = kwargs.get("_suppress_warnings", False)
+
+            executed_count = 0
+            total_rows = 0
+            last_status = None
+
+            # Execute each statement individually for better control and validation
+            for statement in statements:
+                if statement.strip():
+                    # Validate each statement unless warnings suppressed
+                    if not suppress_warnings:
+                        # Run validation through pipeline
+                        temp_sql = SQL(statement, config=self.config)
+                        temp_sql._ensure_processed()
+                        # Validation errors are logged as warnings by default
+
+                    cursor.execute(statement)
+                    executed_count += 1
+                    total_rows += cursor.rowcount or 0
+                    last_status = cursor.statusmessage
+
             return SQLResult(
                 statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
-                rows_affected=0,
+                rows_affected=total_rows,
                 operation_type="SCRIPT",
-                metadata={"status_message": cursor.statusmessage or "SCRIPT EXECUTED"},
-                total_statements=1,
-                successful_statements=1,
+                metadata={"status_message": last_status or "SCRIPT EXECUTED"},
+                total_statements=executed_count,
+                successful_statements=executed_count,
             )
 
     def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
@@ -471,6 +495,7 @@ class PsycopgSyncDriver(
 
 class PsycopgAsyncDriver(
     AsyncDriverAdapterProtocol[PsycopgAsyncConnection, RowT],
+    AsyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
     AsyncStorageMixin,
@@ -485,7 +510,6 @@ class PsycopgAsyncDriver(
         ParameterStyle.NAMED_PYFORMAT,
     )
     default_parameter_style: ParameterStyle = ParameterStyle.POSITIONAL_PYFORMAT
-    __slots__ = ()
 
     def __init__(
         self,
@@ -505,7 +529,7 @@ class PsycopgAsyncDriver(
         self, statement: SQL, connection: Optional[PsycopgAsyncConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         if statement.is_script:
-            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
         detected_styles = set()
@@ -535,8 +559,7 @@ class PsycopgAsyncDriver(
                 sql = statement.to_sql(placeholder_style=target_style)
                 params = kwargs_params
             else:
-                sql, _ = statement.compile(placeholder_style=target_style)
-                params = statement.parameters
+                sql, params = self._get_compiled_sql(statement, target_style)
             if params is not None:
                 processed_params = [self._process_parameters(param_set) for param_set in params]
                 params = processed_params
@@ -560,7 +583,7 @@ class PsycopgAsyncDriver(
             sql = statement.to_sql(placeholder_style=target_style)
             params = kwargs_params
         else:
-            sql, params = statement.compile(placeholder_style=target_style)
+            sql, params = self._get_compiled_sql(statement, target_style)
         params = self._process_parameters(params)
 
         # Fix over-nested parameters for Psycopg
@@ -683,8 +706,8 @@ class PsycopgAsyncDriver(
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
             # Normalize parameter list using consolidated utility
-            normalized_param_list = normalize_parameter_sequence(param_list)
-            final_param_list = normalized_param_list or []
+            converted_param_list = convert_parameter_sequence(param_list)
+            final_param_list = converted_param_list or []
 
             async with txn_conn.cursor() as cursor:
                 await cursor.executemany(cast("Query", sql), final_param_list)
@@ -703,15 +726,37 @@ class PsycopgAsyncDriver(
         conn = connection if connection is not None else self._connection(None)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn, txn_conn.cursor() as cursor:
-            await cursor.execute(cast("Query", script))
+            # Split script into individual statements for validation
+            statements = self._split_script_statements(script)
+            suppress_warnings = kwargs.get("_suppress_warnings", False)
+
+            executed_count = 0
+            total_rows = 0
+            last_status = None
+
+            # Execute each statement individually for better control and validation
+            for statement in statements:
+                if statement.strip():
+                    # Validate each statement unless warnings suppressed
+                    if not suppress_warnings:
+                        # Run validation through pipeline
+                        temp_sql = SQL(statement, config=self.config)
+                        temp_sql._ensure_processed()
+                        # Validation errors are logged as warnings by default
+
+                    await cursor.execute(cast("Query", statement))
+                    executed_count += 1
+                    total_rows += cursor.rowcount or 0
+                    last_status = cursor.statusmessage
+
             return SQLResult(
                 statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
-                rows_affected=0,
+                rows_affected=total_rows,
                 operation_type="SCRIPT",
-                metadata={"status_message": cursor.statusmessage or "SCRIPT EXECUTED"},
-                total_statements=1,
-                successful_statements=1,
+                metadata={"status_message": last_status or "SCRIPT EXECUTED"},
+                total_statements=executed_count,
+                successful_statements=executed_count,
             )
 
     async def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":

@@ -16,7 +16,6 @@ from sqlspec.typing import DictRow, Empty
 if TYPE_CHECKING:
     from asyncmy.cursors import Cursor, DictCursor
     from asyncmy.pool import Pool
-    from sqlglot.dialects.dialect import DialectType
 
 
 __all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "AsyncmyConfig")
@@ -50,34 +49,6 @@ POOL_FIELDS = CONNECTION_FIELDS.union({"minsize", "maxsize", "echo", "pool_recyc
 class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver]):  # pyright: ignore
     """Configuration for Asyncmy database connections with direct field-based configuration."""
 
-    __slots__ = (
-        "_dialect",
-        "autocommit",
-        "charset",
-        "connect_timeout",
-        "cursor_class",
-        "database",
-        "default_row_type",
-        "echo",
-        "extras",
-        "host",
-        "init_command",
-        "local_infile",
-        "maxsize",
-        "minsize",
-        "password",
-        "pool_instance",
-        "pool_recycle",
-        "port",
-        "read_default_file",
-        "read_default_group",
-        "sql_mode",
-        "ssl",
-        "statement_config",
-        "unix_socket",
-        "user",
-    )
-
     is_async: ClassVar[bool] = True
     supports_connection_pooling: ClassVar[bool] = True
     driver_type: type[AsyncmyDriver] = AsyncmyDriver
@@ -87,7 +58,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional",)
     """AsyncMy only supports %s (pyformat_positional) parameter style."""
 
-    preferred_parameter_style: ClassVar[str] = "pyformat_positional"
+    default_parameter_style: ClassVar[str] = "pyformat_positional"
     """AsyncMy's native parameter style is %s (pyformat_positional)."""
 
     def __init__(
@@ -175,8 +146,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
-        self.pool_instance: Optional[Pool] = pool_instance
-        self._dialect: DialectType = None
 
         super().__init__()  # pyright: ignore
 
@@ -271,7 +240,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
-                    target_parameter_style=self.preferred_parameter_style,
+                    default_parameter_style=self.default_parameter_style,
                 )
             yield self.driver_type(connection=connection, config=statement_config)
 

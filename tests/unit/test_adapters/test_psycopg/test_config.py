@@ -142,7 +142,7 @@ def test_sync_config_extras_handling(init_kwargs: dict[str, Any], expected_extra
 
 @pytest.mark.parametrize(
     "statement_config,expected_type",
-    [(None, SQLConfig), (SQLConfig(), SQLConfig), (SQLConfig(strict_mode=True), SQLConfig)],
+    [(None, SQLConfig), (SQLConfig(), SQLConfig), (SQLConfig(parse_errors_as_warnings=False), SQLConfig)],
     ids=["default", "empty", "custom"],
 )
 def test_sync_config_statement_config_initialization(
@@ -394,7 +394,7 @@ def test_sync_provide_session() -> None:
 
         # Check parameter style injection
         assert session.config.allowed_parameter_styles == ("pyformat_positional", "pyformat_named")
-        assert session.config.target_parameter_style == "pyformat_positional"
+        assert session.config.default_parameter_style == "pyformat_positional"
 
     # Verify pool's connection context manager was used
     mock_pool.connection.assert_called_once()
@@ -477,7 +477,7 @@ async def test_async_provide_session() -> None:
 
         # Check parameter style injection
         assert session.config.allowed_parameter_styles == ("pyformat_positional", "pyformat_named")
-        assert session.config.target_parameter_style == "pyformat_positional"
+        assert session.config.default_parameter_style == "pyformat_positional"
 
     # Verify pool's connection context manager was used
     mock_pool.connection.assert_called_once()
@@ -647,9 +647,9 @@ def test_sync_supported_parameter_styles() -> None:
     assert PsycopgSyncConfig.supported_parameter_styles == ("pyformat_positional", "pyformat_named")
 
 
-def test_sync_preferred_parameter_style() -> None:
+def test_sync_default_parameter_style() -> None:
     """Test sync preferred parameter style class attribute."""
-    assert PsycopgSyncConfig.preferred_parameter_style == "pyformat_positional"
+    assert PsycopgSyncConfig.default_parameter_style == "pyformat_positional"
 
 
 def test_async_supported_parameter_styles() -> None:
@@ -657,9 +657,9 @@ def test_async_supported_parameter_styles() -> None:
     assert PsycopgAsyncConfig.supported_parameter_styles == ("pyformat_positional", "pyformat_named")
 
 
-def test_async_preferred_parameter_style() -> None:
+def test_async_default_parameter_style() -> None:
     """Test async preferred parameter style class attribute."""
-    assert PsycopgAsyncConfig.preferred_parameter_style == "pyformat_positional"
+    assert PsycopgAsyncConfig.default_parameter_style == "pyformat_positional"
 
 
 # Edge Cases

@@ -8,7 +8,7 @@ from sqlspec.exceptions import RiskLevel
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.statement.parameters import ParameterInfo, ParameterNormalizationState
+    from sqlspec.statement.parameters import ParameterInfo, ParameterStyleTransformationState
     from sqlspec.statement.sql import SQLConfig
     from sqlspec.typing import SQLParameterType
 
@@ -97,10 +97,10 @@ class SQLProcessingContext:
     statement_type: Optional[str] = None
     """The detected type of the SQL statement (e.g., SELECT, INSERT, DDL)."""
     extra_info: dict[str, Any] = field(default_factory=dict)
-    """Extra information from parameter processing, including normalization state."""
+    """Extra information from parameter processing, including conversion state."""
 
-    parameter_normalization: "Optional[ParameterNormalizationState]" = None
-    """Single source of truth for parameter normalization tracking."""
+    parameter_conversion: "Optional[ParameterStyleTransformationState]" = None
+    """Single source of truth for parameter style conversion tracking."""
 
     @property
     def has_errors(self) -> bool:

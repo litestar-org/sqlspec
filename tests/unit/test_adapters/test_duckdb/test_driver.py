@@ -256,11 +256,12 @@ def test_execute_script(driver: DuckDBDriver, mock_connection: MagicMock) -> Non
 
     result = driver._execute_script(script)
 
-    assert result.total_statements == -1
+    assert result.total_statements == 3  # Now splits and executes each statement
     assert result.metadata["status_message"] == "Script executed successfully."
     assert result.metadata["description"] == "The script was sent to the database."
 
-    mock_cursor.execute.assert_called_once_with(script)
+    # Now checks that execute was called 3 times (once for each statement)
+    assert mock_cursor.execute.call_count == 3
 
 
 # Note: Result wrapping tests removed - drivers now return SQLResult directly from execute methods
@@ -510,7 +511,7 @@ def test_export_native_json(driver: DuckDBDriver, mock_connection: MagicMock) ->
 def test_execute_with_no_parameters(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
     """Test executing statement with no parameters."""
     mock_result = mock_connection.execute.return_value
-    mock_result.fetchone.return_value = (0,)
+    mock_result.fetchone.return_value = 0
 
     # Disable validation to allow DDL
     from sqlspec.statement.sql import SQLConfig

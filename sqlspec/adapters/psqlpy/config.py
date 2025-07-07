@@ -15,7 +15,6 @@ from sqlspec.typing import DictRow, Empty
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from sqlglot.dialects.dialect import DialectType
 
 logger = logging.getLogger("sqlspec.adapters.psqlpy")
 
@@ -69,56 +68,6 @@ __all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "PsqlpyConfig")
 class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyDriver]):
     """Configuration for Psqlpy asynchronous database connections with direct field-based configuration."""
 
-    __slots__ = (
-        "_dialect",
-        "application_name",
-        "ca_file",
-        "channel_binding",
-        "client_encoding",
-        "configure",
-        "conn_recycling_method",
-        "connect_timeout_nanosec",
-        "connect_timeout_sec",
-        "db_name",
-        "default_row_type",
-        "dsn",
-        "extras",
-        "gssdelegation",
-        "gssencmode",
-        "gsslib",
-        "host",
-        "hosts",
-        "keepalives",
-        "keepalives_idle_nanosec",
-        "keepalives_idle_sec",
-        "keepalives_interval_nanosec",
-        "keepalives_interval_sec",
-        "keepalives_retries",
-        "krbsrvname",
-        "load_balance_hosts",
-        "max_db_pool_size",
-        "options",
-        "password",
-        "pool_instance",
-        "port",
-        "ports",
-        "require_auth",
-        "service",
-        "ssl_mode",
-        "sslcert",
-        "sslcompression",
-        "sslcrl",
-        "sslkey",
-        "sslnegotiation",
-        "sslpassword",
-        "sslrootcert",
-        "statement_config",
-        "target_session_attrs",
-        "tcp_user_timeout_nanosec",
-        "tcp_user_timeout_sec",
-        "username",
-    )
-
     is_async: ClassVar[bool] = True
     supports_connection_pooling: ClassVar[bool] = True
 
@@ -128,7 +77,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("numeric",)
     """Psqlpy only supports $1, $2, ... (numeric) parameter style."""
 
-    preferred_parameter_style: ClassVar[str] = "numeric"
+    default_parameter_style: ClassVar[str] = "numeric"
     """Psqlpy's native parameter style is $1, $2, ... (numeric)."""
 
     def __init__(
@@ -283,8 +232,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
-        self.pool_instance: Optional[ConnectionPool] = pool_instance
-        self._dialect: DialectType = None
 
         super().__init__()
 
@@ -399,7 +346,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
-                    target_parameter_style=self.preferred_parameter_style,
+                    default_parameter_style=self.default_parameter_style,
                 )
             driver = self.driver_type(connection=conn, config=statement_config)
             yield driver

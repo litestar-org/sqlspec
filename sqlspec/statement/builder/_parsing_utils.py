@@ -9,6 +9,8 @@ from typing import Any, Optional, Union, cast
 
 from sqlglot import exp, maybe_parse, parse_one
 
+from sqlspec.utils.type_guards import has_expression_attr, has_parameter_builder
+
 
 def parse_column_expression(column_input: Union[str, exp.Expression, Any]) -> exp.Expression:
     """Parse a column input that might be a complex expression.
@@ -31,8 +33,8 @@ def parse_column_expression(column_input: Union[str, exp.Expression, Any]) -> ex
         return column_input
 
     # Handle our custom Column objects
-    if hasattr(column_input, "_expr"):
-        attr_value = getattr(column_input, "_expr", None)
+    if has_expression_attr(column_input):
+        attr_value = getattr(column_input, "_expression", None)
         if isinstance(attr_value, exp.Expression):
             return attr_value
 
@@ -109,7 +111,7 @@ def parse_condition_expression(
         if value is None:
             return exp.Is(this=column_expr, expression=exp.null())
         # Use builder's parameter system if available
-        if builder and hasattr(builder, "add_parameter"):
+        if builder and has_parameter_builder(builder):
             _, param_name = builder.add_parameter(value)
             return exp.EQ(this=column_expr, expression=exp.Placeholder(this=param_name))
         if isinstance(value, str):

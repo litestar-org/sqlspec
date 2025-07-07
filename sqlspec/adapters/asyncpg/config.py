@@ -20,8 +20,6 @@ from sqlspec.utils.serializers import from_json, to_json
 if TYPE_CHECKING:
     from asyncio.events import AbstractEventLoop
 
-    from sqlglot.dialects.dialect import DialectType
-
 
 __all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "AsyncpgConfig")
 
@@ -108,44 +106,10 @@ POOL_FIELDS = CONNECTION_FIELDS.union(
 class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", AsyncpgDriver]):
     """Configuration for AsyncPG database connections using TypedDict."""
 
-    __slots__ = (
-        "_dialect",
-        "command_timeout",
-        "connect_timeout",
-        "connection_class",
-        "database",
-        "default_row_type",
-        "direct_tls",
-        "dsn",
-        "extras",
-        "host",
-        "init",
-        "json_deserializer",
-        "json_serializer",
-        "loop",
-        "max_cacheable_statement_size",
-        "max_cached_statement_lifetime",
-        "max_inactive_connection_lifetime",
-        "max_queries",
-        "max_size",
-        "min_size",
-        "passfile",
-        "password",
-        "pool_instance",
-        "port",
-        "record_class",
-        "server_settings",
-        "setup",
-        "ssl",
-        "statement_cache_size",
-        "statement_config",
-        "user",
-    )
-
     driver_type: type[AsyncpgDriver] = AsyncpgDriver
     connection_type: type[AsyncpgConnection] = type(AsyncpgConnection)  # type: ignore[assignment]
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("numeric",)
-    preferred_parameter_style: ClassVar[str] = "numeric"
+    default_parameter_style: ClassVar[str] = "numeric"
 
     def __init__(self, **kwargs: "Unpack[DriverParameters]") -> None:
         """Initialize AsyncPG configuration."""
@@ -220,9 +184,11 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         self.json_serializer = kwargs.get("json_serializer", to_json)
         self.json_deserializer = kwargs.get("json_deserializer", from_json)
         pool_instance_from_kwargs = kwargs.get("pool_instance")
-        self._dialect: DialectType = None
 
         super().__init__()
+
+        # Override prepared statements to True for PostgreSQL since it supports them well
+        self.enable_prepared_statements = kwargs.get("enable_prepared_statements", True)  # type: ignore[assignment]
 
         if pool_instance_from_kwargs is not None:
             self.pool_instance = pool_instance_from_kwargs
@@ -324,7 +290,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
-                    target_parameter_style=self.preferred_parameter_style,
+                    default_parameter_style=self.default_parameter_style,
                 )
             yield self.driver_type(connection=connection, config=statement_config)
 

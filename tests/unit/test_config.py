@@ -123,7 +123,7 @@ class MockSyncTestConfig(NoPoolSyncConfig["MockConnection", "MockSyncDriver"]):
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = False
     supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("qmark", "named")
-    preferred_parameter_style: "ClassVar[str]" = "qmark"
+    default_parameter_style: "ClassVar[str]" = "qmark"
     default_row_type: "type[Any]" = dict
 
     def __hash__(self) -> int:
@@ -160,7 +160,7 @@ class MockAsyncTestConfig(NoPoolAsyncConfig["MockConnection", "MockAsyncDriver"]
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = False
     supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("numeric",)
-    preferred_parameter_style: "ClassVar[str]" = "numeric"
+    default_parameter_style: "ClassVar[str]" = "numeric"
     default_row_type: "type[Any]" = dict
 
     @property
@@ -194,7 +194,7 @@ class MockSyncPoolTestConfig(SyncDatabaseConfig["MockConnection", "MockPool", "M
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = True
     supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("qmark",)
-    preferred_parameter_style: "ClassVar[str]" = "qmark"
+    default_parameter_style: "ClassVar[str]" = "qmark"
     default_row_type: "type[Any]" = dict
 
     @property
@@ -235,7 +235,7 @@ class MockAsyncPoolTestConfig(AsyncDatabaseConfig["MockConnection", "MockPool", 
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = True
     supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("numeric",)
-    preferred_parameter_style: "ClassVar[str]" = "numeric"
+    default_parameter_style: "ClassVar[str]" = "numeric"
     default_row_type: "type[Any]" = dict
 
     @property
@@ -301,14 +301,14 @@ def test_sync_config_parameter_styles() -> None:
     """Test sync config parameter style attributes."""
     config = MockSyncTestConfig()
     assert config.supported_parameter_styles == ("qmark", "named")
-    assert config.preferred_parameter_style == "qmark"
+    assert config.default_parameter_style == "qmark"
 
 
 def test_async_config_parameter_styles() -> None:
     """Test async config parameter style attributes."""
     config = MockAsyncTestConfig()
     assert config.supported_parameter_styles == ("numeric",)
-    assert config.preferred_parameter_style == "numeric"
+    assert config.default_parameter_style == "numeric"
 
 
 # Test NoPoolSyncConfig behavior

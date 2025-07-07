@@ -115,7 +115,7 @@ def test_extras_handling(init_kwargs: dict[str, Any], expected_extras: dict[str,
 
 @pytest.mark.parametrize(
     "statement_config,expected_type",
-    [(None, SQLConfig), (SQLConfig(), SQLConfig), (SQLConfig(strict_mode=True), SQLConfig)],
+    [(None, SQLConfig), (SQLConfig(), SQLConfig), (SQLConfig(parse_errors_as_warnings=False), SQLConfig)],
     ids=["default", "empty", "custom"],
 )
 def test_statement_config_initialization(statement_config: "SQLConfig | None", expected_type: type[SQLConfig]) -> None:
@@ -192,7 +192,7 @@ def test_provide_session(mock_connect: MagicMock) -> None:
 
         # Check parameter style injection
         assert session.config.allowed_parameter_styles == ("qmark", "named_colon")
-        assert session.config.target_parameter_style == "qmark"
+        assert session.config.default_parameter_style == "qmark"
 
         mock_connection.close.assert_not_called()
 
@@ -206,13 +206,13 @@ def test_provide_session_with_custom_config(mock_connect: MagicMock) -> None:
     mock_connect.return_value = mock_connection
 
     # Custom statement config with parameter styles already set
-    custom_config = SQLConfig(allowed_parameter_styles=("qmark",), target_parameter_style="qmark")
+    custom_config = SQLConfig(allowed_parameter_styles=("qmark",), default_parameter_style="qmark")
     config = SqliteConfig(database=":memory:", statement_config=custom_config)
 
     with config.provide_session() as session:
         # Should use the custom config's parameter styles
         assert session.config.allowed_parameter_styles == ("qmark",)
-        assert session.config.target_parameter_style == "qmark"
+        assert session.config.default_parameter_style == "qmark"
 
 
 # Property Tests
@@ -295,31 +295,9 @@ def test_supported_parameter_styles() -> None:
     assert SqliteConfig.supported_parameter_styles == ("qmark", "named_colon")
 
 
-def test_preferred_parameter_style() -> None:
+def test_default_parameter_style() -> None:
     """Test preferred parameter style class attribute."""
-    assert SqliteConfig.preferred_parameter_style == "qmark"
-
-
-# Slots Test
-def test_slots_defined() -> None:
-    """Test that __slots__ is properly defined."""
-    assert hasattr(SqliteConfig, "__slots__")
-    expected_slots = {
-        "_dialect",
-        "pool_instance",
-        "cached_statements",
-        "check_same_thread",
-        "database",
-        "default_row_type",
-        "detect_types",
-        "extras",
-        "factory",
-        "isolation_level",
-        "statement_config",
-        "timeout",
-        "uri",
-    }
-    assert set(SqliteConfig.__slots__) == expected_slots
+    assert SqliteConfig.default_parameter_style == "qmark"
 
 
 # Edge Cases

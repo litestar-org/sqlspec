@@ -22,7 +22,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
 
     from psycopg import Connection
-    from sqlglot.dialects.dialect import DialectType
 
 logger = logging.getLogger("sqlspec.adapters.psycopg")
 
@@ -67,39 +66,6 @@ __all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "PsycopgAsyncConfig", "PsycopgSyn
 class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool, PsycopgSyncDriver]):
     """Configuration for Psycopg synchronous database connections with direct field-based configuration."""
 
-    __slots__ = (
-        "_dialect",
-        "application_name",
-        "autocommit",
-        "configure",
-        "connect_timeout",
-        "conninfo",
-        "dbname",
-        "default_row_type",
-        "extras",
-        "host",
-        "kwargs",
-        "max_idle",
-        "max_lifetime",
-        "max_size",
-        "max_waiting",
-        "min_size",
-        "name",
-        "num_workers",
-        "options",
-        "password",
-        "pool_instance",
-        "port",
-        "reconnect_timeout",
-        "sslcert",
-        "sslkey",
-        "sslmode",
-        "sslrootcert",
-        "statement_config",
-        "timeout",
-        "user",
-    )
-
     is_async: ClassVar[bool] = False
     supports_connection_pooling: ClassVar[bool] = True
 
@@ -110,7 +76,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional", "pyformat_named")
     """Psycopg supports %s (positional) and %(name)s (named) parameter styles."""
 
-    preferred_parameter_style: ClassVar[str] = "pyformat_positional"
+    default_parameter_style: ClassVar[str] = "pyformat_positional"
     """Psycopg's native parameter style is %s (pyformat positional)."""
 
     def __init__(
@@ -216,7 +182,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
-        self._dialect: DialectType = None
 
         super().__init__()
 
@@ -385,7 +350,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
-                    target_parameter_style=self.preferred_parameter_style,
+                    default_parameter_style=self.default_parameter_style,
                 )
             driver = self.driver_type(connection=conn, config=statement_config)
             yield driver
@@ -417,39 +382,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnectionPool, PsycopgAsyncDriver]):
     """Configuration for Psycopg asynchronous database connections with direct field-based configuration."""
 
-    __slots__ = (
-        "_dialect",
-        "application_name",
-        "autocommit",
-        "configure",
-        "connect_timeout",
-        "conninfo",
-        "dbname",
-        "default_row_type",
-        "extras",
-        "host",
-        "kwargs",
-        "max_idle",
-        "max_lifetime",
-        "max_size",
-        "max_waiting",
-        "min_size",
-        "name",
-        "num_workers",
-        "options",
-        "password",
-        "pool_instance",
-        "port",
-        "reconnect_timeout",
-        "sslcert",
-        "sslkey",
-        "sslmode",
-        "sslrootcert",
-        "statement_config",
-        "timeout",
-        "user",
-    )
-
     is_async: ClassVar[bool] = True
     supports_connection_pooling: ClassVar[bool] = True
 
@@ -461,7 +393,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional", "pyformat_named")
     """Psycopg supports %s (pyformat_positional) and %(name)s (pyformat_named) parameter styles."""
 
-    preferred_parameter_style: ClassVar[str] = "pyformat_positional"
+    default_parameter_style: ClassVar[str] = "pyformat_positional"
     """Psycopg's preferred parameter style is %s (pyformat_positional)."""
 
     def __init__(
@@ -567,7 +499,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
-        self._dialect: DialectType = None
 
         super().__init__()
 
@@ -726,7 +657,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
-                    target_parameter_style=self.preferred_parameter_style,
+                    default_parameter_style=self.default_parameter_style,
                 )
             driver = self.driver_type(connection=conn, config=statement_config)
             yield driver

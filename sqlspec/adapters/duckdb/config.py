@@ -16,8 +16,6 @@ if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
     from contextlib import AbstractContextManager
 
-    from sqlglot.dialects.dialect import DialectType
-
 
 logger = logging.getLogger(__name__)
 
@@ -109,50 +107,6 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
     - Performance optimizations for analytics workloads
     """
 
-    __slots__ = (
-        "_dialect",
-        "allow_community_extensions",
-        "allow_persistent_secrets",
-        "allow_unsigned_extensions",
-        "arrow_large_buffer_size",
-        "autoinstall_extension_repository",
-        "autoinstall_known_extensions",
-        "autoload_known_extensions",
-        "binary_as_string",
-        "checkpoint_threshold",
-        "config",
-        "custom_extension_repository",
-        "database",
-        "default_null_order",
-        "default_order",
-        "default_row_type",
-        "enable_external_access",
-        "enable_external_file_cache",
-        "enable_logging",
-        "enable_object_cache",
-        "enable_progress_bar",
-        "errors_as_json",
-        "extension_directory",
-        "extensions",
-        "extras",
-        "ieee_floating_point_ops",
-        "log_query_path",
-        "logging_level",
-        "max_temp_directory_size",
-        "memory_limit",
-        "on_connection_create",
-        "parquet_metadata_cache",
-        "pool_instance",
-        "preserve_insertion_order",
-        "progress_bar_time",
-        "read_only",
-        "secret_directory",
-        "secrets",
-        "statement_config",
-        "temp_directory",
-        "threads",
-    )
-
     is_async: ClassVar[bool] = False
     supports_connection_pooling: ClassVar[bool] = False
 
@@ -162,7 +116,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark", "numeric")
     """DuckDB supports ? (qmark) and $1, $2 (numeric) parameter styles."""
 
-    preferred_parameter_style: ClassVar[str] = "qmark"
+    default_parameter_style: ClassVar[str] = "qmark"
     """DuckDB's native parameter style is ? (qmark)."""
 
     def __init__(
@@ -325,7 +279,6 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         self.extensions = extensions or []
         self.secrets = secrets or []
         self.on_connection_create = on_connection_create
-        self._dialect: DialectType = None
 
         super().__init__()
 
@@ -479,7 +432,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                     statement_config = replace(
                         statement_config,
                         allowed_parameter_styles=self.supported_parameter_styles,
-                        target_parameter_style=self.preferred_parameter_style,
+                        default_parameter_style=self.default_parameter_style,
                     )
                 driver = self.driver_type(connection=connection, config=statement_config)
                 yield driver

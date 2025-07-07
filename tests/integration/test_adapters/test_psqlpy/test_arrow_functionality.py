@@ -25,7 +25,7 @@ async def psqlpy_arrow_session(postgres_service: PostgresService) -> "AsyncGener
         username=postgres_service.user,
         password=postgres_service.password,
         db_name=postgres_service.database,
-        statement_config=SQLConfig(strict_mode=False),
+        statement_config=SQLConfig(),
     )
 
     async with config.provide_session() as session:
@@ -127,7 +127,7 @@ async def test_psqlpy_arrow_with_parameters(psqlpy_arrow_session: PsqlpyDriver) 
 @pytest.mark.xdist_group("postgres")
 async def test_psqlpy_arrow_empty_result(psqlpy_arrow_session: PsqlpyDriver) -> None:
     """Test fetch_arrow_table with empty result on PSQLPy."""
-    result = await psqlpy_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow WHERE value > $1", (1000,))
+    result = await psqlpy_arrow_session.fetch_arrow_table("SELECT * FROM test_arrow WHERE value > $1", (1000))
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows == 0
@@ -247,7 +247,7 @@ async def test_psqlpy_arrow_with_postgresql_arrays(psqlpy_arrow_session: PsqlpyD
 
     result = await psqlpy_arrow_session.fetch_arrow_table(
         "SELECT id, tags, scores, ratings, array_length(tags, 1) as tag_count, array_to_string(tags, $1) as tags_string FROM test_arrays ORDER BY id",
-        (", ",),
+        (", "),
     )
 
     assert isinstance(result, ArrowResult)
@@ -309,7 +309,7 @@ async def test_psqlpy_arrow_with_json_operations(psqlpy_arrow_session: PsqlpyDri
         WHERE metadata->>'category' = $1
         ORDER BY id
     """,
-        ("electronics",),
+        ("electronics"),
     )
 
     assert isinstance(result, ArrowResult)

@@ -155,7 +155,7 @@ class StatementPipeline:
                     UnsupportedParameterStyleError,
                 )
 
-                if context.config.strict_mode and isinstance(
+                if not context.config.parse_errors_as_warnings and isinstance(
                     e, (MissingParameterError, MixedParameterStyleError, UnsupportedParameterStyleError)
                 ):
                     raise

@@ -47,6 +47,9 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
 
     def on_cli_init(self, cli: "Group") -> None:
         """Configure the CLI for use with SQLSpec."""
+        from sqlspec.extensions.litestar.cli import database_group
+
+        cli.add_command(database_group)
 
     def on_app_init(self, app_config: "AppConfig") -> "AppConfig":
         """Configure application for use with SQLSpec.

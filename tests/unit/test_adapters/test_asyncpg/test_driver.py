@@ -211,17 +211,16 @@ async def test_execute_select_statement(driver: AsyncpgDriver, mock_connection: 
     mock_record.__iter__ = MagicMock(return_value=iter([("id", 1), ("name", "test"), ("email", "test@example.com")]))
     mock_dict = {"id": 1, "name": "test", "email": "test@example.com"}
 
-    # Mock the dict() constructor to return our expected dict
-    with patch("builtins.dict", return_value=mock_dict):
-        mock_connection.fetch.return_value = [mock_record, mock_record]
+    # Mock the connection to return pre-converted dictionaries
+    mock_connection.fetch.return_value = [mock_dict, mock_dict]
 
-        statement = SQL("SELECT * FROM users")
-        result = await driver._execute_statement(statement)
+    statement = SQL("SELECT * FROM users")
+    result = await driver._execute_statement(statement)
 
-        # Now expect the converted dictionary data
-        assert result.data == [mock_dict, mock_dict]
-        assert result.column_names == ["id", "name", "email"]
-        assert result.rows_affected == 2
+    # Now expect the converted dictionary data
+    assert result.data == [mock_dict, mock_dict]
+    assert result.column_names == ["id", "name", "email"]
+    assert result.rows_affected == 2
 
     mock_connection.fetch.assert_called_once_with("SELECT * FROM users")
 
@@ -322,10 +321,11 @@ async def test_execute_script(driver: AsyncpgDriver, mock_connection: AsyncMock)
 
     result = await driver._execute_script(script)
 
-    assert result.total_statements == 1  # Script executed as a single statement
+    assert result.total_statements == 3  # Now splits and executes each statement
     assert result.metadata["status_message"] == "CREATE TABLE"
 
-    mock_connection.execute.assert_called_once_with(script)
+    # Now checks that execute was called 3 times (once for each statement)
+    assert mock_connection.execute.call_count == 3
 
 
 # Note: Result wrapping tests removed - drivers now return SQLResult directly from execute methods

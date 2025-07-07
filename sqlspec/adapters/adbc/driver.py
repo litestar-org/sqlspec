@@ -12,12 +12,13 @@ from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
+    SyncAdapterCacheMixin,
     SyncPipelinedExecutionMixin,
     SyncStorageMixin,
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import normalize_parameter_sequence
+from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
@@ -37,6 +38,7 @@ AdbcConnection = Connection
 
 class AdbcDriver(
     SyncDriverAdapterProtocol["AdbcConnection", RowT],
+    SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
     SyncStorageMixin,
@@ -60,7 +62,6 @@ class AdbcDriver(
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = False  # Not implemented yet
     supports_native_parquet_import: ClassVar[bool] = True
-    __slots__ = ("default_parameter_style", "dialect", "supported_parameter_styles")
 
     def __init__(
         self,
@@ -181,7 +182,7 @@ class AdbcDriver(
         self, statement: SQL, connection: Optional["AdbcConnection"] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         if statement.is_script:
-            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
         detected_styles = {p.style for p in statement.parameter_info}
@@ -197,7 +198,7 @@ class AdbcDriver(
                     target_style = style
                     break
 
-        sql, params = statement.compile(placeholder_style=target_style)
+        sql, params = self._get_compiled_sql(statement, target_style)
         params = self._process_parameters(params)
         if statement.is_many:
             return self._execute_many(sql, params, connection=connection, **kwargs)
@@ -211,17 +212,18 @@ class AdbcDriver(
         conn = connection if connection is not None else self._connection(None)
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            normalized_params = normalize_parameter_sequence(parameters)
-            if normalized_params is not None and not isinstance(normalized_params, (list, tuple)):
-                cursor_params = [normalized_params]
+            converted_params = convert_parameter_sequence(parameters)
+            if converted_params is not None and not isinstance(converted_params, (list, tuple)):
+                cursor_params = [converted_params]
             else:
-                cursor_params = normalized_params
+                cursor_params = converted_params
 
             with self._get_cursor(txn_conn) as cursor:
                 try:
                     cursor.execute(sql, cursor_params or [])
                 except Exception as e:
-                    # Rollback transaction on error for PostgreSQL to avoid "current transaction is aborted" errors
+                    # Rollback transaction on error for PostgreSQL to avoid
+                    # "current transaction is aborted" errors
                     if self.dialect == "postgres":
                         with contextlib.suppress(Exception):
                             cursor.execute("ROLLBACK")
@@ -261,11 +263,11 @@ class AdbcDriver(
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # Normalize parameter list using consolidated utility
-            normalized_param_list = normalize_parameter_sequence(param_list)
+            converted_param_list = convert_parameter_sequence(param_list)
 
             with self._get_cursor(txn_conn) as cursor:
                 try:
-                    cursor.executemany(sql, normalized_param_list or [])
+                    cursor.executemany(sql, converted_param_list or [])
                 except Exception as e:
                     if self.dialect == "postgres":
                         with contextlib.suppress(Exception):
@@ -290,18 +292,28 @@ class AdbcDriver(
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # ADBC drivers don't support multiple statements in a single execute
             statements = self._split_script_statements(script)
+            suppress_warnings = kwargs.get("_suppress_warnings", False)
 
             executed_count = 0
+            total_rows = 0
             with self._get_cursor(txn_conn) as cursor:
                 for statement in statements:
                     if statement.strip():
-                        self._execute_single_script_statement(cursor, statement)
+                        # Validate each statement unless warnings suppressed
+                        if not suppress_warnings:
+                            # Run validation through pipeline
+                            temp_sql = SQL(statement, config=self.config)
+                            temp_sql._ensure_processed()
+                            # Validation errors are logged as warnings by default
+
+                        rows = self._execute_single_script_statement(cursor, statement)
                         executed_count += 1
+                        total_rows += rows
 
             return SQLResult(
                 statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
-                rows_affected=0,
+                rows_affected=total_rows,
                 operation_type="SCRIPT",
                 metadata={"status_message": "SCRIPT EXECUTED"},
                 total_statements=executed_count,
@@ -316,18 +328,19 @@ class AdbcDriver(
             statement: The SQL statement to execute
 
         Returns:
-            1 if successful, 0 if failed
+            Number of rows affected
         """
         try:
             cursor.execute(statement)
         except Exception as e:
-            # Rollback transaction on error for PostgreSQL to avoid "current transaction is aborted" errors
+            # Rollback transaction on error for PostgreSQL to avoid
+            # "current transaction is aborted" errors
             if self.dialect == "postgres":
                 with contextlib.suppress(Exception):
                     cursor.execute("ROLLBACK")
             raise e from e
         else:
-            return 1
+            return cursor.rowcount or 0
 
     def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
         """ADBC native Arrow table fetching.

@@ -24,7 +24,7 @@ def temp_directory() -> Generator[Path, None, None]:
 @pytest.fixture
 def sqlite_with_test_data() -> Generator[SqliteDriver, None, None]:
     """Create SQLite driver with test data for storage operations."""
-    config = SqliteConfig(database=":memory:", statement_config=SQLConfig(strict_mode=False))
+    config = SqliteConfig(database=":memory:", statement_config=SQLConfig())
 
     with config.provide_session() as driver:
         # Create test table

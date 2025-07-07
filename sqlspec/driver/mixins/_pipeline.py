@@ -54,8 +54,6 @@ class PipelineOperation:
 class SyncPipelinedExecutionMixin:
     """Mixin providing pipeline execution for sync drivers."""
 
-    __slots__ = ()
-
     def pipeline(
         self,
         *,
@@ -86,8 +84,6 @@ class SyncPipelinedExecutionMixin:
 
 class AsyncPipelinedExecutionMixin:
     """Async version of pipeline execution mixin."""
-
-    __slots__ = ()
 
     def pipeline(
         self,

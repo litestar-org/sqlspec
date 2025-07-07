@@ -44,8 +44,6 @@ WINDOWS_PATH_MIN_LENGTH = 3
 class StorageMixinBase(ABC):
     """Base class with common storage functionality."""
 
-    __slots__ = ()
-
     config: Any
     _connection: Any
     dialect: "DialectType"
@@ -144,8 +142,6 @@ class StorageMixinBase(ABC):
 class SyncStorageMixin(StorageMixinBase):
     """Unified storage operations for synchronous drivers."""
 
-    __slots__ = ()
-
     def ingest_arrow_table(self, table: "ArrowTable", table_name: str, mode: str = "create", **options: Any) -> int:
         """Ingest an Arrow table into the database.
 
@@ -211,7 +207,7 @@ class SyncStorageMixin(StorageMixinBase):
         # disable parameter validation entirely to allow transformer-added parameters
         if params is None and _config and _config.enable_transformations:
             # Disable validation entirely for transformer-generated parameters
-            _config = replace(_config, strict_mode=False, enable_validation=False)
+            _config = replace(_config, enable_validation=False)
 
         # Only pass params if it's not None to avoid adding None as a parameter
         if params is not None:
@@ -294,12 +290,8 @@ class SyncStorageMixin(StorageMixinBase):
             _config = self.config
             if _config and not _config.dialect:
                 _config = replace(_config, dialect=self.dialect)
-        if _config and _config.enable_transformations:
-            _config = replace(_config, enable_transformations=False)
 
-        sql = (
-            SQL(statement, parameters=params, config=_config) if params is not None else SQL(statement, config=_config)
-        )
+        sql = SQL(statement, *params, config=_config) if params else SQL(statement, config=_config)
         for filter_ in filters:
             sql = sql.filter(filter_)
 
@@ -576,8 +568,6 @@ class SyncStorageMixin(StorageMixinBase):
 class AsyncStorageMixin(StorageMixinBase):
     """Unified storage operations for asynchronous drivers."""
 
-    __slots__ = ()
-
     async def ingest_arrow_table(
         self, table: "ArrowTable", table_name: str, mode: str = "create", **options: Any
     ) -> int:
@@ -650,7 +640,7 @@ class AsyncStorageMixin(StorageMixinBase):
         # disable parameter validation entirely to allow transformer-added parameters
         if params is None and _config and _config.enable_transformations:
             # Disable validation entirely for transformer-generated parameters
-            _config = replace(_config, strict_mode=False, enable_validation=False)
+            _config = replace(_config, enable_validation=False)
 
         # Only pass params if it's not None to avoid adding None as a parameter
         if params is not None:
@@ -703,12 +693,8 @@ class AsyncStorageMixin(StorageMixinBase):
             _config = self.config
             if _config and not _config.dialect:
                 _config = replace(_config, dialect=self.dialect)
-        if _config and _config.enable_transformations:
-            _config = replace(_config, enable_transformations=False)
 
-        sql = (
-            SQL(statement, parameters=params, config=_config) if params is not None else SQL(statement, config=_config)
-        )
+        sql = SQL(statement, *params, config=_config) if params else SQL(statement, config=_config)
         for filter_ in filters:
             sql = sql.filter(filter_)
 

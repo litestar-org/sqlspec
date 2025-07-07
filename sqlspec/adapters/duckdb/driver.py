@@ -12,12 +12,13 @@ from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
+    SyncAdapterCacheMixin,
     SyncPipelinedExecutionMixin,
     SyncStorageMixin,
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import normalize_parameter_sequence
+from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -38,6 +39,7 @@ logger = get_logger("adapters.duckdb")
 
 class DuckDBDriver(
     SyncDriverAdapterProtocol["DuckDBConnection", RowT],
+    SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
     SyncStorageMixin,
@@ -63,7 +65,6 @@ class DuckDBDriver(
     supports_native_arrow_import: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
-    __slots__ = ()
 
     def __init__(
         self,
@@ -86,10 +87,10 @@ class DuckDBDriver(
         self, statement: SQL, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         if statement.is_script:
-            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
-        sql, params = statement.compile(placeholder_style=self.default_parameter_style)
+        sql, params = self._get_compiled_sql(statement, self.default_parameter_style)
         params = self._process_parameters(params)
 
         if statement.is_many:
@@ -104,9 +105,9 @@ class DuckDBDriver(
         conn = connection if connection is not None else self._connection(None)
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # Normalize parameters using consolidated utility
-            normalized_params = normalize_parameter_sequence(parameters)
-            final_params = normalized_params or []
+            # Convert parameters using consolidated utility
+            converted_params = convert_parameter_sequence(parameters)
+            final_params = converted_params or []
 
             if self.returns_rows(statement.expression):
                 result = txn_conn.execute(sql, final_params)
@@ -157,12 +158,12 @@ class DuckDBDriver(
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # Normalize parameter list using consolidated utility
-            normalized_param_list = normalize_parameter_sequence(param_list)
-            final_param_list = normalized_param_list or []
+            converted_param_list = convert_parameter_sequence(param_list)
+            final_param_list = converted_param_list or []
 
             # DuckDB throws an error if executemany is called with empty parameter list
             if not final_param_list:
-                return SQLResult(
+                return SQLResult(  # pyright: ignore
                     statement=SQL(sql, _dialect=self.dialect),
                     data=[],
                     rows_affected=0,
@@ -176,7 +177,7 @@ class DuckDBDriver(
                 # For executemany, fetchone() only returns the count from the last operation,
                 # so use parameter list length as the most accurate estimate
                 rows_affected = cursor.rowcount if cursor.rowcount >= 0 else len(final_param_list)
-                return SQLResult(
+                return SQLResult(  # pyright: ignore
                     statement=SQL(sql, _dialect=self.dialect),
                     data=[],
                     rows_affected=rows_affected,
@@ -191,20 +192,38 @@ class DuckDBDriver(
         conn = connection if connection is not None else self._connection(None)
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
+            # Split script into individual statements for validation
+            statements = self._split_script_statements(script)
+            suppress_warnings = kwargs.get("_suppress_warnings", False)
+
+            executed_count = 0
+            total_rows = 0
+
             with self._get_cursor(txn_conn) as cursor:
-                cursor.execute(script)
+                for statement in statements:
+                    if statement.strip():
+                        # Validate each statement unless warnings suppressed
+                        if not suppress_warnings:
+                            # Run validation through pipeline
+                            temp_sql = SQL(statement, config=self.config)
+                            temp_sql._ensure_processed()
+                            # Validation errors are logged as warnings by default
+
+                        cursor.execute(statement)
+                        executed_count += 1
+                        total_rows += cursor.rowcount or 0
 
             return SQLResult(
                 statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
-                rows_affected=0,
+                rows_affected=total_rows,
                 operation_type="SCRIPT",
                 metadata={
                     "status_message": "Script executed successfully.",
                     "description": "The script was sent to the database.",
                 },
-                total_statements=-1,
-                successful_statements=-1,
+                total_statements=executed_count,
+                successful_statements=executed_count,
             )
 
     # ============================================================================
@@ -214,7 +233,7 @@ class DuckDBDriver(
     def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
         """Enhanced DuckDB native Arrow table fetching with streaming support."""
         conn = self._connection(connection)
-        sql_string, parameters = sql.compile(placeholder_style=self.default_parameter_style)
+        sql_string, parameters = self._get_compiled_sql(sql, self.default_parameter_style)
         parameters = self._process_parameters(parameters)
         result = conn.execute(sql_string, parameters or [])
 

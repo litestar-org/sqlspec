@@ -69,11 +69,15 @@ __all__ = (
     "extract_dataclass_items",
     "has_bytes_conversion",
     "has_dict_attribute",
+    "has_expression_attr",
     "has_expressions",
+    "has_parameter_builder",
     "has_parameter_value",
     "has_query_builder_parameters",
     "has_risk_level",
     "has_sql_method",
+    "has_sqlglot_expression",
+    "has_to_statement",
     "has_with_method",
     "is_async_closeable_connection",
     "is_async_copy_capable",
@@ -890,3 +894,31 @@ def is_object_store_item(obj: Any) -> "TypeGuard[ObjectStoreItemProtocol]":
     from sqlspec.protocols import ObjectStoreItemProtocol
 
     return isinstance(obj, ObjectStoreItemProtocol)
+
+
+def has_sqlglot_expression(obj: Any) -> "TypeGuard[Any]":
+    """Check if an object has a sqlglot_expression property."""
+    from sqlspec.protocols import HasSQLGlotExpressionProtocol
+
+    return isinstance(obj, HasSQLGlotExpressionProtocol)
+
+
+def has_parameter_builder(obj: Any) -> "TypeGuard[Any]":
+    """Check if an object has an add_parameter method."""
+    from sqlspec.protocols import HasParameterBuilderProtocol
+
+    return isinstance(obj, HasParameterBuilderProtocol)
+
+
+def has_expression_attr(obj: Any) -> "TypeGuard[Any]":
+    """Check if an object has an _expression attribute."""
+    from sqlspec.protocols import HasExpressionProtocol
+
+    return isinstance(obj, HasExpressionProtocol)
+
+
+def has_to_statement(obj: Any) -> "TypeGuard[Any]":
+    """Check if an object has a to_statement method."""
+    from sqlspec.protocols import HasToStatementProtocol
+
+    return isinstance(obj, HasToStatementProtocol)

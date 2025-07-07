@@ -69,41 +69,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     - Cloud database integrations
     """
 
-    __slots__ = (
-        "_dialect",
-        "account",
-        "adbc_driver_manager_entrypoint",
-        "authorization_header",
-        "autocommit",
-        "batch_size",
-        "conn_kwargs",
-        "connection_timeout",
-        "database",
-        "dataset_id",
-        "db_kwargs",
-        "default_row_type",
-        "driver_name",
-        "extras",
-        "grpc_options",
-        "isolation_level",
-        "on_connection_create",
-        "password",
-        "pool_instance",
-        "project_id",
-        "query_timeout",
-        "role",
-        "schema",
-        "ssl_ca",
-        "ssl_cert",
-        "ssl_key",
-        "ssl_mode",
-        "statement_config",
-        "token",
-        "uri",
-        "username",
-        "warehouse",
-    )
-
     is_async: ClassVar[bool] = False
     supports_connection_pooling: ClassVar[bool] = False
     driver_type: type[AdbcDriver] = AdbcDriver
@@ -114,7 +79,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark",)
     """ADBC parameter styles depend on the underlying driver."""
 
-    preferred_parameter_style: ClassVar[str] = "qmark"
+    default_parameter_style: ClassVar[str] = "qmark"
     """ADBC default parameter style is ? (qmark)."""
 
     def __init__(
@@ -251,7 +216,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
         self.on_connection_create = on_connection_create
-        self._dialect: DialectType = None
         super().__init__()
 
     def _resolve_driver_name(self) -> str:
@@ -381,7 +345,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         """Get parameter styles based on the underlying driver.
 
         Returns:
-            Tuple of (supported_parameter_styles, preferred_parameter_style)
+            Tuple of (supported_parameter_styles, default_parameter_style)
         """
         try:
             driver_path = self._resolve_driver_name()
@@ -400,7 +364,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
         except Exception:
             # If we can't determine driver, use defaults
-            return (self.supported_parameter_styles, self.preferred_parameter_style)
+            return (self.supported_parameter_styles, self.default_parameter_style)
         return (("qmark",), "qmark")
 
     def create_connection(self) -> AdbcConnection:
@@ -467,7 +431,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                         statement_config = replace(
                             statement_config,
                             allowed_parameter_styles=supported_styles,
-                            target_parameter_style=preferred_style,
+                            default_parameter_style=preferred_style,
                         )
 
                 driver = self.driver_type(connection=connection, config=statement_config)

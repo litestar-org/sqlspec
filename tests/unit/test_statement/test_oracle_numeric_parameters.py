@@ -71,8 +71,8 @@ def test_positional_colon_parameter_extraction(sql: str, parameters: list[Any], 
         ),
         (
             "SELECT * FROM users WHERE id = :1 AND status = :status",
-            [42],  # Missing status parameter
-            MissingParameterError,
+            [42],  # Missing status parameter - now auto-handled
+            None,  # Changed: No longer raises error, auto-generates placeholders
         ),
         # Mixing different parameter styles
         (
@@ -92,11 +92,9 @@ def test_mixed_parameter_styles(
     config = SQLConfig(
         allowed_parameter_styles=("positional_colon", "qmark", "named_colon"),
         allow_mixed_parameter_styles=True,  # Allow mixed styles for these tests
-        strict_mode=True,  # Enable strict mode to raise validation errors
     )
     if error_type:
         stmt = SQL(sql, parameters=parameters, _config=config)
-        # In strict mode, validation errors are wrapped in SQLValidationError
         with pytest.raises((error_type, SQLValidationError)):
             # Trigger validation by accessing property
             _ = stmt.to_sql()
@@ -242,15 +240,15 @@ def test_positional_colon_regex_precedence() -> None:
         # Valid cases
         ("INSERT INTO users VALUES (:1, :2)", [1, "john"], False),
         ("INSERT INTO users VALUES (:1, :2)", {"1": 1, "2": "john"}, False),
-        # Missing parameters
-        ("INSERT INTO users VALUES (:1, :2)", [1], True),
-        ("INSERT INTO users VALUES (:1, :2)", {"1": 1}, True),  # Missing "2"
+        # Missing parameters - now auto-handled
+        ("INSERT INTO users VALUES (:1, :2)", [1], False),  # Changed: auto-generates missing params
+        ("INSERT INTO users VALUES (:1, :2)", {"1": 1}, False),  # Changed: auto-generates missing "2"
         # Extra parameters (should be ok)
         ("INSERT INTO users VALUES (:1, :2)", [1, "john", "extra"], False),
         ("INSERT INTO users VALUES (:1, :2)", {"1": 1, "2": "john", "3": "extra"}, False),
-        # Empty parameters
-        ("INSERT INTO users VALUES (:1, :2)", [], True),
-        ("INSERT INTO users VALUES (:1, :2)", {}, True),
+        # Empty parameters - now auto-handled
+        ("INSERT INTO users VALUES (:1, :2)", [], False),  # Changed: auto-generates all params
+        ("INSERT INTO users VALUES (:1, :2)", {}, False),  # Changed: auto-generates all params
     ],
     ids=[
         "valid_list",
@@ -268,10 +266,7 @@ def test_positional_colon_parameter_validation(
 ) -> None:
     """Test parameter validation for Oracle numeric style."""
     # Enable parameter validation by setting allowed_parameter_styles
-    config = SQLConfig(
-        allowed_parameter_styles=("positional_colon", "positional_colon"),
-        strict_mode=True,  # Enable strict mode to raise validation errors
-    )
+    config = SQLConfig(allowed_parameter_styles=("positional_colon", "positional_colon"))
     stmt = SQL(sql, parameters=parameters, _config=config)
 
     if should_fail:
@@ -296,8 +291,7 @@ def test_positional_colon_in_strings_and_comments() -> None:
         :5 as real_param
     FROM dual
     """
-    # Create SQL with strict mode disabled to avoid validation errors
-    config = SQLConfig(strict_mode=False)
+    config = SQLConfig()
     stmt = SQL(sql, parameters=[42], _config=config)
 
     # Should only find :5 as a real parameter

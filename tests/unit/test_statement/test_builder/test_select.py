@@ -24,7 +24,7 @@ from sqlglot.errors import ParseError
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder import Select
-from sqlspec.statement.builder.mixins._case_builder import CaseBuilder
+from sqlspec.statement.builder.mixins import CaseBuilder
 
 if TYPE_CHECKING:
     pass
@@ -229,7 +229,7 @@ def test_where_not_exists() -> None:
     "method,args,expected_sql",
     [
         ("count_", (), "COUNT(*)"),
-        ("count_", ("id",), "COUNT"),
+        ("count_", ("id"), "COUNT"),
         ("count_", ("id", "total_users"), "COUNT"),
         ("sum_", ("amount", "total_amount"), "SUM"),
         ("avg_", ("price", "avg_price"), "AVG"),

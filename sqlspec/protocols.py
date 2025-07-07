@@ -30,12 +30,16 @@ __all__ = (
     "DictProtocol",
     "FilterAppenderProtocol",
     "FilterParameterProtocol",
+    "HasExpressionProtocol",
     "HasExpressionsProtocol",
     "HasLimitProtocol",
     "HasOffsetProtocol",
     "HasOrderByProtocol",
+    "HasParameterBuilderProtocol",
     "HasRiskLevelProtocol",
+    "HasSQLGlotExpressionProtocol",
     "HasSQLMethodProtocol",
+    "HasToStatementProtocol",
     "HasWhereProtocol",
     "IndexableRow",
     "IterableParameters",
@@ -501,9 +505,39 @@ class ObjectStoreProtocol(Protocol):
         raise NotImplementedError(msg)
 
 
-# =============================================================================
-# SQL Builder Protocols
-# =============================================================================
+@runtime_checkable
+class HasSQLGlotExpressionProtocol(Protocol):
+    """Protocol for objects with a sqlglot_expression property."""
+
+    @property
+    def sqlglot_expression(self) -> "Optional[exp.Expression]":
+        """Return the SQLGlot expression for this object."""
+        ...
+
+
+@runtime_checkable
+class HasParameterBuilderProtocol(Protocol):
+    """Protocol for objects that can add parameters."""
+
+    def add_parameter(self, value: Any, name: "Optional[str]" = None) -> tuple[Any, str]:
+        """Add a parameter to the builder."""
+        ...
+
+
+@runtime_checkable
+class HasExpressionProtocol(Protocol):
+    """Protocol for objects with an _expression attribute."""
+
+    _expression: "Optional[exp.Expression]"
+
+
+@runtime_checkable
+class HasToStatementProtocol(Protocol):
+    """Protocol for objects with a to_statement method."""
+
+    def to_statement(self) -> Any:
+        """Convert to SQL statement."""
+        ...
 
 
 @runtime_checkable

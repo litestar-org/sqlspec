@@ -38,7 +38,7 @@ def _normalize_dialect(dialect: "Union[str, Any, None]") -> str:
         dialect: Original dialect name (can be str, Dialect, type[Dialect], or None)
 
     Returns:
-        Normalized dialect name
+        converted dialect name
     """
     if dialect is None:
         return "sql"
@@ -84,9 +84,9 @@ class _AiosqlAdapterBase:
 
     def _create_sql_object(self, sql: str, parameters: "Any" = None) -> SQL:
         """Create SQL object with proper configuration."""
-        config = SQLConfig(strict_mode=False, enable_validation=False)
-        normalized_dialect = _normalize_dialect(self.driver.dialect)
-        return SQL(sql, parameters, config=config, dialect=normalized_dialect)
+        config = SQLConfig(enable_validation=False)
+        converted_dialect = _normalize_dialect(self.driver.dialect)
+        return SQL(sql, parameters, config=config, dialect=converted_dialect)
 
 
 class AiosqlSyncAdapter(_AiosqlAdapterBase):

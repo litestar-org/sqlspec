@@ -25,7 +25,7 @@ def adbc_postgresql_arrow_session(postgres_service: PostgresService) -> Generato
     config = AdbcConfig(
         uri=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
         driver_name="adbc_driver_postgresql",
-        statement_config=SQLConfig(strict_mode=False),
+        statement_config=SQLConfig(),
     )
 
     with config.provide_session() as session:
@@ -59,7 +59,7 @@ def adbc_postgresql_arrow_session(postgres_service: PostgresService) -> Generato
 @pytest.fixture
 def adbc_sqlite_arrow_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session for Arrow testing."""
-    config = AdbcConfig(uri=":memory:", driver_name="adbc_driver_sqlite", statement_config=SQLConfig(strict_mode=False))
+    config = AdbcConfig(uri=":memory:", driver_name="adbc_driver_sqlite", statement_config=SQLConfig())
 
     with config.provide_session() as session:
         # Create test table with various data types

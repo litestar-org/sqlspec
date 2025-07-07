@@ -9,6 +9,7 @@ from psqlpy import Connection
 from sqlspec.driver import AsyncDriverAdapterProtocol
 from sqlspec.driver.connection import managed_transaction_async
 from sqlspec.driver.mixins import (
+    AsyncAdapterCacheMixin,
     AsyncPipelinedExecutionMixin,
     AsyncStorageMixin,
     SQLTranslatorMixin,
@@ -31,6 +32,7 @@ logger = logging.getLogger("sqlspec")
 
 class PsqlpyDriver(
     AsyncDriverAdapterProtocol[PsqlpyConnection, RowT],
+    AsyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
     AsyncStorageMixin,
@@ -45,7 +47,6 @@ class PsqlpyDriver(
     dialect: "DialectType" = "postgres"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.NUMERIC,)
     default_parameter_style: ParameterStyle = ParameterStyle.NUMERIC
-    __slots__ = ()
 
     def __init__(
         self,
@@ -79,7 +80,7 @@ class PsqlpyDriver(
         self, statement: SQL, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         if statement.is_script:
-            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
         # Detect parameter styles in the SQL
@@ -106,7 +107,7 @@ class PsqlpyDriver(
                     break
 
         # Compile with the determined style
-        sql, params = statement.compile(placeholder_style=target_style)
+        sql, params = self._get_compiled_sql(statement, target_style)
         params = self._process_parameters(params)
 
         if statement.is_many:
@@ -198,16 +199,35 @@ class PsqlpyDriver(
         conn = connection if connection is not None else self._connection(None)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # psqlpy can execute multi-statement scripts directly
-            await txn_conn.execute(script)
+            # Split script into individual statements for validation
+            statements = self._split_script_statements(script)
+            suppress_warnings = kwargs.get("_suppress_warnings", False)
+
+            executed_count = 0
+            total_rows = 0
+
+            # Execute each statement individually for better control and validation
+            for statement in statements:
+                if statement.strip():
+                    # Validate each statement unless warnings suppressed
+                    if not suppress_warnings:
+                        # Run validation through pipeline
+                        temp_sql = SQL(statement, config=self.config)
+                        temp_sql._ensure_processed()
+                        # Validation errors are logged as warnings by default
+
+                    await txn_conn.execute(statement)
+                    executed_count += 1
+                    # psqlpy doesn't provide row count from execute()
+
             return SQLResult(
                 statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
-                rows_affected=0,
+                rows_affected=total_rows,
                 operation_type="SCRIPT",
                 metadata={"status_message": "SCRIPT EXECUTED"},
-                total_statements=-1,  # Not directly supported, but script is executed
-                successful_statements=-1,
+                total_statements=executed_count,
+                successful_statements=executed_count,
             )
 
     async def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:

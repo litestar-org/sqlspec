@@ -477,8 +477,7 @@ class TestSQLFileLoaderWithFixtures:
         from sqlspec.statement.sql import SQLConfig
 
         stmt = SQL(
-            content,
-            config=SQLConfig(enable_parsing=False, enable_validation=False, strict_mode=False, dialect="oracle"),
+            content, config=SQLConfig(enable_parsing=False, enable_validation=False, dialect="oracle")
         ).as_script()
         assert stmt.is_script is True
 

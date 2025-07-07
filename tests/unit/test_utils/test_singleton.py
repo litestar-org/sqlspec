@@ -320,5 +320,5 @@ def test_singleton_with_various_argument_patterns(init_args: tuple[Any, ...], in
     assert instance1 is instance2
     assert instance1.args == init_args
     assert instance1.kwargs == init_kwargs
-    assert instance2.args == init_args  # Not (999,)
+    assert instance2.args == init_args  # Not (999)
     assert instance2.kwargs == init_kwargs  # Not {"different": "args"}

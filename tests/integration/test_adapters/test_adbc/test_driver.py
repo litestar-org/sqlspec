@@ -27,7 +27,7 @@ def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[Adbc
     config = AdbcConfig(
         uri=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
         driver_name="adbc_driver_postgresql",
-        statement_config=SQLConfig(strict_mode=False),  # Allow DDL statements for tests
+        statement_config=SQLConfig(),  # Allow DDL statements for tests
     )
 
     with config.provide_session() as session:
@@ -60,7 +60,7 @@ def adbc_sqlite_session() -> Generator[AdbcDriver, None, None]:
     config = AdbcConfig(
         uri=":memory:",
         driver_name="adbc_driver_sqlite",
-        statement_config=SQLConfig(strict_mode=False),  # Allow DDL statements for tests
+        statement_config=SQLConfig(),  # Allow DDL statements for tests
     )
 
     with config.provide_session() as session:
@@ -82,7 +82,7 @@ def adbc_duckdb_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC DuckDB session with test table."""
     config = AdbcConfig(
         driver_name="adbc_driver_duckdb.dbapi.connect",
-        statement_config=SQLConfig(strict_mode=False),  # Allow DDL statements for tests
+        statement_config=SQLConfig(),  # Allow DDL statements for tests
     )
 
     with config.provide_session() as session:
@@ -112,7 +112,7 @@ def adbc_bigquery_session(bigquery_service: BigQueryService) -> Generator[AdbcDr
             "client_options": {"api_endpoint": f"http://{bigquery_service.host}:{bigquery_service.port}"},
             "credentials": None,
         },
-        statement_config=SQLConfig(strict_mode=False),
+        statement_config=SQLConfig(),
     )
 
     with config.provide_session() as session:
@@ -814,7 +814,7 @@ def test_adbc_postgresql_schema_operations(adbc_postgresql_session: AdbcDriver) 
 
     # Insert data into new table
     insert_result = adbc_postgresql_session.execute(
-        "INSERT INTO schema_test (description) VALUES ($1)", ("test description",)
+        "INSERT INTO schema_test (description) VALUES ($1)", ("test description")
     )
     assert isinstance(insert_result, SQLResult)
     # ADBC drivers may not support rowcount and return -1 or 0
@@ -843,7 +843,7 @@ def test_adbc_postgresql_column_names_and_metadata(adbc_postgresql_session: Adbc
 
     # Test column names
     result = adbc_postgresql_session.execute(
-        "SELECT id, name, value, created_at FROM test_table WHERE name = $1", ("metadata_test",)
+        "SELECT id, name, value, created_at FROM test_table WHERE name = $1", ("metadata_test")
     )
     assert isinstance(result, SQLResult)
     assert result.column_names == ["id", "name", "value", "created_at"]
@@ -874,7 +874,7 @@ def test_adbc_postgresql_with_schema_type(adbc_postgresql_session: AdbcDriver) -
 
     # Query with schema type
     result = adbc_postgresql_session.execute(
-        "SELECT id, name, value FROM test_table WHERE name = $1", ("schema_test",), schema_type=TestRecord
+        "SELECT id, name, value FROM test_table WHERE name = $1", ("schema_test"), schema_type=TestRecord
     )
 
     assert isinstance(result, SQLResult)

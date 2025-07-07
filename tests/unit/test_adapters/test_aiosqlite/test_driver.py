@@ -32,7 +32,7 @@ def mock_aiosqlite_connection() -> AsyncMock:
     mock_cursor.execute.return_value = None
     mock_cursor.executemany.return_value = None
     mock_cursor.fetchall.return_value = [(1, "test")]
-    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
+    mock_cursor.description = ["id", "name", "email"]
     mock_cursor.rowcount = 0
     return mock_connection
 
@@ -40,7 +40,7 @@ def mock_aiosqlite_connection() -> AsyncMock:
 @pytest.fixture
 def aiosqlite_driver(mock_aiosqlite_connection: AsyncMock) -> AiosqliteDriver:
     """Create an AIOSQLite driver with mocked connection."""
-    config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
+    config = SQLConfig()  # Disable strict mode for unit tests
     return AiosqliteDriver(connection=mock_aiosqlite_connection, config=config)
 
 
@@ -84,7 +84,7 @@ async def test_aiosqlite_driver_execute_statement_select(
     # Setup mock cursor
     mock_cursor = AsyncMock()
     mock_cursor.fetchall.return_value = [(1, "test")]
-    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
+    mock_cursor.description = ["id", "name", "email"]
 
     async def _cursor(*args: Any, **kwargs: Any) -> AsyncMock:
         return mock_cursor
@@ -116,7 +116,7 @@ async def test_aiosqlite_driver_fetch_arrow_table_with_parameters(
     """Test AIOSQLite driver fetch_arrow_table method with parameters."""
     # Setup mock cursor and result data
     mock_cursor = AsyncMock()
-    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
+    mock_cursor.description = ["id", "name", "email"]
     mock_cursor.fetchall.return_value = [{"id": 42, "name": "Test User"}]
 
     async def _cursor(*args: Any, **kwargs: Any) -> AsyncMock:
@@ -175,7 +175,7 @@ async def test_aiosqlite_driver_execute_with_connection_override(aiosqlite_drive
     # Create override connection
     override_connection = AsyncMock()
     mock_cursor = AsyncMock()
-    mock_cursor.description = [(col,) for col in ["id", "name", "email"]]
+    mock_cursor.description = ["id", "name", "email"]
     mock_cursor.fetchall.return_value = [{"id": 1}]
 
     async def _cursor(*args: Any, **kwargs: Any) -> AsyncMock:

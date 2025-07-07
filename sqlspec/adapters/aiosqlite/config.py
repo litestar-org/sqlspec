@@ -16,8 +16,6 @@ from sqlspec.typing import DictRow, Empty
 if TYPE_CHECKING:
     from typing import Literal
 
-    from sqlglot.dialects.dialect import DialectType
-
 
 __all__ = ("CONNECTION_FIELDS", "AiosqliteConfig")
 
@@ -34,21 +32,6 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
     Note: Aiosqlite doesn't support connection pooling, so pool_instance is always None.
     """
 
-    __slots__ = (
-        "_dialect",
-        "cached_statements",
-        "check_same_thread",
-        "database",
-        "default_row_type",
-        "detect_types",
-        "extras",
-        "isolation_level",
-        "pool_instance",
-        "statement_config",
-        "timeout",
-        "uri",
-    )
-
     is_async: ClassVar[bool] = True
     supports_connection_pooling: ClassVar[bool] = False
 
@@ -59,7 +42,7 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark", "named_colon")
     """AIOSQLite supports ? (qmark) and :name (named_colon) parameter styles."""
 
-    preferred_parameter_style: ClassVar[str] = "qmark"
+    default_parameter_style: ClassVar[str] = "qmark"
     """AIOSQLite's native parameter style is ? (qmark)."""
 
     def __init__(
@@ -102,7 +85,6 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
-        self._dialect: DialectType = None
 
         super().__init__()
 
@@ -179,7 +161,7 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
-                    target_parameter_style=self.preferred_parameter_style,
+                    default_parameter_style=self.default_parameter_style,
                 )
             yield self.driver_type(connection=connection, config=statement_config)
 

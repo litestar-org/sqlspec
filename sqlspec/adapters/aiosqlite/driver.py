@@ -10,13 +10,14 @@ import aiosqlite
 from sqlspec.driver import AsyncDriverAdapterProtocol
 from sqlspec.driver.connection import managed_transaction_async
 from sqlspec.driver.mixins import (
+    AsyncAdapterCacheMixin,
     AsyncPipelinedExecutionMixin,
     AsyncStorageMixin,
     SQLTranslatorMixin,
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import normalize_parameter_sequence
+from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -35,6 +36,7 @@ AiosqliteConnection = aiosqlite.Connection
 
 class AiosqliteDriver(
     AsyncDriverAdapterProtocol[AiosqliteConnection, RowT],
+    AsyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
     AsyncStorageMixin,
@@ -46,7 +48,6 @@ class AiosqliteDriver(
     dialect: "DialectType" = "sqlite"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK, ParameterStyle.NAMED_COLON)
     default_parameter_style: ParameterStyle = ParameterStyle.QMARK
-    __slots__ = ()
 
     def __init__(
         self,
@@ -101,7 +102,7 @@ class AiosqliteDriver(
         self, statement: SQL, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         if statement.is_script:
-            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
         detected_styles = set()
@@ -124,13 +125,13 @@ class AiosqliteDriver(
                     break
 
         if statement.is_many:
-            sql, params = statement.compile(placeholder_style=target_style)
+            sql, params = self._get_compiled_sql(statement, target_style)
 
             params = self._process_parameters(params)
 
             return await self._execute_many(sql, params, connection=connection, **kwargs)
 
-        sql, params = statement.compile(placeholder_style=target_style)
+        sql, params = self._get_compiled_sql(statement, target_style)
 
         params = self._process_parameters(params)
 
@@ -142,13 +143,10 @@ class AiosqliteDriver(
         conn = self._connection(connection)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            normalized_params = normalize_parameter_sequence(parameters)
+            converted_params = convert_parameter_sequence(parameters)
 
-            # Extract the actual parameters from the normalized list
-            if normalized_params and len(normalized_params) == 1:
-                actual_params = normalized_params[0]
-            else:
-                actual_params = normalized_params
+            # Extract the actual parameters from the converted list
+            actual_params = converted_params[0] if converted_params and len(converted_params) == 1 else converted_params
 
             # AIOSQLite expects tuple or dict - handle parameter conversion
             if ":param_" in sql or (isinstance(actual_params, dict)):
@@ -193,11 +191,11 @@ class AiosqliteDriver(
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
             # Normalize parameter list using consolidated utility
-            normalized_param_list = normalize_parameter_sequence(param_list)
+            converted_param_list = convert_parameter_sequence(param_list)
 
             params_list: list[tuple[Any, ...]] = []
-            if normalized_param_list and isinstance(normalized_param_list, Sequence):
-                for param_set in normalized_param_list:
+            if converted_param_list and isinstance(converted_param_list, Sequence):
+                for param_set in converted_param_list:
                     if isinstance(param_set, (list, tuple)):
                         params_list.append(tuple(param_set))
                     elif param_set is None:
@@ -220,16 +218,36 @@ class AiosqliteDriver(
         conn = connection if connection is not None else self._connection(None)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            # Split script into individual statements for validation
+            statements = self._split_script_statements(script)
+            suppress_warnings = kwargs.get("_suppress_warnings", False)
+
+            executed_count = 0
+            total_rows = 0
+
+            # Execute each statement individually for better control and validation
             async with self._get_cursor(txn_conn) as cursor:
-                await cursor.executescript(script)
+                for statement in statements:
+                    if statement.strip():
+                        # Validate each statement unless warnings suppressed
+                        if not suppress_warnings:
+                            # Run validation through pipeline
+                            temp_sql = SQL(statement, config=self.config)
+                            temp_sql._ensure_processed()
+                            # Validation errors are logged as warnings by default
+
+                        await cursor.execute(statement)
+                        executed_count += 1
+                        total_rows += cursor.rowcount or 0
+
             return SQLResult(
                 statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
-                rows_affected=0,
+                rows_affected=total_rows,
                 operation_type="SCRIPT",
                 metadata={"status_message": "SCRIPT EXECUTED"},
-                total_statements=-1,  # AIOSQLite doesn't provide this info
-                successful_statements=-1,
+                total_statements=executed_count,
+                successful_statements=executed_count,
             )
 
     async def _bulk_load_file(self, file_path: Path, table_name: str, format: str, mode: str, **options: Any) -> int:

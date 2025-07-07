@@ -47,10 +47,6 @@ logger = get_logger("config")
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     """Protocol defining the interface for database configurations."""
 
-    # Note: __slots__ cannot be used with dataclass fields in Python < 3.10
-    # Concrete subclasses can still use __slots__ for any additional attributes
-    __slots__ = ()
-
     is_async: "ClassVar[bool]" = field(init=False, default=False)
     supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=False)
     supports_native_arrow_import: "ClassVar[bool]" = field(init=False, default=False)
@@ -61,12 +57,24 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     driver_type: "type[DriverT]" = field(init=False, repr=False, hash=False, compare=False)
     pool_instance: "Optional[PoolT]" = field(default=None)
     default_row_type: "type[Any]" = field(init=False)
+    migration_config: "dict[str, Any]" = field(default_factory=dict)
+    """Migration configuration settings."""
     _dialect: "DialectType" = field(default=None, init=False, repr=False, hash=False, compare=False)
+
+    # Adapter-level cache configuration
+    enable_adapter_cache: bool = field(default=True)
+    """Enable adapter-level SQL compilation caching."""
+    adapter_cache_size: int = field(default=500)
+    """Maximum number of compiled SQL statements to cache per adapter."""
+    enable_prepared_statements: bool = field(default=False)
+    """Enable prepared statement pooling for supported databases."""
+    prepared_statement_cache_size: int = field(default=100)
+    """Maximum number of prepared statements to maintain."""
 
     supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ()
     """Parameter styles supported by this database adapter (e.g., ('qmark', 'named_colon'))."""
 
-    preferred_parameter_style: "ClassVar[str]" = "none"
+    default_parameter_style: "ClassVar[str]" = "none"
     """The preferred/native parameter style for this database."""
 
     def __hash__(self) -> int:
@@ -85,7 +93,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             The SQL dialect type for this database.
         """
         if self._dialect is None:
-            self._dialect = self._get_dialect()  # type: ignore[misc]
+            self._dialect = self._get_dialect()
         return self._dialect
 
     def _get_dialect(self) -> "DialectType":
@@ -177,8 +185,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
 class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for a sync database configurations that do not implement a pool."""
 
-    __slots__ = ()
-
     is_async: "ClassVar[bool]" = field(init=False, default=False)
     supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=False)
     pool_instance: None = None
@@ -208,8 +214,6 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
 @dataclass
 class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for an async database configurations that do not implement a pool."""
-
-    __slots__ = ()
 
     is_async: "ClassVar[bool]" = field(init=False, default=True)
     supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=False)
@@ -241,14 +245,10 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
 class GenericPoolConfig:
     """Generic Database Pool Configuration."""
 
-    __slots__ = ()
-
 
 @dataclass
 class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Generic Sync Database Configuration."""
-
-    __slots__ = ()
 
     is_async: "ClassVar[bool]" = field(init=False, default=False)
     supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=True)
@@ -261,7 +261,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         """
         if self.pool_instance is not None:
             return self.pool_instance
-        self.pool_instance = self._create_pool()  # type: ignore[misc]
+        self.pool_instance = self._create_pool()
         return self.pool_instance
 
     def close_pool(self) -> None:
@@ -271,7 +271,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
         """Provide pool instance."""
         if self.pool_instance is None:
-            self.pool_instance = self.create_pool()  # type: ignore[misc]
+            self.pool_instance = self.create_pool()
         return self.pool_instance
 
     def create_connection(self) -> ConnectionT:
@@ -301,8 +301,6 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
 class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Generic Async Database Configuration."""
 
-    __slots__ = ()
-
     is_async: "ClassVar[bool]" = field(init=False, default=True)
     supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=True)
 
@@ -314,7 +312,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         """
         if self.pool_instance is not None:
             return self.pool_instance
-        self.pool_instance = await self._create_pool()  # type: ignore[misc]
+        self.pool_instance = await self._create_pool()
         return self.pool_instance
 
     async def close_pool(self) -> None:
@@ -324,7 +322,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     async def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
         """Provide pool instance."""
         if self.pool_instance is None:
-            self.pool_instance = await self.create_pool()  # type: ignore[misc]
+            self.pool_instance = await self.create_pool()
         return self.pool_instance
 
     async def create_connection(self) -> ConnectionT:

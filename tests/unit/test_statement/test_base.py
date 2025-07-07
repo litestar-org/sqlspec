@@ -295,7 +295,7 @@ def test_returns_rows(
     """
     try:
         # Create a permissive configuration for testing that allows DDL, risky DML, and UNION operations
-        test_config = SQLConfig(strict_mode=False)
+        test_config = SQLConfig()
         statement = SQL(sql, config=test_config)
         expression = statement.expression
         actual_returns_rows = driver_attributes.returns_rows(expression)
@@ -314,7 +314,7 @@ def test_returns_rows_with_invalid_expression(driver_attributes: CommonDriverAtt
     assert result is False, "Should return False for None expression"
 
     # Create a permissive configuration for testing
-    test_config = SQLConfig(strict_mode=False)
+    test_config = SQLConfig()
 
     try:
         empty_stmt = SQL("", config=test_config)

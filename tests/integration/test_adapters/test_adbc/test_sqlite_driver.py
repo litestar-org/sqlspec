@@ -23,7 +23,7 @@ def adbc_sqlite_session() -> Generator[AdbcDriver, None, None]:
     config = AdbcConfig(
         uri=":memory:",
         driver_name="adbc_driver_sqlite.dbapi.connect",
-        statement_config=SQLConfig(strict_mode=False),  # Allow DDL statements for tests
+        statement_config=SQLConfig(),  # Allow DDL statements for tests
     )
 
     with config.provide_session() as session:
@@ -75,7 +75,7 @@ def test_basic_crud(adbc_sqlite_session: AdbcDriver) -> None:
     assert insert_result.rows_affected in (-1, 1)
 
     # SELECT
-    select_result = adbc_sqlite_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_name",))
+    select_result = adbc_sqlite_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_name"))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
@@ -89,13 +89,13 @@ def test_basic_crud(adbc_sqlite_session: AdbcDriver) -> None:
     assert update_result.rows_affected in (-1, 1)
 
     # Verify UPDATE
-    verify_result = adbc_sqlite_session.execute("SELECT value FROM test_table WHERE name = ?", ("test_name",))
+    verify_result = adbc_sqlite_session.execute("SELECT value FROM test_table WHERE name = ?", ("test_name"))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
 
     # DELETE
-    delete_result = adbc_sqlite_session.execute("DELETE FROM test_table WHERE name = ?", ("test_name",))
+    delete_result = adbc_sqlite_session.execute("DELETE FROM test_table WHERE name = ?", ("test_name"))
     assert isinstance(delete_result, SQLResult)
     # ADBC drivers may not support rowcount and return -1
     assert delete_result.rows_affected in (-1, 1)

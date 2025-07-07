@@ -22,12 +22,9 @@ if TYPE_CHECKING:
     [
         (
             {},  # Default values
-            {"dialect": None, "cache_parsed_expression": True},
+            {"dialect": None, "enable_caching": True},
         ),
-        (
-            {"dialect": "duckdb", "cache_parsed_expression": False},
-            {"dialect": "duckdb", "cache_parsed_expression": False},
-        ),
+        ({"dialect": "duckdb", "enable_caching": False}, {"dialect": "duckdb", "enable_caching": False}),
     ],
     ids=["defaults", "custom"],
 )
@@ -69,9 +66,9 @@ def test_sql_initialization_with_parameters() -> None:
 @pytest.mark.parametrize(
     "sql,params,expected_sql",
     [
-        ("SELECT * FROM users WHERE id = ?", (1,), "SELECT * FROM users WHERE id = ?"),
+        ("SELECT * FROM users WHERE id = ?", (1), "SELECT * FROM users WHERE id = ?"),
         ("SELECT * FROM users WHERE id = :id", {"id": 1}, "SELECT * FROM users WHERE id = :id"),
-        ("SELECT * FROM users WHERE id = $1", (1,), "SELECT * FROM users WHERE id = $1"),
+        ("SELECT * FROM users WHERE id = $1", (1), "SELECT * FROM users WHERE id = $1"),
     ],
 )
 def test_sql_with_different_parameter_styles(sql: str, params: "SQLParameterType", expected_sql: str) -> None:
@@ -365,7 +362,7 @@ def test_sql_whitespace_only() -> None:
 # Test SQL caching behavior
 def test_sql_expression_caching() -> None:
     """Test SQL expression caching when enabled."""
-    config = SQLConfig(cache_parsed_expression=True)
+    config = SQLConfig(enable_caching=True)
     stmt = SQL("SELECT * FROM users", config=config)
 
     # First access
@@ -378,7 +375,7 @@ def test_sql_expression_caching() -> None:
 
 def test_sql_no_expression_caching() -> None:
     """Test SQL expression not cached when disabled."""
-    config = SQLConfig(cache_parsed_expression=False)
+    config = SQLConfig(enable_caching=False)
     stmt = SQL("SELECT * FROM users", config=config)
 
     # Access expression multiple times

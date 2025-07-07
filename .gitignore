@@ -50,3 +50,7 @@ GEMINI.*.md
 .cursorrules
 CLAUDE*.md
 *CLAUDE*.md
+requirements/*
+tools/*.json
+benchmarks/
+.benchmark

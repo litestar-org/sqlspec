@@ -10,7 +10,7 @@ from sqlglot import exp
 
 from sqlspec import sql
 from sqlspec.statement.builder import Column
-from sqlspec.statement.builder.column import ColumnExpression, FunctionColumn
+from sqlspec.statement.builder._column import ColumnExpression, FunctionColumn
 
 
 def test_dynamic_column_creation() -> None:
@@ -36,12 +36,12 @@ def test_dynamic_column_method_chaining() -> None:
     # Test upper() method
     upper_name = sql.user_name.upper()
     assert isinstance(upper_name, FunctionColumn)
-    assert isinstance(upper_name._expr, exp.Upper)
+    assert isinstance(upper_name._expression, exp.Upper)
 
     # Test lower() method
     lower_email = sql.email.lower()
     assert isinstance(lower_email, FunctionColumn)
-    assert isinstance(lower_email._expr, exp.Lower)
+    assert isinstance(lower_email._expression, exp.Lower)
 
     # Test alias() method on columns
     aliased_col = sql.user_id.alias("uid")
@@ -59,29 +59,29 @@ def test_dynamic_column_operators() -> None:
     # Test comparison operators
     eq_expr = sql.user_id == 123
     assert isinstance(eq_expr, ColumnExpression)
-    assert isinstance(eq_expr._expr, exp.EQ)
+    assert isinstance(eq_expr._expression, exp.EQ)
 
     ne_expr = sql.status != "active"
     assert isinstance(ne_expr, ColumnExpression)
-    assert isinstance(ne_expr._expr, exp.NEQ)
+    assert isinstance(ne_expr._expression, exp.NEQ)
 
     gt_expr = sql.age > 18
     assert isinstance(gt_expr, ColumnExpression)
-    assert isinstance(gt_expr._expr, exp.GT)
+    assert isinstance(gt_expr._expression, exp.GT)
 
     # Test logical operators
     and_expr = (sql.age >= 18) & (sql.age <= 65)
     assert isinstance(and_expr, ColumnExpression)
-    assert isinstance(and_expr._expr, exp.And)
+    assert isinstance(and_expr._expression, exp.And)
 
     or_expr = (sql.status == "active") | (sql.status == "pending")
     assert isinstance(or_expr, ColumnExpression)
-    assert isinstance(or_expr._expr, exp.Or)
+    assert isinstance(or_expr._expression, exp.Or)
 
     # Test NOT operator
     not_expr = ~sql.is_deleted
     assert isinstance(not_expr, ColumnExpression)
-    assert isinstance(not_expr._expr, exp.Not)
+    assert isinstance(not_expr._expression, exp.Not)
 
 
 def test_dynamic_column_sql_methods() -> None:
@@ -89,27 +89,27 @@ def test_dynamic_column_sql_methods() -> None:
     # Test LIKE
     like_expr = sql.name.like("%john%")
     assert isinstance(like_expr, ColumnExpression)
-    assert isinstance(like_expr._expr, exp.Like)
+    assert isinstance(like_expr._expression, exp.Like)
 
     # Test IN
     in_expr = sql.category.in_(["electronics", "books", "music"])
     assert isinstance(in_expr, ColumnExpression)
-    assert isinstance(in_expr._expr, exp.In)
+    assert isinstance(in_expr._expression, exp.In)
 
     # Test BETWEEN
     between_expr = sql.price.between(10, 100)
     assert isinstance(between_expr, ColumnExpression)
-    assert isinstance(between_expr._expr, exp.Between)
+    assert isinstance(between_expr._expression, exp.Between)
 
     # Test IS NULL
     null_expr = sql.deleted_at.is_null()
     assert isinstance(null_expr, ColumnExpression)
-    assert isinstance(null_expr._expr, exp.Is)
+    assert isinstance(null_expr._expression, exp.Is)
 
     # Test IS NOT NULL
     not_null_expr = sql.created_at.is_not_null()
     assert isinstance(not_null_expr, ColumnExpression)
-    assert isinstance(not_null_expr._expr, exp.Not)
+    assert isinstance(not_null_expr._expression, exp.Not)
 
 
 def test_dynamic_columns_in_select_query() -> None:
@@ -192,11 +192,11 @@ def test_dynamic_column_edge_cases() -> None:
     # Test NULL comparisons
     null_eq = sql.deleted_at == None  # noqa: E711
     assert isinstance(null_eq, ColumnExpression)
-    assert isinstance(null_eq._expr, exp.Is)
+    assert isinstance(null_eq._expression, exp.Is)
 
     null_ne = sql.deleted_at != None  # noqa: E711
     assert isinstance(null_ne, ColumnExpression)
-    assert isinstance(null_ne._expr, exp.Not)
+    assert isinstance(null_ne._expression, exp.Not)
 
 
 def test_dynamic_column_repr() -> None:

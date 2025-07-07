@@ -13,7 +13,6 @@ from sqlspec.typing import DictRow
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-    from sqlglot.dialects.dialect import DialectType
 
 logger = logging.getLogger(__name__)
 
@@ -36,26 +35,10 @@ __all__ = ("CONNECTION_FIELDS", "SqliteConfig", "sqlite3")
 class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
     """Configuration for SQLite database connections with direct field-based configuration."""
 
-    __slots__ = (
-        "_dialect",
-        "cached_statements",
-        "check_same_thread",
-        "database",
-        "default_row_type",
-        "detect_types",
-        "extras",
-        "factory",
-        "isolation_level",
-        "pool_instance",
-        "statement_config",
-        "timeout",
-        "uri",
-    )
-
     driver_type: type[SqliteDriver] = SqliteDriver
     connection_type: type[SqliteConnection] = SqliteConnection
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark", "named_colon")
-    preferred_parameter_style: ClassVar[str] = "qmark"
+    default_parameter_style: ClassVar[str] = "qmark"
 
     def __init__(
         self,
@@ -65,7 +48,7 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
         # SQLite connection parameters
         timeout: Optional[float] = None,
         detect_types: Optional[int] = None,
-        isolation_level: Optional[Union[str, None]] = None,
+        isolation_level: Union[None, str] = None,
         check_same_thread: Optional[bool] = None,
         factory: Optional[type[SqliteConnection]] = None,
         cached_statements: Optional[int] = None,
@@ -106,7 +89,6 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
-        self._dialect: DialectType = None
         super().__init__()
 
     @property
@@ -169,6 +151,6 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
                 statement_config = replace(
                     statement_config,
                     allowed_parameter_styles=self.supported_parameter_styles,
-                    target_parameter_style=self.preferred_parameter_style,
+                    default_parameter_style=self.default_parameter_style,
                 )
             yield self.driver_type(connection=connection, config=statement_config)

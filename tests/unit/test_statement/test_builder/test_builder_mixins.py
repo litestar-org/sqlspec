@@ -24,18 +24,14 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast
 from unittest.mock import Mock
 
 import pytest
-from sqlglot import exp
+from sqlglot import Expression, exp
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder.mixins._aggregate_functions import AggregateFunctionsMixin
-from sqlspec.statement.builder.mixins._from import FromClauseMixin
-from sqlspec.statement.builder.mixins._group_by import GroupByClauseMixin
-from sqlspec.statement.builder.mixins._having import HavingClauseMixin
-from sqlspec.statement.builder.mixins._insert_from_select import InsertFromSelectMixin
-from sqlspec.statement.builder.mixins._insert_values import InsertValuesMixin
-from sqlspec.statement.builder.mixins._join import JoinClauseMixin
-from sqlspec.statement.builder.mixins._limit_offset import LimitOffsetClauseMixin
-from sqlspec.statement.builder.mixins._merge_clauses import (
+from sqlspec.statement.builder import Column, FunctionColumn
+from sqlspec.statement.builder.mixins._cte_and_set_ops import SetOperationMixin
+from sqlspec.statement.builder.mixins._insert_operations import InsertFromSelectMixin, InsertValuesMixin
+from sqlspec.statement.builder.mixins._join_operations import JoinClauseMixin
+from sqlspec.statement.builder.mixins._merge_operations import (
     MergeIntoClauseMixin,
     MergeMatchedClauseMixin,
     MergeNotMatchedBySourceClauseMixin,
@@ -43,14 +39,15 @@ from sqlspec.statement.builder.mixins._merge_clauses import (
     MergeOnClauseMixin,
     MergeUsingClauseMixin,
 )
-from sqlspec.statement.builder.mixins._order_by import OrderByClauseMixin
-from sqlspec.statement.builder.mixins._pivot import PivotClauseMixin
-from sqlspec.statement.builder.mixins._returning import ReturningClauseMixin
-from sqlspec.statement.builder.mixins._set_ops import SetOperationMixin
-from sqlspec.statement.builder.mixins._unpivot import UnpivotClauseMixin
-from sqlspec.statement.builder.mixins._update_from import UpdateFromClauseMixin
-from sqlspec.statement.builder.mixins._update_set import UpdateSetClauseMixin
-from sqlspec.statement.builder.mixins._where import WhereClauseMixin
+from sqlspec.statement.builder.mixins._order_limit_operations import (
+    LimitOffsetClauseMixin,
+    OrderByClauseMixin,
+    ReturningClauseMixin,
+)
+from sqlspec.statement.builder.mixins._pivot_operations import PivotClauseMixin, UnpivotClauseMixin
+from sqlspec.statement.builder.mixins._select_operations import SelectClauseMixin
+from sqlspec.statement.builder.mixins._update_operations import UpdateFromClauseMixin, UpdateSetClauseMixin
+from sqlspec.statement.builder.mixins._where_clause import HavingClauseMixin, WhereClauseMixin
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -153,7 +150,7 @@ def test_where_clause_basic(condition: Any, expected_type: type[exp.Expression])
 def test_where_clause_wrong_expression_type() -> None:
     """Test WHERE clause with wrong expression type."""
     builder = WhereTestBuilder(exp.Insert())
-    with pytest.raises(SQLBuilderError, match="Cannot add WHERE clause to unsupported expression type"):
+    with pytest.raises(SQLBuilderError, match="WHERE clause not supported for Insert"):
         builder.where("id = 1")
 
 
@@ -369,7 +366,7 @@ def test_order_by_wrong_expression_type() -> None:
         builder.order_by("name")
 
 
-class FromTestBuilder(MockBuilder, FromClauseMixin):
+class FromTestBuilder(MockBuilder, SelectClauseMixin):
     """Test builder with FROM clause mixin."""
 
     pass
@@ -543,7 +540,7 @@ def test_set_operation_wrong_expression_type() -> None:
         builder1.union(builder2)
 
 
-class GroupByTestBuilder(MockBuilder, GroupByClauseMixin):
+class GroupByTestBuilder(MockBuilder, SelectClauseMixin):
     """Test builder with GROUP BY mixin."""
 
     pass
@@ -944,19 +941,19 @@ def test_unpivot_wrong_expression_type() -> None:
         builder.unpivot(value_column_name="value", name_column_name="name", columns_to_unpivot=["col1"])
 
 
-class AggregateTestBuilder(MockBuilder, AggregateFunctionsMixin):
+class AggregateTestBuilder(MockBuilder, SelectClauseMixin):  # pyright: ignore
     """Test builder with aggregate functions mixin."""
 
-    def select(self, expr: Any) -> "AggregateTestBuilder":
+    def select(self, *columns: Union[str, Expression, Column, FunctionColumn]) -> "AggregateTestBuilder":
         """Mock select method to add expressions."""
         if self._expression is None:
             self._expression = exp.Select()
 
         exprs = self._expression.args.get("expressions")
         if exprs is None:
-            self._expression.set("expressions", [expr])
+            self._expression.set("expressions", [*columns])
         else:
-            exprs.append(expr)
+            exprs.extend(columns)
         return self
 
 

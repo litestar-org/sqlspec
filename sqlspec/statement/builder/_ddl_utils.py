@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Optional
 from sqlglot import exp
 
 if TYPE_CHECKING:
-    from sqlspec.statement.builder.ddl import ColumnDefinition, ConstraintDefinition
+    from sqlspec.statement.builder._ddl import ColumnDefinition, ConstraintDefinition
 
 __all__ = ("build_column_expression", "build_constraint_expression")
 

@@ -68,10 +68,10 @@ def setup_test_context(
     [
         ("SELECT * FROM users WHERE id = ?", ("qmark", "named_colon"), True, None),
         ("SELECT * FROM users WHERE id = :user_id", ("qmark", "named_colon"), True, None),
-        ("SELECT * FROM users WHERE id = $1", ("numeric",), True, None),
-        ("SELECT * FROM users WHERE id = @user_id", ("named_at",), True, None),
-        ("SELECT * FROM users WHERE id = :user_id", ("qmark",), False, RiskLevel.HIGH),
-        ("SELECT * FROM users WHERE id = $1", ("qmark",), False, RiskLevel.HIGH),
+        ("SELECT * FROM users WHERE id = $1", ("numeric"), True, None),
+        ("SELECT * FROM users WHERE id = @user_id", ("named_at"), True, None),
+        ("SELECT * FROM users WHERE id = :user_id", ("qmark"), False, RiskLevel.HIGH),
+        ("SELECT * FROM users WHERE id = $1", ("qmark"), False, RiskLevel.HIGH),
     ],
     ids=[
         "qmark_allowed",
@@ -118,7 +118,7 @@ def test_parameter_style_validation(
             False,
             "Mixed parameter styles detected",
         ),
-        ("SELECT * FROM users WHERE id = $1 AND name = $2", ("numeric",), False, True, None),  # Same style, no mixing
+        ("SELECT * FROM users WHERE id = $1 AND name = $2", ("numeric"), False, True, None),  # Same style, no mixing
     ],
     ids=["mixed_allowed", "mixed_disallowed", "same_style_ok"],
 )
@@ -153,8 +153,8 @@ def test_mixed_parameter_styles(
 @pytest.mark.parametrize(
     "sql,style_name,allowed_styles",
     [
-        ("SELECT * FROM users WHERE id = $1 AND name = $2", "numeric", ("numeric",)),
-        ("SELECT * FROM users WHERE id = @user_id AND name = @user_name", "named_at", ("named_at",)),
+        ("SELECT * FROM users WHERE id = $1 AND name = $2", "numeric", ("numeric")),
+        ("SELECT * FROM users WHERE id = @user_id AND name = @user_name", "named_at", ("named_at")),
     ],
     ids=["numeric_style", "named_at_style"],
 )
@@ -351,7 +351,7 @@ def test_target_style_suggestion(context: SQLProcessingContext, param_validator:
     """Test that target style is configured but doesn't cause errors."""
     validator = create_validator()
     context.config.allowed_parameter_styles = ("qmark", "numeric")
-    context.config.target_parameter_style = "numeric"
+    context.config.default_parameter_style = "numeric"
 
     # Using qmark instead of preferred numeric
     sql = "SELECT * FROM users WHERE id = ?"
@@ -367,9 +367,9 @@ def test_target_style_suggestion(context: SQLProcessingContext, param_validator:
 @pytest.mark.parametrize(
     "sql,config_setup,expected_errors,description",
     [
-        ("SELECT id FROM users", {"allowed_parameter_styles": ("qmark",)}, 0, "no_parameters"),
-        ("SELECT * FROM users WHERE id = ?", {"allowed_parameter_styles": ("qmark",)}, 0, "single_allowed_style"),
-        ("SELECT * FROM users WHERE id = :id", {"allowed_parameter_styles": ("qmark",)}, 1, "single_disallowed_style"),
+        ("SELECT id FROM users", {"allowed_parameter_styles": ("qmark")}, 0, "no_parameters"),
+        ("SELECT * FROM users WHERE id = ?", {"allowed_parameter_styles": ("qmark")}, 0, "single_allowed_style"),
+        ("SELECT * FROM users WHERE id = :id", {"allowed_parameter_styles": ("qmark")}, 1, "single_disallowed_style"),
         (
             "SELECT * FROM users WHERE id = ? AND name = :name",
             {"allowed_parameter_styles": ("qmark", "named_colon"), "allow_mixed_parameter_styles": True},

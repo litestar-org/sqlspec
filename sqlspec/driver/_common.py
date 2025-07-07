@@ -9,7 +9,7 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.tokens import TokenType
 
-from sqlspec.driver.parameters import normalize_parameter_sequence
+from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.exceptions import NotFoundError
 from sqlspec.statement import SQLConfig
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator, TypedParameter
@@ -60,6 +60,7 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             config: SQL statement configuration
             default_row_type: Default row type for results (DictRow, TupleRow, etc.)
         """
+        super().__init__()
         self.connection = connection
         self.config = config or SQLConfig()
         self.default_row_type = default_row_type or dict[str, Any]
@@ -335,11 +336,11 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             Parameters with TypedParameter objects unwrapped to primitive values
         """
 
-        normalized = normalize_parameter_sequence(parameters)
-        if not normalized:
+        converted = convert_parameter_sequence(parameters)
+        if not converted:
             return []
 
-        return [self._coerce_parameter(p) if isinstance(p, TypedParameter) else p for p in normalized]
+        return [self._coerce_parameter(p) if isinstance(p, TypedParameter) else p for p in converted]
 
     def _prepare_driver_parameters_many(self, parameters: Any) -> "list[Any]":
         """Prepare parameter sequences for executemany operations.

@@ -19,7 +19,6 @@ if TYPE_CHECKING:
     from google.api_core.client_info import ClientInfo
     from google.api_core.client_options import ClientOptions
     from google.auth.credentials import Credentials
-    from sqlglot.dialects.dialect import DialectType
 
 logger = logging.getLogger(__name__)
 
@@ -76,45 +75,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     - Parquet and Arrow format optimization
     """
 
-    __slots__ = (
-        "_connection_instance",
-        "_dialect",
-        "client_info",
-        "client_options",
-        "credentials",
-        "credentials_path",
-        "dataframes_backend",
-        "dataset_id",
-        "default_load_job_config",
-        "default_query_job_config",
-        "default_row_type",
-        "edition",
-        "enable_bigquery_ml",
-        "enable_bigquery_omni",
-        "enable_column_level_security",
-        "enable_continuous_queries",
-        "enable_cross_cloud",
-        "enable_dataframes",
-        "enable_gemini_integration",
-        "enable_row_level_security",
-        "enable_vector_search",
-        "extras",
-        "job_timeout_ms",
-        "location",
-        "maximum_bytes_billed",
-        "on_connection_create",
-        "on_job_complete",
-        "on_job_start",
-        "parquet_enable_list_inference",
-        "pool_instance",
-        "project",
-        "query_timeout_ms",
-        "reservation_id",
-        "statement_config",
-        "use_avro_logical_types",
-        "use_query_cache",
-    )
-
     is_async: ClassVar[bool] = False
     supports_connection_pooling: ClassVar[bool] = False
 
@@ -125,7 +85,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_at",)
     """BigQuery only supports @name (named_at) parameter style."""
 
-    preferred_parameter_style: ClassVar[str] = "named_at"
+    default_parameter_style: ClassVar[str] = "named_at"
     """BigQuery's native parameter style is @name (named_at)."""
 
     def __init__(
@@ -283,7 +243,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
         # Store connection instance for reuse (BigQuery doesn't support traditional pooling)
         self._connection_instance: Optional[BigQueryConnection] = None
-        self._dialect: DialectType = None
 
         super().__init__()
 
@@ -391,7 +350,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
                     statement_config = replace(
                         statement_config,
                         allowed_parameter_styles=self.supported_parameter_styles,
-                        target_parameter_style=self.preferred_parameter_style,
+                        default_parameter_style=self.default_parameter_style,
                     )
                 driver = self.driver_type(
                     connection=connection,

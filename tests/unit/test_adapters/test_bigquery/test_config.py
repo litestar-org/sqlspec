@@ -158,7 +158,7 @@ def test_feature_flags(feature_flag: str, value: bool) -> None:
 
 @pytest.mark.parametrize(
     "statement_config,expected_type",
-    [(None, SQLConfig), (SQLConfig(), SQLConfig), (SQLConfig(strict_mode=True), SQLConfig)],
+    [(None, SQLConfig), (SQLConfig(), SQLConfig), (SQLConfig(parse_errors_as_warnings=False), SQLConfig)],
     ids=["default", "empty", "custom"],
 )
 def test_statement_config_initialization(statement_config: "SQLConfig | None", expected_type: type[SQLConfig]) -> None:
@@ -250,7 +250,7 @@ def test_provide_session() -> None:
 
             # Check parameter style injection
             assert session.config.allowed_parameter_styles == ("named_at",)
-            assert session.config.target_parameter_style == "named_at"
+            assert session.config.default_parameter_style == "named_at"
 
             # BigQuery client doesn't have a close method to assert on
 
@@ -292,9 +292,9 @@ def test_supported_parameter_styles() -> None:
     assert BigQueryConfig.supported_parameter_styles == ("named_at",)
 
 
-def test_preferred_parameter_style() -> None:
+def test_default_parameter_style() -> None:
     """Test preferred parameter style class attribute."""
-    assert BigQueryConfig.preferred_parameter_style == "named_at"
+    assert BigQueryConfig.default_parameter_style == "named_at"
 
 
 # Advanced Configuration Tests
@@ -366,51 +366,6 @@ def test_storage_format_options(option: str, value: bool) -> None:
     """Test storage format options."""
     config = BigQueryConfig(project="test-project", **{option: value})  # type: ignore[arg-type]
     assert getattr(config, option) == value
-
-
-# Slots Test
-def test_slots_defined() -> None:
-    """Test that __slots__ is properly defined."""
-    assert hasattr(BigQueryConfig, "__slots__")
-    expected_slots = {
-        "_dialect",
-        "pool_instance",
-        "_connection_instance",
-        "client_info",
-        "client_options",
-        "credentials",
-        "credentials_path",
-        "dataframes_backend",
-        "dataset_id",
-        "default_load_job_config",
-        "default_query_job_config",
-        "default_row_type",
-        "edition",
-        "enable_bigquery_ml",
-        "enable_bigquery_omni",
-        "enable_column_level_security",
-        "enable_continuous_queries",
-        "enable_cross_cloud",
-        "enable_dataframes",
-        "enable_gemini_integration",
-        "enable_row_level_security",
-        "enable_vector_search",
-        "extras",
-        "job_timeout_ms",
-        "location",
-        "maximum_bytes_billed",
-        "on_connection_create",
-        "on_job_complete",
-        "on_job_start",
-        "parquet_enable_list_inference",
-        "project",
-        "query_timeout_ms",
-        "reservation_id",
-        "statement_config",
-        "use_avro_logical_types",
-        "use_query_cache",
-    }
-    assert set(BigQueryConfig.__slots__) == expected_slots
 
 
 # Edge Cases

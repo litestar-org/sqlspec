@@ -30,7 +30,7 @@ def mock_psqlpy_connection() -> AsyncMock:
 @pytest.fixture
 def psqlpy_driver(mock_psqlpy_connection: AsyncMock) -> PsqlpyDriver:
     """Create a PSQLPy driver with mocked connection."""
-    config = SQLConfig(strict_mode=False)  # Disable strict mode for unit tests
+    config = SQLConfig()  # Disable strict mode for unit tests
     return PsqlpyDriver(connection=mock_psqlpy_connection, config=config)
 
 

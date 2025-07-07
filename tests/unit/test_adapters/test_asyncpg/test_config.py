@@ -141,7 +141,7 @@ def test_extras_handling(init_kwargs: dict[str, Any], expected_extras: dict[str,
 
 @pytest.mark.parametrize(
     "statement_config,expected_type",
-    [(None, SQLConfig), (SQLConfig(), SQLConfig), (SQLConfig(strict_mode=True), SQLConfig)],
+    [(None, SQLConfig), (SQLConfig(), SQLConfig), (SQLConfig(parse_errors_as_warnings=False), SQLConfig)],
     ids=["default", "empty", "custom"],
 )
 def test_statement_config_initialization(statement_config: "SQLConfig | None", expected_type: type[SQLConfig]) -> None:
@@ -403,7 +403,7 @@ async def test_provide_session() -> None:
 
             # Check parameter style injection
             assert session.config.allowed_parameter_styles == ("numeric",)
-            assert session.config.target_parameter_style == "numeric"
+            assert session.config.default_parameter_style == "numeric"
 
             mock_pool.release.assert_not_called()
 
@@ -492,9 +492,9 @@ def test_supported_parameter_styles() -> None:
     assert AsyncpgConfig.supported_parameter_styles == ("numeric",)
 
 
-def test_preferred_parameter_style() -> None:
+def test_default_parameter_style() -> None:
     """Test preferred parameter style class attribute."""
-    assert AsyncpgConfig.preferred_parameter_style == "numeric"
+    assert AsyncpgConfig.default_parameter_style == "numeric"
 
 
 # JSON Serialization Tests
@@ -511,46 +511,6 @@ def test_json_serializer_configuration() -> None:
 
     assert config.json_serializer is custom_serializer
     assert config.json_deserializer is custom_deserializer
-
-
-# Slots Test
-def test_slots_defined() -> None:
-    """Test that __slots__ is properly defined."""
-    assert hasattr(AsyncpgConfig, "__slots__")
-    expected_slots = {
-        "_dialect",
-        "command_timeout",
-        "connect_timeout",
-        "connection_class",
-        "database",
-        "default_row_type",
-        "direct_tls",
-        "dsn",
-        "extras",
-        "host",
-        "init",
-        "json_deserializer",
-        "json_serializer",
-        "loop",
-        "max_cacheable_statement_size",
-        "max_cached_statement_lifetime",
-        "max_inactive_connection_lifetime",
-        "max_queries",
-        "max_size",
-        "min_size",
-        "passfile",
-        "password",
-        "pool_instance",
-        "port",
-        "record_class",
-        "server_settings",
-        "setup",
-        "ssl",
-        "statement_cache_size",
-        "statement_config",
-        "user",
-    }
-    assert set(AsyncpgConfig.__slots__) == expected_slots
 
 
 # Edge Cases

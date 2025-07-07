@@ -73,13 +73,13 @@ class ParameterStyleValidator(ProcessorProtocol):
             config = context.config
             param_info = context.parameter_info
 
-            # Check if parameters were normalized by looking for param_ placeholders
-            # This happens when Oracle numeric parameters (:1, :2) are normalized
-            is_normalized = param_info and any(p.name and p.name.startswith("param_") for p in param_info)
+            # Check if parameters were converted by looking for param_ placeholders
+            # This happens when Oracle numeric parameters (:1, :2) are converted
+            is_converted = param_info and any(p.name and p.name.startswith("param_") for p in param_info)
 
-            # First check parameter styles if configured (skip if normalized)
+            # First check parameter styles if configured (skip if converted)
             has_style_errors = False
-            if not is_normalized and config.allowed_parameter_styles is not None and param_info:
+            if not is_converted and config.allowed_parameter_styles is not None and param_info:
                 unique_styles = {p.style for p in param_info}
 
                 if len(unique_styles) > 1 and not config.allow_mixed_parameter_styles:
@@ -279,11 +279,11 @@ class ParameterStyleValidator(ProcessorProtocol):
         """Handle validation for named parameters."""
         missing: list[str] = []
 
-        # Check if we have normalized parameters (e.g., param_0)
-        is_normalized = any(p.name and p.name.startswith("param_") for p in param_info)
+        # Check if we have converted parameters (e.g., param_0)
+        is_converted = any(p.name and p.name.startswith("param_") for p in param_info)
 
-        if is_normalized and hasattr(context, "extra_info"):
-            # For normalized parameters, we need to check against the original placeholder mapping
+        if is_converted and hasattr(context, "extra_info"):
+            # For converted parameters, we need to check against the original placeholder mapping
             placeholder_map = context.extra_info.get("placeholder_map", {})
 
             # Check if we have Oracle numeric keys in merged_params
@@ -291,9 +291,9 @@ class ParameterStyleValidator(ProcessorProtocol):
 
             if all_numeric_keys:
                 # Parameters were provided as list and converted to Oracle numeric dict {"1": val1, "2": val2}
-                for i, _p in enumerate(param_info):
-                    normalized_name = f"param_{i}"
-                    original_key = placeholder_map.get(normalized_name)
+                for i in range(len(param_info)):
+                    converted_name = f"param_{i}"
+                    original_key = placeholder_map.get(converted_name)
 
                     if original_key is not None:
                         # Check using the original key (e.g., "1", "2" for Oracle)
@@ -309,11 +309,11 @@ class ParameterStyleValidator(ProcessorProtocol):
 
                 if all_param_keys:
                     # This was originally a list converted to dict with param_N keys
-                    for i, _p in enumerate(param_info):
-                        normalized_name = f"param_{i}"
-                        if normalized_name not in merged_params or merged_params[normalized_name] is None:
+                    for i in range(len(param_info)):
+                        converted_name = f"param_{i}"
+                        if converted_name not in merged_params or merged_params[converted_name] is None:
                             # Get original parameter style from placeholder map
-                            original_key = placeholder_map.get(normalized_name)
+                            original_key = placeholder_map.get(converted_name)
                             if original_key is not None:
                                 original_key_str = str(original_key)
                                 if original_key_str.isdigit():
@@ -322,16 +322,16 @@ class ParameterStyleValidator(ProcessorProtocol):
                                     missing.append(f":{original_key}")
                 else:
                     # Mixed parameter names, check using placeholder map
-                    for i, _p in enumerate(param_info):
-                        normalized_name = f"param_{i}"
-                        original_key = placeholder_map.get(normalized_name)
+                    for i in range(len(param_info)):
+                        converted_name = f"param_{i}"
+                        original_key = placeholder_map.get(converted_name)
 
                         if original_key is not None:
-                            # For mixed params, check both normalized and original keys
+                            # For mixed params, check both converted and original keys
                             original_key_str = str(original_key)
 
-                            # First check with normalized name
-                            found = normalized_name in merged_params and merged_params[normalized_name] is not None
+                            # First check with converted name
+                            found = converted_name in merged_params and merged_params[converted_name] is not None
 
                             # If not found, check with original key
                             if not found:

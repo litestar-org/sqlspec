@@ -341,6 +341,7 @@ def test_execute_many_parameter_formatting(
 def test_execute_script(driver: SqliteDriver, mock_connection: MagicMock) -> None:
     """Test executing a SQL script."""
     mock_cursor = mock_connection.cursor.return_value
+    mock_cursor.rowcount = 1  # Each statement affects 1 row
 
     script = """
     CREATE TABLE test (id INTEGER PRIMARY KEY);
@@ -348,13 +349,23 @@ def test_execute_script(driver: SqliteDriver, mock_connection: MagicMock) -> Non
     INSERT INTO test VALUES (2);
     """
 
-    result = driver._execute_script(script)
+    # Mock split_sql_script to return 3 statements
+    with patch("sqlspec.statement.splitter.split_sql_script") as mock_split:
+        mock_split.return_value = [
+            "CREATE TABLE test (id INTEGER PRIMARY KEY)",
+            "INSERT INTO test VALUES (1)",
+            "INSERT INTO test VALUES (2)",
+        ]
 
-    assert result.total_statements == -1
-    assert result.metadata["status_message"] == "SCRIPT EXECUTED"
+        result = driver._execute_script(script)
 
-    mock_cursor.executescript.assert_called_once_with(script)
-    mock_connection.commit.assert_called_once()
+        assert result.total_statements == 3  # Now returns actual count
+        assert result.successful_statements == 3
+        assert result.metadata["status_message"] == "SCRIPT EXECUTED"
+
+        # Each statement is executed individually now
+        assert mock_cursor.execute.call_count == 3
+        mock_connection.commit.assert_called_once()
 
 
 # Bulk Load Tests

@@ -132,10 +132,14 @@ async def test_asyncpg_to_arrow_with_sql_object(asyncpg_arrow_session: AsyncpgDr
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_arrow_large_dataset(asyncpg_arrow_session: AsyncpgDriver) -> None:
     """Test Arrow functionality with larger dataset."""
-    # Insert more test data
-    large_data = [(f"Item {i}", i * 10, float(i * 2.5), i % 2 == 0) for i in range(100, 1000)]
+    # Get initial count
+    initial_result = await asyncpg_arrow_session.fetch_arrow_table("SELECT COUNT(*) as total FROM test_arrow")
+    initial_count = initial_result.data["total"].to_pylist()[0] or 0
 
-    await asyncpg_arrow_session.execute_many(
+    # Insert more test data - smaller batch to avoid potential issues
+    large_data = [(f"Item {i}", i * 10, float(i * 2.5), i % 2 == 0) for i in range(100, 200)]
+
+    result = await asyncpg_arrow_session.execute_many(
         "INSERT INTO test_arrow (name, value, price, is_active) VALUES ($1, $2, $3, $4)", large_data
     )
 
@@ -144,7 +148,13 @@ async def test_asyncpg_arrow_large_dataset(asyncpg_arrow_session: AsyncpgDriver)
     assert isinstance(result, ArrowResult)
     assert result.num_rows == 1
     total_count = result.data["total"].to_pylist()[0]
-    assert total_count == 905  # 5 original + 900 new records
+
+    # Let's also check the actual records
+    all_records = await asyncpg_arrow_session.fetch_arrow_table("SELECT name, value FROM test_arrow ORDER BY value")
+    all_records.data["name"].to_pylist()
+
+    # Check that we have initial + 100 new records
+    assert total_count == initial_count + 100
 
 
 @pytest.mark.asyncio

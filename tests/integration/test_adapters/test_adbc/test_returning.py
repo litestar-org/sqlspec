@@ -21,7 +21,7 @@ def adbc_postgresql_session_returning(postgres_service: PostgresService) -> Gene
     config = AdbcConfig(
         uri=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
         driver_name="adbc_driver_postgresql",
-        statement_config=SQLConfig(strict_mode=False),
+        statement_config=SQLConfig(),
     )
 
     with config.provide_session() as session:
@@ -41,7 +41,7 @@ def adbc_postgresql_session_returning(postgres_service: PostgresService) -> Gene
 @pytest.fixture
 def adbc_sqlite_session_returning() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session with test table supporting RETURNING."""
-    config = AdbcConfig(uri=":memory:", driver_name="adbc_driver_sqlite", statement_config=SQLConfig(strict_mode=False))
+    config = AdbcConfig(uri=":memory:", driver_name="adbc_driver_sqlite", statement_config=SQLConfig())
 
     with config.provide_session() as session:
         # Create test table
@@ -118,7 +118,7 @@ def test_postgresql_delete_returning(adbc_postgresql_session_returning: AdbcDriv
 
     # Delete with RETURNING
     result = adbc_postgresql_session_returning.execute(
-        "DELETE FROM test_returning WHERE name = $1 RETURNING id, name, value", ("delete_test",)
+        "DELETE FROM test_returning WHERE name = $1 RETURNING id, name, value", ("delete_test")
     )
 
     assert isinstance(result, SQLResult)

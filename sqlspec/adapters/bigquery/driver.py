@@ -24,12 +24,13 @@ from sqlspec.driver import SyncDriverAdapterProtocol
 from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
+    SyncAdapterCacheMixin,
     SyncPipelinedExecutionMixin,
     SyncStorageMixin,
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import normalize_parameter_sequence
+from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import ArrowResult, SQLResult
@@ -57,6 +58,7 @@ TIMESTAMP_ERROR_MSG_LENGTH = 189  # Length check for timestamp parsing error
 
 class BigQueryDriver(
     SyncDriverAdapterProtocol["BigQueryConnection", RowT],
+    SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
     SyncStorageMixin,
@@ -70,8 +72,6 @@ class BigQueryDriver(
     - execute_many() - Batch operations with transaction safety
     - execute_script() - Multi-statement scripts and DDL operations
     """
-
-    __slots__ = ("_default_query_job_config", "on_job_complete", "on_job_start")
 
     dialect: "DialectType" = "bigquery"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.NAMED_AT,)
@@ -342,7 +342,7 @@ class BigQueryDriver(
         This is now just a pass-through since the core parameter generation
         has been fixed to generate BigQuery-compatible parameter names.
         """
-        return statement.compile(placeholder_style=target_style)
+        return self._get_compiled_sql(statement, target_style)
 
     def _execute_statement(
         self, statement: SQL, connection: Optional[BigQueryConnection] = None, **kwargs: Any
@@ -387,14 +387,14 @@ class BigQueryDriver(
         # BigQuery doesn't have traditional transactions, but we'll use the pattern for consistency
         # The managed_transaction_sync will just pass through for BigQuery Client objects
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # Normalize parameters using consolidated utility
-            normalized_params = normalize_parameter_sequence(parameters)
+            # Convert parameters using consolidated utility
+            converted_params = convert_parameter_sequence(parameters)
             param_dict: dict[str, Any] = {}
-            if normalized_params:
-                if isinstance(normalized_params[0], dict):
-                    param_dict = normalized_params[0]
+            if converted_params:
+                if isinstance(converted_params[0], dict):
+                    param_dict = converted_params[0]
                 else:
-                    param_dict = {f"param_{i}": val for i, val in enumerate(normalized_params)}
+                    param_dict = {f"param_{i}": val for i, val in enumerate(converted_params)}
 
             bq_params = self._prepare_bq_query_parameters(param_dict)
 
@@ -413,14 +413,14 @@ class BigQueryDriver(
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # Normalize parameter list using consolidated utility
-            normalized_param_list = normalize_parameter_sequence(param_list)
+            converted_param_list = convert_parameter_sequence(param_list)
 
             # Use a multi-statement script for batch execution
             script_parts = []
             all_params: dict[str, Any] = {}
             param_counter = 0
 
-            for params in normalized_param_list or []:
+            for params in converted_param_list or []:
                 if isinstance(params, dict):
                     param_dict = params
                 elif isinstance(params, (list, tuple)):
@@ -470,20 +470,32 @@ class BigQueryDriver(
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # BigQuery does not support multi-statement scripts in a single job
             statements = self._split_script_statements(script)
+            suppress_warnings = kwargs.get("_suppress_warnings", False)
+            successful = 0
+            total_rows = 0
 
             for statement in statements:
                 if statement:
+                    # Validate each statement unless warnings suppressed
+                    if not suppress_warnings:
+                        # Run validation through pipeline
+                        temp_sql = SQL(statement, config=self.config)
+                        temp_sql._ensure_processed()
+                        # Validation errors are logged as warnings by default
+
                     query_job = self._run_query_job(statement, [], connection=txn_conn)
                     query_job.result(timeout=kwargs.get("bq_job_timeout"))
+                    successful += 1
+                    total_rows += query_job.num_dml_affected_rows or 0
 
             return SQLResult(
                 statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
-                rows_affected=0,
+                rows_affected=total_rows,
                 operation_type="SCRIPT",
                 metadata={"status_message": "SCRIPT EXECUTED"},
                 total_statements=len(statements),
-                successful_statements=len(statements),
+                successful_statements=successful,
             )
 
     def _connection(self, connection: "Optional[Client]" = None) -> "Client":
