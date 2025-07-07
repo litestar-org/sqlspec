@@ -109,7 +109,7 @@ test = [
 ]
 
 [project.scripts]
-sqlspec = "sqlspec.cli:run_cli"
+sqlspec = "sqlspec.__main__:run_cli"
 
 [build-system]
 build-backend = "hatchling.build"
