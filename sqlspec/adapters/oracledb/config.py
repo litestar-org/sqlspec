@@ -23,7 +23,6 @@ if TYPE_CHECKING:
 
     from oracledb import AuthMode
     from oracledb.pool import AsyncConnectionPool, ConnectionPool
-    from sqlglot.dialects.dialect import DialectType
 
 
 __all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "OracleAsyncConfig", "OracleSyncConfig")
@@ -72,43 +71,6 @@ POOL_FIELDS = CONNECTION_FIELDS.union(
 
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool", OracleSyncDriver]):
     """Configuration for Oracle synchronous database connections with direct field-based configuration."""
-
-    __slots__ = (
-        "_dialect",
-        "config_dir",
-        "default_row_type",
-        "dsn",
-        "edition",
-        "events",
-        "extras",
-        "getmode",
-        "homogeneous",
-        "host",
-        "increment",
-        "max",
-        "max_lifetime_session",
-        "max_sessions_per_shard",
-        "min",
-        "mode",
-        "password",
-        "ping_interval",
-        "pool_instance",
-        "port",
-        "retry_count",
-        "retry_delay",
-        "service_name",
-        "session_callback",
-        "sid",
-        "soda_metadata_cache",
-        "statement_config",
-        "tcp_connect_timeout",
-        "threaded",
-        "timeout",
-        "user",
-        "wait_timeout",
-        "wallet_location",
-        "wallet_password",
-    )
 
     is_async: ClassVar[bool] = False
     supports_connection_pooling: ClassVar[bool] = True
@@ -236,8 +198,6 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
-        self.pool_instance = pool_instance
-        self._dialect: DialectType = None
 
         super().__init__()
 
@@ -368,43 +328,6 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
 class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnectionPool", OracleAsyncDriver]):
     """Configuration for Oracle asynchronous database connections with direct field-based configuration."""
 
-    __slots__ = (
-        "_dialect",
-        "config_dir",
-        "default_row_type",
-        "dsn",
-        "edition",
-        "events",
-        "extras",
-        "getmode",
-        "homogeneous",
-        "host",
-        "increment",
-        "max",
-        "max_lifetime_session",
-        "max_sessions_per_shard",
-        "min",
-        "mode",
-        "password",
-        "ping_interval",
-        "pool_instance",
-        "port",
-        "retry_count",
-        "retry_delay",
-        "service_name",
-        "session_callback",
-        "sid",
-        "soda_metadata_cache",
-        "statement_config",
-        "tcp_connect_timeout",
-        "threaded",
-        "timeout",
-        "user",
-        "wait_timeout",
-        "wallet_location",
-        "wallet_password",
-    )
-
     is_async: ClassVar[bool] = True
     supports_connection_pooling: ClassVar[bool] = True
 
@@ -531,8 +454,6 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
-        self.pool_instance: Optional[AsyncConnectionPool] = pool_instance
-        self._dialect: DialectType = None
 
         super().__init__()
 

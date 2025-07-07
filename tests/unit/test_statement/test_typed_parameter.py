@@ -4,11 +4,11 @@ import math
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlspec.statement.parameters import ParameterConverter, ParameterInfo, TypedParameter
+from sqlspec.statement.parameters import ParameterConverter, ParameterInfo, ParameterStyle, TypedParameter
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
-def test_typed_parameter_hashable():
+def test_typed_parameter_hashable() -> None:
     """Test that TypedParameter is hashable."""
     from sqlglot import exp
 
@@ -29,7 +29,7 @@ def test_typed_parameter_hashable():
     assert len(param_set) == 2
 
 
-def test_wrap_parameters_with_types_dict():
+def test_wrap_parameters_with_types_dict() -> None:
     """Test wrapping dict parameters with types."""
     params = {
         "name": "John",
@@ -41,7 +41,7 @@ def test_wrap_parameters_with_types_dict():
         "metadata": {"key": "value"},
     }
 
-    param_info = []  # Not used for dict params
+    param_info: list[ParameterInfo] = []  # Not used for dict params
     wrapped = ParameterConverter.wrap_parameters_with_types(params, param_info)
     assert isinstance(wrapped, dict)
     # Simple types should not be wrapped
@@ -72,7 +72,7 @@ def test_wrap_parameters_with_types_dict():
     assert wrapped["metadata"].type_hint == "json"
 
 
-def test_wrap_parameters_with_types_list():
+def test_wrap_parameters_with_types_list() -> None:
     """Test wrapping list parameters with types."""
     params = [
         "John",
@@ -84,15 +84,16 @@ def test_wrap_parameters_with_types_list():
     ]
 
     param_info = [
-        ParameterInfo(name="name", position=0, style=None, ordinal=0, placeholder_text="?"),
-        ParameterInfo(name="age", position=10, style=None, ordinal=1, placeholder_text="?"),
-        ParameterInfo(name=None, position=20, style=None, ordinal=2, placeholder_text="?"),
-        ParameterInfo(name=None, position=30, style=None, ordinal=3, placeholder_text="?"),
-        ParameterInfo(name="ids", position=40, style=None, ordinal=4, placeholder_text="?"),
-        ParameterInfo(name=None, position=50, style=None, ordinal=5, placeholder_text="?"),
+        ParameterInfo(name="name", position=0, style=ParameterStyle.QMARK, ordinal=0, placeholder_text="?"),
+        ParameterInfo(name="age", position=10, style=ParameterStyle.QMARK, ordinal=1, placeholder_text="?"),
+        ParameterInfo(name=None, position=20, style=ParameterStyle.QMARK, ordinal=2, placeholder_text="?"),
+        ParameterInfo(name=None, position=30, style=ParameterStyle.QMARK, ordinal=3, placeholder_text="?"),
+        ParameterInfo(name="ids", position=40, style=ParameterStyle.QMARK, ordinal=4, placeholder_text="?"),
+        ParameterInfo(name=None, position=50, style=ParameterStyle.QMARK, ordinal=5, placeholder_text="?"),
     ]
 
     wrapped = ParameterConverter.wrap_parameters_with_types(params, param_info)
+    assert isinstance(wrapped, list)
 
     # Simple types should not be wrapped
     assert wrapped[0] == "John"
@@ -118,7 +119,7 @@ def test_wrap_parameters_with_types_list():
     assert wrapped[5].type_hint == "bigint"
 
 
-def test_wrap_parameters_with_types_already_wrapped():
+def test_wrap_parameters_with_types_already_wrapped() -> None:
     """Test that already wrapped parameters are not re-wrapped."""
     from sqlglot import exp
 
@@ -128,12 +129,13 @@ def test_wrap_parameters_with_types_already_wrapped():
 
     params = {"param": tp}
     wrapped = ParameterConverter.wrap_parameters_with_types(params, [])
+    assert isinstance(wrapped, dict)
 
     # Should be the same object
     assert wrapped["param"] is tp
 
 
-def test_sql_with_typed_parameters():
+def test_sql_with_typed_parameters() -> None:
     """Test SQL execution with TypedParameter wrapping."""
     config = SQLConfig(enable_parameter_type_wrapping=True)
 
@@ -163,7 +165,7 @@ def test_sql_with_typed_parameters():
     assert params[1] is True
 
 
-def test_typed_parameter_type_inference():
+def test_typed_parameter_type_inference() -> None:
     """Test type inference for various Python types."""
 
     test_cases = [
@@ -185,6 +187,7 @@ def test_typed_parameter_type_inference():
 
     for value, expected_hint, expected_type in test_cases:
         wrapped = ParameterConverter.wrap_parameters_with_types({"param": value}, [])
+        assert isinstance(wrapped, dict)
 
         if (
             isinstance(value, (str, int, float))
@@ -201,11 +204,12 @@ def test_typed_parameter_type_inference():
             assert str(wrapped["param"].sqlglot_type) == expected_type
 
 
-def test_typed_parameter_performance_optimization():
+def test_typed_parameter_performance_optimization() -> None:
     """Test that simple scalar types are not wrapped for performance."""
     params = {"string": "hello", "small_int": 100, "float": math.pi, "big_int": 9999999999, "bool": True}
 
     wrapped = ParameterConverter.wrap_parameters_with_types(params, [])
+    assert isinstance(wrapped, dict)
 
     # Simple scalars should not be wrapped (except bigint and bool)
     assert wrapped["string"] == "hello"

@@ -300,28 +300,6 @@ def test_default_parameter_style() -> None:
     assert SqliteConfig.default_parameter_style == "qmark"
 
 
-# Slots Test
-def test_slots_defined() -> None:
-    """Test that __slots__ is properly defined."""
-    assert hasattr(SqliteConfig, "__slots__")
-    expected_slots = {
-        "_dialect",
-        "pool_instance",
-        "cached_statements",
-        "check_same_thread",
-        "database",
-        "default_row_type",
-        "detect_types",
-        "extras",
-        "factory",
-        "isolation_level",
-        "statement_config",
-        "timeout",
-        "uri",
-    }
-    assert set(SqliteConfig.__slots__) == expected_slots
-
-
 # Edge Cases
 @pytest.mark.parametrize(
     "kwargs,expected_error",

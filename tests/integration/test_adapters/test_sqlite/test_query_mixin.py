@@ -1,5 +1,7 @@
 """Integration tests for SQLite driver with query mixin functionality."""
 
+from collections.abc import Generator
+
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteDriver
@@ -9,7 +11,7 @@ from sqlspec.statement.sql import SQL
 
 
 @pytest.fixture
-def sqlite_driver():
+def sqlite_driver() -> Generator[SqliteDriver, None, None]:
     """Create a SQLite driver with a test table."""
     import sqlite3
 
@@ -44,72 +46,73 @@ def sqlite_driver():
 class TestSqliteQueryMixin:
     """Test query mixin methods with SQLite driver."""
 
-    def test_select_one_success(self, sqlite_driver):
+    def test_select_one_success(self, sqlite_driver: SqliteDriver) -> None:
         """Test select_one returns exactly one row."""
         result = sqlite_driver.select_one("SELECT * FROM users WHERE id = 1")
         assert result["id"] == 1
         assert result["name"] == "John Doe"
         assert result["email"] == "john@example.com"
 
-    def test_select_one_no_rows(self, sqlite_driver):
+    def test_select_one_no_rows(self, sqlite_driver: SqliteDriver) -> None:
         """Test select_one raises when no rows found."""
         with pytest.raises(NotFoundError):
             sqlite_driver.select_one("SELECT * FROM users WHERE id = 999")
 
-    def test_select_one_multiple_rows(self, sqlite_driver):
+    def test_select_one_multiple_rows(self, sqlite_driver: SqliteDriver) -> None:
         """Test select_one raises when multiple rows found."""
         with pytest.raises(ValueError, match="Expected exactly one row"):
             sqlite_driver.select_one("SELECT * FROM users WHERE age > 25")
 
-    def test_select_one_or_none_success(self, sqlite_driver):
+    def test_select_one_or_none_success(self, sqlite_driver: SqliteDriver) -> None:
         """Test select_one_or_none returns one row when found."""
         result = sqlite_driver.select_one_or_none("SELECT * FROM users WHERE email = 'jane@example.com'")
+        assert result is not None
         assert result["id"] == 2
         assert result["name"] == "Jane Smith"
 
-    def test_select_one_or_none_no_rows(self, sqlite_driver):
+    def test_select_one_or_none_no_rows(self, sqlite_driver: SqliteDriver) -> None:
         """Test select_one_or_none returns None when no rows found."""
         result = sqlite_driver.select_one_or_none("SELECT * FROM users WHERE email = 'notfound@example.com'")
         assert result is None
 
-    def test_select_one_or_none_multiple_rows(self, sqlite_driver):
+    def test_select_one_or_none_multiple_rows(self, sqlite_driver: SqliteDriver) -> None:
         """Test select_one_or_none raises when multiple rows found."""
         with pytest.raises(ValueError, match="Expected at most one row"):
             sqlite_driver.select_one_or_none("SELECT * FROM users WHERE age < 35")
 
-    def test_select_value_success(self, sqlite_driver):
+    def test_select_value_success(self, sqlite_driver: SqliteDriver) -> None:
         """Test select_value returns single scalar value."""
         result = sqlite_driver.select_value("SELECT COUNT(*) FROM users")
         assert result == 5
 
-    def test_select_value_specific_column(self, sqlite_driver):
+    def test_select_value_specific_column(self, sqlite_driver: SqliteDriver) -> None:
         """Test select_value returns specific column value."""
         result = sqlite_driver.select_value("SELECT name FROM users WHERE id = 3")
         assert result == "Bob Johnson"
 
-    def test_select_value_no_rows(self, sqlite_driver):
+    def test_select_value_no_rows(self, sqlite_driver: SqliteDriver) -> None:
         """Test select_value raises when no rows found."""
         with pytest.raises(NotFoundError):
             sqlite_driver.select_value("SELECT name FROM users WHERE id = 999")
 
-    def test_select_value_or_none_success(self, sqlite_driver):
+    def test_select_value_or_none_success(self, sqlite_driver: SqliteDriver) -> None:
         """Test select_value_or_none returns value when found."""
         result = sqlite_driver.select_value_or_none("SELECT age FROM users WHERE name = 'Alice Brown'")
         assert result == 28
 
-    def test_select_value_or_none_no_rows(self, sqlite_driver):
+    def test_select_value_or_none_no_rows(self, sqlite_driver: SqliteDriver) -> None:
         """Test select_value_or_none returns None when no rows."""
         result = sqlite_driver.select_value_or_none("SELECT age FROM users WHERE name = 'Unknown'")
         assert result is None
 
-    def test_select_returns_all_rows(self, sqlite_driver):
+    def test_select_returns_all_rows(self, sqlite_driver: SqliteDriver) -> None:
         """Test select returns all matching rows."""
         results = sqlite_driver.select("SELECT * FROM users ORDER BY id")
         assert len(results) == 5
         assert results[0]["name"] == "John Doe"
         assert results[4]["name"] == "Charlie Davis"
 
-    def test_select_with_filter(self, sqlite_driver):
+    def test_select_with_filter(self, sqlite_driver: SqliteDriver) -> None:
         """Test select with WHERE clause."""
         results = sqlite_driver.select("SELECT * FROM users WHERE age >= 30 ORDER BY age")
         assert len(results) == 3
@@ -117,7 +120,7 @@ class TestSqliteQueryMixin:
         assert results[1]["name"] == "Charlie Davis"
         assert results[2]["name"] == "Bob Johnson"
 
-    def test_paginate_with_kwargs(self, sqlite_driver):
+    def test_paginate_with_kwargs(self, sqlite_driver: SqliteDriver) -> None:
         """Test paginate with limit/offset in kwargs."""
         result = sqlite_driver.paginate("SELECT * FROM users ORDER BY id", limit=2, offset=1)
 
@@ -129,7 +132,7 @@ class TestSqliteQueryMixin:
         assert result.items[0]["name"] == "Jane Smith"
         assert result.items[1]["name"] == "Bob Johnson"
 
-    def test_paginate_with_limit_offset_filter(self, sqlite_driver):
+    def test_paginate_with_limit_offset_filter(self, sqlite_driver: SqliteDriver) -> None:
         """Test paginate with LimitOffsetFilter."""
         filter_obj = LimitOffsetFilter(limit=3, offset=2)
         result = sqlite_driver.paginate("SELECT * FROM users ORDER BY id", filter_obj)
@@ -143,7 +146,7 @@ class TestSqliteQueryMixin:
         assert result.items[1]["name"] == "Alice Brown"
         assert result.items[2]["name"] == "Charlie Davis"
 
-    def test_paginate_with_where_clause(self, sqlite_driver):
+    def test_paginate_with_where_clause(self, sqlite_driver: SqliteDriver) -> None:
         """Test paginate with filtered query."""
         result = sqlite_driver.paginate("SELECT * FROM users WHERE age > 25 ORDER BY age", limit=2, offset=0)
 
@@ -152,7 +155,7 @@ class TestSqliteQueryMixin:
         assert result.items[0]["age"] == 28
         assert result.items[1]["age"] == 30
 
-    def test_paginate_empty_result(self, sqlite_driver):
+    def test_paginate_empty_result(self, sqlite_driver: SqliteDriver) -> None:
         """Test paginate with no matching rows."""
         result = sqlite_driver.paginate("SELECT * FROM users WHERE age > 100", limit=10, offset=0)
 
@@ -161,7 +164,7 @@ class TestSqliteQueryMixin:
         assert result.limit == 10
         assert result.offset == 0
 
-    def test_select_with_parameters(self, sqlite_driver):
+    def test_select_with_parameters(self, sqlite_driver: SqliteDriver) -> None:
         """Test select methods with parameterized queries."""
         # Test with named parameters
         result = sqlite_driver.select_one(SQL("SELECT * FROM users WHERE email = :email", email="bob@example.com"))
@@ -173,7 +176,7 @@ class TestSqliteQueryMixin:
         assert results[0]["age"] == 32
         assert results[1]["age"] == 35
 
-    def test_complex_query_with_joins(self, sqlite_driver):
+    def test_complex_query_with_joins(self, sqlite_driver: SqliteDriver) -> None:
         """Test query methods with more complex SQL."""
         # Create a related table
         sqlite_driver.execute_script("""

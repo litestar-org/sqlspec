@@ -199,16 +199,35 @@ class PsqlpyDriver(
         conn = connection if connection is not None else self._connection(None)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # psqlpy can execute multi-statement scripts directly
-            await txn_conn.execute(script)
+            # Split script into individual statements for validation
+            statements = self._split_script_statements(script)
+            suppress_warnings = kwargs.get("_suppress_warnings", False)
+
+            executed_count = 0
+            total_rows = 0
+
+            # Execute each statement individually for better control and validation
+            for statement in statements:
+                if statement.strip():
+                    # Validate each statement unless warnings suppressed
+                    if not suppress_warnings:
+                        # Run validation through pipeline
+                        temp_sql = SQL(statement, config=self.config)
+                        temp_sql._ensure_processed()
+                        # Validation errors are logged as warnings by default
+
+                    await txn_conn.execute(statement)
+                    executed_count += 1
+                    # psqlpy doesn't provide row count from execute()
+
             return SQLResult(
                 statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
-                rows_affected=0,
+                rows_affected=total_rows,
                 operation_type="SCRIPT",
                 metadata={"status_message": "SCRIPT EXECUTED"},
-                total_statements=-1,  # Not directly supported, but script is executed
-                successful_statements=-1,
+                total_statements=executed_count,
+                successful_statements=executed_count,
             )
 
     async def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:

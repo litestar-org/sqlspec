@@ -134,7 +134,7 @@ async def test_asyncpg_arrow_large_dataset(asyncpg_arrow_session: AsyncpgDriver)
     """Test Arrow functionality with larger dataset."""
     # Get initial count
     initial_result = await asyncpg_arrow_session.fetch_arrow_table("SELECT COUNT(*) as total FROM test_arrow")
-    initial_count = initial_result.data["total"].to_pylist()[0]
+    initial_count = initial_result.data["total"].to_pylist()[0] or 0
 
     # Insert more test data - smaller batch to avoid potential issues
     large_data = [(f"Item {i}", i * 10, float(i * 2.5), i % 2 == 0) for i in range(100, 200)]

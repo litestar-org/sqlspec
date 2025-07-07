@@ -73,8 +73,6 @@ class BigQueryDriver(
     - execute_script() - Multi-statement scripts and DDL operations
     """
 
-    __slots__ = ("_default_query_job_config", "on_job_complete", "on_job_start")
-
     dialect: "DialectType" = "bigquery"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.NAMED_AT,)
     default_parameter_style: ParameterStyle = ParameterStyle.NAMED_AT
@@ -472,20 +470,32 @@ class BigQueryDriver(
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # BigQuery does not support multi-statement scripts in a single job
             statements = self._split_script_statements(script)
+            suppress_warnings = kwargs.get("_suppress_warnings", False)
+            successful = 0
+            total_rows = 0
 
             for statement in statements:
                 if statement:
+                    # Validate each statement unless warnings suppressed
+                    if not suppress_warnings:
+                        # Run validation through pipeline
+                        temp_sql = SQL(statement, config=self.config)
+                        temp_sql._ensure_processed()
+                        # Validation errors are logged as warnings by default
+
                     query_job = self._run_query_job(statement, [], connection=txn_conn)
                     query_job.result(timeout=kwargs.get("bq_job_timeout"))
+                    successful += 1
+                    total_rows += query_job.num_dml_affected_rows or 0
 
             return SQLResult(
                 statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
-                rows_affected=0,
+                rows_affected=total_rows,
                 operation_type="SCRIPT",
                 metadata={"status_message": "SCRIPT EXECUTED"},
                 total_statements=len(statements),
-                successful_statements=len(statements),
+                successful_statements=successful,
             )
 
     def _connection(self, connection: "Optional[Client]" = None) -> "Client":

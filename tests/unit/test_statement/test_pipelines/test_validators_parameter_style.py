@@ -179,7 +179,7 @@ def test_specific_parameter_styles(
 def test_pyformat_positional_style(context: SQLProcessingContext, param_validator: ParameterValidator) -> None:
     """Test detection of pyformat positional style (%s)."""
     validator = create_validator()
-    context.config.allowed_parameter_styles = "pyformat_positional"
+    context.config.allowed_parameter_styles = ("pyformat_positional",)
 
     # %s style requires special handling as SQLGlot may not parse it directly
     sql = "SELECT * FROM users WHERE id = %s AND name = %s"
@@ -198,7 +198,7 @@ def test_pyformat_positional_style(context: SQLProcessingContext, param_validato
 def test_pyformat_named_style(context: SQLProcessingContext, param_validator: ParameterValidator) -> None:
     """Test detection of pyformat named style (%(name)s)."""
     validator = create_validator()
-    context.config.allowed_parameter_styles = "pyformat_named"
+    context.config.allowed_parameter_styles = ("pyformat_named",)
 
     # %(name)s style requires special handling as SQLGlot may not parse it directly
     sql = "SELECT * FROM users WHERE id = %(user_id)s AND name = %(user_name)s"
@@ -218,7 +218,7 @@ def test_pyformat_named_style(context: SQLProcessingContext, param_validator: Pa
 def test_no_parameters_in_sql(context: SQLProcessingContext, param_validator: ParameterValidator) -> None:
     """Test that SQL without parameters passes validation."""
     validator = create_validator()
-    context.config.allowed_parameter_styles = "qmark"
+    context.config.allowed_parameter_styles = ("qmark",)
 
     sql = "SELECT * FROM users WHERE id = 1"
     setup_test_context(context, sql, param_validator)
@@ -265,7 +265,7 @@ def test_configuration_edge_cases(
 def test_multiple_style_violations(context: SQLProcessingContext, param_validator: ParameterValidator) -> None:
     """Test detection of multiple parameter style violations."""
     validator = create_validator()
-    context.config.allowed_parameter_styles = "qmark"
+    context.config.allowed_parameter_styles = ("qmark",)
     context.config.allow_mixed_parameter_styles = False
 
     # Multiple different disallowed styles - use simplified SQL for parsing
@@ -413,7 +413,7 @@ def test_fail_on_violation_enabled(context: SQLProcessingContext, param_validato
     from sqlspec.statement.pipelines.validators._parameter_style import UnsupportedParameterStyleError
 
     validator = create_validator(fail_on_violation=True)
-    context.config.allowed_parameter_styles = "qmark"
+    context.config.allowed_parameter_styles = ("qmark",)
 
     # Disallowed style
     sql = "SELECT * FROM users WHERE id = :user_id"
@@ -427,7 +427,7 @@ def test_fail_on_violation_enabled(context: SQLProcessingContext, param_validato
 def test_validator_handles_parsing_errors(context: SQLProcessingContext, param_validator: ParameterValidator) -> None:
     """Test that validator handles edge cases gracefully."""
     validator = create_validator()
-    context.config.allowed_parameter_styles = "qmark"
+    context.config.allowed_parameter_styles = ("qmark",)
 
     # Valid SQL that might have parsing edge cases
     sql = "SELECT * FROM users WHERE name LIKE '?%' AND id = ?"

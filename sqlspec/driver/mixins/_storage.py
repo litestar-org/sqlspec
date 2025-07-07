@@ -44,8 +44,6 @@ WINDOWS_PATH_MIN_LENGTH = 3
 class StorageMixinBase(ABC):
     """Base class with common storage functionality."""
 
-    __slots__ = ()
-
     config: Any
     _connection: Any
     dialect: "DialectType"
@@ -143,8 +141,6 @@ class StorageMixinBase(ABC):
 
 class SyncStorageMixin(StorageMixinBase):
     """Unified storage operations for synchronous drivers."""
-
-    __slots__ = ()
 
     def ingest_arrow_table(self, table: "ArrowTable", table_name: str, mode: str = "create", **options: Any) -> int:
         """Ingest an Arrow table into the database.
@@ -571,8 +567,6 @@ class SyncStorageMixin(StorageMixinBase):
 
 class AsyncStorageMixin(StorageMixinBase):
     """Unified storage operations for asynchronous drivers."""
-
-    __slots__ = ()
 
     async def ingest_arrow_table(
         self, table: "ArrowTable", table_name: str, mode: str = "create", **options: Any

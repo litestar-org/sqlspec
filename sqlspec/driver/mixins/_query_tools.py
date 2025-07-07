@@ -9,7 +9,7 @@ from typing_extensions import Self
 from sqlspec.exceptions import NotFoundError
 from sqlspec.statement.filters import LimitOffsetFilter, OffsetPagination
 from sqlspec.statement.sql import SQL
-from sqlspec.typing import ConnectionT
+from sqlspec.typing import ConnectionT, ModelDTOT, RowT
 from sqlspec.utils.type_guards import (
     is_dict_row,
     is_indexable_row,
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from sqlspec.statement import Statement, StatementFilter
     from sqlspec.statement.builder import Select
     from sqlspec.statement.sql import SQLConfig
-    from sqlspec.typing import ModelDTOT, RowT, StatementParameters
+    from sqlspec.typing import StatementParameters
 
 __all__ = ("AsyncQueryMixin", "SyncQueryMixin")
 
@@ -36,8 +36,6 @@ WINDOWS_PATH_MIN_LENGTH = 3
 class QueryBase(ABC, Generic[ConnectionT]):
     """Base class with common query functionality."""
 
-    __slots__ = ()
-
     config: Any
     _connection: Any
     dialect: "DialectType"
@@ -45,11 +43,11 @@ class QueryBase(ABC, Generic[ConnectionT]):
     @property
     def connection(self) -> "ConnectionT":
         """Get the connection instance."""
-        return self._connection
+        return self._connection  # type: ignore[no-any-return]
 
     @classmethod
     def new(cls, connection: "ConnectionT") -> Self:
-        return cls(connection)
+        return cls(connection)  # type: ignore[call-arg]
 
     def _transform_to_sql(
         self,
@@ -121,7 +119,7 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> "Union[RowT, ModelDTOT]":
         """Execute a select statement and return exactly one row.
 
         Raises an exception if no rows or more than one row is returned.
@@ -139,7 +137,7 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
         if len(data) > 1:
             msg = f"Expected exactly one row, found {len(data)}"
             raise ValueError(msg)
-        return data[0]
+        return data[0]  # type: ignore[no-any-return]
 
     @overload
     def select_one_or_none(
@@ -173,7 +171,7 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
         schema_type: "Optional[type[ModelDTOT]]" = None,
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
-        **kwargs: Any,
+        **kwargs: "Optional[Union[RowT, ModelDTOT]]",
     ) -> Any:
         """Execute a select statement and return at most one row.
 
@@ -228,7 +226,7 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> Union[list[RowT], list[ModelDTOT]]:
         """Execute a select statement and return all rows."""
         result = self.execute(  # type: ignore[attr-defined]
             statement, *parameters, schema_type=schema_type, _connection=_connection, _config=_config, **kwargs
@@ -353,7 +351,7 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> "Union[OffsetPagination[RowT], OffsetPagination[ModelDTOT]]":
         """Execute a paginated query with automatic counting.
 
         This method performs two queries:
@@ -479,7 +477,7 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
             data_stmt, params, schema_type=schema_type, _connection=_connection, _config=_config, **kwargs
         )
 
-        return OffsetPagination(items=items, limit=limit, offset=offset, total=total)
+        return OffsetPagination(items=items, limit=limit, offset=offset, total=total)  # pyright: ignore
 
 
 class AsyncQueryMixin(QueryBase[ConnectionT]):
@@ -507,7 +505,7 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "RowT": ...  # type: ignore[type-var]
+    ) -> "RowT": ...
 
     async def select_one(
         self,
@@ -518,7 +516,7 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> "Union[RowT, ModelDTOT]":
         """Execute a select statement and return exactly one row.
 
         Raises an exception if no rows or more than one row is returned.
@@ -533,7 +531,7 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         if len(data) > 1:
             msg = f"Expected exactly one row, found {len(data)}"
             raise ValueError(msg)
-        return data[0]
+        return data[0]  # type: ignore[no-any-return]
 
     @overload
     async def select_one_or_none(
@@ -568,13 +566,13 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> "Optional[Union[RowT, ModelDTOT]]":
         """Execute a select statement and return at most one row.
 
         Returns None if no rows are found.
         Raises an exception if more than one row is returned.
         """
-        result = await self.execute(
+        result = await self.execute(  # type: ignore[attr-defined]
             statement, *parameters, schema_type=schema_type, _connection=_connection, _config=_config, **kwargs
         )
         data = result.get_data()
@@ -583,7 +581,7 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         if len(data) > 1:
             msg = f"Expected at most one row, found {len(data)}"
             raise ValueError(msg)
-        return data[0]
+        return data[0]  # type: ignore[no-any-return]
 
     @overload
     async def select(
@@ -618,12 +616,12 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> "Union[list[RowT], list[ModelDTOT]]":
         """Execute a select statement and return all rows."""
         result = await self.execute(  # type: ignore[attr-defined]
             statement, *parameters, schema_type=schema_type, _connection=_connection, _config=_config, **kwargs
         )
-        return result.get_data()
+        return result.get_data()  # type: ignore[no-any-return]
 
     async def select_value(
         self,
@@ -639,7 +637,7 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         Expects exactly one row with one column.
         Raises an exception if no rows or more than one row/column is returned.
         """
-        result = await self.execute(statement, *parameters, _connection=_connection, _config=_config, **kwargs)
+        result = await self.execute(statement, *parameters, _connection=_connection, _config=_config, **kwargs)  # type: ignore[attr-defined]
         row = result.one()
         if not row:
             msg = "No rows found"
@@ -734,7 +732,7 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> "Union[OffsetPagination[RowT], OffsetPagination[ModelDTOT]]":
         # Separate filters from parameters
         filters: list[StatementFilter] = []
         params: list[Any] = []
@@ -795,4 +793,4 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
             data_stmt, *params, schema_type=schema_type, _connection=_connection, _config=_config, **kwargs
         )
 
-        return OffsetPagination(items=items, limit=limit, offset=offset, total=total)
+        return OffsetPagination(items=items, limit=limit, offset=offset, total=total)  # pyright: ignore

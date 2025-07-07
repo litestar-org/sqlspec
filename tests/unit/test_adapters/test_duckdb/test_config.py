@@ -446,56 +446,6 @@ def test_security_configuration() -> None:
     assert config.allow_persistent_secrets is False
 
 
-# Slots Test
-def test_slots_defined() -> None:
-    """Test that __slots__ is properly defined."""
-    assert hasattr(DuckDBConfig, "__slots__")
-    expected_slots = {
-        "_dialect",
-        "pool_instance",
-        "allow_community_extensions",
-        "allow_persistent_secrets",
-        "allow_unsigned_extensions",
-        "arrow_large_buffer_size",
-        "autoinstall_extension_repository",
-        "autoinstall_known_extensions",
-        "autoload_known_extensions",
-        "binary_as_string",
-        "checkpoint_threshold",
-        "config",
-        "custom_extension_repository",
-        "database",
-        "default_null_order",
-        "default_order",
-        "default_row_type",
-        "enable_external_access",
-        "enable_external_file_cache",
-        "enable_logging",
-        "enable_object_cache",
-        "enable_progress_bar",
-        "errors_as_json",
-        "extension_directory",
-        "extensions",
-        "extras",
-        "ieee_floating_point_ops",
-        "log_query_path",
-        "logging_level",
-        "max_temp_directory_size",
-        "memory_limit",
-        "on_connection_create",
-        "parquet_metadata_cache",
-        "preserve_insertion_order",
-        "progress_bar_time",
-        "read_only",
-        "secret_directory",
-        "secrets",
-        "statement_config",
-        "temp_directory",
-        "threads",
-    }
-    assert set(DuckDBConfig.__slots__) == expected_slots
-
-
 # Edge Cases
 def test_config_with_dict_config() -> None:
     """Test config initialization with dict config parameter."""

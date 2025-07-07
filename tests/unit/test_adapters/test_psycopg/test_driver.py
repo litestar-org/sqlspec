@@ -482,10 +482,11 @@ def test_sync_execute_script(sync_driver: PsycopgSyncDriver, mock_sync_connectio
 
     result = sync_driver._execute_script(script)
 
-    assert result.total_statements == 1  # Script executed as a single statement
+    assert result.total_statements == 3  # Now splits and executes each statement
     assert result.metadata["status_message"] == "CREATE TABLE"
 
-    mock_cursor.execute.assert_called_once_with(script)
+    # Now checks that execute was called 3 times (once for each statement)
+    assert mock_cursor.execute.call_count == 3
 
 
 @pytest.mark.asyncio
@@ -502,10 +503,11 @@ async def test_async_execute_script(async_driver: PsycopgAsyncDriver, mock_async
 
     result = await async_driver._execute_script(script)
 
-    assert result.total_statements == 1  # Script executed as a single statement
+    assert result.total_statements == 3  # Now splits and executes each statement
     assert result.metadata["status_message"] == "CREATE TABLE"
 
-    mock_cursor.execute.assert_called_once_with(script)
+    # Now checks that execute was called 3 times (once for each statement)
+    assert mock_cursor.execute.call_count == 3
 
 
 # Note: Result wrapping tests removed - drivers now return SQLResult directly from execute methods

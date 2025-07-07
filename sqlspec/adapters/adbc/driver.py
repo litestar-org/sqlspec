@@ -62,7 +62,6 @@ class AdbcDriver(
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_parquet_export: ClassVar[bool] = False  # Not implemented yet
     supports_native_parquet_import: ClassVar[bool] = True
-    __slots__ = ("default_parameter_style", "dialect", "supported_parameter_styles")
 
     def __init__(
         self,
@@ -223,7 +222,8 @@ class AdbcDriver(
                 try:
                     cursor.execute(sql, cursor_params or [])
                 except Exception as e:
-                    # Rollback transaction on error for PostgreSQL to avoid "current transaction is aborted" errors
+                    # Rollback transaction on error for PostgreSQL to avoid
+                    # "current transaction is aborted" errors
                     if self.dialect == "postgres":
                         with contextlib.suppress(Exception):
                             cursor.execute("ROLLBACK")
@@ -292,18 +292,28 @@ class AdbcDriver(
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # ADBC drivers don't support multiple statements in a single execute
             statements = self._split_script_statements(script)
+            suppress_warnings = kwargs.get("_suppress_warnings", False)
 
             executed_count = 0
+            total_rows = 0
             with self._get_cursor(txn_conn) as cursor:
                 for statement in statements:
                     if statement.strip():
-                        self._execute_single_script_statement(cursor, statement)
+                        # Validate each statement unless warnings suppressed
+                        if not suppress_warnings:
+                            # Run validation through pipeline
+                            temp_sql = SQL(statement, config=self.config)
+                            temp_sql._ensure_processed()
+                            # Validation errors are logged as warnings by default
+
+                        rows = self._execute_single_script_statement(cursor, statement)
                         executed_count += 1
+                        total_rows += rows
 
             return SQLResult(
                 statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
-                rows_affected=0,
+                rows_affected=total_rows,
                 operation_type="SCRIPT",
                 metadata={"status_message": "SCRIPT EXECUTED"},
                 total_statements=executed_count,
@@ -318,18 +328,19 @@ class AdbcDriver(
             statement: The SQL statement to execute
 
         Returns:
-            1 if successful, 0 if failed
+            Number of rows affected
         """
         try:
             cursor.execute(statement)
         except Exception as e:
-            # Rollback transaction on error for PostgreSQL to avoid "current transaction is aborted" errors
+            # Rollback transaction on error for PostgreSQL to avoid
+            # "current transaction is aborted" errors
             if self.dialect == "postgres":
                 with contextlib.suppress(Exception):
                     cursor.execute("ROLLBACK")
             raise e from e
         else:
-            return 1
+            return cursor.rowcount or 0
 
     def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
         """ADBC native Arrow table fetching.

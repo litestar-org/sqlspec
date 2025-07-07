@@ -16,8 +16,6 @@ from sqlspec.typing import DictRow, Empty
 if TYPE_CHECKING:
     from typing import Literal
 
-    from sqlglot.dialects.dialect import DialectType
-
 
 __all__ = ("CONNECTION_FIELDS", "AiosqliteConfig")
 
@@ -33,21 +31,6 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
 
     Note: Aiosqlite doesn't support connection pooling, so pool_instance is always None.
     """
-
-    __slots__ = (
-        "_dialect",
-        "cached_statements",
-        "check_same_thread",
-        "database",
-        "default_row_type",
-        "detect_types",
-        "extras",
-        "isolation_level",
-        "pool_instance",
-        "statement_config",
-        "timeout",
-        "uri",
-    )
 
     is_async: ClassVar[bool] = True
     supports_connection_pooling: ClassVar[bool] = False
@@ -102,7 +85,6 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
-        self._dialect: DialectType = None
 
         super().__init__()
 

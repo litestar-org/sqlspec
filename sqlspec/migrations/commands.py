@@ -449,7 +449,9 @@ class MigrationCommands:
         """
 
         if config.is_async:
-            self._impl = AsyncMigrationCommands(cast("AsyncConfigT", config))
+            self._impl: Union[AsyncMigrationCommands[Any], SyncMigrationCommands[Any]] = AsyncMigrationCommands(
+                cast("AsyncConfigT", config)
+            )
         else:
             self._impl = SyncMigrationCommands(cast("SyncConfigT", config))
 
@@ -463,9 +465,9 @@ class MigrationCommands:
             package: Whether to create __init__.py file.
         """
         if self._is_async:
-            await_(self._impl.init)(directory, package=package)
+            await_(cast("AsyncMigrationCommands[Any]", self._impl).init)(directory, package=package)
         else:
-            self._impl.init(directory, package=package)
+            cast("SyncMigrationCommands[Any]", self._impl).init(directory, package=package)
 
     def current(self, verbose: bool = False) -> None:
         """Show current migration version.
@@ -474,9 +476,9 @@ class MigrationCommands:
             verbose: Whether to show detailed migration history.
         """
         if self._is_async:
-            await_(self._impl.current, raise_sync_error=False)(verbose=verbose)
+            await_(cast("AsyncMigrationCommands[Any]", self._impl).current, raise_sync_error=False)(verbose=verbose)
         else:
-            self._impl.current(verbose=verbose)
+            cast("SyncMigrationCommands[Any]", self._impl).current(verbose=verbose)
 
     def upgrade(self, revision: str = "head") -> None:
         """Upgrade to a target revision.
@@ -485,9 +487,9 @@ class MigrationCommands:
             revision: Target revision or "head" for latest.
         """
         if self._is_async:
-            await_(self._impl.upgrade, raise_sync_error=False)(revision=revision)
+            await_(cast("AsyncMigrationCommands[Any]", self._impl).upgrade, raise_sync_error=False)(revision=revision)
         else:
-            self._impl.upgrade(revision=revision)
+            cast("SyncMigrationCommands[Any]", self._impl).upgrade(revision=revision)
 
     def downgrade(self, revision: str = "-1") -> None:
         """Downgrade to a target revision.
@@ -496,9 +498,9 @@ class MigrationCommands:
             revision: Target revision or "-1" for one step back.
         """
         if self._is_async:
-            await_(self._impl.downgrade, raise_sync_error=False)(revision=revision)
+            await_(cast("AsyncMigrationCommands[Any]", self._impl).downgrade, raise_sync_error=False)(revision=revision)
         else:
-            self._impl.downgrade(revision=revision)
+            cast("SyncMigrationCommands[Any]", self._impl).downgrade(revision=revision)
 
     def stamp(self, revision: str) -> None:
         """Mark database as being at a specific revision without running migrations.
@@ -507,9 +509,9 @@ class MigrationCommands:
             revision: The revision to stamp.
         """
         if self._is_async:
-            await_(self._impl.stamp, raise_sync_error=False)(revision)
+            await_(cast("AsyncMigrationCommands[Any]", self._impl).stamp, raise_sync_error=False)(revision)
         else:
-            self._impl.stamp(revision)
+            cast("SyncMigrationCommands[Any]", self._impl).stamp(revision)
 
     def revision(self, message: str) -> None:
         """Create a new migration file.
@@ -518,6 +520,6 @@ class MigrationCommands:
             message: Description for the migration.
         """
         if self._is_async:
-            await_(self._impl.revision, raise_sync_error=False)(message)
+            await_(cast("AsyncMigrationCommands[Any]", self._impl).revision, raise_sync_error=False)(message)
         else:
-            self._impl.revision(message)
+            cast("SyncMigrationCommands[Any]", self._impl).revision(message)

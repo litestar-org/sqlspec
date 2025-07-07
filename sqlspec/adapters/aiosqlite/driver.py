@@ -218,16 +218,36 @@ class AiosqliteDriver(
         conn = connection if connection is not None else self._connection(None)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+            # Split script into individual statements for validation
+            statements = self._split_script_statements(script)
+            suppress_warnings = kwargs.get("_suppress_warnings", False)
+
+            executed_count = 0
+            total_rows = 0
+
+            # Execute each statement individually for better control and validation
             async with self._get_cursor(txn_conn) as cursor:
-                await cursor.executescript(script)
+                for statement in statements:
+                    if statement.strip():
+                        # Validate each statement unless warnings suppressed
+                        if not suppress_warnings:
+                            # Run validation through pipeline
+                            temp_sql = SQL(statement, config=self.config)
+                            temp_sql._ensure_processed()
+                            # Validation errors are logged as warnings by default
+
+                        await cursor.execute(statement)
+                        executed_count += 1
+                        total_rows += cursor.rowcount or 0
+
             return SQLResult(
                 statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
-                rows_affected=0,
+                rows_affected=total_rows,
                 operation_type="SCRIPT",
                 metadata={"status_message": "SCRIPT EXECUTED"},
-                total_statements=-1,  # AIOSQLite doesn't provide this info
-                successful_statements=-1,
+                total_statements=executed_count,
+                successful_statements=executed_count,
             )
 
     async def _bulk_load_file(self, file_path: Path, table_name: str, format: str, mode: str, **options: Any) -> int:

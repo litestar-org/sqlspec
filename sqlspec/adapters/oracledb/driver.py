@@ -226,19 +226,32 @@ class OracleSyncDriver(
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             statements = self._split_script_statements(script, strip_trailing_semicolon=True)
+            suppress_warnings = kwargs.get("_suppress_warnings", False)
+            successful = 0
+            total_rows = 0
+
             with self._get_cursor(txn_conn) as cursor:
                 for statement in statements:
                     if statement and statement.strip():
+                        # Validate each statement unless warnings suppressed
+                        if not suppress_warnings:
+                            # Run validation through pipeline
+                            temp_sql = SQL(statement.strip(), config=self.config)
+                            temp_sql._ensure_processed()
+                            # Validation errors are logged as warnings by default
+
                         cursor.execute(statement.strip())
+                        successful += 1
+                        total_rows += cursor.rowcount or 0
 
             return SQLResult(
                 statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
-                rows_affected=0,
+                rows_affected=total_rows,
                 operation_type="SCRIPT",
                 metadata={"status_message": "SCRIPT EXECUTED"},
                 total_statements=len(statements),
-                successful_statements=len(statements),
+                successful_statements=successful,
             )
 
     def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
@@ -488,20 +501,32 @@ class OracleAsyncDriver(
             # Oracle doesn't support multi-statement scripts in a single execute
             # The splitter now handles PL/SQL blocks correctly when strip_trailing_semicolon=True
             statements = self._split_script_statements(script, strip_trailing_semicolon=True)
+            suppress_warnings = kwargs.get("_suppress_warnings", False)
+            successful = 0
+            total_rows = 0
 
             async with self._get_cursor(txn_conn) as cursor:
                 for statement in statements:
                     if statement and statement.strip():
+                        # Validate each statement unless warnings suppressed
+                        if not suppress_warnings:
+                            # Run validation through pipeline
+                            temp_sql = SQL(statement.strip(), config=self.config)
+                            temp_sql._ensure_processed()
+                            # Validation errors are logged as warnings by default
+
                         await cursor.execute(statement.strip())
+                        successful += 1
+                        total_rows += cursor.rowcount or 0
 
             return SQLResult(
                 statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
-                rows_affected=0,
+                rows_affected=total_rows,
                 operation_type="SCRIPT",
                 metadata={"status_message": "SCRIPT EXECUTED"},
                 total_statements=len(statements),
-                successful_statements=len(statements),
+                successful_statements=successful,
             )
 
     async def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":

@@ -200,8 +200,4 @@ def hash_sql_statement(statement: "SQL") -> str:
         hash(statement._is_script),
     ]
 
-    # Include parameter style preferences if any
-    if hasattr(statement._config, "parameter_style_preference"):
-        state_components.append(hash(statement._config.parameter_style_preference))
-
     return f"sql:{hash(tuple(state_components))}"

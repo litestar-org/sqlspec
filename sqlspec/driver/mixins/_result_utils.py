@@ -52,8 +52,6 @@ def _default_msgspec_deserializer(
 
 
 class ToSchemaMixin:
-    __slots__ = ()
-
     @staticmethod
     def _determine_operation_type(statement: "Any") -> OperationType:
         """Determine operation type from SQL statement expression.

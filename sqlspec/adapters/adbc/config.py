@@ -69,41 +69,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     - Cloud database integrations
     """
 
-    __slots__ = (
-        "_dialect",
-        "account",
-        "adbc_driver_manager_entrypoint",
-        "authorization_header",
-        "autocommit",
-        "batch_size",
-        "conn_kwargs",
-        "connection_timeout",
-        "database",
-        "dataset_id",
-        "db_kwargs",
-        "default_row_type",
-        "driver_name",
-        "extras",
-        "grpc_options",
-        "isolation_level",
-        "on_connection_create",
-        "password",
-        "pool_instance",
-        "project_id",
-        "query_timeout",
-        "role",
-        "schema",
-        "ssl_ca",
-        "ssl_cert",
-        "ssl_key",
-        "ssl_mode",
-        "statement_config",
-        "token",
-        "uri",
-        "username",
-        "warehouse",
-    )
-
     is_async: ClassVar[bool] = False
     supports_connection_pooling: ClassVar[bool] = False
     driver_type: type[AdbcDriver] = AdbcDriver
@@ -251,7 +216,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
         self.on_connection_create = on_connection_create
-        self._dialect: DialectType = None
         super().__init__()
 
     def _resolve_driver_name(self) -> str:

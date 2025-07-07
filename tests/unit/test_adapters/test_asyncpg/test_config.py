@@ -513,46 +513,6 @@ def test_json_serializer_configuration() -> None:
     assert config.json_deserializer is custom_deserializer
 
 
-# Slots Test
-def test_slots_defined() -> None:
-    """Test that __slots__ is properly defined."""
-    assert hasattr(AsyncpgConfig, "__slots__")
-    expected_slots = {
-        "_dialect",
-        "command_timeout",
-        "connect_timeout",
-        "connection_class",
-        "database",
-        "default_row_type",
-        "direct_tls",
-        "dsn",
-        "extras",
-        "host",
-        "init",
-        "json_deserializer",
-        "json_serializer",
-        "loop",
-        "max_cacheable_statement_size",
-        "max_cached_statement_lifetime",
-        "max_inactive_connection_lifetime",
-        "max_queries",
-        "max_size",
-        "min_size",
-        "passfile",
-        "password",
-        "pool_instance",
-        "port",
-        "record_class",
-        "server_settings",
-        "setup",
-        "ssl",
-        "statement_cache_size",
-        "statement_config",
-        "user",
-    }
-    assert set(AsyncpgConfig.__slots__) == expected_slots
-
-
 # Edge Cases
 def test_config_with_both_dsn_and_individual_params() -> None:
     """Test config with both DSN and individual parameters."""

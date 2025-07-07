@@ -1,5 +1,6 @@
 """Unit tests for query mixin functionality."""
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -14,17 +15,17 @@ from sqlspec.statement.sql import SQL
 class MockSyncDriver(SyncQueryMixin):
     """Mock driver for testing SyncQueryMixin."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._connection = MagicMock()
         self.config = MagicMock()
         self.dialect = "sqlite"
         self.execute = MagicMock()
 
     @property
-    def connection(self):
-        return self._connection
+    def connection(self) -> MagicMock:
+        return self._connection  # type: ignore[no-any-return]
 
-    def _transform_to_sql(self, statement, params=None, config=None):
+    def _transform_to_sql(self, statement: Any, params: Any = None, config: Any = None) -> SQL:
         """Mock implementation of _normalize_statement."""
         return SQL(statement if isinstance(statement, str) else str(statement))
 
@@ -32,17 +33,17 @@ class MockSyncDriver(SyncQueryMixin):
 class MockAsyncDriver(AsyncQueryMixin):
     """Mock driver for testing AsyncQueryMixin."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._connection = MagicMock()
         self.config = MagicMock()
         self.dialect = "sqlite"
         self.execute = AsyncMock()
 
     @property
-    def connection(self):
-        return self._connection
+    def connection(self) -> MagicMock:
+        return self._connection  # type: ignore[no-any-return]
 
-    def _transform_to_sql(self, statement, params=None, config=None):
+    def _transform_to_sql(self, statement: Any, params: Any = None, config: Any = None) -> SQL:
         """Mock implementation of _normalize_statement."""
         return SQL(statement if isinstance(statement, str) else str(statement))
 
@@ -50,7 +51,7 @@ class MockAsyncDriver(AsyncQueryMixin):
 class TestSyncQueryMixin:
     """Test synchronous query mixin methods."""
 
-    def test_select_one_success(self):
+    def test_select_one_success(self) -> None:
         """Test select_one returns exactly one row."""
         driver = MockSyncDriver()
         mock_result = SQLResult(
@@ -66,7 +67,7 @@ class TestSyncQueryMixin:
         assert result == {"id": 1, "name": "John"}
         driver.execute.assert_called_once()
 
-    def test_select_one_no_rows(self):
+    def test_select_one_no_rows(self) -> None:
         """Test select_one raises when no rows found."""
         driver = MockSyncDriver()
         mock_result = SQLResult(
@@ -81,7 +82,7 @@ class TestSyncQueryMixin:
         with pytest.raises(NotFoundError):
             driver.select_one("SELECT * FROM users WHERE id = 1")
 
-    def test_select_one_multiple_rows(self):
+    def test_select_one_multiple_rows(self) -> None:
         """Test select_one raises when multiple rows found."""
         driver = MockSyncDriver()
         mock_result = SQLResult(
@@ -96,7 +97,7 @@ class TestSyncQueryMixin:
         with pytest.raises(ValueError, match="Expected exactly one row"):
             driver.select_one("SELECT * FROM users")
 
-    def test_select_one_or_none_success(self):
+    def test_select_one_or_none_success(self) -> None:
         """Test select_one_or_none returns one row when found."""
         driver = MockSyncDriver()
         mock_result = SQLResult(
@@ -111,7 +112,7 @@ class TestSyncQueryMixin:
         result = driver.select_one_or_none("SELECT * FROM users WHERE id = 1")
         assert result == {"id": 1, "name": "John"}
 
-    def test_select_one_or_none_no_rows(self):
+    def test_select_one_or_none_no_rows(self) -> None:
         """Test select_one_or_none returns None when no rows found."""
         driver = MockSyncDriver()
         mock_result = SQLResult(
@@ -126,7 +127,7 @@ class TestSyncQueryMixin:
         result = driver.select_one_or_none("SELECT * FROM users WHERE id = 999")
         assert result is None
 
-    def test_select_value_success(self):
+    def test_select_value_success(self) -> None:
         """Test select_value returns single scalar value."""
         driver = MockSyncDriver()
         mock_result = SQLResult(
@@ -141,7 +142,7 @@ class TestSyncQueryMixin:
         result = driver.select_value("SELECT COUNT(*) FROM users")
         assert result == 42
 
-    def test_select_value_tuple_row(self):
+    def test_select_value_tuple_row(self) -> None:
         """Test select_value works with tuple rows."""
         driver = MockSyncDriver()
         mock_result = SQLResult(
@@ -156,7 +157,7 @@ class TestSyncQueryMixin:
         result = driver.select_value("SELECT COUNT(*) FROM users")
         assert result == 42
 
-    def test_select_value_or_none_no_rows(self):
+    def test_select_value_or_none_no_rows(self) -> None:
         """Test select_value_or_none returns None when no rows."""
         driver = MockSyncDriver()
         mock_result = SQLResult(
@@ -171,7 +172,7 @@ class TestSyncQueryMixin:
         result = driver.select_value_or_none("SELECT name FROM users WHERE id = 999")
         assert result is None
 
-    def test_select_returns_all_rows(self):
+    def test_select_returns_all_rows(self) -> None:
         """Test select returns all rows."""
         driver = MockSyncDriver()
         mock_result = SQLResult(
@@ -188,7 +189,7 @@ class TestSyncQueryMixin:
         assert result[0]["name"] == "John"
         assert result[2]["name"] == "Bob"
 
-    def test_paginate_with_kwargs(self):
+    def test_paginate_with_kwargs(self) -> None:
         """Test paginate with limit/offset in kwargs."""
         driver = MockSyncDriver()
 
@@ -221,7 +222,7 @@ class TestSyncQueryMixin:
         assert len(result.items) == 10
         assert result.items[0]["id"] == 21
 
-    def test_paginate_with_limit_offset_filter(self):
+    def test_paginate_with_limit_offset_filter(self) -> None:
         """Test paginate with LimitOffsetFilter."""
         from sqlspec.statement.filters import LimitOffsetFilter
 
@@ -256,7 +257,7 @@ class TestSyncQueryMixin:
         assert result.total == 50
         assert len(result.items) == 5
 
-    def test_paginate_no_limit_offset(self):
+    def test_paginate_no_limit_offset(self) -> None:
         """Test paginate raises when no limit/offset provided."""
         driver = MockSyncDriver()
 
@@ -268,7 +269,7 @@ class TestAsyncQueryMixin:
     """Test asynchronous query mixin methods."""
 
     @pytest.mark.asyncio
-    async def test_select_one_async(self):
+    async def test_select_one_async(self) -> None:
         """Test async select_one returns exactly one row."""
         driver = MockAsyncDriver()
         mock_result = SQLResult(
@@ -285,7 +286,7 @@ class TestAsyncQueryMixin:
         driver.execute.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_select_value_async(self):
+    async def test_select_value_async(self) -> None:
         """Test async select_value returns single scalar value."""
         driver = MockAsyncDriver()
         mock_result = SQLResult(
@@ -301,7 +302,7 @@ class TestAsyncQueryMixin:
         assert result == 42
 
     @pytest.mark.asyncio
-    async def test_paginate_async(self):
+    async def test_paginate_async(self) -> None:
         """Test async paginate with limit/offset."""
         driver = MockAsyncDriver()
 

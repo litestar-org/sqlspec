@@ -321,10 +321,11 @@ async def test_execute_script(driver: AsyncpgDriver, mock_connection: AsyncMock)
 
     result = await driver._execute_script(script)
 
-    assert result.total_statements == 1  # Script executed as a single statement
+    assert result.total_statements == 3  # Now splits and executes each statement
     assert result.metadata["status_message"] == "CREATE TABLE"
 
-    mock_connection.execute.assert_called_once_with(script)
+    # Now checks that execute was called 3 times (once for each statement)
+    assert mock_connection.execute.call_count == 3
 
 
 # Note: Result wrapping tests removed - drivers now return SQLResult directly from execute methods

@@ -163,7 +163,7 @@ class DuckDBDriver(
 
             # DuckDB throws an error if executemany is called with empty parameter list
             if not final_param_list:
-                return SQLResult(
+                return SQLResult(  # pyright: ignore
                     statement=SQL(sql, _dialect=self.dialect),
                     data=[],
                     rows_affected=0,
@@ -177,7 +177,7 @@ class DuckDBDriver(
                 # For executemany, fetchone() only returns the count from the last operation,
                 # so use parameter list length as the most accurate estimate
                 rows_affected = cursor.rowcount if cursor.rowcount >= 0 else len(final_param_list)
-                return SQLResult(
+                return SQLResult(  # pyright: ignore
                     statement=SQL(sql, _dialect=self.dialect),
                     data=[],
                     rows_affected=rows_affected,
@@ -192,20 +192,38 @@ class DuckDBDriver(
         conn = connection if connection is not None else self._connection(None)
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
+            # Split script into individual statements for validation
+            statements = self._split_script_statements(script)
+            suppress_warnings = kwargs.get("_suppress_warnings", False)
+
+            executed_count = 0
+            total_rows = 0
+
             with self._get_cursor(txn_conn) as cursor:
-                cursor.execute(script)
+                for statement in statements:
+                    if statement.strip():
+                        # Validate each statement unless warnings suppressed
+                        if not suppress_warnings:
+                            # Run validation through pipeline
+                            temp_sql = SQL(statement, config=self.config)
+                            temp_sql._ensure_processed()
+                            # Validation errors are logged as warnings by default
+
+                        cursor.execute(statement)
+                        executed_count += 1
+                        total_rows += cursor.rowcount or 0
 
             return SQLResult(
                 statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
-                rows_affected=0,
+                rows_affected=total_rows,
                 operation_type="SCRIPT",
                 metadata={
                     "status_message": "Script executed successfully.",
                     "description": "The script was sent to the database.",
                 },
-                total_statements=-1,
-                successful_statements=-1,
+                total_statements=executed_count,
+                successful_statements=executed_count,
             )
 
     # ============================================================================

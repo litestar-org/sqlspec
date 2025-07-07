@@ -177,7 +177,7 @@ class SQLConfig:
 
             analyzers = [StatementAnalyzer()]
 
-        return StatementPipeline(transformers=transformers, validators=validators, analyzers=analyzers)
+        return StatementPipeline(transformers=transformers, validators=validators, analyzers=analyzers)  # pyright: ignore
 
 
 def default_analysis_handler(analysis: Any) -> None:
@@ -494,7 +494,11 @@ class SQL:
                     # Restore LIMIT/OFFSET from initial expression
                     processed_expr = context.initial_expression
 
-            processed_sql = processed_expr.sql(dialect=self._dialect or self._config.dialect, comments=False)
+            processed_sql = (
+                processed_expr.sql(dialect=self._dialect or self._config.dialect, comments=False)
+                if processed_expr
+                else ""
+            )
             if self._placeholder_mapping and self._original_sql:
                 processed_sql, result = self._denormalize_sql(processed_sql, result)
 
