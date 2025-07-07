@@ -6,6 +6,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional
 
 from sqlspec.adapters.adbc.driver import AdbcConnection, AdbcDriver
+from sqlspec.adapters.adbc.transformers import AdbcPostgresTransformer
 from sqlspec.config import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.statement.sql import SQLConfig
@@ -433,6 +434,17 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                             allowed_parameter_styles=supported_styles,
                             default_parameter_style=preferred_style,
                         )
+
+                    # Add ADBC PostgreSQL transformer if needed
+                    if self._get_dialect() == "postgres":
+                        # Get the default transformers from the pipeline
+                        pipeline = statement_config.get_statement_pipeline()
+                        existing_transformers = list(pipeline.transformers)
+
+                        # Append our transformer to the existing ones
+                        existing_transformers.append(AdbcPostgresTransformer())
+
+                        statement_config = replace(statement_config, transformers=existing_transformers)
 
                 driver = self.driver_type(connection=connection, config=statement_config)
                 yield driver

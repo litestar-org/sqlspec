@@ -220,6 +220,9 @@ class AdbcDriver(
 
             with self._get_cursor(txn_conn) as cursor:
                 try:
+                    # ADBC PostgreSQL has issues with NULL parameters in some cases
+                    # The transformer handles all-NULL cases, but mixed NULL/non-NULL
+                    # can still cause "Can't map Arrow type 'na' to Postgres type" errors
                     cursor.execute(sql, cursor_params or [])
                 except Exception as e:
                     # Rollback transaction on error for PostgreSQL to avoid
@@ -264,6 +267,17 @@ class AdbcDriver(
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # Normalize parameter list using consolidated utility
             converted_param_list = convert_parameter_sequence(param_list)
+
+            # Handle empty parameter list case for PostgreSQL
+            if not converted_param_list and self.dialect == "postgres":
+                # Return empty result without executing
+                return SQLResult(
+                    statement=SQL(sql, _dialect=self.dialect),
+                    data=[],
+                    rows_affected=0,
+                    operation_type="EXECUTE",
+                    metadata={"status_message": "OK"},
+                )
 
             with self._get_cursor(txn_conn) as cursor:
                 try:

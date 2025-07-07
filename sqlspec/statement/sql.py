@@ -37,7 +37,7 @@ from sqlspec.utils.type_guards import (
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.statement.parameters import ParameterStyleTransformationState
+    from sqlspec.statement.parameters import ParameterStyleConversionState
 
 __all__ = ("SQL", "SQLConfig", "Statement")
 
@@ -242,7 +242,7 @@ class SQL:
         self._original_parameters: Any = None
         self._original_sql: str = ""
         self._placeholder_mapping: dict[str, Union[str, int]] = {}
-        self._parameter_conversion_state: Optional[ParameterStyleTransformationState] = None
+        self._parameter_conversion_state: Optional[ParameterStyleConversionState] = None
         self._is_many: bool = False
         self._is_script: bool = False
 
@@ -686,9 +686,9 @@ class SQL:
             self._placeholder_mapping = placeholder_mapping
 
             # Create conversion state
-            from sqlspec.statement.parameters import ParameterStyleTransformationState
+            from sqlspec.statement.parameters import ParameterStyleConversionState
 
-            self._parameter_conversion_state = ParameterStyleTransformationState(
+            self._parameter_conversion_state = ParameterStyleConversionState(
                 was_transformed=True,
                 original_styles=list({p.style for p in param_info}),
                 transformation_style=ParameterStyle.NAMED_COLON,

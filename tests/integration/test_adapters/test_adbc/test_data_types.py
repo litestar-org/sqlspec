@@ -173,9 +173,6 @@ def test_postgresql_date_time_types(adbc_postgresql_types_session: AdbcDriver) -
 
 @pytest.mark.xdist_group("postgres")
 @xfail_if_driver_missing
-@pytest.mark.xfail(
-    reason="ADBC PostgreSQL driver has issues with null parameter handling - Known limitation: https://github.com/apache/arrow-adbc/issues/81"
-)
 def test_postgresql_null_values(adbc_postgresql_types_session: AdbcDriver) -> None:
     """Test NULL value handling with PostgreSQL.
 

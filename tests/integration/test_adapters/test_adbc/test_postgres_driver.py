@@ -224,9 +224,6 @@ def test_multiple_parameters(adbc_postgresql_session: AdbcDriver) -> None:
 
 
 @pytest.mark.xdist_group("postgres")
-@pytest.mark.xfail(
-    reason="ADBC PostgreSQL driver has issues with null parameter handling - Known limitation: https://github.com/apache/arrow-adbc/issues/81"
-)
 def test_null_parameters(adbc_postgresql_session: AdbcDriver) -> None:
     """Test handling of NULL parameters.
 
@@ -265,7 +262,6 @@ def test_null_parameters(adbc_postgresql_session: AdbcDriver) -> None:
 
 
 @pytest.mark.xdist_group("postgres")
-@pytest.mark.xfail(reason="ADBC PostgreSQL driver has issues with Arrow type mapping in executemany - Known limitation")
 def test_execute_many(adbc_postgresql_session: AdbcDriver) -> None:
     """Test execute_many functionality with ADBC PostgreSQL.
 
@@ -701,7 +697,6 @@ def test_date_time_types(adbc_postgresql_session: AdbcDriver) -> None:
 
 
 @pytest.mark.xdist_group("postgres")
-@pytest.mark.xfail(reason="ADBC PostgreSQL driver has issues with null parameter handling")
 def test_null_values(adbc_postgresql_session: AdbcDriver) -> None:
     """Test NULL value handling."""
     # Ensure test_table exists after any prior errors

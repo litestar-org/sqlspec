@@ -8,7 +8,7 @@ from sqlspec.exceptions import RiskLevel
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.statement.parameters import ParameterInfo, ParameterStyleTransformationState
+    from sqlspec.statement.parameters import ParameterInfo, ParameterStyleConversionState
     from sqlspec.statement.sql import SQLConfig
     from sqlspec.typing import SQLParameterType
 
@@ -66,12 +66,6 @@ class SQLProcessingContext:
     # Current state
     current_expression: Optional[exp.Expression] = None
     """The SQL expression, potentially modified by transformers."""
-
-    # Parameters
-    initial_parameters: "Optional[SQLParameterType]" = None
-    """The initial parameters as provided to the SQL object (before merging with kwargs)."""
-    initial_kwargs: "Optional[dict[str, Any]]" = None
-    """The initial keyword arguments as provided to the SQL object."""
     merged_parameters: "SQLParameterType" = field(default_factory=list)
     """Parameters after merging initial_parameters and initial_kwargs."""
     parameter_info: "list[ParameterInfo]" = field(default_factory=list)
@@ -99,7 +93,7 @@ class SQLProcessingContext:
     extra_info: dict[str, Any] = field(default_factory=dict)
     """Extra information from parameter processing, including conversion state."""
 
-    parameter_conversion: "Optional[ParameterStyleTransformationState]" = None
+    parameter_conversion: "Optional[ParameterStyleConversionState]" = None
     """Single source of truth for parameter style conversion tracking."""
 
     @property

@@ -10,15 +10,13 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Final, Optional, Union
+from typing import Any, Final, Optional, Union
 
+from sqlglot import exp
 from typing_extensions import TypedDict
 
 from sqlspec.exceptions import ExtraParameterError, MissingParameterError, ParameterStyleMismatchError
 from sqlspec.typing import SQLParameterType
-
-if TYPE_CHECKING:
-    from sqlglot import exp
 
 # Constants
 MAX_32BIT_INT: Final[int] = 2147483647
@@ -28,7 +26,7 @@ __all__ = (
     "ParameterConverter",
     "ParameterInfo",
     "ParameterStyle",
-    "ParameterStyleTransformationState",
+    "ParameterStyleConversionState",
     "ParameterValidator",
     "SQLParameterType",
     "TypedParameter",
@@ -169,7 +167,7 @@ class ParameterStyleInfo(TypedDict, total=False):
 
 
 @dataclass
-class ParameterStyleTransformationState:
+class ParameterStyleConversionState:
     """Encapsulates all information about parameter style transformation.
 
     This class provides a single source of truth for parameter style conversions,
@@ -213,7 +211,7 @@ class ConvertedParameters:
     merged_parameters: "SQLParameterType"
     """Parameters after merging from various sources."""
 
-    conversion_state: ParameterStyleTransformationState
+    conversion_state: ParameterStyleConversionState
     """Complete conversion state for tracking conversions."""
 
 
@@ -314,17 +312,13 @@ class ParameterValidator:
         """
         if not parameters_info:
             return ParameterStyle.NONE
-
-        # Note: This logic prioritizes pyformat if present, then named, then positional.
         is_pyformat_named = any(p.style == ParameterStyle.NAMED_PYFORMAT for p in parameters_info)
         is_pyformat_positional = any(p.style == ParameterStyle.POSITIONAL_PYFORMAT for p in parameters_info)
 
         if is_pyformat_named:
             return ParameterStyle.NAMED_PYFORMAT
-        if is_pyformat_positional:  # If only PYFORMAT_POSITIONAL and not PYFORMAT_NAMED
+        if is_pyformat_positional:
             return ParameterStyle.POSITIONAL_PYFORMAT
-
-        # Simplified logic if not pyformat, checks for any named or any positional
         has_named = any(
             p.style
             in {
@@ -336,13 +330,7 @@ class ParameterValidator:
             for p in parameters_info
         )
         has_positional = any(p.style in {ParameterStyle.QMARK, ParameterStyle.NUMERIC} for p in parameters_info)
-
-        # If mixed named and positional (non-pyformat), prefer named as dominant.
-        # The choice of NAMED_COLON here is somewhat arbitrary if multiple named styles are mixed.
         if has_named:
-            # Could refine to return the style of the first named param encountered, or most frequent.
-            # For simplicity, returning a general named style like NAMED_COLON is often sufficient.
-            # Or, more accurately, find the first named style:
             for p_style in (
                 ParameterStyle.NAMED_COLON,
                 ParameterStyle.POSITIONAL_COLON,
@@ -354,12 +342,11 @@ class ParameterValidator:
             return ParameterStyle.NAMED_COLON
 
         if has_positional:
-            # Similarly, could choose QMARK or NUMERIC based on presence.
             if any(p.style == ParameterStyle.NUMERIC for p in parameters_info):
                 return ParameterStyle.NUMERIC
-            return ParameterStyle.QMARK  # Default positional
+            return ParameterStyle.QMARK
 
-        return ParameterStyle.NONE  # Should not be reached if parameters_info is not empty
+        return ParameterStyle.NONE
 
     @staticmethod
     def determine_parameter_input_type(parameters_info: "list[ParameterInfo]") -> "Optional[type]":
@@ -384,9 +371,8 @@ class ParameterValidator:
         if any(
             p.name is not None and p.style not in {ParameterStyle.POSITIONAL_COLON, ParameterStyle.NUMERIC}
             for p in parameters_info
-        ):  # True for NAMED styles and PYFORMAT_NAMED
+        ):
             return dict
-        # All parameters must have p.name is None or be positional styles (POSITIONAL_COLON, NUMERIC)
         if all(
             p.name is None or p.style in {ParameterStyle.POSITIONAL_COLON, ParameterStyle.NUMERIC}
             for p in parameters_info
@@ -400,9 +386,7 @@ class ParameterValidator:
             "Ambiguous parameter structure for determining input type. "
             "Query might contain a mix of named and unnamed styles not typically supported together."
         )
-        # Defaulting to dict if any named param is found, as that's the more common requirement for mixed scenarios.
-        # However, strict validation should ideally prevent such mixed styles from being valid.
-        return dict  # Or raise an error for unsupported mixed styles.
+        return dict
 
     def validate_parameters(
         self,
@@ -421,12 +405,7 @@ class ParameterValidator:
             ParameterStyleMismatchError: When style doesn't match
         """
         expected_input_type = self.determine_parameter_input_type(parameters_info)
-
-        # Allow creating SQL statements with placeholders but no parameters
-        # This enables patterns like SQL("SELECT * FROM users WHERE id = ?").as_many([...])
-        # Validation will happen later when parameters are actually provided
         if provided_params is None and parameters_info:
-            # Don't raise an error, just return - validation will happen later
             return
 
         if (
@@ -707,7 +686,7 @@ class ParameterConverter:
             self.validator.validate_parameters(parameters_info, merged_params, sql)
         if needs_conversion:
             transformed_sql, placeholder_map = self._transform_sql_for_parsing(sql, parameters_info)
-            conversion_state = ParameterStyleTransformationState(
+            conversion_state = ParameterStyleConversionState(
                 was_transformed=True,
                 original_styles=list({p.style for p in parameters_info}),
                 transformation_style=ParameterStyle.NAMED_COLON,
@@ -716,7 +695,7 @@ class ParameterConverter:
             )
         else:
             transformed_sql = sql
-            conversion_state = ParameterStyleTransformationState(
+            conversion_state = ParameterStyleConversionState(
                 was_transformed=False,
                 original_styles=list({p.style for p in parameters_info}),
                 original_param_info=parameters_info,
@@ -775,10 +754,10 @@ class ParameterConverter:
             return parameters
 
         if kwargs is not None:
-            return dict(kwargs)  # Make a copy
+            return dict(kwargs)
 
         if args is not None:
-            return list(args)  # Convert tuple of args to list for consistency and mutability if needed later
+            return list(args)
 
         return None
 
@@ -809,53 +788,34 @@ class ParameterConverter:
 
         def infer_type_from_value(value: Any) -> tuple[str, "exp.DataType"]:
             """Infer SQL type hint and SQLGlot DataType from Python value."""
-            # Import here to avoid issues
-            from sqlglot import exp
 
             # None/NULL
             if value is None:
                 return "null", exp.DataType.build("NULL")
-
-            # Boolean
             if isinstance(value, bool):
                 return "boolean", exp.DataType.build("BOOLEAN")
-
-            # Integer types
             if isinstance(value, int) and not isinstance(value, bool):
                 if abs(value) > MAX_32BIT_INT:
                     return "bigint", exp.DataType.build("BIGINT")
                 return "integer", exp.DataType.build("INT")
-
-            # Float/Decimal
             if isinstance(value, float):
                 return "float", exp.DataType.build("FLOAT")
             if isinstance(value, Decimal):
                 return "decimal", exp.DataType.build("DECIMAL")
-
-            # Date/Time types
             if isinstance(value, datetime):
                 return "timestamp", exp.DataType.build("TIMESTAMP")
             if isinstance(value, date):
                 return "date", exp.DataType.build("DATE")
             if isinstance(value, time):
                 return "time", exp.DataType.build("TIME")
-
-            # JSON/Dict
             if isinstance(value, dict):
                 return "json", exp.DataType.build("JSON")
-
-            # Array/List
             if isinstance(value, (list, tuple)):
                 return "array", exp.DataType.build("ARRAY")
-
             if isinstance(value, str):
                 return "string", exp.DataType.build("VARCHAR")
-
-            # Bytes
             if isinstance(value, bytes):
                 return "binary", exp.DataType.build("BINARY")
-
-            # Default fallback
             return "string", exp.DataType.build("VARCHAR")
 
         def wrap_value(value: Any, semantic_name: Optional[str] = None) -> Any:
