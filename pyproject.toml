@@ -7,7 +7,7 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.9, <4.0"
-version = "0.13.1"
+version = "0.14.0"
 
 [project.urls]
 Discord = "https://discord.gg/litestar"
@@ -131,7 +131,7 @@ packages = ["sqlspec"]
 allow_dirty = true
 commit = false
 commit_args = "--no-verify"
-current_version = "0.13.1"
+current_version = "0.14.0"
 ignore_missing_files = false
 ignore_missing_version = false
 message = "chore(release): bump to v{new_version}"
