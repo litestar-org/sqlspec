@@ -126,6 +126,13 @@ def hash_parameters(
     return param_hash
 
 
+def _hash_filter_value(value: Any) -> int:
+    try:
+        return hash(value)
+    except TypeError:
+        return hash(repr(value))
+
+
 def hash_filters(filters: Optional[list["StatementFilter"]] = None) -> int:
     """Generate hash for statement filters.
 
@@ -145,15 +152,11 @@ def hash_filters(filters: Optional[list["StatementFilter"]] = None) -> int:
         components: list[Any] = [f.__class__.__name__]
 
         # Add any hashable attributes if available
-        if hasattr(f, "__dict__"):
-            for key, value in sorted(f.__dict__.items()):
-                try:
-                    # Try to hash the value
-                    hash(value)
-                    components.append((key, value))
-                except TypeError:  # noqa: PERF203
-                    # If not hashable, use repr
-                    components.append((key, repr(value)))
+        # Use getattr with default instead of hasattr for mypyc compatibility
+        filter_dict = getattr(f, "__dict__", None)
+        if filter_dict is not None:
+            for key, value in sorted(filter_dict.items()):
+                components.append((key, _hash_filter_value(value)))
 
         filter_components.append(tuple(components))
 

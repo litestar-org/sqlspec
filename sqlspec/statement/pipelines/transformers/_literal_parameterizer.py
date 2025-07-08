@@ -9,12 +9,24 @@ from sqlglot.expressions import Array, Binary, Boolean, DataType, Func, Literal,
 from sqlspec.protocols import ProcessorProtocol
 from sqlspec.statement.parameters import ParameterStyle, TypedParameter
 from sqlspec.statement.pipelines.context import SQLProcessingContext
+from sqlspec.utils.type_guards import (
+    get_literal_parent,
+    get_node_expressions,
+    get_node_this,
+    has_expressions_attribute,
+    is_number_literal,
+    is_string_literal,
+)
 
 __all__ = ("ParameterizationContext", "ParameterizeLiterals")
 
-# Constants for magic values and literal parameterization
+
 MAX_DECIMAL_PRECISION = 6
+"""Maximum precision for decimal literals in parameterization."""
+
 MAX_INT32_VALUE = 2147483647
+"""Maximum value for 32-bit signed integers in parameterization."""
+
 DEFAULT_MAX_STRING_LENGTH = 1000
 """Default maximum string length for literal parameterization."""
 
@@ -100,7 +112,7 @@ class ParameterizeLiterals(ProcessorProtocol):
             "NVL",
             "ISNULL",
             # Array functions that take dimension arguments
-            "ARRAYSIZE",  # SQLglot converts array_length to ArraySize
+            "ARRAYSIZE",
             "ARRAY_UPPER",
             "ARRAY_LOWER",
             "ARRAY_NDIMS",
@@ -201,7 +213,7 @@ class ParameterizeLiterals(ProcessorProtocol):
             result = self._process_existing_parameter(node, context)
         elif isinstance(node, exp.Column) and self._is_reordering_needed:
             # Check if this column looks like a PostgreSQL parameter ($1, $2, etc.)
-            column_name = str(node.this) if hasattr(node, "this") else ""
+            column_name = str(get_node_this(node, ""))
             if column_name.startswith("$") and column_name[1:].isdigit():
                 # This is a PostgreSQL-style parameter parsed as a column
                 result = self._process_postgresql_column_parameter(node, context)
@@ -308,7 +320,7 @@ class ParameterizeLiterals(ProcessorProtocol):
             context.subquery_depth += 1
             context.in_subquery = True
         # Check if we're in a SELECT clause expressions list
-        if hasattr(node, "expressions"):
+        if has_expressions_attribute(node):
             # We'll handle this specifically when processing individual expressions
             context.in_select_list = False  # Will be detected by _is_in_select_expressions
 
@@ -407,18 +419,21 @@ class ParameterizeLiterals(ProcessorProtocol):
                 self._final_params.append(typed_param)
             else:
                 # Fallback - this shouldn't happen but handle gracefully
-                if not hasattr(self, "_fallback_params"):
-                    self._fallback_params = []
+                # Initialize _fallback_params if it doesn't exist
+                try:
+                    # Try to access it first
+                    _ = self._fallback_params
+                except AttributeError:
+                    # If it doesn't exist, create it
+                    self._fallback_params: list[Any] = []
                 self._fallback_params.append(typed_param)
 
-        self._parameter_metadata.append(
-            {
-                "index": len(self._final_params if self._is_reordering_needed else self.extracted_parameters) - 1,
-                "type": type_hint,
-                "semantic_name": semantic_name,
-                "context": self._get_context_description(context),
-            }
-        )
+        self._parameter_metadata.append({
+            "index": len(self._final_params if self._is_reordering_needed else self.extracted_parameters) - 1,
+            "type": type_hint,
+            "semantic_name": semantic_name,
+            "context": self._get_context_description(context),
+        })
 
         # Create appropriate placeholder
         return self._create_placeholder(hint=semantic_name)
@@ -454,7 +469,7 @@ class ParameterizeLiterals(ProcessorProtocol):
             self._add_to_final_params(None, node)
             return
 
-        raw_placeholder_name = node.this if hasattr(node, "this") else None
+        raw_placeholder_name = get_node_this(node, None)
         if not raw_placeholder_name:
             # Unnamed placeholder '?' with dict params is ambiguous
             self._add_to_final_params(None, node)
@@ -512,8 +527,8 @@ class ParameterizeLiterals(ProcessorProtocol):
                 if isinstance(self._final_params, list):
                     self._final_params.extend(param_list)
                 elif isinstance(self._final_params, dict):
-                    for i, val in enumerate(param_list):
-                        self._final_params[str(i)] = val
+                    for i in range(len(param_list)):
+                        self._final_params[str(i)] = param_list[i]
 
     def _handle_single_dict_param(self) -> None:
         """Handle single dict parameter case."""
@@ -532,7 +547,7 @@ class ParameterizeLiterals(ProcessorProtocol):
     def _add_to_final_params(self, value: Any, node: exp.Placeholder) -> None:
         """Add a value to final params with proper type handling."""
         if self._preserve_dict_format and isinstance(self._final_params, dict):
-            placeholder_name = node.this if hasattr(node, "this") else f"param_{self._user_param_index}"
+            placeholder_name = get_node_this(node, f"param_{self._user_param_index}")
             self._final_params[placeholder_name] = value
         elif isinstance(self._final_params, list):
             self._final_params.append(value)
@@ -571,23 +586,26 @@ class ParameterizeLiterals(ProcessorProtocol):
     @staticmethod
     def _extract_parameter_name(node: exp.Parameter) -> Optional[str]:
         """Extract parameter name from a Parameter node for named parameters."""
-        if hasattr(node, "this"):
-            if isinstance(node.this, exp.Var):
+        node_this = get_node_this(node, None)
+        if node_this is not None:
+            if isinstance(node_this, exp.Var):
                 # Named parameter like @min_value -> min_value
-                return str(node.this.this)
-            if hasattr(node.this, "this"):
-                # Handle other node types that might contain the name
-                return str(node.this.this)
+                return str(get_node_this(node_this, ""))
+            # Handle other node types that might contain the name
+            nested_this = get_node_this(node_this, None)
+            if nested_this is not None:
+                return str(nested_this)
         return None
 
     @staticmethod
     def _extract_parameter_index(node: exp.Parameter) -> Optional[int]:
         """Extract parameter index from a Parameter node."""
-        if hasattr(node, "this") and isinstance(node.this, Literal):
+        node_this = get_node_this(node, None)
+        if node_this is not None and isinstance(node_this, Literal):
             import contextlib
 
             with contextlib.suppress(ValueError, TypeError):
-                return int(node.this.this) - 1  # Convert to 0-based index
+                return int(get_node_this(node_this, 0)) - 1  # Convert to 0-based index
         return None
 
     def _handle_list_params_for_parameter_node(self, param_index: Optional[int]) -> None:
@@ -659,7 +677,7 @@ class ParameterizeLiterals(ProcessorProtocol):
     ) -> exp.Expression:
         """Process PostgreSQL-style parameters that were parsed as columns ($1, $2)."""
         # Extract the numeric part from $1, $2, etc.
-        column_name = str(node.this) if hasattr(node, "this") else ""
+        column_name = str(get_node_this(node, ""))
         param_index = None
 
         if column_name.startswith("$") and column_name[1:].isdigit():
@@ -763,8 +781,8 @@ class ParameterizeLiterals(ProcessorProtocol):
 
         # Check if this literal is being used as an alias value in SELECT
         # e.g., 'computed' as process_status should be preserved
-        if hasattr(literal, "parent") and literal.parent:
-            parent = literal.parent
+        parent = get_literal_parent(literal, None)
+        if parent is not None:
             # Check if it's an Alias node and the literal is the expression (not the alias name)
             if isinstance(parent, exp.Alias) and parent.this == literal:
                 # Check if this alias is in a SELECT clause
@@ -804,8 +822,9 @@ class ParameterizeLiterals(ProcessorProtocol):
         """Check if literal is in SELECT clause expressions (critical for type inference)."""
         for parent in reversed(context.parent_stack):
             if isinstance(parent, exp.Select):
-                if hasattr(parent, "expressions") and parent.expressions:
-                    return any(self._literal_is_in_expression_tree(literal, expr) for expr in parent.expressions)
+                expressions = get_node_expressions(parent, None)
+                if expressions:
+                    return any(self._literal_is_in_expression_tree(literal, expr) for expr in expressions)
             elif isinstance(parent, (exp.Where, exp.Having, exp.Join)):
                 return False
         return False
@@ -860,7 +879,7 @@ class ParameterizeLiterals(ProcessorProtocol):
         if not isinstance(literal, exp.Literal) or not self._is_string_literal(literal):
             return False
 
-        value = str(literal.this)
+        value = str(get_node_this(literal, ""))
 
         # Conservative heuristics for enum-like values
         return (
@@ -872,37 +891,39 @@ class ParameterizeLiterals(ProcessorProtocol):
 
     def _extract_literal_value_and_type(self, literal: exp.Expression) -> tuple[Any, str]:
         """Extract the Python value and type info from a SQLGlot literal."""
-        if isinstance(literal, Null) or literal.this is None:
+        literal_this = get_node_this(literal, None)
+
+        if isinstance(literal, Null) or literal_this is None:
             return None, "null"
 
         # Ensure we have a Literal for type checking methods
         if not isinstance(literal, exp.Literal):
             return str(literal), "string"
 
-        if isinstance(literal, Boolean) or isinstance(literal.this, bool):
-            return literal.this, "boolean"
+        if isinstance(literal, Boolean) or isinstance(literal_this, bool):
+            return literal_this, "boolean"
 
         if self._is_string_literal(literal):
-            return str(literal.this), "string"
+            return str(literal_this), "string"
 
         if self._is_number_literal(literal):
             # Preserve numeric precision if enabled
             if self.type_preservation:
-                value_str = str(literal.this)
+                value_str = str(literal_this)
                 if "." in value_str or "e" in value_str.lower():
                     try:
                         # Check if it's a decimal that needs precision
                         decimal_places = len(value_str.split(".")[1]) if "." in value_str else 0
                         if decimal_places > MAX_DECIMAL_PRECISION:  # Likely needs decimal precision
                             return value_str, "decimal"
-                        return float(literal.this), "float"
+                        return float(literal_this), "float"
                     except (ValueError, IndexError):
-                        return str(literal.this), "numeric_string"
+                        return str(literal_this), "numeric_string"
                 else:
                     try:
-                        value = int(literal.this)
+                        value = int(literal_this)
                     except ValueError:
-                        return str(literal.this), "numeric_string"
+                        return str(literal_this), "numeric_string"
                     else:
                         # Check for bigint
                         if abs(value) > MAX_INT32_VALUE:  # Max 32-bit int
@@ -911,18 +932,18 @@ class ParameterizeLiterals(ProcessorProtocol):
             else:
                 # Simple type conversion
                 try:
-                    if "." in str(literal.this):
-                        return float(literal.this), "float"
-                    return int(literal.this), "integer"
+                    if "." in str(literal_this):
+                        return float(literal_this), "float"
+                    return int(literal_this), "integer"
                 except ValueError:
-                    return str(literal.this), "numeric_string"
+                    return str(literal_this), "numeric_string"
 
         # Handle date/time literals - these are DataType attributes not Literal attributes
         # Date/time values are typically string literals that need context-aware processing
         # We'll return them as strings and let the database handle type conversion
 
         # Fallback
-        return str(literal.this), "unknown"
+        return str(literal_this), "unknown"
 
     def _extract_literal_value_and_type_optimized(
         self, literal: exp.Expression, context: ParameterizationContext
@@ -1033,24 +1054,15 @@ class ParameterizeLiterals(ProcessorProtocol):
     def _is_string_literal(self, literal: exp.Literal) -> bool:
         """Check if a literal is a string."""
         # Check if it's explicitly a string literal
-        return (hasattr(literal, "is_string") and literal.is_string) or (
-            isinstance(literal.this, str) and not self._is_number_literal(literal)
+        return is_string_literal(literal) or (
+            isinstance(get_node_this(literal, None), str) and not self._is_number_literal(literal)
         )
 
     @staticmethod
     def _is_number_literal(literal: exp.Literal) -> bool:
         """Check if a literal is a number."""
-        # Check if it's explicitly a number literal
-        if hasattr(literal, "is_number") and literal.is_number:
-            return True
-        if literal.this is None:
-            return False
-        # Try to determine if it's numeric by attempting conversion
-        try:
-            float(str(literal.this))
-        except (ValueError, TypeError):
-            return False
-        return True
+        # Use the helper function that handles the hasattr check
+        return is_number_literal(literal)
 
     def _create_placeholder(self, hint: Optional[str] = None) -> exp.Expression:
         """Create a placeholder expression with optional type hint."""
@@ -1132,14 +1144,12 @@ class ParameterizeLiterals(ProcessorProtocol):
 
             # Replace entire array with a single parameter
             self.extracted_parameters.append(typed_param)
-            self._parameter_metadata.append(
-                {
-                    "index": len(self.extracted_parameters) - 1,
-                    "type": f"array<{element_type}>",
-                    "length": len(array_values),
-                    "context": "array_literal",
-                }
-            )
+            self._parameter_metadata.append({
+                "index": len(self.extracted_parameters) - 1,
+                "type": f"array<{element_type}>",
+                "length": len(array_values),
+                "context": "array_literal",
+            })
             return self._create_placeholder("array")
         # Process individual elements
         new_expressions = []

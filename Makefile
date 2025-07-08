@@ -46,7 +46,18 @@ install: destroy clean                              ## Install the project, depe
 	@uv python pin 3.12 >/dev/null 2>&1
 	@uv venv >/dev/null 2>&1
 	@uv sync --all-extras --dev
+	@uv pip install -e . --force-reinstall >/dev/null 2>&1
 	@echo "${OK} Installation complete! 🎉"
+
+.PHONY: install-performance
+install-performance: destroy clean                  ## Install with mypyc compilation for performance
+	@echo "${INFO} Starting fresh installation with mypyc compilation..."
+	@uv python pin 3.12 >/dev/null 2>&1
+	@uv venv >/dev/null 2>&1
+	@uv sync --all-extras --dev
+	@echo "${INFO} Compiling performance extensions with mypyc..."
+	@HATCH_BUILD_HOOKS_ENABLE=1 uv pip install -e . --force-reinstall
+	@echo "${OK} Performance installation complete! 🚀"
 
 .PHONY: destroy
 destroy:                                            ## Destroy the virtual environment
@@ -83,6 +94,21 @@ build:                                             ## Build the package
 	@uv build >/dev/null 2>&1
 	@echo "${OK} Package build complete"
 
+.PHONY: build-performance
+build-performance:                                 ## Build package with mypyc compilation
+	@echo "${INFO} Building package with mypyc compilation... 📦"
+	@HATCH_BUILD_HOOKS_ENABLE=1 uv build >/dev/null 2>&1
+	@echo "${OK} Performance package build complete 🚀"
+
+.PHONY: test-mypyc
+test-mypyc:                                        ## Test mypyc compilation on individual modules
+	@echo "${INFO} Testing mypyc compilation... 🔧"
+	@uv run mypyc --check-untyped-defs sqlspec/utils/statement_hashing.py
+	@uv run mypyc --check-untyped-defs sqlspec/utils/text.py
+	@uv run mypyc --check-untyped-defs sqlspec/utils/sync_tools.py
+	@uv run mypyc --check-untyped-defs sqlspec/statement/cache.py
+	@echo "${OK} Mypyc compilation tests passed ✨"
+
 .PHONY: release
 release:                                           ## Bump version and create release tag
 	@echo "${INFO} Preparing for release... 📦"
@@ -108,6 +134,8 @@ clean:                                              ## Cleanup temporary build a
 	@find . -name '*~' -exec rm -f {} + >/dev/null 2>&1
 	@find . -name '__pycache__' -exec rm -rf {} + >/dev/null 2>&1
 	@find . -name '.ipynb_checkpoints' -exec rm -rf {} + >/dev/null 2>&1
+	@find . -name '*__mypyc*.so' -exec rm -f {} + >/dev/null 2>&1
+	@find . -name '*__mypyc*.c' -exec rm -f {} + >/dev/null 2>&1
 	@echo "${OK} Working directory cleaned"
 	$(MAKE) docs-clean
 

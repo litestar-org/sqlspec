@@ -65,18 +65,29 @@ __all__ = (
     "can_convert_to_schema",
     "can_extract_parameters",
     "dataclass_to_dict",
+    "expression_has_limit",
     "extract_dataclass_fields",
     "extract_dataclass_items",
+    "get_initial_expression",
+    "get_literal_parent",
+    "get_node_expressions",
+    "get_node_this",
+    "get_param_style_and_name",
+    "get_value_attribute",
+    "has_attr",
     "has_bytes_conversion",
     "has_dict_attribute",
     "has_expression_attr",
     "has_expressions",
+    "has_expressions_attribute",
     "has_parameter_builder",
     "has_parameter_value",
+    "has_parent_attribute",
     "has_query_builder_parameters",
     "has_risk_level",
     "has_sql_method",
     "has_sqlglot_expression",
+    "has_this_attribute",
     "has_to_statement",
     "has_with_method",
     "is_async_closeable_connection",
@@ -100,6 +111,7 @@ __all__ = (
     "is_msgspec_struct",
     "is_msgspec_struct_with_field",
     "is_msgspec_struct_without_field",
+    "is_number_literal",
     "is_object_store_item",
     "is_pydantic_model",
     "is_pydantic_model_with_field",
@@ -112,6 +124,7 @@ __all__ = (
     "is_schema_without_field",
     "is_select_builder",
     "is_statement_filter",
+    "is_string_literal",
     "is_sync_closeable_connection",
     "is_sync_copy_capable",
     "is_sync_pipeline_capable_driver",
@@ -250,7 +263,14 @@ def is_dataclass_instance(obj: Any) -> "TypeGuard[DataclassProtocol]":
         True if the object is a dataclass instance.
     """
     # and that its type is a dataclass.
-    return not isinstance(obj, type) and hasattr(type(obj), "__dataclass_fields__")
+    if isinstance(obj, type):
+        return False
+    try:
+        # Check if type has __dataclass_fields__
+        _ = type(obj).__dataclass_fields__
+        return True
+    except AttributeError:
+        return False
 
 
 def is_dataclass(obj: Any) -> "TypeGuard[DataclassProtocol]":
@@ -262,8 +282,12 @@ def is_dataclass(obj: Any) -> "TypeGuard[DataclassProtocol]":
     Returns:
         bool
     """
-    if isinstance(obj, type) and hasattr(obj, "__dataclass_fields__"):
-        return True
+    if isinstance(obj, type):
+        try:
+            _ = obj.__dataclass_fields__  # type: ignore[attr-defined]
+            return True
+        except AttributeError:
+            return False
     return is_dataclass_instance(obj)
 
 
@@ -277,7 +301,13 @@ def is_dataclass_with_field(obj: Any, field_name: str) -> "TypeGuard[object]":
     Returns:
         bool
     """
-    return is_dataclass(obj) and hasattr(obj, field_name)
+    if not is_dataclass(obj):
+        return False
+    try:
+        _ = getattr(obj, field_name)
+        return True
+    except AttributeError:
+        return False
 
 
 def is_dataclass_without_field(obj: Any, field_name: str) -> "TypeGuard[object]":
@@ -290,7 +320,13 @@ def is_dataclass_without_field(obj: Any, field_name: str) -> "TypeGuard[object]"
     Returns:
         bool
     """
-    return is_dataclass(obj) and not hasattr(obj, field_name)
+    if not is_dataclass(obj):
+        return False
+    try:
+        _ = getattr(obj, field_name)
+        return False
+    except AttributeError:
+        return True
 
 
 def is_pydantic_model(obj: Any) -> "TypeGuard[BaseModel]":
@@ -315,7 +351,13 @@ def is_pydantic_model_with_field(obj: Any, field_name: str) -> "TypeGuard[BaseMo
     Returns:
         bool
     """
-    return is_pydantic_model(obj) and hasattr(obj, field_name)
+    if not is_pydantic_model(obj):
+        return False
+    try:
+        _ = getattr(obj, field_name)
+        return True
+    except AttributeError:
+        return False
 
 
 def is_pydantic_model_without_field(obj: Any, field_name: str) -> "TypeGuard[BaseModel]":
@@ -328,7 +370,13 @@ def is_pydantic_model_without_field(obj: Any, field_name: str) -> "TypeGuard[Bas
     Returns:
         bool
     """
-    return is_pydantic_model(obj) and not hasattr(obj, field_name)
+    if not is_pydantic_model(obj):
+        return False
+    try:
+        _ = getattr(obj, field_name)
+        return False
+    except AttributeError:
+        return True
 
 
 def is_msgspec_struct(obj: Any) -> "TypeGuard[Struct]":
@@ -353,7 +401,14 @@ def is_msgspec_struct_with_field(obj: Any, field_name: str) -> "TypeGuard[Struct
     Returns:
         bool
     """
-    return is_msgspec_struct(obj) and hasattr(obj, field_name)
+    if not is_msgspec_struct(obj):
+        return False
+    try:
+        _ = getattr(obj, field_name)
+
+    except AttributeError:
+        return False
+    return True
 
 
 def is_msgspec_struct_without_field(obj: Any, field_name: str) -> "TypeGuard[Struct]":
@@ -366,7 +421,13 @@ def is_msgspec_struct_without_field(obj: Any, field_name: str) -> "TypeGuard[Str
     Returns:
         bool
     """
-    return is_msgspec_struct(obj) and not hasattr(obj, field_name)
+    if not is_msgspec_struct(obj):
+        return False
+    try:
+        _ = getattr(obj, field_name)
+    except AttributeError:
+        return True
+    return False
 
 
 def is_dict(obj: Any) -> "TypeGuard[dict[str, Any]]":
@@ -922,3 +983,227 @@ def has_to_statement(obj: Any) -> "TypeGuard[Any]":
     from sqlspec.protocols import HasToStatementProtocol
 
     return isinstance(obj, HasToStatementProtocol)
+
+
+# SQLGlot expression helper functions (moved from _literal_parameterizer_helpers.py)
+
+
+def has_attr(obj: Any, attr: str) -> bool:
+    """Safe replacement for hasattr() that works with mypyc.
+
+    Args:
+        obj: Object to check
+        attr: Attribute name to look for
+
+    Returns:
+        True if attribute exists, False otherwise
+    """
+    try:
+        getattr(obj, attr)
+    except AttributeError:
+        return False
+    return True
+
+
+def get_node_this(node: "exp.Expression", default: Optional[Any] = None) -> Any:
+    """Safely get the 'this' attribute from a SQLGlot node.
+
+    Args:
+        node: The SQLGlot expression node
+        default: Default value if 'this' attribute doesn't exist
+
+    Returns:
+        The value of node.this or the default value
+    """
+    try:
+        return node.this
+    except AttributeError:
+        return default
+
+
+def has_this_attribute(node: "exp.Expression") -> bool:
+    """Check if a node has the 'this' attribute without using hasattr().
+
+    Args:
+        node: The SQLGlot expression node
+
+    Returns:
+        True if the node has a 'this' attribute, False otherwise
+    """
+    try:
+        _ = node.this
+    except AttributeError:
+        return False
+    return True
+
+
+def get_node_expressions(node: "exp.Expression", default: Optional[Any] = None) -> Any:
+    """Safely get the 'expressions' attribute from a SQLGlot node.
+
+    Args:
+        node: The SQLGlot expression node
+        default: Default value if 'expressions' attribute doesn't exist
+
+    Returns:
+        The value of node.expressions or the default value
+    """
+    try:
+        return node.expressions
+    except AttributeError:
+        return default
+
+
+def has_expressions_attribute(node: "exp.Expression") -> bool:
+    """Check if a node has the 'expressions' attribute without using hasattr().
+
+    Args:
+        node: The SQLGlot expression node
+
+    Returns:
+        True if the node has an 'expressions' attribute, False otherwise
+    """
+    try:
+        _ = node.expressions
+    except AttributeError:
+        return False
+    return True
+
+
+def get_literal_parent(literal: "exp.Expression", default: Optional[Any] = None) -> Any:
+    """Safely get the 'parent' attribute from a SQLGlot literal.
+
+    Args:
+        literal: The SQLGlot expression
+        default: Default value if 'parent' attribute doesn't exist
+
+    Returns:
+        The value of literal.parent or the default value
+    """
+    try:
+        return literal.parent
+    except AttributeError:
+        return default
+
+
+def has_parent_attribute(literal: "exp.Expression") -> bool:
+    """Check if a literal has the 'parent' attribute without using hasattr().
+
+    Args:
+        literal: The SQLGlot expression
+
+    Returns:
+        True if the literal has a 'parent' attribute, False otherwise
+    """
+    try:
+        _ = literal.parent
+    except AttributeError:
+        return False
+    return True
+
+
+def is_string_literal(literal: "exp.Literal") -> bool:
+    """Check if a literal is a string literal without using hasattr().
+
+    Args:
+        literal: The SQLGlot Literal expression
+
+    Returns:
+        True if the literal is a string, False otherwise
+    """
+    try:
+        return bool(literal.is_string)
+    except AttributeError:
+        # Fallback to checking the value type
+        try:
+            return isinstance(literal.this, str)
+        except AttributeError:
+            return False
+
+
+def is_number_literal(literal: "exp.Literal") -> bool:
+    """Check if a literal is a number literal without using hasattr().
+
+    Args:
+        literal: The SQLGlot Literal expression
+
+    Returns:
+        True if the literal is a number, False otherwise
+    """
+    try:
+        return bool(literal.is_number)
+    except AttributeError:
+        # Fallback to trying to convert to float
+        try:
+            if literal.this is not None:
+                float(str(literal.this))
+                return True
+        except (AttributeError, ValueError, TypeError):
+            pass
+        return False
+
+
+# SQL processing helper functions (moved from _sql_helpers.py)
+
+
+def get_initial_expression(context: Any) -> "Optional[exp.Expression]":
+    """Safely get initial_expression from context.
+
+    Args:
+        context: SQL processing context
+
+    Returns:
+        The initial expression or None if not available
+    """
+    try:
+        return context.initial_expression  # type: ignore[no-any-return]
+    except AttributeError:
+        return None
+
+
+def expression_has_limit(expr: "Optional[exp.Expression]") -> bool:
+    """Check if an expression has a limit clause.
+
+    Args:
+        expr: SQLGlot expression to check
+
+    Returns:
+        True if expression has limit in args, False otherwise
+    """
+    if expr is None:
+        return False
+    try:
+        return "limit" in expr.args
+    except AttributeError:
+        return False
+
+
+def get_value_attribute(obj: Any) -> Any:
+    """Safely get the 'value' attribute from an object.
+
+    Args:
+        obj: Object to get value from
+
+    Returns:
+        The value attribute or the object itself if no value attribute
+    """
+    try:
+        return obj.value
+    except AttributeError:
+        return obj
+
+
+def get_param_style_and_name(param: Any) -> "tuple[Optional[str], Optional[str]]":
+    """Safely get style and name attributes from a parameter.
+
+    Args:
+        param: Parameter object
+
+    Returns:
+        Tuple of (style, name) or (None, None) if attributes don't exist
+    """
+    try:
+        style = param.style
+        name = param.name
+    except AttributeError:
+        return None, None
+    return style, name

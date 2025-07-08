@@ -26,6 +26,10 @@ from sqlspec.utils.statement_hashing import hash_sql_statement
 from sqlspec.utils.type_guards import (
     can_append_to_statement,
     can_extract_parameters,
+    expression_has_limit,
+    get_initial_expression,
+    get_param_style_and_name,
+    get_value_attribute,
     has_parameter_value,
     has_risk_level,
     is_dict,
@@ -481,18 +485,15 @@ class SQL:
         else:
             # Use the initial expression that includes filters, not the processed one
             # The processed expression may have lost LIMIT/OFFSET during pipeline processing
-            if hasattr(context, "initial_expression") and context.initial_expression != processed_expr:
+            initial_expr = get_initial_expression(context)
+            if initial_expr and initial_expr != processed_expr:
                 # Check if LIMIT/OFFSET was stripped during processing
-                has_limit_in_initial = (
-                    context.initial_expression is not None
-                    and hasattr(context.initial_expression, "args")
-                    and "limit" in context.initial_expression.args
-                )
-                has_limit_in_processed = hasattr(processed_expr, "args") and "limit" in processed_expr.args
+                has_limit_in_initial = expression_has_limit(initial_expr)
+                has_limit_in_processed = expression_has_limit(processed_expr)
 
                 if has_limit_in_initial and not has_limit_in_processed:
                     # Restore LIMIT/OFFSET from initial expression
-                    processed_expr = context.initial_expression
+                    processed_expr = initial_expr
 
             processed_sql = (
                 processed_expr.sql(dialect=self._dialect or self._config.dialect, comments=False)
@@ -654,7 +655,8 @@ class SQL:
             raise SQLValidationError(
                 message=highest_risk_error.message,
                 sql=self._raw_sql or processed_sql,
-                risk_level=getattr(highest_risk_error, "risk_level", RiskLevel.HIGH),
+                # Use try/except for mypyc compatibility
+                risk_level=highest_risk_error.risk_level if highest_risk_error else RiskLevel.HIGH,
             )
 
     def _to_expression(self, statement: "Union[str, exp.Expression]") -> exp.Expression:
@@ -707,7 +709,8 @@ class SQL:
                 return exp.Anonymous(this=statement)
 
         except ParseError as e:
-            if getattr(self._config, "parse_errors_as_warnings", False):
+            # Use direct attribute access for mypyc compatibility
+            if self._config.parse_errors_as_warnings:
                 logger.warning(
                     "Failed to parse SQL, returning Anonymous expression.", extra={"sql": statement, "error": str(e)}
                 )
@@ -989,20 +992,19 @@ class SQL:
                 for param_set in param_sets:
                     if isinstance(param_set, (list, tuple)):
                         # Add extracted literals to the parameter tuple
-                        enhanced_set = list(param_set) + [
-                            p.value if hasattr(p, "value") else p for p in extracted_literals
-                        ]
+                        literal_values = [get_value_attribute(p) for p in extracted_literals]
+                        enhanced_set = list(param_set) + literal_values
                         enhanced_params.append(tuple(enhanced_set))
                     elif isinstance(param_set, dict):
                         # For dict params, add extracted literals with generated names
                         enhanced_dict = dict(param_set)
                         for i, literal in enumerate(extracted_literals):
                             param_name = f"_literal_{i}"
-                            enhanced_dict[param_name] = literal.value if hasattr(literal, "value") else literal
+                            enhanced_dict[param_name] = get_value_attribute(literal)
                         enhanced_params.append(enhanced_dict)
                     else:
                         # Single parameter - convert to tuple with literals
-                        literals = [p.value if hasattr(p, "value") else p for p in extracted_literals]
+                        literals = [get_value_attribute(p) for p in extracted_literals]
                         enhanced_params.append((param_set, *literals))
                 param_sets = enhanced_params
 
@@ -1160,8 +1162,8 @@ class SQL:
                 if old_pos < len(params):
                     reordered_list[new_pos] = params[old_pos]  # pyright: ignore
 
-            for i, val in enumerate(reordered_list):
-                if val is None and i < len(params) and i not in mapping:
+            for i in range(len(reordered_list)):
+                if reordered_list[i] is None and i < len(params) and i not in mapping:
                     reordered_list[i] = params[i]  # pyright: ignore
 
             return tuple(reordered_list) if isinstance(params, tuple) else reordered_list
@@ -1352,14 +1354,9 @@ class SQL:
             return f"@{param.name or f'param_{param.ordinal}'}"
         if target_style == ParameterStyle.POSITIONAL_COLON:
             # For Oracle positional colon, preserve the original numeric identifier if it was already :N style
-            if (
-                hasattr(param, "style")
-                and param.style == ParameterStyle.POSITIONAL_COLON
-                and hasattr(param, "name")
-                and param.name
-                and param.name.isdigit()
-            ):
-                return f":{param.name}"
+            style, name = get_param_style_and_name(param)
+            if style == ParameterStyle.POSITIONAL_COLON and name and name.isdigit():
+                return f":{name}"
             return f":{param.ordinal + 1}"
         if target_style == ParameterStyle.POSITIONAL_PYFORMAT:
             return "%s"

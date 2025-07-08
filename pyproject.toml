@@ -48,8 +48,8 @@ uuid = ["uuid-utils"]
 
 
 [dependency-groups]
-benchmarks = ["sqlalchemy", "psutil", "types-psutil"]
-build = ["bump-my-version"]
+benchmarks = ["sqlalchemy[asyncio]", "psutil", "types-psutil", "rich", "rich-click", "duckdb"]
+build = ["bump-my-version", "hatch-mypyc"]
 dev = [
   { include-group = "extras" },
   { include-group = "lint" },
@@ -113,7 +113,7 @@ sqlspec = "sqlspec.__main__:run_cli"
 
 [build-system]
 build-backend = "hatchling.build"
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-mypyc"]
 
 [tool.hatch.build.targets.sdist]
 dev-mode-dirs = ["."]
@@ -125,6 +125,50 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 include = ["NOTICE"]
 packages = ["sqlspec"]
+
+# Mypyc build hook configuration - disabled by default
+[tool.hatch.build.targets.wheel.hooks.mypyc]
+dependencies = ["hatch-mypyc"]
+enable-by-default = false
+require-runtime-features = ["performance"]
+exclude = [
+  "sqlspec/**/tests/**",    # All test directories
+  "sqlspec/**/__main__.py", # Main entry points (can't be run directly when compiled)
+  "sqlspec/**/_typing.py",  # Type definitions
+  "sqlspec/cli.py",         # CLI module (not performance-critical)
+  "sqlspec/**/__init__.py", # Init files (usually just imports)
+]
+include = [
+  # Currently disabled for development - enable only when building release wheels
+  # "sqlspec/utils/statement_hashing.py",
+  # "sqlspec/utils/text.py",              # String processing utilities
+  # "sqlspec/utils/sync_tools.py",        # Async/sync conversion utilities
+  # "sqlspec/statement/sql.py",  # Disabled - dataclass issues with mypyc (SQLConfig, _ProcessedState)
+  # "sqlspec/statement/pipelines/transformers/_literal_parameterizer.py", # AST traversal (Phase 2) - fixed hasattr issues
+  # "sqlspec/statement/parameters.py",  # Disabled - dataclass issues with mypyc
+  # "sqlspec/statement/cache.py", # Statement caching
+  # Add more as needed:
+  # "sqlspec/utils/**/*.py",  # All utils
+  # "sqlspec/statement/**/*.py",  # All statement modules
+]
+require-runtime-dependencies = false
+
+# Mypy arguments for type checking during build
+mypy-args = [
+  "--ignore-missing-imports",
+  "--allow-untyped-defs",
+  "--allow-untyped-globals",
+  "--no-implicit-reexport",
+  "--no-warn-redundant-casts",
+  "--no-warn-unused-ignores",
+  "--follow-imports=skip",
+]
+
+# Mypyc compilation options
+[tool.hatch.build.targets.wheel.hooks.mypyc.options]
+debug_level = "0" # No debug info in production (0-2)
+multi_file = true # Enable cross-module optimization
+opt_level = "3"   # Maximum optimization (0-3)
 
 
 [tool.bumpversion]

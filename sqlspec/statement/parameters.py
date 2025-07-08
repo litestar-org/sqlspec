@@ -821,8 +821,12 @@ class ParameterConverter:
         def wrap_value(value: Any, semantic_name: Optional[str] = None) -> Any:
             """Wrap a single value with TypedParameter if beneficial."""
             # Don't wrap if already a TypedParameter
-            if hasattr(value, "__class__") and value.__class__.__name__ == "TypedParameter":
-                return value
+            # Use try/except for mypyc compatibility instead of hasattr
+            try:
+                if value.__class__.__name__ == "TypedParameter":
+                    return value
+            except AttributeError:
+                pass
 
             # Don't wrap simple scalar types unless they need special handling
             if isinstance(value, (str, int, float)) and not isinstance(value, bool):
@@ -905,7 +909,7 @@ class ParameterConverter:
             from sqlspec.exceptions import SQLTransformationError
 
             msg = (
-                f"Parameter count mismatch during deconversion. "
+                f"Parameter count mismatch during conversion back to {target_style}. "
                 f"Expected at least {len(final_parameter_info)} parameters, "
                 f"found {len(canonical_params)} in SQL"
             )

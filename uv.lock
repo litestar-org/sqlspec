@@ -1477,6 +1477,37 @@ wheels = [
 ]
 
 [[package]]
+name = "hatch-mypyc"
+version = "0.16.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "hatchling" },
+    { name = "mypy" },
+    { name = "pathspec" },
+    { name = "setuptools" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/68/ba/a49750d3f38dbb61d42c5ac8aa322112bc28e38bf149704172d13ad86c52/hatch_mypyc-0.16.0.tar.gz", hash = "sha256:6e3aa99634d81142cab993358698eaae823de91fe87ee85029a82f2e737c3ded", size = 12851, upload-time = "2023-02-23T04:58:03.607Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ac/2e/126610a897cb592188d118138b94a6e600f681fce439045777ccf8b270d7/hatch_mypyc-0.16.0-py3-none-any.whl", hash = "sha256:914f060fbb060186de72935c6ca07a55a47a5242be8864f135e32e72459cad4f", size = 8481, upload-time = "2023-02-23T04:58:02.134Z" },
+]
+
+[[package]]
+name = "hatchling"
+version = "1.27.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+    { name = "pathspec" },
+    { name = "pluggy" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
+    { name = "trove-classifiers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8f/8a/cc1debe3514da292094f1c3a700e4ca25442489731ef7c0814358816bb03/hatchling-1.27.0.tar.gz", hash = "sha256:971c296d9819abb3811112fc52c7a9751c8d381898f36533bb16f9791e941fd6", size = 54983, upload-time = "2024-12-15T17:08:11.894Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/08/e7/ae38d7a6dfba0533684e0b2136817d667588ae3ec984c1a4e5df5eb88482/hatchling-1.27.0-py3-none-any.whl", hash = "sha256:d3a2f3567c4f926ea39849cdf924c7e99e6686c9c8e288ae1037c8fa2a5d937b", size = 75794, upload-time = "2024-12-15T17:08:10.364Z" },
+]
+
+[[package]]
 name = "html5lib"
 version = "1.1"
 source = { registry = "https://pypi.org/simple" }
@@ -4315,6 +4346,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/1c/fc/9ba22f01b5cdacc8f5ed0d22304718d2c758fce3fd49a5372b886a86f37c/sqlalchemy-2.0.41-py3-none-any.whl", hash = "sha256:57df5dc6fdb5ed1a88a1ed2195fd31927e705cad62dedd86b46972752a80f576", size = 1911224, upload-time = "2025-05-14T17:39:42.154Z" },
 ]
 
+[package.optional-dependencies]
+asyncio = [
+    { name = "greenlet" },
+]
+
 [[package]]
 name = "sqlglot"
 version = "26.33.0"
@@ -4507,12 +4543,16 @@ uuid = [
 
 [package.dev-dependencies]
 benchmarks = [
+    { name = "duckdb" },
     { name = "psutil" },
-    { name = "sqlalchemy" },
+    { name = "rich" },
+    { name = "rich-click" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "types-psutil" },
 ]
 build = [
     { name = "bump-my-version" },
+    { name = "hatch-mypyc" },
 ]
 dev = [
     { name = "adbc-driver-bigquery" },
@@ -4525,6 +4565,8 @@ dev = [
     { name = "auto-pytabs", extra = ["sphinx"] },
     { name = "bump-my-version" },
     { name = "coverage" },
+    { name = "duckdb" },
+    { name = "hatch-mypyc" },
     { name = "mypy" },
     { name = "myst-parser", version = "3.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "myst-parser", version = "4.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -4541,6 +4583,8 @@ dev = [
     { name = "pytest-mock" },
     { name = "pytest-sugar" },
     { name = "pytest-xdist" },
+    { name = "rich" },
+    { name = "rich-click" },
     { name = "ruff" },
     { name = "shibuya" },
     { name = "slotscheck" },
@@ -4558,7 +4602,7 @@ dev = [
     { name = "sphinx-togglebutton" },
     { name = "sphinx-toolbox" },
     { name = "sphinxcontrib-mermaid" },
-    { name = "sqlalchemy" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "types-cffi" },
     { name = "types-colorama" },
     { name = "types-protobuf" },
@@ -4665,11 +4709,17 @@ provides-extras = ["adbc", "aioodbc", "aiosql", "aiosqlite", "asyncmy", "asyncpg
 
 [package.metadata.requires-dev]
 benchmarks = [
+    { name = "duckdb" },
     { name = "psutil" },
-    { name = "sqlalchemy" },
+    { name = "rich" },
+    { name = "rich-click" },
+    { name = "sqlalchemy", extras = ["asyncio"] },
     { name = "types-psutil" },
 ]
-build = [{ name = "bump-my-version" }]
+build = [
+    { name = "bump-my-version" },
+    { name = "hatch-mypyc" },
+]
 dev = [
     { name = "adbc-driver-bigquery" },
     { name = "adbc-driver-flightsql" },
@@ -4681,6 +4731,8 @@ dev = [
     { name = "auto-pytabs", extras = ["sphinx"], specifier = ">=0.5.0" },
     { name = "bump-my-version" },
     { name = "coverage", specifier = ">=7.6.1" },
+    { name = "duckdb" },
+    { name = "hatch-mypyc" },
     { name = "mypy", specifier = ">=1.13.0" },
     { name = "myst-parser" },
     { name = "polars" },
@@ -4696,6 +4748,8 @@ dev = [
     { name = "pytest-mock", specifier = ">=3.14.0" },
     { name = "pytest-sugar", specifier = ">=1.0.0" },
     { name = "pytest-xdist", specifier = ">=3.6.1" },
+    { name = "rich" },
+    { name = "rich-click" },
     { name = "ruff", specifier = ">=0.7.1" },
     { name = "shibuya" },
     { name = "slotscheck", specifier = ">=0.16.5" },
@@ -4710,7 +4764,7 @@ dev = [
     { name = "sphinx-togglebutton", specifier = ">=0.3.2" },
     { name = "sphinx-toolbox", specifier = ">=3.8.1" },
     { name = "sphinxcontrib-mermaid", specifier = ">=0.9.2" },
-    { name = "sqlalchemy" },
+    { name = "sqlalchemy", extras = ["asyncio"] },
     { name = "types-cffi" },
     { name = "types-colorama" },
     { name = "types-protobuf" },
@@ -4853,6 +4907,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/cc/18/0bbf3884e9eaa38819ebe46a7bd25dcd56b67434402b66a58c4b8e552575/tomlkit-0.13.3.tar.gz", hash = "sha256:430cf247ee57df2b94ee3fbe588e71d362a941ebb545dec29b53961d61add2a1", size = 185207, upload-time = "2025-06-05T07:13:44.947Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/bd/75/8539d011f6be8e29f339c42e633aae3cb73bffa95dd0f9adec09b9c58e85/tomlkit-0.13.3-py3-none-any.whl", hash = "sha256:c89c649d79ee40629a9fda55f8ace8c6a1b42deb912b2a8fd8d942ddadb606b0", size = 38901, upload-time = "2025-06-05T07:13:43.546Z" },
+]
+
+[[package]]
+name = "trove-classifiers"
+version = "2025.5.9.12"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/38/04/1cd43f72c241fedcf0d9a18d0783953ee301eac9e5d9db1df0f0f089d9af/trove_classifiers-2025.5.9.12.tar.gz", hash = "sha256:7ca7c8a7a76e2cd314468c677c69d12cc2357711fcab4a60f87994c1589e5cb5", size = 16940, upload-time = "2025-05-09T12:04:48.829Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/92/ef/c6deb083748be3bcad6f471b6ae983950c161890bf5ae1b2af80cc56c530/trove_classifiers-2025.5.9.12-py3-none-any.whl", hash = "sha256:e381c05537adac78881c8fa345fd0e9970159f4e4a04fcc42cfd3129cca640ce", size = 14119, upload-time = "2025-05-09T12:04:46.38Z" },
 ]
 
 [[package]]
