@@ -4,7 +4,21 @@ import asyncio
 from typing import Any
 
 from rich.panel import Panel
-from sqlalchemy import Column, Integer, String, create_engine, pool, text
+from sqlalchemy import (
+    Column,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    create_engine,
+    delete,
+    func,
+    insert,
+    pool,
+    select,
+    text,
+    update,
+)
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.pool import QueuePool
@@ -19,11 +33,14 @@ from tools.benchmark.core.metrics import BenchmarkMetrics, TimingResult
 from tools.benchmark.infrastructure.containers import ContainerManager
 from tools.benchmark.suites.base import BaseBenchmarkSuite
 
+# Constants
+MIN_ID_THRESHOLD = 100
+
 # SQLAlchemy setup
 Base = declarative_base()
 
 
-class User(Base):
+class User(Base):  # type: ignore[misc,valid-type]
     """SQLAlchemy ORM model for testing."""
 
     __tablename__ = "users"
@@ -34,10 +51,23 @@ class User(Base):
     status = Column(String(20))
 
 
+# SQLAlchemy Core table definitions
+metadata = MetaData()
+
+users_table = Table(
+    "users",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("name", String(50)),
+    Column("email", String(100)),
+    Column("status", String(20)),
+)
+
+
 class ORMComparisonBenchmark(BaseBenchmarkSuite):
     """Comprehensive ORM benchmark testing all databases with sync/async variants."""
 
-    def __init__(self, config, runner, console) -> None:
+    def __init__(self, config: Any, runner: Any, console: Any) -> None:
         super().__init__(config, runner, console)
         self.container_manager = ContainerManager(console)
 
@@ -73,71 +103,73 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # Database configurations
         databases = []
 
-        # SQLite (sync)
-        databases.append({
-            "name": "SQLite",
-            "type": "sync",
-            "sqlspec_config": self._get_sqlite_configs(),
-            "sqlalchemy_url": "sqlite:///.benchmark/test_sync.db",
-            "sqlalchemy_async_url": None,
-            "setup_func": self._setup_sqlite,
-            "requires_container": False,
-        })
-
-        # SQLite (async)
-        databases.append({
-            "name": "AioSQLite",
-            "type": "async",
-            "sqlspec_config": self._get_aiosqlite_configs(),
-            "sqlalchemy_url": None,
-            "sqlalchemy_async_url": "sqlite+aiosqlite:///.benchmark/test_async.db",
-            "setup_func": self._setup_sqlite_async,
-            "requires_container": False,
-        })
+        databases.append(
+            {
+                "name": "SQLite",
+                "type": "sync",
+                "sqlspec_config": self._get_sqlite_configs(),
+                "sqlalchemy_url": "sqlite:///.benchmark/test_sync.db",
+                "sqlalchemy_async_url": None,
+                "setup_func": self._setup_sqlite,
+                "requires_container": False,
+            }
+        )
+        databases.append(
+            {
+                "name": "AioSQLite",
+                "type": "async",
+                "sqlspec_config": self._get_aiosqlite_configs(),
+                "sqlalchemy_url": None,
+                "sqlalchemy_async_url": "sqlite+aiosqlite:///.benchmark/test_async.db",
+                "setup_func": self._setup_sqlite_async,  # type: ignore[dict-item]
+                "requires_container": False,
+            }
+        )
 
         # PostgreSQL (sync + async)
         if self.container_manager.is_docker_running() and not self.config.no_containers:
             try:
                 host, port = self.container_manager.start_postgres(self.config.keep_containers)
 
-                # Psycopg (sync)
-                databases.append({
-                    "name": "Psycopg",
-                    "type": "sync",
-                    "sqlspec_config": self._get_psycopg_configs(host, port),
-                    "sqlalchemy_url": f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
-                    f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
-                    f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
-                    "sqlalchemy_async_url": None,
-                    "setup_func": self._setup_postgres,
-                    "requires_container": True,
-                })
-
-                # Psycopg Async (async)
-                databases.append({
-                    "name": "Psycopg-Async",
-                    "type": "async",
-                    "sqlspec_config": self._get_psycopg_async_configs(host, port),
-                    "sqlalchemy_url": None,
-                    "sqlalchemy_async_url": f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
-                    f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
-                    f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
-                    "setup_func": self._setup_postgres_async,
-                    "requires_container": True,
-                })
-
-                # Asyncpg (async)
-                databases.append({
-                    "name": "Asyncpg",
-                    "type": "async",
-                    "sqlspec_config": self._get_asyncpg_configs(host, port),
-                    "sqlalchemy_url": None,
-                    "sqlalchemy_async_url": f"postgresql+asyncpg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
-                    f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
-                    f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
-                    "setup_func": self._setup_postgres_async,
-                    "requires_container": True,
-                })
+                databases.append(
+                    {
+                        "name": "Psycopg",
+                        "type": "sync",
+                        "sqlspec_config": self._get_psycopg_configs(host, port),
+                        "sqlalchemy_url": f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
+                        "sqlalchemy_async_url": None,
+                        "setup_func": self._setup_postgres,
+                        "requires_container": True,
+                    }
+                )
+                databases.append(
+                    {
+                        "name": "Psycopg-Async",
+                        "type": "async",
+                        "sqlspec_config": self._get_psycopg_async_configs(host, port),
+                        "sqlalchemy_url": None,
+                        "sqlalchemy_async_url": f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
+                        "setup_func": self._setup_postgres_async,  # type: ignore[dict-item]
+                        "requires_container": True,
+                    }
+                )
+                databases.append(
+                    {
+                        "name": "Asyncpg",
+                        "type": "async",
+                        "sqlspec_config": self._get_asyncpg_configs(host, port),
+                        "sqlalchemy_url": None,
+                        "sqlalchemy_async_url": f"postgresql+asyncpg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
+                        "setup_func": self._setup_postgres_async,  # type: ignore[dict-item]
+                        "requires_container": True,
+                    }
+                )
             except Exception as e:
                 self.console.print(f"[yellow]Skipping PostgreSQL tests: {e}[/yellow]")
 
@@ -146,27 +178,28 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             try:
                 host, port = self.container_manager.start_oracle(self.config.keep_containers)
 
-                # OracleDB (sync)
-                databases.append({
-                    "name": "OracleDB",
-                    "type": "sync",
-                    "sqlspec_config": self._get_oracledb_configs(host, port, mode="sync"),
-                    "sqlalchemy_url": f"oracle+oracledb://system:{self.container_manager.docker_config.ORACLE_DEFAULT_PASSWORD}@{host}:{port}?service_name=FREEPDB1",
-                    "sqlalchemy_async_url": None,
-                    "setup_func": self._setup_oracle,
-                    "requires_container": True,
-                })
-
-                # OracleDB (async)
-                databases.append({
-                    "name": "OracleDB-Async",
-                    "type": "async",
-                    "sqlspec_config": self._get_oracledb_configs(host, port, mode="async"),
-                    "sqlalchemy_url": None,
-                    "sqlalchemy_async_url": f"oracle+oracledb://system:{self.container_manager.docker_config.ORACLE_DEFAULT_PASSWORD}@{host}:{port}?service_name=FREEPDB1",
-                    "setup_func": self._setup_oracle_async,
-                    "requires_container": True,
-                })
+                databases.append(
+                    {
+                        "name": "OracleDB",
+                        "type": "sync",
+                        "sqlspec_config": self._get_oracledb_configs(host, port, mode="sync"),
+                        "sqlalchemy_url": f"oracle+oracledb://system:{self.container_manager.docker_config.ORACLE_DEFAULT_PASSWORD}@{host}:{port}?service_name=FREEPDB1",
+                        "sqlalchemy_async_url": None,
+                        "setup_func": self._setup_oracle,
+                        "requires_container": True,
+                    }
+                )
+                databases.append(
+                    {
+                        "name": "OracleDB-Async",
+                        "type": "async",
+                        "sqlspec_config": self._get_oracledb_configs(host, port, mode="async"),
+                        "sqlalchemy_url": None,
+                        "sqlalchemy_async_url": f"oracle+oracledb://system:{self.container_manager.docker_config.ORACLE_DEFAULT_PASSWORD}@{host}:{port}?service_name=FREEPDB1",
+                        "setup_func": self._setup_oracle_async,  # type: ignore[dict-item]
+                        "requires_container": True,
+                    }
+                )
             except Exception as e:
                 self.console.print(f"[yellow]Skipping Oracle tests: {e}[/yellow]")
 
@@ -174,14 +207,14 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         for db_config in databases:
             self.console.print(f"\n[bold cyan]Testing {db_config['name']}...[/bold cyan]")
 
-            if db_config["type"] == "sync":
+            if str(db_config["type"]) == "sync":
                 db_results = self._run_sync_benchmarks(db_config)
             else:
                 db_results = asyncio.run(self._run_async_benchmarks(db_config))
 
             # Add results with database prefix
             for key, result in db_results.items():
-                full_key = f"{db_config['name'].lower()}_{key}"
+                full_key = f"{str(db_config['name']).lower()}_{key}"
                 results[full_key] = result
 
         return results
@@ -190,21 +223,9 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         """Get SQLite configs with and without caching."""
         db_path = ".benchmark/test_sync.db"
 
-        config_no_cache = SqliteConfig(
-            database=db_path,
-            pool_size=20,
-            max_overflow=0,
-            pool_pre_ping=True,
-            statement_config=SQLConfig(enable_caching=False),
-        )
+        config_no_cache = SqliteConfig(database=db_path, statement_config=SQLConfig(enable_caching=False))
 
-        config_with_cache = SqliteConfig(
-            database=db_path,
-            pool_size=20,
-            max_overflow=0,
-            pool_pre_ping=True,
-            statement_config=SQLConfig(enable_caching=True),
-        )
+        config_with_cache = SqliteConfig(database=db_path, statement_config=SQLConfig(enable_caching=True))
 
         return config_no_cache, config_with_cache
 
@@ -299,9 +320,9 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
 
     def _get_oracledb_configs(self, host: str, port: int, mode: str) -> tuple:
         """Get OracleDB configs with and without caching."""
-        ConfigClass = OracleAsyncConfig if mode == "async" else OracleSyncConfig
+        config_class = OracleAsyncConfig if mode == "async" else OracleSyncConfig
 
-        config_no_cache = ConfigClass(
+        config_no_cache = config_class(
             user="system",
             password=self.container_manager.docker_config.ORACLE_DEFAULT_PASSWORD,
             dsn=f"{host}:{port}/FREEPDB1",
@@ -310,7 +331,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             statement_config=SQLConfig(enable_caching=False),
         )
 
-        config_with_cache = ConfigClass(
+        config_with_cache = config_class(
             user="system",
             password=self.container_manager.docker_config.ORACLE_DEFAULT_PASSWORD,
             dsn=f"{host}:{port}/FREEPDB1",
@@ -545,8 +566,8 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             operation="simple_select_sqlspec_cache", iterations=self.config.iterations, times=times
         )
 
-        # SQLAlchemy Core with compiled statement cache
-        stmt = text(simple_query)
+        # SQLAlchemy Core with proper constructs
+        stmt = select(users_table).limit(100)
 
         def sqlalchemy_core() -> None:
             with engine.connect() as conn:
@@ -558,10 +579,10 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         )
 
         # SQLAlchemy ORM with optimized query
-        SessionLocal = sessionmaker(bind=engine)
+        session_local = sessionmaker(bind=engine)
 
         def sqlalchemy_orm() -> None:
-            with SessionLocal() as session:
+            with session_local() as session:
                 # Use query.options() for optimized loading
                 list(session.query(User).limit(100).all())
 
@@ -601,12 +622,12 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             operation="filtered_select_sqlspec_cache", iterations=self.config.iterations, times=times
         )
 
-        # SQLAlchemy Core
-        stmt = text(filtered_query)
+        # SQLAlchemy Core with proper constructs
+        stmt = select(users_table).where(users_table.c.status == "active").limit(50)
 
         def sqlalchemy_core() -> None:
             with engine.connect() as conn:
-                list(conn.execute(stmt, {"status": "active"}))
+                list(conn.execute(stmt))
 
         times = BenchmarkMetrics.time_operation(sqlalchemy_core, iterations=self.config.iterations, warmup=10)
         results["filtered_select_core"] = TimingResult(
@@ -614,10 +635,10 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         )
 
         # SQLAlchemy ORM
-        SessionLocal = sessionmaker(bind=engine)
+        session_local = sessionmaker(bind=engine)
 
         def sqlalchemy_orm() -> None:
-            with SessionLocal() as session:
+            with session_local() as session:
                 list(session.query(User).filter(User.status == "active").limit(50).all())
 
         times = BenchmarkMetrics.time_operation(sqlalchemy_orm, iterations=self.config.iterations, warmup=10)
@@ -665,12 +686,21 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             operation="join_query_sqlspec_cache", iterations=min(self.config.iterations, 100), times=times
         )
 
-        # SQLAlchemy Core
-        stmt = text(join_query)
+        # SQLAlchemy Core with proper constructs
+        u1 = users_table.alias("u1")
+        u2 = users_table.alias("u2")
+
+        stmt = (
+            select(u1.c.name, func.count(u2.c.id).label("colleague_count"))
+            .select_from(u1.outerjoin(u2, (u1.c.status == u2.c.status) & (u1.c.id != u2.c.id)))
+            .where(u1.c.status == "active")
+            .group_by(u1.c.name)
+            .limit(20)
+        )
 
         def sqlalchemy_core() -> None:
             with engine.connect() as conn:
-                list(conn.execute(stmt, {"status": "active"}))
+                list(conn.execute(stmt))
 
         times = BenchmarkMetrics.time_operation(sqlalchemy_core, iterations=min(self.config.iterations, 100), warmup=5)
         results["join_query_core"] = TimingResult(
@@ -678,10 +708,10 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         )
 
         # SQLAlchemy ORM (simplified)
-        SessionLocal = sessionmaker(bind=engine)
+        session_local = sessionmaker(bind=engine)
 
         def sqlalchemy_orm() -> None:
-            with SessionLocal() as session:
+            with session_local() as session:
                 list(session.query(User.name).filter(User.status == "active").limit(20).all())
 
         times = BenchmarkMetrics.time_operation(sqlalchemy_orm, iterations=min(self.config.iterations, 100), warmup=5)
@@ -744,10 +774,10 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLAlchemy ORM
         from sqlalchemy import func
 
-        SessionLocal = sessionmaker(bind=engine)
+        session_local = sessionmaker(bind=engine)
 
         def sqlalchemy_orm() -> None:
-            with SessionLocal() as session:
+            with session_local() as session:
                 list(
                     session.query(User.status, func.count(User.id), func.count(func.distinct(User.email)))
                     .group_by(User.status)
@@ -832,18 +862,23 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
                 # Get fresh data for each iteration
                 if "oracle" in db_name.lower():
                     insert_data = get_oracle_insert_data(iteration_counter)
-                    conn.execute(
-                        text("INSERT INTO users (id, name, email, status) VALUES (:id, :name, :email, :status)"),
-                        insert_data,
+                    stmt = insert(users_table).values(
+                        id=insert_data[0]["id"],
+                        name=insert_data[0]["name"],
+                        email=insert_data[0]["email"],
+                        status=insert_data[0]["status"],
                     )
+                    conn.execute(stmt, insert_data)
                 else:
                     insert_data = get_insert_data()
-                    conn.execute(
-                        text("INSERT INTO users (name, email, status) VALUES (:name, :email, :status)"), insert_data
+                    stmt = insert(users_table).values(
+                        name=insert_data[0]["name"], email=insert_data[0]["email"], status=insert_data[0]["status"]
                     )
+                    conn.execute(stmt, insert_data)
 
                 # Clean up after each iteration
-                conn.execute(text("DELETE FROM users WHERE name LIKE 'bulk_user_%'"))
+                delete_stmt = delete(users_table).where(users_table.c.name.like("bulk_user_%"))
+                conn.execute(delete_stmt)
             iteration_counter += 1
 
         times = BenchmarkMetrics.time_operation(
@@ -877,12 +912,16 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             operation="bulk_update_sqlspec", iterations=min(20, self.config.iterations), times=times
         )
 
-        # SQLAlchemy Core
-        stmt = text("UPDATE users SET status = :new_status WHERE status = :old_status AND id > :min_id")
+        # SQLAlchemy Core with proper constructs
+        stmt = (
+            update(users_table)
+            .where((users_table.c.status == "active") & (users_table.c.id > MIN_ID_THRESHOLD))
+            .values(status="updated")
+        )
 
         def sqlalchemy_core_update() -> None:
             with engine.begin() as conn:
-                conn.execute(stmt, {"new_status": "updated", "old_status": "active", "min_id": 100})
+                conn.execute(stmt)
 
         times = BenchmarkMetrics.time_operation(
             sqlalchemy_core_update, iterations=min(20, self.config.iterations), warmup=5
@@ -929,8 +968,8 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             operation="simple_select_sqlspec_cache", iterations=self.config.iterations, times=times
         )
 
-        # SQLAlchemy Core with compiled statement cache
-        stmt = text(simple_query)
+        # SQLAlchemy Core with proper constructs
+        stmt = select(users_table).limit(100)
 
         async def sqlalchemy_core() -> None:
             async with engine.connect() as conn:
@@ -945,10 +984,10 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         )
 
         # SQLAlchemy ORM with optimized async query
-        AsyncSessionLocal = async_sessionmaker(bind=engine)
+        async_session_local = async_sessionmaker(bind=engine)
 
         async def sqlalchemy_orm() -> None:
-            async with AsyncSessionLocal() as session:
+            async with async_session_local() as session:
                 # Use query with async execution
                 from sqlalchemy import select
 
@@ -1000,12 +1039,12 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             operation="filtered_select_sqlspec_cache", iterations=self.config.iterations, times=times
         )
 
-        # SQLAlchemy Core
-        stmt = text(filtered_query)
+        # SQLAlchemy Core with proper constructs
+        stmt = select(users_table).where(users_table.c.status == "active").limit(50)
 
         async def sqlalchemy_core() -> None:
             async with engine.connect() as conn:
-                result = await conn.execute(stmt, {"status": "active"})
+                result = await conn.execute(stmt)
                 list(result)
 
         times = await BenchmarkMetrics.time_operation_async(
@@ -1016,10 +1055,10 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         )
 
         # SQLAlchemy ORM
-        AsyncSessionLocal = async_sessionmaker(bind=engine)
+        async_session_local = async_sessionmaker(bind=engine)
 
         async def sqlalchemy_orm() -> None:
-            async with AsyncSessionLocal() as session:
+            async with async_session_local() as session:
                 from sqlalchemy import select
 
                 stmt = select(User).where(User.status == "active").limit(50)
@@ -1077,12 +1116,21 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             operation="join_query_sqlspec_cache", iterations=min(self.config.iterations, 100), times=times
         )
 
-        # SQLAlchemy Core
-        stmt = text(join_query)
+        # SQLAlchemy Core with proper constructs
+        u1 = users_table.alias("u1")
+        u2 = users_table.alias("u2")
+
+        stmt = (
+            select(u1.c.name, func.count(u2.c.id).label("colleague_count"))
+            .select_from(u1.outerjoin(u2, (u1.c.status == u2.c.status) & (u1.c.id != u2.c.id)))
+            .where(u1.c.status == "active")
+            .group_by(u1.c.name)
+            .limit(20)
+        )
 
         async def sqlalchemy_core() -> None:
             async with engine.connect() as conn:
-                result = await conn.execute(stmt, {"status": "active"})
+                result = await conn.execute(stmt)
                 list(result)
 
         times = await BenchmarkMetrics.time_operation_async(
@@ -1228,18 +1276,23 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
                 # Get fresh data for each iteration
                 if "oracle" in db_name.lower():
                     insert_data = get_oracle_insert_data(iteration_counter)
-                    await conn.execute(
-                        text("INSERT INTO users (id, name, email, status) VALUES (:id, :name, :email, :status)"),
-                        insert_data,
+                    stmt = insert(users_table).values(
+                        id=insert_data[0]["id"],
+                        name=insert_data[0]["name"],
+                        email=insert_data[0]["email"],
+                        status=insert_data[0]["status"],
                     )
+                    await conn.execute(stmt, insert_data)
                 else:
                     insert_data = get_insert_data()
-                    await conn.execute(
-                        text("INSERT INTO users (name, email, status) VALUES (:name, :email, :status)"), insert_data
+                    stmt = insert(users_table).values(
+                        name=insert_data[0]["name"], email=insert_data[0]["email"], status=insert_data[0]["status"]
                     )
+                    await conn.execute(stmt, insert_data)
 
                 # Clean up after each iteration
-                await conn.execute(text("DELETE FROM users WHERE name LIKE 'bulk_user_%'"))
+                delete_stmt = delete(users_table).where(users_table.c.name.like("bulk_user_%"))
+                await conn.execute(delete_stmt)
             iteration_counter += 1
 
         times = await BenchmarkMetrics.time_operation_async(
@@ -1275,12 +1328,16 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             operation="bulk_update_sqlspec", iterations=min(20, self.config.iterations), times=times
         )
 
-        # SQLAlchemy Core
-        stmt = text("UPDATE users SET status = :new_status WHERE status = :old_status AND id > :min_id")
+        # SQLAlchemy Core with proper constructs
+        stmt = (
+            update(users_table)
+            .where((users_table.c.status == "active") & (users_table.c.id > MIN_ID_THRESHOLD))
+            .values(status="updated")
+        )
 
         async def sqlalchemy_core_update() -> None:
             async with engine.begin() as conn:
-                await conn.execute(stmt, {"new_status": "updated", "old_status": "active", "min_id": 100})
+                await conn.execute(stmt)
 
         times = await BenchmarkMetrics.time_operation_async(
             sqlalchemy_core_update, iterations=min(20, self.config.iterations), warmup=5

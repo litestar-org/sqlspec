@@ -22,6 +22,44 @@ logger = logging.getLogger(__name__)
 __all__ = ("CONNECTION_FIELDS", "DuckDBConfig", "DuckDBExtensionConfig", "DuckDBSecretConfig")
 
 
+class DuckDBConnectionParams(TypedDict, total=False):
+    """DuckDB connection parameters."""
+
+    database: NotRequired[str]
+    read_only: NotRequired[bool]
+    config: NotRequired[dict[str, Any]]
+    memory_limit: NotRequired[str]
+    threads: NotRequired[int]
+    temp_directory: NotRequired[str]
+    max_temp_directory_size: NotRequired[str]
+    autoload_known_extensions: NotRequired[bool]
+    autoinstall_known_extensions: NotRequired[bool]
+    allow_community_extensions: NotRequired[bool]
+    allow_unsigned_extensions: NotRequired[bool]
+    extension_directory: NotRequired[str]
+    custom_extension_repository: NotRequired[str]
+    autoinstall_extension_repository: NotRequired[str]
+    allow_persistent_secrets: NotRequired[bool]
+    enable_external_access: NotRequired[bool]
+    secret_directory: NotRequired[str]
+    enable_object_cache: NotRequired[bool]
+    parquet_metadata_cache: NotRequired[str]
+    enable_external_file_cache: NotRequired[bool]
+    checkpoint_threshold: NotRequired[str]
+    enable_progress_bar: NotRequired[bool]
+    progress_bar_time: NotRequired[float]
+    enable_logging: NotRequired[bool]
+    log_query_path: NotRequired[str]
+    logging_level: NotRequired[str]
+    preserve_insertion_order: NotRequired[bool]
+    default_null_order: NotRequired[str]
+    default_order: NotRequired[str]
+    ieee_floating_point_ops: NotRequired[bool]
+    binary_as_string: NotRequired[bool]
+    arrow_large_buffer_size: NotRequired[bool]
+    errors_as_json: NotRequired[bool]
+
+
 CONNECTION_FIELDS = frozenset(
     {
         "database",
@@ -427,10 +465,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                 statement_config = self.statement_config
                 # Inject parameter style info if not already set
                 if statement_config.allowed_parameter_styles is None:
-                    from dataclasses import replace
-
-                    statement_config = replace(
-                        statement_config,
+                    statement_config = statement_config.replace(
                         allowed_parameter_styles=self.supported_parameter_styles,
                         default_parameter_style=self.default_parameter_style,
                     )

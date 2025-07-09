@@ -14,12 +14,7 @@ from tools.benchmark.core.runner import BenchmarkRunner
 class BaseBenchmarkSuite(ABC):
     """Abstract base class for benchmark suites."""
 
-    def __init__(
-        self,
-        config: BenchmarkConfig,
-        runner: BenchmarkRunner,
-        console: Optional[Console] = None,
-    ) -> None:
+    def __init__(self, config: BenchmarkConfig, runner: BenchmarkRunner, console: Optional[Console] = None) -> None:
         self.config = config
         self.runner = runner
         self.console = console or Console()
@@ -74,10 +69,7 @@ class BaseBenchmarkSuite(ABC):
     def check_regression(self, operation: str, current: TimingResult, adapter: str) -> Optional[str]:
         """Check if current result shows regression compared to baseline."""
         baseline = self.runner.storage.get_comparison_baseline(
-            benchmark_type=self.name,
-            adapter=adapter,
-            operation=operation,
-            days=self.config.comparison_days,
+            benchmark_type=self.name, adapter=adapter, operation=operation, days=self.config.comparison_days
         )
 
         if not baseline:
@@ -96,10 +88,7 @@ class BaseBenchmarkSuite(ABC):
     def get_regression_info(self, operation: str, current: TimingResult, adapter: str) -> Optional[tuple[str, float]]:
         """Get regression information as tuple for summary purposes."""
         baseline = self.runner.storage.get_comparison_baseline(
-            benchmark_type=self.name,
-            adapter=adapter,
-            operation=operation,
-            days=self.config.comparison_days,
+            benchmark_type=self.name, adapter=adapter, operation=operation, days=self.config.comparison_days
         )
 
         if not baseline:

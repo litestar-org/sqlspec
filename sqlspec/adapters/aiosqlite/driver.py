@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 import aiosqlite
+from typing_extensions import TypeAlias
 
 from sqlspec.driver import AsyncDriverAdapterProtocol
 from sqlspec.driver.connection import managed_transaction_async
@@ -31,7 +32,7 @@ __all__ = ("AiosqliteConnection", "AiosqliteDriver")
 
 logger = logging.getLogger("sqlspec")
 
-AiosqliteConnection = aiosqlite.Connection
+AiosqliteConnection: TypeAlias = aiosqlite.Connection
 
 
 class AiosqliteDriver(

@@ -285,10 +285,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             statement_config = self.statement_config
             # Inject parameter style info if not already set
             if statement_config is not None and statement_config.allowed_parameter_styles is None:
-                from dataclasses import replace
-
-                statement_config = replace(
-                    statement_config,
+                statement_config = statement_config.replace(
                     allowed_parameter_styles=self.supported_parameter_styles,
                     default_parameter_style=self.default_parameter_style,
                 )

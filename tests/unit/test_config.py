@@ -1,6 +1,5 @@
 """Unit tests for sqlspec.config module."""
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Optional
 from unittest.mock import AsyncMock, Mock
 
@@ -114,17 +113,34 @@ def test_generic_pool_config() -> None:
 
 
 # Concrete config implementations for testing
-@dataclass
 class MockSyncTestConfig(NoPoolSyncConfig["MockConnection", "MockSyncDriver"]):
     """Mock sync config without pooling for testing."""
 
-    driver_type: "type[MockSyncDriver]" = MockSyncDriver
-    connection_type: "type[MockConnection]" = MockConnection
+    __slots__ = ()
+
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = False
     supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("qmark", "named")
     default_parameter_style: "ClassVar[str]" = "qmark"
-    default_row_type: "type[Any]" = dict
+
+    def __init__(
+        self,
+        migration_config: "Optional[dict[str, Any]]" = None,
+        enable_adapter_cache: bool = True,
+        adapter_cache_size: int = 500,
+        enable_prepared_statements: bool = False,
+        prepared_statement_cache_size: int = 100,
+    ) -> None:
+        super().__init__(
+            migration_config=migration_config,
+            enable_adapter_cache=enable_adapter_cache,
+            adapter_cache_size=adapter_cache_size,
+            enable_prepared_statements=enable_prepared_statements,
+            prepared_statement_cache_size=prepared_statement_cache_size,
+        )
+        self.driver_type = MockSyncDriver
+        self.connection_type = MockConnection
+        self.default_row_type = dict
 
     def __hash__(self) -> int:
         return id(self)
@@ -151,17 +167,34 @@ class MockSyncTestConfig(NoPoolSyncConfig["MockConnection", "MockSyncDriver"]):
         return mock
 
 
-@dataclass(eq=False)
 class MockAsyncTestConfig(NoPoolAsyncConfig["MockConnection", "MockAsyncDriver"]):
     """Mock async config without pooling for testing."""
 
-    driver_type: "type[MockAsyncDriver]" = MockAsyncDriver
-    connection_type: "type[MockConnection]" = MockConnection
+    __slots__ = ()  # No additional fields beyond parent
+
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = False
     supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("numeric",)
     default_parameter_style: "ClassVar[str]" = "numeric"
-    default_row_type: "type[Any]" = dict
+
+    def __init__(
+        self,
+        migration_config: "Optional[dict[str, Any]]" = None,
+        enable_adapter_cache: bool = True,
+        adapter_cache_size: int = 500,
+        enable_prepared_statements: bool = False,
+        prepared_statement_cache_size: int = 100,
+    ) -> None:
+        super().__init__(
+            migration_config=migration_config,
+            enable_adapter_cache=enable_adapter_cache,
+            adapter_cache_size=adapter_cache_size,
+            enable_prepared_statements=enable_prepared_statements,
+            prepared_statement_cache_size=prepared_statement_cache_size,
+        )
+        self.driver_type = MockAsyncDriver
+        self.connection_type = MockConnection
+        self.default_row_type = dict
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -185,17 +218,36 @@ class MockAsyncTestConfig(NoPoolAsyncConfig["MockConnection", "MockAsyncDriver"]
         return mock
 
 
-@dataclass(eq=False)
 class MockSyncPoolTestConfig(SyncDatabaseConfig["MockConnection", "MockPool", "MockSyncDriver"]):
     """Mock sync config with pooling for testing."""
 
-    driver_type: "type[MockSyncDriver]" = MockSyncDriver
-    connection_type: "type[MockConnection]" = MockConnection
+    __slots__ = ()  # No additional fields beyond parent
+
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = True
     supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("qmark",)
     default_parameter_style: "ClassVar[str]" = "qmark"
-    default_row_type: "type[Any]" = dict
+
+    def __init__(
+        self,
+        pool_instance: "Optional[MockPool]" = None,
+        migration_config: "Optional[dict[str, Any]]" = None,
+        enable_adapter_cache: bool = True,
+        adapter_cache_size: int = 500,
+        enable_prepared_statements: bool = False,
+        prepared_statement_cache_size: int = 100,
+    ) -> None:
+        super().__init__(
+            pool_instance=pool_instance,
+            migration_config=migration_config,
+            enable_adapter_cache=enable_adapter_cache,
+            adapter_cache_size=adapter_cache_size,
+            enable_prepared_statements=enable_prepared_statements,
+            prepared_statement_cache_size=prepared_statement_cache_size,
+        )
+        self.driver_type = MockSyncDriver
+        self.connection_type = MockConnection
+        self.default_row_type = dict
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -226,17 +278,36 @@ class MockSyncPoolTestConfig(SyncDatabaseConfig["MockConnection", "MockPool", "M
             self.pool_instance.close()
 
 
-@dataclass(eq=False)
 class MockAsyncPoolTestConfig(AsyncDatabaseConfig["MockConnection", "MockPool", "MockAsyncDriver"]):
     """Mock async config with pooling for testing."""
 
-    driver_type: "type[MockAsyncDriver]" = MockAsyncDriver
-    connection_type: "type[MockConnection]" = MockConnection
+    __slots__ = ()  # No additional fields beyond parent
+
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = True
     supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("numeric",)
     default_parameter_style: "ClassVar[str]" = "numeric"
-    default_row_type: "type[Any]" = dict
+
+    def __init__(
+        self,
+        pool_instance: "Optional[MockPool]" = None,
+        migration_config: "Optional[dict[str, Any]]" = None,
+        enable_adapter_cache: bool = True,
+        adapter_cache_size: int = 500,
+        enable_prepared_statements: bool = False,
+        prepared_statement_cache_size: int = 100,
+    ) -> None:
+        super().__init__(
+            pool_instance=pool_instance,
+            migration_config=migration_config,
+            enable_adapter_cache=enable_adapter_cache,
+            adapter_cache_size=adapter_cache_size,
+            enable_prepared_statements=enable_prepared_statements,
+            prepared_statement_cache_size=prepared_statement_cache_size,
+        )
+        self.driver_type = MockAsyncDriver
+        self.connection_type = MockConnection
+        self.default_row_type = dict
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":

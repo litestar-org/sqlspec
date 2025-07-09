@@ -2,9 +2,10 @@
 
 import contextlib
 import logging
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict
 
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
+from typing_extensions import NotRequired
 
 from sqlspec.adapters.bigquery.driver import BigQueryConnection, BigQueryDriver
 from sqlspec.config import NoPoolSyncConfig
@@ -21,6 +22,39 @@ if TYPE_CHECKING:
     from google.auth.credentials import Credentials
 
 logger = logging.getLogger(__name__)
+
+
+class BigQueryConnectionParams(TypedDict, total=False):
+    """BigQuery connection parameters."""
+
+    project: NotRequired[str]
+    location: NotRequired[str]
+    credentials: NotRequired["Credentials"]
+    dataset_id: NotRequired[str]
+    credentials_path: NotRequired[str]
+    client_options: NotRequired["ClientOptions"]
+    client_info: NotRequired["ClientInfo"]
+    default_query_job_config: NotRequired[QueryJobConfig]
+    default_load_job_config: NotRequired[LoadJobConfig]
+    use_query_cache: NotRequired[bool]
+    maximum_bytes_billed: NotRequired[int]
+    enable_bigquery_ml: NotRequired[bool]
+    enable_gemini_integration: NotRequired[bool]
+    query_timeout_ms: NotRequired[int]
+    job_timeout_ms: NotRequired[int]
+    reservation_id: NotRequired[str]
+    edition: NotRequired[str]
+    enable_cross_cloud: NotRequired[bool]
+    enable_bigquery_omni: NotRequired[bool]
+    use_avro_logical_types: NotRequired[bool]
+    parquet_enable_list_inference: NotRequired[bool]
+    enable_column_level_security: NotRequired[bool]
+    enable_row_level_security: NotRequired[bool]
+    enable_dataframes: NotRequired[bool]
+    dataframes_backend: NotRequired[str]
+    enable_continuous_queries: NotRequired[bool]
+    enable_vector_search: NotRequired[bool]
+
 
 CONNECTION_FIELDS = frozenset(
     {
@@ -345,10 +379,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
                 statement_config = self.statement_config
                 # Inject parameter style info if not already set
                 if statement_config.allowed_parameter_styles is None:
-                    from dataclasses import replace
-
-                    statement_config = replace(
-                        statement_config,
+                    statement_config = statement_config.replace(
                         allowed_parameter_styles=self.supported_parameter_styles,
                         default_parameter_style=self.default_parameter_style,
                     )

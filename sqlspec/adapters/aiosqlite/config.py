@@ -3,12 +3,13 @@
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict
 
 import aiosqlite
+from typing_extensions import NotRequired
 
 from sqlspec.adapters.aiosqlite.driver import AiosqliteConnection, AiosqliteDriver
-from sqlspec.config import AsyncDatabaseConfig
+from sqlspec.config import NoPoolAsyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import DictRow, Empty
@@ -21,29 +22,34 @@ __all__ = ("CONNECTION_FIELDS", "AiosqliteConfig")
 
 logger = logging.getLogger(__name__)
 
+
+class AiosqliteConnectionParams(TypedDict, total=False):
+    """aiosqlite connection parameters."""
+
+    database: NotRequired[str]
+    timeout: NotRequired[float]
+    detect_types: NotRequired[int]
+    isolation_level: NotRequired[Optional[str]]
+    check_same_thread: NotRequired[bool]
+    cached_statements: NotRequired[int]
+    uri: NotRequired[bool]
+
+
 CONNECTION_FIELDS = frozenset(
     {"database", "timeout", "detect_types", "isolation_level", "check_same_thread", "cached_statements", "uri"}
 )
 
 
-class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDriver]):
+class AiosqliteConfig(NoPoolAsyncConfig[AiosqliteConnection, AiosqliteDriver]):
     """Configuration for Aiosqlite database connections with direct field-based configuration.
 
     Note: Aiosqlite doesn't support connection pooling, so pool_instance is always None.
     """
 
-    is_async: ClassVar[bool] = True
-    supports_connection_pooling: ClassVar[bool] = False
-
     driver_type: type[AiosqliteDriver] = AiosqliteDriver
     connection_type: type[AiosqliteConnection] = AiosqliteConnection
-
-    # Parameter style support information
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark", "named_colon")
-    """AIOSQLite supports ? (qmark) and :name (named_colon) parameter styles."""
-
     default_parameter_style: ClassVar[str] = "qmark"
-    """AIOSQLite's native parameter style is ? (qmark)."""
 
     def __init__(
         self,
@@ -103,14 +109,6 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
 
         return config
 
-    async def _create_pool(self) -> None:
-        """Aiosqlite doesn't support pooling."""
-        return
-
-    async def _close_pool(self) -> None:
-        """Aiosqlite doesn't support pooling."""
-        return
-
     async def create_connection(self) -> AiosqliteConnection:
         """Create a single async connection.
 
@@ -156,18 +154,11 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDr
             statement_config = self.statement_config
             # Inject parameter style info if not already set
             if statement_config.allowed_parameter_styles is None:
-                from dataclasses import replace
-
-                statement_config = replace(
-                    statement_config,
+                statement_config = statement_config.replace(
                     allowed_parameter_styles=self.supported_parameter_styles,
                     default_parameter_style=self.default_parameter_style,
                 )
             yield self.driver_type(connection=connection, config=statement_config)
-
-    async def provide_pool(self, *args: Any, **kwargs: Any) -> None:
-        """Aiosqlite doesn't support pooling."""
-        return
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":
         """Get the signature namespace for Aiosqlite types.

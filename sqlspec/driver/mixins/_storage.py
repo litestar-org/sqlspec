@@ -12,7 +12,6 @@ and storage backend operations for optimal performance.
 import logging
 import tempfile
 from abc import ABC
-from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 from urllib.parse import urlparse
@@ -207,7 +206,7 @@ class SyncStorageMixin(StorageMixinBase):
         # disable parameter validation entirely to allow transformer-added parameters
         if params is None and _config and _config.enable_transformations:
             # Disable validation entirely for transformer-generated parameters
-            _config = replace(_config, enable_validation=False)
+            _config = _config.replace(enable_validation=False)
 
         # Only pass params if it's not None to avoid adding None as a parameter
         if params is not None:
@@ -289,7 +288,7 @@ class SyncStorageMixin(StorageMixinBase):
         if _config is None:
             _config = self.config
             if _config and not _config.dialect:
-                _config = replace(_config, dialect=self.dialect)
+                _config = _config.replace(dialect=self.dialect)
 
         sql = SQL(statement, *params, config=_config) if params else SQL(statement, config=_config)
         for filter_ in filters:
@@ -640,7 +639,7 @@ class AsyncStorageMixin(StorageMixinBase):
         # disable parameter validation entirely to allow transformer-added parameters
         if params is None and _config and _config.enable_transformations:
             # Disable validation entirely for transformer-generated parameters
-            _config = replace(_config, enable_validation=False)
+            _config = _config.replace(enable_validation=False)
 
         # Only pass params if it's not None to avoid adding None as a parameter
         if params is not None:
@@ -692,7 +691,7 @@ class AsyncStorageMixin(StorageMixinBase):
         if _config is None:
             _config = self.config
             if _config and not _config.dialect:
-                _config = replace(_config, dialect=self.dialect)
+                _config = _config.replace(dialect=self.dialect)
 
         sql = SQL(statement, *params, config=_config) if params else SQL(statement, config=_config)
         for filter_ in filters:

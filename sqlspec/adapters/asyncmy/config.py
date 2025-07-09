@@ -3,10 +3,11 @@
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union
 
 import asyncmy
 from asyncmy.pool import Pool as AsyncmyPool
+from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncmy.driver import AsyncmyConnection, AsyncmyDriver
 from sqlspec.config import AsyncDatabaseConfig
@@ -21,6 +22,37 @@ if TYPE_CHECKING:
 __all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "AsyncmyConfig")
 
 logger = logging.getLogger(__name__)
+
+
+class AsyncmyConnectionParams(TypedDict, total=False):
+    """Asyncmy connection parameters."""
+
+    host: NotRequired[str]
+    user: NotRequired[str]
+    password: NotRequired[str]
+    database: NotRequired[str]
+    port: NotRequired[int]
+    unix_socket: NotRequired[str]
+    charset: NotRequired[str]
+    connect_timeout: NotRequired[int]
+    read_default_file: NotRequired[str]
+    read_default_group: NotRequired[str]
+    autocommit: NotRequired[bool]
+    local_infile: NotRequired[bool]
+    ssl: NotRequired[Any]
+    sql_mode: NotRequired[str]
+    init_command: NotRequired[str]
+    cursor_class: NotRequired[Union[type["Cursor"], type["DictCursor"]]]
+
+
+class AsyncmyPoolParams(AsyncmyConnectionParams, total=False):
+    """Asyncmy pool parameters."""
+
+    minsize: NotRequired[int]
+    maxsize: NotRequired[int]
+    echo: NotRequired[bool]
+    pool_recycle: NotRequired[int]
+
 
 CONNECTION_FIELDS = frozenset(
     {
@@ -235,10 +267,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             statement_config = self.statement_config
             # Inject parameter style info if not already set
             if statement_config.allowed_parameter_styles is None:
-                from dataclasses import replace
-
-                statement_config = replace(
-                    statement_config,
+                statement_config = statement_config.replace(
                     allowed_parameter_styles=self.supported_parameter_styles,
                     default_parameter_style=self.default_parameter_style,
                 )

@@ -428,12 +428,14 @@ class ParameterizeLiterals(ProcessorProtocol):
                     self._fallback_params: list[Any] = []
                 self._fallback_params.append(typed_param)
 
-        self._parameter_metadata.append({
-            "index": len(self._final_params if self._is_reordering_needed else self.extracted_parameters) - 1,
-            "type": type_hint,
-            "semantic_name": semantic_name,
-            "context": self._get_context_description(context),
-        })
+        self._parameter_metadata.append(
+            {
+                "index": len(self._final_params if self._is_reordering_needed else self.extracted_parameters) - 1,
+                "type": type_hint,
+                "semantic_name": semantic_name,
+                "context": self._get_context_description(context),
+            }
+        )
 
         # Create appropriate placeholder
         return self._create_placeholder(hint=semantic_name)
@@ -1144,12 +1146,14 @@ class ParameterizeLiterals(ProcessorProtocol):
 
             # Replace entire array with a single parameter
             self.extracted_parameters.append(typed_param)
-            self._parameter_metadata.append({
-                "index": len(self.extracted_parameters) - 1,
-                "type": f"array<{element_type}>",
-                "length": len(array_values),
-                "context": "array_literal",
-            })
+            self._parameter_metadata.append(
+                {
+                    "index": len(self.extracted_parameters) - 1,
+                    "type": f"array<{element_type}>",
+                    "length": len(array_values),
+                    "context": "array_literal",
+                }
+            )
             return self._create_placeholder("array")
         # Process individual elements
         new_expressions = []

@@ -128,11 +128,7 @@ class BenchmarkStorage:
             )
 
     def save_result(
-        self,
-        run_id: str,
-        result: TimingResult,
-        save_samples: bool = False,
-        metadata: Optional[dict[str, Any]] = None,
+        self, run_id: str, result: TimingResult, save_samples: bool = False, metadata: Optional[dict[str, Any]] = None
     ) -> None:
         """Save a benchmark result."""
         import uuid
@@ -162,10 +158,7 @@ class BenchmarkStorage:
 
             # Optionally save raw samples
             if save_samples:
-                samples = [
-                    (str(uuid.uuid4()), result_id, i, t * 1000)
-                    for i, t in enumerate(result.times)
-                ]
+                samples = [(str(uuid.uuid4()), result_id, i, t * 1000) for i, t in enumerate(result.times)]
                 conn.executemany(
                     """
                     INSERT INTO benchmark_samples
@@ -176,11 +169,7 @@ class BenchmarkStorage:
                 )
 
     def get_comparison_baseline(
-        self,
-        benchmark_type: str,
-        adapter: str,
-        operation: str,
-        days: int = 7,
+        self, benchmark_type: str, adapter: str, operation: str, days: int = 7
     ) -> Optional[dict[str, float]]:
         """Get baseline metrics for comparison."""
         with duckdb.connect(str(self.db_path)) as conn:
@@ -202,12 +191,7 @@ class BenchmarkStorage:
             ).fetchone()
 
             if result and result[3] > 0:  # sample_count > 0
-                return {
-                    "avg_ms": result[0],
-                    "min_ms": result[1],
-                    "max_ms": result[2],
-                    "sample_count": result[3],
-                }
+                return {"avg_ms": result[0], "min_ms": result[1], "max_ms": result[2], "sample_count": result[3]}
 
             return None
 

@@ -22,12 +22,7 @@ class BenchmarkRunner:
         self.system_info = SystemInfo()
         self.current_run_id: Optional[str] = None
 
-    def start_run(
-        self,
-        benchmark_type: str,
-        adapter: str,
-        metadata: Optional[dict[str, Any]] = None,
-    ) -> str:
+    def start_run(self, benchmark_type: str, adapter: str, metadata: Optional[dict[str, Any]] = None) -> str:
         """Start a new benchmark run."""
         self.current_run_id = str(uuid.uuid4())
 

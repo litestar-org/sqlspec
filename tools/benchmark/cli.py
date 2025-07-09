@@ -154,6 +154,13 @@ def run(
     if all_results:
         if len(suites_to_run) > 1:
             console.print("\n" + "=" * 80)
+            console.print("\n[bold cyan]📊 Detailed Analysis by Suite[/bold cyan]\n")
+
+            # Display all suite-specific analyses
+            summary.display_suite_results("all", all_results)
+
+            console.print("\n" + "=" * 80)
+
         summary.display_overall_summary(
             all_results, system_info=runner.system_info.to_dict(), regressions=regressions, improvements=improvements
         )

@@ -2,8 +2,9 @@
 
 import logging
 from contextlib import contextmanager
-from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict
+
+from typing_extensions import NotRequired
 
 from sqlspec.adapters.adbc.driver import AdbcConnection, AdbcDriver
 from sqlspec.adapters.adbc.transformers import AdbcPostgresTransformer
@@ -20,6 +21,38 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
 logger = logging.getLogger("sqlspec.adapters.adbc")
+
+
+class AdbcConnectionParams(TypedDict, total=False):
+    """ADBC connection parameters."""
+
+    uri: NotRequired[str]
+    driver_name: NotRequired[str]
+    db_kwargs: NotRequired[dict[str, Any]]
+    conn_kwargs: NotRequired[dict[str, Any]]
+    adbc_driver_manager_entrypoint: NotRequired[str]
+    autocommit: NotRequired[bool]
+    isolation_level: NotRequired[str]
+    batch_size: NotRequired[int]
+    query_timeout: NotRequired[float]
+    connection_timeout: NotRequired[float]
+    ssl_mode: NotRequired[str]
+    ssl_cert: NotRequired[str]
+    ssl_key: NotRequired[str]
+    ssl_ca: NotRequired[str]
+    username: NotRequired[str]
+    password: NotRequired[str]
+    token: NotRequired[str]
+    project_id: NotRequired[str]
+    dataset_id: NotRequired[str]
+    account: NotRequired[str]
+    warehouse: NotRequired[str]
+    database: NotRequired[str]
+    schema: NotRequired[str]
+    role: NotRequired[str]
+    authorization_header: NotRequired[str]
+    grpc_options: NotRequired[dict[str, Any]]
+
 
 CONNECTION_FIELDS = frozenset(
     {
@@ -426,13 +459,11 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                 statement_config = self.statement_config
                 if statement_config is not None:
                     if statement_config.dialect is None:
-                        statement_config = replace(statement_config, dialect=self._get_dialect())
+                        statement_config = statement_config.replace(dialect=self._get_dialect())
 
                     if statement_config.allowed_parameter_styles is None:
-                        statement_config = replace(
-                            statement_config,
-                            allowed_parameter_styles=supported_styles,
-                            default_parameter_style=preferred_style,
+                        statement_config = statement_config.replace(
+                            allowed_parameter_styles=supported_styles, default_parameter_style=preferred_style
                         )
 
                     # Add ADBC PostgreSQL transformer if needed
@@ -444,7 +475,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                         # Append our transformer to the existing ones
                         existing_transformers.append(AdbcPostgresTransformer())
 
-                        statement_config = replace(statement_config, transformers=existing_transformers)
+                        statement_config = statement_config.replace(transformers=existing_transformers)
 
                 driver = self.driver_type(connection=connection, config=statement_config)
                 yield driver

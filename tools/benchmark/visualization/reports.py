@@ -24,7 +24,11 @@ class BenchmarkSummary:
             "parameters": self.display_parameters_comparison,
         }
 
-        if suite_name in display_map:
+        if suite_name == "all":
+            # Display all suite-specific analyses
+            for display_func in display_map.values():
+                display_func(results)
+        elif suite_name in display_map:
             display_map[suite_name](results)
         else:
             # Generic display for any other suite
@@ -273,22 +277,21 @@ class BenchmarkSummary:
                 continue
 
             table = Table(title=f"{driver_type} Performance", show_header=True)
-            table.add_column("Operation", style="cyan", width=20)
-            table.add_column("SQLSpec\n(stmts/sec)", justify="right", style="green", width=12)
-            table.add_column("SQLSpec\n(% of best)", justify="right", style="green", width=12)
-            table.add_column("Core\n(stmts/sec)", justify="right", style="yellow", width=12)
-            table.add_column("Core\n(% of best)", justify="right", style="yellow", width=12)
-            table.add_column("ORM\n(stmts/sec)", justify="right", style="blue", width=12)
-            table.add_column("ORM\n(% of best)", justify="right", style="blue", width=12)
+            table.add_column("Operation", style="cyan", width=18)
+            table.add_column("SQLSpec\n(cached)", justify="right", style="green", width=11)
+            table.add_column("SQLSpec\n(no cache)", justify="right", style="green dim", width=11)
+            table.add_column("Core\n(stmts/sec)", justify="right", style="yellow", width=11)
+            table.add_column("ORM\n(stmts/sec)", justify="right", style="blue", width=11)
             table.add_column("Winner", justify="center", style="bold", width=10)
 
             for op_key, op_name in key_operations:
                 # Aggregate results across matching databases
-                sqlspec_stmts = []
+                sqlspec_cache_stmts = []
+                sqlspec_no_cache_stmts = []
                 core_stmts = []
                 orm_stmts = []
 
-                for db_name, db_ops in matching_dbs.items():
+                for db_ops in matching_dbs.values():
                     for result_key, result in db_ops.items():
                         if op_key in result_key or result_key.startswith(op_key):
                             stmts_per_sec = 1000.0 / result.avg_ms if result.avg_ms > 0 else 0
@@ -297,26 +300,27 @@ class BenchmarkSummary:
                                 core_stmts.append(stmts_per_sec)
                             elif "orm" in result_key:
                                 orm_stmts.append(stmts_per_sec)
-                            elif "sqlspec" in result_key:
-                                sqlspec_stmts.append(stmts_per_sec)
+                            elif "sqlspec_cache" in result_key:
+                                sqlspec_cache_stmts.append(stmts_per_sec)
+                            elif "sqlspec_no_cache" in result_key:
+                                sqlspec_no_cache_stmts.append(stmts_per_sec)
 
                 # Calculate averages
-                avg_sqlspec = sum(sqlspec_stmts) / len(sqlspec_stmts) if sqlspec_stmts else 0
+                avg_sqlspec_cache = sum(sqlspec_cache_stmts) / len(sqlspec_cache_stmts) if sqlspec_cache_stmts else 0
+                avg_sqlspec_no_cache = (
+                    sum(sqlspec_no_cache_stmts) / len(sqlspec_no_cache_stmts) if sqlspec_no_cache_stmts else 0
+                )
                 avg_core = sum(core_stmts) / len(core_stmts) if core_stmts else 0
                 avg_orm = sum(orm_stmts) / len(orm_stmts) if orm_stmts else 0
 
-                # Calculate percentages relative to fastest SQLSpec
-                sqlspec_pct = (
-                    (avg_sqlspec / fastest_sqlspec_stmts_per_sec * 100) if fastest_sqlspec_stmts_per_sec > 0 else 0
-                )
-                core_pct = (avg_core / fastest_sqlspec_stmts_per_sec * 100) if fastest_sqlspec_stmts_per_sec > 0 else 0
-                orm_pct = (avg_orm / fastest_sqlspec_stmts_per_sec * 100) if fastest_sqlspec_stmts_per_sec > 0 else 0
+                # Use the faster SQLSpec version as the best SQLSpec performance
+                best_sqlspec = max(avg_sqlspec_cache, avg_sqlspec_no_cache)
 
                 # Determine winner
                 winner = "N/A"
-                if avg_sqlspec > 0 or avg_core > 0 or avg_orm > 0:
-                    max_val = max(avg_sqlspec, avg_core, avg_orm)
-                    if max_val == avg_sqlspec:
+                if best_sqlspec > 0 or avg_core > 0 or avg_orm > 0:
+                    max_val = max(best_sqlspec, avg_core, avg_orm)
+                    if max_val == best_sqlspec:
                         winner = "SQLSpec"
                     elif max_val == avg_core:
                         winner = "Core"
@@ -325,12 +329,10 @@ class BenchmarkSummary:
 
                 table.add_row(
                     op_name,
-                    f"{avg_sqlspec:,.0f}" if avg_sqlspec > 0 else "N/A",
-                    f"{sqlspec_pct:.1f}%" if sqlspec_pct > 0 else "N/A",
+                    f"{avg_sqlspec_cache:,.0f}" if avg_sqlspec_cache > 0 else "N/A",
+                    f"{avg_sqlspec_no_cache:,.0f}" if avg_sqlspec_no_cache > 0 else "N/A",
                     f"{avg_core:,.0f}" if avg_core > 0 else "N/A",
-                    f"{core_pct:.1f}%" if core_pct > 0 else "N/A",
                     f"{avg_orm:,.0f}" if avg_orm > 0 else "N/A",
-                    f"{orm_pct:.1f}%" if orm_pct > 0 else "N/A",
                     winner,
                 )
 
@@ -446,10 +448,7 @@ class BenchmarkSummary:
 
                     # Calculate best to worst ratio
                     times = [t for t in [sqlspec_ms, core_ms, orm_ms] if t is not None]
-                    if times:
-                        ratio = max(times) / min(times)
-                    else:
-                        ratio = None
+                    ratio = max(times) / min(times) if times else None
 
                     table.add_row(
                         db_name,

@@ -3,7 +3,9 @@
 import logging
 import sqlite3
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict
+
+from typing_extensions import NotRequired
 
 from sqlspec.adapters.sqlite.driver import SqliteConnection, SqliteDriver
 from sqlspec.config import NoPoolSyncConfig
@@ -15,6 +17,20 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+class SqliteConnectionParams(TypedDict, total=False):
+    """SQLite connection parameters."""
+
+    database: NotRequired[str]
+    timeout: NotRequired[float]
+    detect_types: NotRequired[int]
+    isolation_level: NotRequired[Optional[str]]
+    check_same_thread: NotRequired[bool]
+    factory: NotRequired[Optional[type[SqliteConnection]]]
+    cached_statements: NotRequired[int]
+    uri: NotRequired[bool]
+
 
 CONNECTION_FIELDS = frozenset(
     {
@@ -48,7 +64,7 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
         # SQLite connection parameters
         timeout: Optional[float] = None,
         detect_types: Optional[int] = None,
-        isolation_level: Union[None, str] = None,
+        isolation_level: Optional[str] = None,
         check_same_thread: Optional[bool] = None,
         factory: Optional[type[SqliteConnection]] = None,
         cached_statements: Optional[int] = None,
@@ -146,10 +162,7 @@ class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
             statement_config = self.statement_config
             # Inject parameter style info if not already set
             if statement_config.allowed_parameter_styles is None:
-                from dataclasses import replace
-
-                statement_config = replace(
-                    statement_config,
+                statement_config = statement_config.replace(
                     allowed_parameter_styles=self.supported_parameter_styles,
                     default_parameter_style=self.default_parameter_style,
                 )

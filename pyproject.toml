@@ -126,34 +126,26 @@ allow-direct-references = true
 include = ["NOTICE"]
 packages = ["sqlspec"]
 
-# Mypyc build hook configuration - disabled by default
+
 [tool.hatch.build.targets.wheel.hooks.mypyc]
 dependencies = ["hatch-mypyc"]
 enable-by-default = false
-require-runtime-features = ["performance"]
 exclude = [
-  "sqlspec/**/tests/**",    # All test directories
-  "sqlspec/**/__main__.py", # Main entry points (can't be run directly when compiled)
-  "sqlspec/**/_typing.py",  # Type definitions
-  "sqlspec/cli.py",         # CLI module (not performance-critical)
-  "sqlspec/**/__init__.py", # Init files (usually just imports)
+  # "tests/**",    # All test directories
+  # "sqlspec/__main__.py", # Main entry points (can't be run directly when compiled)
+  # "sqlspec/_typing.py",  # Type definitions
+  # "sqlspec/cli.py",         # CLI module (not performance-critical)
+  # "sqlspec/**/__init__.py", # Init files (usually just imports)
 ]
 include = [
-  # Currently disabled for development - enable only when building release wheels
-  # "sqlspec/utils/statement_hashing.py",
-  # "sqlspec/utils/text.py",              # String processing utilities
-  # "sqlspec/utils/sync_tools.py",        # Async/sync conversion utilities
-  # "sqlspec/statement/sql.py",  # Disabled - dataclass issues with mypyc (SQLConfig, _ProcessedState)
-  # "sqlspec/statement/pipelines/transformers/_literal_parameterizer.py", # AST traversal (Phase 2) - fixed hasattr issues
-  # "sqlspec/statement/parameters.py",  # Disabled - dataclass issues with mypyc
-  # "sqlspec/statement/cache.py", # Statement caching
-  # Add more as needed:
-  # "sqlspec/utils/**/*.py",  # All utils
-  # "sqlspec/statement/**/*.py",  # All statement modules
+  "sqlspec/utils/statement_hashing.py",
+  "sqlspec/utils/text.py",
+  "sqlspec/utils/sync_tools.py",
+  "sqlspec/statement/sql.py",
+  "sqlspec/statement/pipelines/transformers/_literal_parameterizer.py",
+  "sqlspec/statement/parameters.py",
+  "sqlspec/statement/cache.py",
 ]
-require-runtime-dependencies = false
-
-# Mypy arguments for type checking during build
 mypy-args = [
   "--ignore-missing-imports",
   "--allow-untyped-defs",
@@ -163,6 +155,8 @@ mypy-args = [
   "--no-warn-unused-ignores",
   "--follow-imports=skip",
 ]
+require-runtime-dependencies = true
+require-runtime-features = ["performance"]
 
 # Mypyc compilation options
 [tool.hatch.build.targets.wheel.hooks.mypyc.options]

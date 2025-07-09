@@ -23,7 +23,7 @@ uv run python -m tools.benchmark run --quick
 # Run specific benchmark suite
 uv run python -m tools.benchmark run --suite sql-compilation
 
-# Run parameter styles for specific adapter  
+# Run parameter styles for specific adapter
 uv run python -m tools.benchmark run --suite parameter-styles --adapter sqlite
 ```
 
@@ -87,7 +87,7 @@ tools/benchmark/
 --iterations <n>         # Override default iteration count
 --quick                  # Quick mode with fewer iterations
 
-# Container management  
+# Container management
 --keep-containers        # Don't cleanup containers after run
 --no-containers          # Skip container-based tests
 
@@ -110,7 +110,7 @@ Environment variables:
 
 - Core framework (metrics, storage, runner)
 - CLI interface with rich formatting
-- SQL compilation benchmarks  
+- SQL compilation benchmarks
 - Parameter styles benchmarks
 - TypedParameter benchmarks
 - DuckDB storage with regression detection

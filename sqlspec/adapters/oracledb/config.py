@@ -4,9 +4,10 @@ import contextlib
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, cast
 
 import oracledb
+from typing_extensions import NotRequired
 
 from sqlspec.adapters.oracledb.driver import (
     OracleAsyncConnection,
@@ -28,6 +29,46 @@ if TYPE_CHECKING:
 __all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "OracleAsyncConfig", "OracleSyncConfig")
 
 logger = logging.getLogger(__name__)
+
+
+class OracleConnectionParams(TypedDict, total=False):
+    """OracleDB connection parameters."""
+
+    dsn: NotRequired[str]
+    user: NotRequired[str]
+    password: NotRequired[str]
+    host: NotRequired[str]
+    port: NotRequired[int]
+    service_name: NotRequired[str]
+    sid: NotRequired[str]
+    wallet_location: NotRequired[str]
+    wallet_password: NotRequired[str]
+    config_dir: NotRequired[str]
+    tcp_connect_timeout: NotRequired[float]
+    retry_count: NotRequired[int]
+    retry_delay: NotRequired[int]
+    mode: NotRequired["AuthMode"]
+    events: NotRequired[bool]
+    edition: NotRequired[str]
+
+
+class OraclePoolParams(OracleConnectionParams, total=False):
+    """OracleDB pool parameters."""
+
+    min: NotRequired[int]
+    max: NotRequired[int]
+    increment: NotRequired[int]
+    threaded: NotRequired[bool]
+    getmode: NotRequired[Any]
+    homogeneous: NotRequired[bool]
+    timeout: NotRequired[int]
+    wait_timeout: NotRequired[int]
+    max_lifetime_session: NotRequired[int]
+    session_callback: NotRequired["Callable[..., Any]"]
+    max_sessions_per_shard: NotRequired[int]
+    soda_metadata_cache: NotRequired[bool]
+    ping_interval: NotRequired[int]
+
 
 CONNECTION_FIELDS = frozenset(
     {
@@ -255,10 +296,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
             statement_config = self.statement_config
             # Inject parameter style info if not already set
             if statement_config.allowed_parameter_styles is None:
-                from dataclasses import replace
-
-                statement_config = replace(
-                    statement_config,
+                statement_config = statement_config.replace(
                     allowed_parameter_styles=self.supported_parameter_styles,
                     default_parameter_style=self.default_parameter_style,
                 )
@@ -539,10 +577,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
             statement_config = self.statement_config
             # Inject parameter style info if not already set
             if statement_config.allowed_parameter_styles is None:
-                from dataclasses import replace
-
-                statement_config = replace(
-                    statement_config,
+                statement_config = statement_config.replace(
                     allowed_parameter_styles=self.supported_parameter_styles,
                     default_parameter_style=self.default_parameter_style,
                 )

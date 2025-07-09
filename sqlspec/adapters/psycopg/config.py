@@ -3,10 +3,11 @@
 import contextlib
 import logging
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, cast
 
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
+from typing_extensions import NotRequired
 
 from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncConnection,
@@ -24,6 +25,42 @@ if TYPE_CHECKING:
     from psycopg import Connection
 
 logger = logging.getLogger("sqlspec.adapters.psycopg")
+
+
+class PsycopgConnectionParams(TypedDict, total=False):
+    """Psycopg connection parameters."""
+
+    conninfo: NotRequired[str]
+    host: NotRequired[str]
+    port: NotRequired[int]
+    user: NotRequired[str]
+    password: NotRequired[str]
+    dbname: NotRequired[str]
+    connect_timeout: NotRequired[int]
+    options: NotRequired[str]
+    application_name: NotRequired[str]
+    sslmode: NotRequired[str]
+    sslcert: NotRequired[str]
+    sslkey: NotRequired[str]
+    sslrootcert: NotRequired[str]
+    autocommit: NotRequired[bool]
+
+
+class PsycopgPoolParams(PsycopgConnectionParams, total=False):
+    """Psycopg pool parameters."""
+
+    min_size: NotRequired[int]
+    max_size: NotRequired[int]
+    name: NotRequired[str]
+    timeout: NotRequired[float]
+    max_waiting: NotRequired[int]
+    max_lifetime: NotRequired[float]
+    max_idle: NotRequired[float]
+    reconnect_timeout: NotRequired[float]
+    num_workers: NotRequired[int]
+    configure: NotRequired["Callable[..., Any]"]
+    kwargs: NotRequired[dict[str, Any]]
+
 
 CONNECTION_FIELDS = frozenset(
     {
@@ -345,10 +382,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             statement_config = self.statement_config
             # Inject parameter style info if not already set
             if statement_config.allowed_parameter_styles is None:
-                from dataclasses import replace
-
-                statement_config = replace(
-                    statement_config,
+                statement_config = statement_config.replace(
                     allowed_parameter_styles=self.supported_parameter_styles,
                     default_parameter_style=self.default_parameter_style,
                 )
@@ -652,10 +686,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             statement_config = self.statement_config
             # Inject parameter style info if not already set
             if statement_config.allowed_parameter_styles is None:
-                from dataclasses import replace
-
-                statement_config = replace(
-                    statement_config,
+                statement_config = statement_config.replace(
                     allowed_parameter_styles=self.supported_parameter_styles,
                     default_parameter_style=self.default_parameter_style,
                 )

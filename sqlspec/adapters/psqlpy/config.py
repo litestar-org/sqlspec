@@ -3,9 +3,10 @@
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict
 
 from psqlpy import ConnectionPool
+from typing_extensions import NotRequired
 
 from sqlspec.adapters.psqlpy.driver import PsqlpyConnection, PsqlpyDriver
 from sqlspec.config import AsyncDatabaseConfig
@@ -17,6 +18,59 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger("sqlspec.adapters.psqlpy")
+
+
+class PsqlpyConnectionParams(TypedDict, total=False):
+    """Psqlpy connection parameters."""
+
+    dsn: NotRequired[str]
+    username: NotRequired[str]
+    password: NotRequired[str]
+    db_name: NotRequired[str]
+    host: NotRequired[str]
+    port: NotRequired[int]
+    connect_timeout_sec: NotRequired[int]
+    connect_timeout_nanosec: NotRequired[int]
+    tcp_user_timeout_sec: NotRequired[int]
+    tcp_user_timeout_nanosec: NotRequired[int]
+    keepalives: NotRequired[bool]
+    keepalives_idle_sec: NotRequired[int]
+    keepalives_idle_nanosec: NotRequired[int]
+    keepalives_interval_sec: NotRequired[int]
+    keepalives_interval_nanosec: NotRequired[int]
+    keepalives_retries: NotRequired[int]
+    ssl_mode: NotRequired[str]
+    ca_file: NotRequired[str]
+    target_session_attrs: NotRequired[str]
+    options: NotRequired[str]
+    application_name: NotRequired[str]
+    client_encoding: NotRequired[str]
+    gssencmode: NotRequired[str]
+    sslnegotiation: NotRequired[str]
+    sslcompression: NotRequired[str]
+    sslcert: NotRequired[str]
+    sslkey: NotRequired[str]
+    sslpassword: NotRequired[str]
+    sslrootcert: NotRequired[str]
+    sslcrl: NotRequired[str]
+    require_auth: NotRequired[str]
+    channel_binding: NotRequired[str]
+    krbsrvname: NotRequired[str]
+    gsslib: NotRequired[str]
+    gssdelegation: NotRequired[str]
+    service: NotRequired[str]
+    load_balance_hosts: NotRequired[str]
+
+
+class PsqlpyPoolParams(PsqlpyConnectionParams, total=False):
+    """Psqlpy pool parameters."""
+
+    hosts: NotRequired[list[str]]
+    ports: NotRequired[list[int]]
+    conn_recycling_method: NotRequired[str]
+    max_db_pool_size: NotRequired[int]
+    configure: NotRequired["Callable[..., Any]"]
+
 
 CONNECTION_FIELDS = frozenset(
     {
@@ -67,9 +121,6 @@ __all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "PsqlpyConfig")
 
 class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyDriver]):
     """Configuration for Psqlpy asynchronous database connections with direct field-based configuration."""
-
-    is_async: ClassVar[bool] = True
-    supports_connection_pooling: ClassVar[bool] = True
 
     driver_type: type[PsqlpyDriver] = PsqlpyDriver
     connection_type: type[PsqlpyConnection] = PsqlpyConnection
@@ -341,10 +392,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             statement_config = self.statement_config
             # Inject parameter style info if not already set
             if statement_config.allowed_parameter_styles is None:
-                from dataclasses import replace
-
-                statement_config = replace(
-                    statement_config,
+                statement_config = statement_config.replace(
                     allowed_parameter_styles=self.supported_parameter_styles,
                     default_parameter_style=self.default_parameter_style,
                 )
