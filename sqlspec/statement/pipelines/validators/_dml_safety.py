@@ -1,5 +1,4 @@
 # DML Safety Validator - Consolidates risky DML operations and DDL prevention
-from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
@@ -25,16 +24,33 @@ class StatementCategory(Enum):
     TCL = "tcl"  # COMMIT, ROLLBACK, SAVEPOINT
 
 
-@dataclass
 class DMLSafetyConfig:
     """Configuration for DML safety validation."""
 
-    prevent_ddl: bool = True
-    prevent_dcl: bool = True
-    require_where_clause: "set[str]" = field(default_factory=lambda: {"DELETE", "UPDATE"})
-    allowed_ddl_operations: "set[str]" = field(default_factory=set)
-    migration_mode: bool = False  # Allow DDL in migration contexts
-    max_affected_rows: "Optional[int]" = None  # Limit for DML operations
+    __slots__ = (
+        "allowed_ddl_operations",
+        "max_affected_rows",
+        "migration_mode",
+        "prevent_dcl",
+        "prevent_ddl",
+        "require_where_clause",
+    )
+
+    def __init__(
+        self,
+        prevent_ddl: bool = True,
+        prevent_dcl: bool = True,
+        require_where_clause: Optional["set[str]"] = None,
+        allowed_ddl_operations: Optional["set[str]"] = None,
+        migration_mode: bool = False,
+        max_affected_rows: "Optional[int]" = None,
+    ) -> None:
+        self.prevent_ddl = prevent_ddl
+        self.prevent_dcl = prevent_dcl
+        self.require_where_clause = require_where_clause if require_where_clause is not None else {"DELETE", "UPDATE"}
+        self.allowed_ddl_operations = allowed_ddl_operations if allowed_ddl_operations is not None else set()
+        self.migration_mode = migration_mode
+        self.max_affected_rows = max_affected_rows
 
 
 class DMLSafetyValidator(ProcessorProtocol):

@@ -48,14 +48,17 @@ install: destroy clean                              ## Install the project, depe
 	@uv sync --all-extras --dev
 	@echo "${OK} Installation complete! 🎉"
 
-.PHONY: install-performance
-install-performance: destroy clean                  ## Install with mypyc compilation for performance
+.PHONY: install-compiled
+install-compiled: destroy clean                  ## Install with mypyc compilation for performance
 	@echo "${INFO} Starting fresh installation with mypyc compilation..."
 	@uv python pin 3.12 >/dev/null 2>&1
 	@uv venv >/dev/null 2>&1
-	@echo "${INFO} Compiling performance extensions with mypyc..."
-	@HATCH_BUILD_HOOKS_ENABLE=1 uv sync --all-extras --dev
+	@echo "${INFO} Installing in editable mode with mypyc compilation..."
+	@HATCH_BUILD_HOOKS_ENABLE=1 uv pip install -e .
+	@uv sync --all-extras --dev
 	@echo "${OK} Performance installation complete! 🚀"
+	@echo "${INFO} Verifying compilation..."
+	@find sqlspec -name "*.so" | wc -l | xargs -I {} echo "${OK} Compiled {} modules"
 
 .PHONY: destroy
 destroy:                                            ## Destroy the virtual environment
@@ -106,6 +109,7 @@ test-mypyc:                                        ## Test mypyc compilation on 
 	@uv run mypyc --check-untyped-defs sqlspec/utils/sync_tools.py
 	@uv run mypyc --check-untyped-defs sqlspec/statement/cache.py
 	@echo "${OK} Mypyc compilation tests passed ✨"
+
 
 .PHONY: release
 release:                                           ## Bump version and create release tag

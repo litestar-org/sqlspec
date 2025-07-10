@@ -2,7 +2,6 @@
 
 import logging
 from collections import defaultdict
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
 from sqlglot import expressions as exp
@@ -40,92 +39,173 @@ logger = logging.getLogger(__name__)
 DEEP_NESTING_THRESHOLD = 2
 
 
-@dataclass
 class PerformanceConfig:
     """Configuration for performance validation."""
 
-    max_joins: int = 5
-    max_subqueries: int = 3
-    max_union_branches: int = 5
-    warn_on_cartesian: bool = True
-    warn_on_missing_index: bool = True
-    complexity_threshold: int = 50
-    analyze_execution_plan: bool = False
+    __slots__ = (
+        "analyze_execution_plan",
+        "complexity_threshold",
+        "enable_optimization_analysis",
+        "max_joins",
+        "max_optimization_attempts",
+        "max_subqueries",
+        "max_union_branches",
+        "optimization_threshold",
+        "suggest_optimizations",
+        "warn_on_cartesian",
+        "warn_on_missing_index",
+    )
 
-    # SQLGlot optimization analysis
-    enable_optimization_analysis: bool = True
-    suggest_optimizations: bool = True
-    optimization_threshold: float = 0.2  # 20% potential improvement to flag
-    max_optimization_attempts: int = 3
+    def __init__(
+        self,
+        max_joins: int = 5,
+        max_subqueries: int = 3,
+        max_union_branches: int = 5,
+        warn_on_cartesian: bool = True,
+        warn_on_missing_index: bool = True,
+        complexity_threshold: int = 50,
+        analyze_execution_plan: bool = False,
+        enable_optimization_analysis: bool = True,
+        suggest_optimizations: bool = True,
+        optimization_threshold: float = 0.2,
+        max_optimization_attempts: int = 3,
+    ) -> None:
+        self.max_joins = max_joins
+        self.max_subqueries = max_subqueries
+        self.max_union_branches = max_union_branches
+        self.warn_on_cartesian = warn_on_cartesian
+        self.warn_on_missing_index = warn_on_missing_index
+        self.complexity_threshold = complexity_threshold
+        self.analyze_execution_plan = analyze_execution_plan
+        self.enable_optimization_analysis = enable_optimization_analysis
+        self.suggest_optimizations = suggest_optimizations
+        self.optimization_threshold = optimization_threshold
+        self.max_optimization_attempts = max_optimization_attempts
 
 
-@dataclass
 class PerformanceIssue:
     """Represents a performance issue found during validation."""
 
-    issue_type: str  # "cartesian", "excessive_joins", "missing_index", etc.
-    severity: str  # "warning", "error", "critical"
-    description: str
-    impact: str  # Expected performance impact
-    recommendation: str
-    location: "Optional[str]" = None  # SQL fragment
+    __slots__ = ("description", "impact", "issue_type", "location", "recommendation", "severity")
+
+    def __init__(
+        self,
+        issue_type: str,
+        severity: str,
+        description: str,
+        impact: str,
+        recommendation: str,
+        location: "Optional[str]" = None,
+    ) -> None:
+        self.issue_type = issue_type
+        self.severity = severity
+        self.description = description
+        self.impact = impact
+        self.recommendation = recommendation
+        self.location = location
 
 
-@dataclass
 class JoinCondition:
     """Information about a join condition."""
 
-    left_table: str
-    right_table: str
-    condition: "Optional[exp.Expression]"
-    join_type: str
+    __slots__ = ("condition", "join_type", "left_table", "right_table")
+
+    def __init__(
+        self, left_table: str, right_table: str, condition: "Optional[exp.Expression]", join_type: str
+    ) -> None:
+        self.left_table = left_table
+        self.right_table = right_table
+        self.condition = condition
+        self.join_type = join_type
 
 
-@dataclass
 class OptimizationOpportunity:
     """Represents a potential optimization for the query."""
 
-    optimization_type: str  # "join_elimination", "predicate_pushdown", etc.
-    description: str
-    potential_improvement: float  # Estimated improvement factor (0.0 to 1.0)
-    complexity_reduction: int  # Estimated complexity score reduction
-    recommendation: str
-    optimized_sql: "Optional[str]" = None
+    __slots__ = (
+        "complexity_reduction",
+        "description",
+        "optimization_type",
+        "optimized_sql",
+        "potential_improvement",
+        "recommendation",
+    )
+
+    def __init__(
+        self,
+        optimization_type: str,
+        description: str,
+        potential_improvement: float,
+        complexity_reduction: int,
+        recommendation: str,
+        optimized_sql: "Optional[str]" = None,
+    ) -> None:
+        self.optimization_type = optimization_type
+        self.description = description
+        self.potential_improvement = potential_improvement
+        self.complexity_reduction = complexity_reduction
+        self.recommendation = recommendation
+        self.optimized_sql = optimized_sql
 
 
-@dataclass
 class PerformanceAnalysis:
     """Tracks performance metrics during AST traversal."""
 
-    # Join analysis
-    join_count: int = 0
-    join_types: "dict[str, int]" = field(default_factory=dict)
-    join_conditions: "list[JoinCondition]" = field(default_factory=list)
-    tables: "set[str]" = field(default_factory=set)
+    __slots__ = (
+        "correlated_subqueries",
+        "current_subquery_depth",
+        "distinct_operations",
+        "group_by_columns",
+        "implicit_conversions",
+        "join_conditions",
+        "join_count",
+        "join_types",
+        "max_subquery_depth",
+        "non_sargable_predicates",
+        "optimization_opportunities",
+        "optimized_complexity",
+        "order_by_columns",
+        "original_complexity",
+        "potential_improvement",
+        "select_star_count",
+        "subquery_count",
+        "tables",
+        "union_branches",
+        "where_conditions",
+    )
 
-    # Subquery analysis
-    subquery_count: int = 0
-    max_subquery_depth: int = 0
-    current_subquery_depth: int = 0
-    correlated_subqueries: int = 0
+    def __init__(self) -> None:
+        # Join analysis
+        self.join_count: int = 0
+        self.join_types: dict[str, int] = {}
+        self.join_conditions: list[JoinCondition] = []
+        self.tables: set[str] = set()
 
-    # Complexity metrics
-    where_conditions: int = 0
-    group_by_columns: int = 0
-    order_by_columns: int = 0
-    distinct_operations: int = 0
-    union_branches: int = 0
+        # Subquery analysis
+        self.subquery_count: int = 0
+        self.max_subquery_depth: int = 0
+        self.current_subquery_depth: int = 0
+        self.correlated_subqueries: int = 0
 
-    # Anti-patterns
-    select_star_count: int = 0
-    implicit_conversions: int = 0
-    non_sargable_predicates: int = 0
+        # Complexity metrics
+        self.where_conditions: int = 0
+        self.group_by_columns: int = 0
+        self.order_by_columns: int = 0
+        self.distinct_operations: int = 0
+        self.union_branches: int = 0
 
-    # SQLGlot optimization analysis
-    optimization_opportunities: "list[OptimizationOpportunity]" = field(default_factory=list)
-    original_complexity: int = 0
-    optimized_complexity: int = 0
-    potential_improvement: float = 0.0
+        # Anti-patterns
+        self.select_star_count: int = 0
+        self.implicit_conversions: int = 0
+        self.non_sargable_predicates: int = 0
+
+        # SQLGlot optimization analysis
+        self.optimization_opportunities: list[OptimizationOpportunity] = []
+
+        # Additional fields
+        self.original_complexity: int = 0
+        self.optimized_complexity: int = 0
+        self.potential_improvement: float = 0.0
 
 
 class PerformanceValidator(ProcessorProtocol):

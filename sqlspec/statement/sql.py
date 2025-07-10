@@ -9,7 +9,7 @@ from sqlglot.errors import ParseError
 from typing_extensions import TypeAlias
 
 from sqlspec.exceptions import RiskLevel, SQLParsingError, SQLValidationError
-from sqlspec.statement.cache import sql_cache
+from sqlspec.statement.cache import ast_fragment_cache, sql_cache
 from sqlspec.statement.filters import StatementFilter
 from sqlspec.statement.parameters import (
     SQLGLOT_INCOMPATIBLE_STYLES,
@@ -875,6 +875,13 @@ class SQL:
         else:
             self._parameter_conversion_state = None
 
+        # Try to get from AST cache first
+        cached_expr = ast_fragment_cache.parse_with_cache(converted_sql, fragment_type="QUERY", dialect=self._dialect)
+
+        if cached_expr:
+            return cached_expr
+
+        # Fall back to regular parsing if not cached
         try:
             expressions = sqlglot.parse(converted_sql, dialect=self._dialect)  # pyright: ignore
             if not expressions:
@@ -882,6 +889,15 @@ class SQL:
             first_expr = expressions[0]
             if first_expr is None:
                 return exp.Anonymous(this=statement)
+
+            # Cache the successfully parsed expression
+            ast_fragment_cache.set_fragment(
+                sql=converted_sql,
+                expression=first_expr,
+                fragment_type="QUERY",
+                dialect=self._dialect,
+                parameter_count=len(param_info),
+            )
 
         except ParseError as e:
             # Use direct attribute access for mypyc compatibility

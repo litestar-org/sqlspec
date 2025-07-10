@@ -138,13 +138,47 @@ exclude = [
   # "sqlspec/**/__init__.py", # Init files (usually just imports)
 ]
 include = [
+  # === HOT PATH MODULES (from profiling) ===
+  # SQL parsing and execution (0.2-1.3ms bottleneck)
+  "sqlspec/statement/sql.py",
+  "sqlspec/statement/parameters.py",
+
+  # === PIPELINE COMPONENTS ===
+  # Pipeline context
+  "sqlspec/statement/pipelines/context.py",
+
+  # Transformers (AST transformation hot paths)
+  "sqlspec/statement/pipelines/transformers/_literal_parameterizer.py",
+  "sqlspec/statement/pipelines/transformers/_expression_simplifier.py",
+  "sqlspec/statement/pipelines/transformers/_remove_comments_and_hints.py",
+
+  # Analyzers
+  "sqlspec/statement/pipelines/analyzers/_analyzer.py",
+
+  # Validators
+  "sqlspec/statement/pipelines/validators/_dml_safety.py",
+  "sqlspec/statement/pipelines/validators/_parameter_style.py",
+  "sqlspec/statement/pipelines/validators/_performance.py",
+  "sqlspec/statement/pipelines/validators/_security.py",
+
+  # === ADAPTER-SPECIFIC TRANSFORMERS ===
+  "sqlspec/adapters/adbc/transformers.py",
+  "sqlspec/adapters/psycopg/transformers.py",
+
+  # === CACHING AND UTILITIES ===
+  "sqlspec/statement/cache.py",
+
+  # === DRIVER CORE ===
+  "sqlspec/driver/parameters.py",
+
+  # === STATEMENT PROCESSING ===
+  "sqlspec/statement/splitter.py",
+  "sqlspec/statement/filters.py",
+
+  # === UTILITY MODULES (imported by hot paths) ===
   "sqlspec/utils/statement_hashing.py",
   "sqlspec/utils/text.py",
   "sqlspec/utils/sync_tools.py",
-  "sqlspec/statement/sql.py",
-  "sqlspec/statement/pipelines/transformers/_literal_parameterizer.py",
-  "sqlspec/statement/parameters.py",
-  "sqlspec/statement/cache.py",
 ]
 mypy-args = [
   "--ignore-missing-imports",

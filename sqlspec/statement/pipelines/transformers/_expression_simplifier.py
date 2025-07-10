@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional, cast
 
 from sqlglot.optimizer import simplify
@@ -14,15 +13,30 @@ if TYPE_CHECKING:
 __all__ = ("ExpressionSimplifier", "SimplificationConfig")
 
 
-@dataclass
 class SimplificationConfig:
     """Configuration for expression simplification."""
 
-    enable_literal_folding: bool = True
-    enable_boolean_optimization: bool = True
-    enable_connector_optimization: bool = True
-    enable_equality_conversion: bool = True
-    enable_complement_removal: bool = True
+    __slots__ = (
+        "enable_boolean_optimization",
+        "enable_complement_removal",
+        "enable_connector_optimization",
+        "enable_equality_conversion",
+        "enable_literal_folding",
+    )
+
+    def __init__(
+        self,
+        enable_literal_folding: bool = True,
+        enable_boolean_optimization: bool = True,
+        enable_connector_optimization: bool = True,
+        enable_equality_conversion: bool = True,
+        enable_complement_removal: bool = True,
+    ) -> None:
+        self.enable_literal_folding = enable_literal_folding
+        self.enable_boolean_optimization = enable_boolean_optimization
+        self.enable_connector_optimization = enable_connector_optimization
+        self.enable_equality_conversion = enable_equality_conversion
+        self.enable_complement_removal = enable_complement_removal
 
 
 class ExpressionSimplifier(ProcessorProtocol):

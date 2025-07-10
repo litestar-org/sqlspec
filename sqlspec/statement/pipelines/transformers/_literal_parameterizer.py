@@ -1,6 +1,5 @@
 """Replaces literals in SQL with placeholders and extracts them using SQLGlot AST."""
 
-from dataclasses import dataclass
 from typing import Any, Optional, Union
 
 from sqlglot import exp
@@ -43,22 +42,51 @@ MIN_ENUM_LENGTH = 2
 """Minimum length for enum-like string values to be meaningful."""
 
 
-@dataclass
 class ParameterizationContext:
     """Context for tracking parameterization state during AST traversal."""
 
-    parent_stack: list[exp.Expression]
-    in_function_args: bool = False
-    in_case_when: bool = False
-    in_array: bool = False
-    in_in_clause: bool = False
-    in_recursive_cte: bool = False
-    in_subquery: bool = False
-    in_select_list: bool = False
-    in_join_condition: bool = False
-    function_depth: int = 0
-    cte_depth: int = 0
-    subquery_depth: int = 0
+    __slots__ = (
+        "cte_depth",
+        "function_depth",
+        "in_array",
+        "in_case_when",
+        "in_function_args",
+        "in_in_clause",
+        "in_join_condition",
+        "in_recursive_cte",
+        "in_select_list",
+        "in_subquery",
+        "parent_stack",
+        "subquery_depth",
+    )
+
+    def __init__(
+        self,
+        parent_stack: list[exp.Expression],
+        in_function_args: bool = False,
+        in_case_when: bool = False,
+        in_array: bool = False,
+        in_in_clause: bool = False,
+        in_recursive_cte: bool = False,
+        in_subquery: bool = False,
+        in_select_list: bool = False,
+        in_join_condition: bool = False,
+        function_depth: int = 0,
+        cte_depth: int = 0,
+        subquery_depth: int = 0,
+    ) -> None:
+        self.parent_stack = parent_stack
+        self.in_function_args = in_function_args
+        self.in_case_when = in_case_when
+        self.in_array = in_array
+        self.in_in_clause = in_in_clause
+        self.in_recursive_cte = in_recursive_cte
+        self.in_subquery = in_subquery
+        self.in_select_list = in_select_list
+        self.in_join_condition = in_join_condition
+        self.function_depth = function_depth
+        self.cte_depth = cte_depth
+        self.subquery_depth = subquery_depth
 
 
 class ParameterizeLiterals(ProcessorProtocol):

@@ -118,10 +118,14 @@ class ParameterInfo:
 
     def __repr__(self) -> str:
         """String representation compatible with dataclass.__repr__."""
-        field_strs = []
-        for slot in self.__slots__:
-            value = getattr(self, slot)
-            field_strs.append(f"{slot}={value!r}")
+        # mypyc removes __slots__ at runtime, so we hardcode the fields
+        field_strs = [
+            f"name={self.name!r}",
+            f"ordinal={self.ordinal!r}",
+            f"placeholder_text={self.placeholder_text!r}",
+            f"position={self.position!r}",
+            f"style={self.style!r}",
+        ]
         return f"{type(self).__name__}({', '.join(field_strs)})"
 
     def __hash__(self) -> int:
@@ -184,10 +188,13 @@ class TypedParameter:
 
     def __repr__(self) -> str:
         """String representation compatible with dataclass.__repr__."""
-        field_strs = []
-        for slot in self.__slots__:
-            value = getattr(self, slot)
-            field_strs.append(f"{slot}={value!r}")
+        # mypyc removes __slots__ at runtime, so we hardcode the fields
+        field_strs = [
+            f"semantic_name={self.semantic_name!r}",
+            f"sqlglot_type={self.sqlglot_type!r}",
+            f"type_hint={self.type_hint!r}",
+            f"value={self.value!r}",
+        ]
         return f"{type(self).__name__}({', '.join(field_strs)})"
 
 
@@ -250,14 +257,27 @@ class ParameterStyleConversionState:
         """Equality comparison compatible with dataclass.__eq__."""
         if not isinstance(other, type(self)):
             return False
-        return all(getattr(self, slot) == getattr(other, slot) for slot in self.__slots__)
+        # mypyc removes __slots__ at runtime, so we hardcode the comparison
+        return (
+            self.was_transformed == other.was_transformed
+            and self.original_styles == other.original_styles
+            and self.transformation_style == other.transformation_style
+            and self.placeholder_map == other.placeholder_map
+            and self.reverse_map == other.reverse_map
+            and self.original_param_info == other.original_param_info
+        )
 
     def __repr__(self) -> str:
         """String representation compatible with dataclass.__repr__."""
-        field_strs = []
-        for slot in self.__slots__:
-            value = getattr(self, slot)
-            field_strs.append(f"{slot}={value!r}")
+        # mypyc removes __slots__ at runtime, so we hardcode the fields
+        field_strs = [
+            f"original_param_info={self.original_param_info!r}",
+            f"original_styles={self.original_styles!r}",
+            f"placeholder_map={self.placeholder_map!r}",
+            f"reverse_map={self.reverse_map!r}",
+            f"transformation_style={self.transformation_style!r}",
+            f"was_transformed={self.was_transformed!r}",
+        ]
         return f"{type(self).__name__}({', '.join(field_strs)})"
 
 
@@ -292,14 +312,23 @@ class ConvertedParameters:
         """Equality comparison compatible with dataclass.__eq__."""
         if not isinstance(other, type(self)):
             return False
-        return all(getattr(self, slot) == getattr(other, slot) for slot in self.__slots__)
+        # mypyc removes __slots__ at runtime, so we hardcode the comparison
+        return (
+            self.transformed_sql == other.transformed_sql
+            and self.parameter_info == other.parameter_info
+            and self.merged_parameters == other.merged_parameters
+            and self.conversion_state == other.conversion_state
+        )
 
     def __repr__(self) -> str:
         """String representation compatible with dataclass.__repr__."""
-        field_strs = []
-        for slot in self.__slots__:
-            value = getattr(self, slot)
-            field_strs.append(f"{slot}={value!r}")
+        # mypyc removes __slots__ at runtime, so we hardcode the fields
+        field_strs = [
+            f"conversion_state={self.conversion_state!r}",
+            f"merged_parameters={self.merged_parameters!r}",
+            f"parameter_info={self.parameter_info!r}",
+            f"transformed_sql={self.transformed_sql!r}",
+        ]
         return f"{type(self).__name__}({', '.join(field_strs)})"
 
 

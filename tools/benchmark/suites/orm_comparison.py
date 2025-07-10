@@ -223,9 +223,13 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         """Get SQLite configs with and without caching."""
         db_path = ".benchmark/test_sync.db"
 
-        config_no_cache = SqliteConfig(database=db_path, statement_config=SQLConfig(enable_caching=False))
+        config_no_cache = SqliteConfig(
+            connection_config={"database": db_path}, statement_config=SQLConfig(enable_caching=False)
+        )
 
-        config_with_cache = SqliteConfig(database=db_path, statement_config=SQLConfig(enable_caching=True))
+        config_with_cache = SqliteConfig(
+            connection_config={"database": db_path}, statement_config=SQLConfig(enable_caching=True)
+        )
 
         return config_no_cache, config_with_cache
 
@@ -234,87 +238,67 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         db_path = ".benchmark/test_async.db"
 
         # AioSQLite doesn't support connection pooling
-        config_no_cache = AiosqliteConfig(database=db_path, statement_config=SQLConfig(enable_caching=False))
+        config_no_cache = AiosqliteConfig(
+            connection_config={"database": db_path}, statement_config=SQLConfig(enable_caching=False)
+        )
 
-        config_with_cache = AiosqliteConfig(database=db_path, statement_config=SQLConfig(enable_caching=True))
+        config_with_cache = AiosqliteConfig(
+            connection_config={"database": db_path}, statement_config=SQLConfig(enable_caching=True)
+        )
 
         return config_no_cache, config_with_cache
 
     def _get_psycopg_configs(self, host: str, port: int) -> tuple[PsycopgSyncConfig, PsycopgSyncConfig]:
         """Get Psycopg configs with and without caching."""
-        config_no_cache = PsycopgSyncConfig(
-            host=host,
-            port=port,
-            user=self.container_manager.docker_config.POSTGRES_DEFAULT_USER,
-            password=self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD,
-            dbname=self.container_manager.docker_config.POSTGRES_DEFAULT_DB,
-            min_size=10,
-            max_size=20,
-            statement_config=SQLConfig(enable_caching=False),
-        )
+        pool_params = {
+            "host": host,
+            "port": port,
+            "user": self.container_manager.docker_config.POSTGRES_DEFAULT_USER,
+            "password": self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD,
+            "dbname": self.container_manager.docker_config.POSTGRES_DEFAULT_DB,
+            "min_size": 10,
+            "max_size": 20,
+        }
 
-        config_with_cache = PsycopgSyncConfig(
-            host=host,
-            port=port,
-            user=self.container_manager.docker_config.POSTGRES_DEFAULT_USER,
-            password=self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD,
-            dbname=self.container_manager.docker_config.POSTGRES_DEFAULT_DB,
-            min_size=10,
-            max_size=20,
-            statement_config=SQLConfig(enable_caching=True),
-        )
+        config_no_cache = PsycopgSyncConfig(pool_config=pool_params, statement_config=SQLConfig(enable_caching=False))
+
+        config_with_cache = PsycopgSyncConfig(pool_config=pool_params, statement_config=SQLConfig(enable_caching=True))
 
         return config_no_cache, config_with_cache
 
     def _get_psycopg_async_configs(self, host: str, port: int) -> tuple[PsycopgAsyncConfig, PsycopgAsyncConfig]:
         """Get Psycopg Async configs with and without caching."""
-        config_no_cache = PsycopgAsyncConfig(
-            host=host,
-            port=port,
-            user=self.container_manager.docker_config.POSTGRES_DEFAULT_USER,
-            password=self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD,
-            dbname=self.container_manager.docker_config.POSTGRES_DEFAULT_DB,
-            min_size=10,
-            max_size=20,
-            statement_config=SQLConfig(enable_caching=False),
-        )
+        pool_params = {
+            "host": host,
+            "port": port,
+            "user": self.container_manager.docker_config.POSTGRES_DEFAULT_USER,
+            "password": self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD,
+            "dbname": self.container_manager.docker_config.POSTGRES_DEFAULT_DB,
+            "min_size": 10,
+            "max_size": 20,
+        }
 
-        config_with_cache = PsycopgAsyncConfig(
-            host=host,
-            port=port,
-            user=self.container_manager.docker_config.POSTGRES_DEFAULT_USER,
-            password=self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD,
-            dbname=self.container_manager.docker_config.POSTGRES_DEFAULT_DB,
-            min_size=10,
-            max_size=20,
-            statement_config=SQLConfig(enable_caching=True),
-        )
+        config_no_cache = PsycopgAsyncConfig(pool_config=pool_params, statement_config=SQLConfig(enable_caching=False))
+
+        config_with_cache = PsycopgAsyncConfig(pool_config=pool_params, statement_config=SQLConfig(enable_caching=True))
 
         return config_no_cache, config_with_cache
 
     def _get_asyncpg_configs(self, host: str, port: int) -> tuple[AsyncpgConfig, AsyncpgConfig]:
         """Get Asyncpg configs with and without caching."""
-        config_no_cache = AsyncpgConfig(
-            host=host,
-            port=port,
-            user=self.container_manager.docker_config.POSTGRES_DEFAULT_USER,
-            password=self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD,
-            database=self.container_manager.docker_config.POSTGRES_DEFAULT_DB,
-            min_size=10,
-            max_size=20,
-            statement_config=SQLConfig(enable_caching=False),
-        )
+        pool_params = {
+            "host": host,
+            "port": port,
+            "user": self.container_manager.docker_config.POSTGRES_DEFAULT_USER,
+            "password": self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD,
+            "database": self.container_manager.docker_config.POSTGRES_DEFAULT_DB,
+            "min_size": 10,
+            "max_size": 20,
+        }
 
-        config_with_cache = AsyncpgConfig(
-            host=host,
-            port=port,
-            user=self.container_manager.docker_config.POSTGRES_DEFAULT_USER,
-            password=self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD,
-            database=self.container_manager.docker_config.POSTGRES_DEFAULT_DB,
-            min_size=10,
-            max_size=20,
-            statement_config=SQLConfig(enable_caching=True),
-        )
+        config_no_cache = AsyncpgConfig(pool_config=pool_params, statement_config=SQLConfig(enable_caching=False))
+
+        config_with_cache = AsyncpgConfig(pool_config=pool_params, statement_config=SQLConfig(enable_caching=True))
 
         return config_no_cache, config_with_cache
 
@@ -322,23 +306,17 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         """Get OracleDB configs with and without caching."""
         config_class = OracleAsyncConfig if mode == "async" else OracleSyncConfig
 
-        config_no_cache = config_class(
-            user="system",
-            password=self.container_manager.docker_config.ORACLE_DEFAULT_PASSWORD,
-            dsn=f"{host}:{port}/FREEPDB1",
-            min=10,
-            max=20,
-            statement_config=SQLConfig(enable_caching=False),
-        )
+        pool_params = {
+            "user": "system",
+            "password": self.container_manager.docker_config.ORACLE_DEFAULT_PASSWORD,
+            "dsn": f"{host}:{port}/FREEPDB1",
+            "min": 10,
+            "max": 20,
+        }
 
-        config_with_cache = config_class(
-            user="system",
-            password=self.container_manager.docker_config.ORACLE_DEFAULT_PASSWORD,
-            dsn=f"{host}:{port}/FREEPDB1",
-            min=10,
-            max=20,
-            statement_config=SQLConfig(enable_caching=True),
-        )
+        config_no_cache = config_class(pool_config=pool_params, statement_config=SQLConfig(enable_caching=False))
+
+        config_with_cache = config_class(pool_config=pool_params, statement_config=SQLConfig(enable_caching=True))
 
         return config_no_cache, config_with_cache
 
