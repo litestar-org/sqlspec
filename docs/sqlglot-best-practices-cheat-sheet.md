@@ -76,8 +76,8 @@ modified_ast = ast.copy()
 ```python
 # Direct transpilation between dialects
 converted = sqlglot.transpile(
-    "SELECT * FROM table", 
-    read="postgres", 
+    "SELECT * FROM table",
+    read="postgres",
     write="snowflake"
 )[0]
 ```
@@ -112,7 +112,7 @@ for node in ast.walk(exp.Select):
 
 # Find with conditions
 first_user_table = ast.find(
-    exp.Table, 
+    exp.Table,
     lambda table: table.name == "users"
 )
 
@@ -133,7 +133,7 @@ root = build(ast)[0]
 for scope in root.traverse():
     for alias, (node, source) in scope.selected_sources.items():
         print(f"Table alias: {alias}, Source: {source}")
-    
+
     for column in scope.columns:
         print(f"Column: {column}")
 ```
@@ -330,7 +330,7 @@ def detect_tautologies(node):
     """Detect always-true conditions."""
     if isinstance(node, exp.EQ):
         left, right = node.this, node.expression
-        if (isinstance(left, exp.Literal) and isinstance(right, exp.Literal) 
+        if (isinstance(left, exp.Literal) and isinstance(right, exp.Literal)
             and left.this == right.this):
             print(f"Tautology detected: {node.sql()}")
     return node
@@ -344,7 +344,7 @@ ast.transform(detect_tautologies)
 def bind_parameters(ast, params):
     """Safely bind parameters to placeholders."""
     param_index = 0
-    
+
     def replace_placeholder(node):
         nonlocal param_index
         if isinstance(node, exp.Placeholder):
@@ -356,7 +356,7 @@ def bind_parameters(ast, params):
                 elif isinstance(value, (int, float)):
                     return exp.Literal.number(str(value))
         return node
-    
+
     return ast.transform(replace_placeholder)
 ```
 
@@ -417,12 +417,12 @@ def parse_column_expression(column_input):
     """Parse column input handling various formats."""
     if isinstance(column_input, exp.Expression):
         return column_input
-    
+
     # Try parsing as expression first
     parsed = exp.maybe_parse(column_input)
     if parsed:
         return parsed
-    
+
     # Fallback to column
     return exp.column(str(column_input))
 
@@ -430,19 +430,19 @@ def parse_condition_expression(condition_input):
     """Parse condition with tuple and string support."""
     if isinstance(condition_input, exp.Expression):
         return condition_input
-    
+
     if isinstance(condition_input, tuple) and len(condition_input) == 2:
         column, value = condition_input
         column_expr = parse_column_expression(column)
-        
+
         if value is None:
             return exp.Is(this=column_expr, expression=exp.null())
-        
+
         if isinstance(value, str):
             return exp.EQ(this=column_expr, expression=exp.Literal.string(value))
         elif isinstance(value, (int, float)):
             return exp.EQ(this=column_expr, expression=exp.Literal.number(str(value)))
-    
+
     # Parse as condition string
     return exp.condition(str(condition_input))
 ```
@@ -453,10 +453,10 @@ def parse_condition_expression(condition_input):
 # Based on sqlspec/statement/pipelines/transformers/_literal_parameterizer.py
 class ParameterizeLiterals:
     """Extract literals and replace with placeholders."""
-    
+
     def process(self, expression):
         parameters = []
-        
+
         def extract_literal(node):
             if isinstance(node, exp.Literal):
                 if isinstance(node.this, str):
@@ -470,7 +470,7 @@ class ParameterizeLiterals:
                     parameters.append(node.this)
                     return exp.Placeholder(this=param_name)
             return node
-        
+
         parameterized = expression.transform(extract_literal)
         return parameterized, parameters
 ```
@@ -482,32 +482,32 @@ class ParameterizeLiterals:
 def validate_security(expression):
     """Comprehensive security validation."""
     issues = []
-    
+
     for node in expression.walk():
         # Check for suspicious functions
         if isinstance(node, exp.Func):
             func_name = node.name.lower() if node.name else ""
             if func_name in SUSPICIOUS_FUNCTIONS:
                 issues.append(f"Suspicious function: {func_name}")
-        
+
         # Check for UNION injection patterns
         if isinstance(node, exp.Union):
             # Analyze UNION structure
             if isinstance(node.right, exp.Select):
                 select_expr = node.right
                 if hasattr(select_expr, 'expressions'):
-                    null_count = sum(1 for expr in select_expr.expressions 
+                    null_count = sum(1 for expr in select_expr.expressions
                                    if isinstance(expr, exp.Null))
                     if null_count > 3:  # Suspicious NULL padding
                         issues.append("Potential UNION injection detected")
-        
+
         # Check for tautologies
         if isinstance(node, exp.EQ):
             left, right = node.this, node.expression
             if (isinstance(left, exp.Literal) and isinstance(right, exp.Literal)
                 and left.this == right.this):
                 issues.append("Tautology condition detected")
-    
+
     return issues
 ```
 

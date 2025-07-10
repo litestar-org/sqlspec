@@ -106,18 +106,12 @@ class CachingOptimizationBenchmark(BaseBenchmarkSuite):
 
         # Time the operation
         times = BenchmarkMetrics.time_operation(
-            func=run_fragment_test,
-            iterations=self.config.iterations // len(where_patterns),
-            warmup=5,
+            func=run_fragment_test, iterations=self.config.iterations // len(where_patterns), warmup=5
         )
 
         get_cache_stats()
 
-        return TimingResult(
-            operation="fragment_caching_where_clauses",
-            iterations=len(times),
-            times=times,
-        )
+        return TimingResult(operation="fragment_caching_where_clauses", iterations=len(times), times=times)
 
     def _test_optimization_caching(self) -> TimingResult:
         """Test caching of optimized expressions."""
@@ -153,18 +147,12 @@ class CachingOptimizationBenchmark(BaseBenchmarkSuite):
 
         # Time the operation
         times = BenchmarkMetrics.time_operation(
-            func=run_optimization_test,
-            iterations=self.config.iterations // len(complex_queries),
-            warmup=5,
+            func=run_optimization_test, iterations=self.config.iterations // len(complex_queries), warmup=5
         )
 
         get_cache_stats()
 
-        return TimingResult(
-            operation="optimization_caching",
-            iterations=len(times),
-            times=times,
-        )
+        return TimingResult(operation="optimization_caching", iterations=len(times), times=times)
 
     def _test_complex_query_caching(self) -> TimingResult:
         """Test caching with complex queries containing repeated subqueries."""
@@ -214,18 +202,12 @@ class CachingOptimizationBenchmark(BaseBenchmarkSuite):
 
         # Time the operation
         times = BenchmarkMetrics.time_operation(
-            func=run_complex_test,
-            iterations=self.config.iterations // len(queries),
-            warmup=5,
+            func=run_complex_test, iterations=self.config.iterations // len(queries), warmup=5
         )
 
         get_cache_stats()
 
-        return TimingResult(
-            operation="complex_query_caching",
-            iterations=len(times),
-            times=times,
-        )
+        return TimingResult(operation="complex_query_caching", iterations=len(times), times=times)
 
     def _test_cache_hit_rates(self) -> TimingResult:
         """Test cache hit rates under realistic load."""
@@ -279,11 +261,7 @@ class CachingOptimizationBenchmark(BaseBenchmarkSuite):
 
         get_cache_stats()
 
-        return TimingResult(
-            operation="cache_hit_rates_under_load",
-            iterations=len(times),
-            times=times,
-        )
+        return TimingResult(operation="cache_hit_rates_under_load", iterations=len(times), times=times)
 
     def cleanup(self) -> None:
         """Clean up after benchmarks."""

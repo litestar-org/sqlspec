@@ -51,6 +51,7 @@ def cli(ctx: click.Context, config: Optional[Path], storage: Optional[Path], ver
             "parameters",
             "sql-compilation",
             "orm-comparison",
+            "orm-comparison-optimized",
             "caching-comparison",
             "caching-optimization",
             "async-operations",
@@ -99,6 +100,7 @@ def run(
     from tools.benchmark.suites.caching_comparison import CachingComparisonBenchmark
     from tools.benchmark.suites.caching_optimization import CachingOptimizationBenchmark
     from tools.benchmark.suites.orm_comparison import ORMComparisonBenchmark
+    from tools.benchmark.suites.orm_comparison_optimized import OptimizedORMComparisonBenchmark
     from tools.benchmark.suites.parameters import ParametersBenchmark
     from tools.benchmark.suites.sql_compilation import SQLCompilationBenchmark
     from tools.benchmark.visualization.reports import BenchmarkSummary
@@ -108,6 +110,7 @@ def run(
         "parameters": ParametersBenchmark,
         "sql-compilation": SQLCompilationBenchmark,
         "orm-comparison": ORMComparisonBenchmark,
+        "orm-comparison-optimized": OptimizedORMComparisonBenchmark,
         "caching-comparison": CachingComparisonBenchmark,
         "caching-optimization": CachingOptimizationBenchmark,
     }

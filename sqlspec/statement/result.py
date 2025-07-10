@@ -210,7 +210,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
 
     def get_count(self) -> int:
         """Get the number of rows in the current result set (e.g., a page of data)."""
-        return len(self.data) if self.data is not None else 0
+        return len(self.data)
 
     def is_empty(self) -> bool:
         """Check if the result set (self.data) is empty."""
@@ -238,7 +238,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         Returns:
             Number of rows in the data.
         """
-        return len(self.data) if self.data is not None else 0
+        return len(self.data)
 
     def __getitem__(self, index: int) -> "RowT":
         """Get a row by index.
@@ -248,13 +248,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
 
         Returns:
             The row at the specified index
-
-        Raises:
-            TypeError: If data is None
         """
-        if self.data is None:
-            msg = "No data available"
-            raise TypeError(msg)
         return self.data[index]
 
     def all(self) -> "list[RowT]":
@@ -263,9 +257,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         Returns:
             List of all rows in the result
         """
-        if self.data is None:
-            return []
-        return self.data
+        return self.data or []
 
     def one(self) -> "RowT":
         """Return exactly one row.
@@ -276,7 +268,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         Raises:
             ValueError: If no results or more than one result
         """
-        if self.data is None or len(self.data) == 0:
+        if len(self.data) == 0:
             msg = "No result found, exactly one row expected"
             raise ValueError(msg)
         if len(self.data) > 1:

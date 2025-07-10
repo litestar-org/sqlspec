@@ -103,73 +103,63 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # Database configurations
         databases = []
 
-        databases.append(
-            {
-                "name": "SQLite",
-                "type": "sync",
-                "sqlspec_config": self._get_sqlite_configs(),
-                "sqlalchemy_url": "sqlite:///.benchmark/test_sync.db",
-                "sqlalchemy_async_url": None,
-                "setup_func": self._setup_sqlite,
-                "requires_container": False,
-            }
-        )
-        databases.append(
-            {
-                "name": "AioSQLite",
-                "type": "async",
-                "sqlspec_config": self._get_aiosqlite_configs(),
-                "sqlalchemy_url": None,
-                "sqlalchemy_async_url": "sqlite+aiosqlite:///.benchmark/test_async.db",
-                "setup_func": self._setup_sqlite_async,  # type: ignore[dict-item]
-                "requires_container": False,
-            }
-        )
+        databases.append({
+            "name": "SQLite",
+            "type": "sync",
+            "sqlspec_config": self._get_sqlite_configs(),
+            "sqlalchemy_url": "sqlite:///.benchmark/test_sync.db",
+            "sqlalchemy_async_url": None,
+            "setup_func": self._setup_sqlite,
+            "requires_container": False,
+        })
+        databases.append({
+            "name": "AioSQLite",
+            "type": "async",
+            "sqlspec_config": self._get_aiosqlite_configs(),
+            "sqlalchemy_url": None,
+            "sqlalchemy_async_url": "sqlite+aiosqlite:///.benchmark/test_async.db",
+            "setup_func": self._setup_sqlite_async,  # type: ignore[dict-item]
+            "requires_container": False,
+        })
 
         # PostgreSQL (sync + async)
         if self.container_manager.is_docker_running() and not self.config.no_containers:
             try:
                 host, port = self.container_manager.start_postgres(self.config.keep_containers)
 
-                databases.append(
-                    {
-                        "name": "Psycopg",
-                        "type": "sync",
-                        "sqlspec_config": self._get_psycopg_configs(host, port),
-                        "sqlalchemy_url": f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
-                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
-                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
-                        "sqlalchemy_async_url": None,
-                        "setup_func": self._setup_postgres,
-                        "requires_container": True,
-                    }
-                )
-                databases.append(
-                    {
-                        "name": "Psycopg-Async",
-                        "type": "async",
-                        "sqlspec_config": self._get_psycopg_async_configs(host, port),
-                        "sqlalchemy_url": None,
-                        "sqlalchemy_async_url": f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
-                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
-                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
-                        "setup_func": self._setup_postgres_async,  # type: ignore[dict-item]
-                        "requires_container": True,
-                    }
-                )
-                databases.append(
-                    {
-                        "name": "Asyncpg",
-                        "type": "async",
-                        "sqlspec_config": self._get_asyncpg_configs(host, port),
-                        "sqlalchemy_url": None,
-                        "sqlalchemy_async_url": f"postgresql+asyncpg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
-                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
-                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
-                        "setup_func": self._setup_postgres_async,  # type: ignore[dict-item]
-                        "requires_container": True,
-                    }
-                )
+                databases.append({
+                    "name": "Psycopg",
+                    "type": "sync",
+                    "sqlspec_config": self._get_psycopg_configs(host, port),
+                    "sqlalchemy_url": f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
+                    f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
+                    f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
+                    "sqlalchemy_async_url": None,
+                    "setup_func": self._setup_postgres,
+                    "requires_container": True,
+                })
+                databases.append({
+                    "name": "Psycopg-Async",
+                    "type": "async",
+                    "sqlspec_config": self._get_psycopg_async_configs(host, port),
+                    "sqlalchemy_url": None,
+                    "sqlalchemy_async_url": f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
+                    f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
+                    f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
+                    "setup_func": self._setup_postgres_async,  # type: ignore[dict-item]
+                    "requires_container": True,
+                })
+                databases.append({
+                    "name": "Asyncpg",
+                    "type": "async",
+                    "sqlspec_config": self._get_asyncpg_configs(host, port),
+                    "sqlalchemy_url": None,
+                    "sqlalchemy_async_url": f"postgresql+asyncpg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
+                    f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
+                    f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
+                    "setup_func": self._setup_postgres_async,  # type: ignore[dict-item]
+                    "requires_container": True,
+                })
             except Exception as e:
                 self.console.print(f"[yellow]Skipping PostgreSQL tests: {e}[/yellow]")
 
@@ -178,28 +168,24 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             try:
                 host, port = self.container_manager.start_oracle(self.config.keep_containers)
 
-                databases.append(
-                    {
-                        "name": "OracleDB",
-                        "type": "sync",
-                        "sqlspec_config": self._get_oracledb_configs(host, port, mode="sync"),
-                        "sqlalchemy_url": f"oracle+oracledb://system:{self.container_manager.docker_config.ORACLE_DEFAULT_PASSWORD}@{host}:{port}?service_name=FREEPDB1",
-                        "sqlalchemy_async_url": None,
-                        "setup_func": self._setup_oracle,
-                        "requires_container": True,
-                    }
-                )
-                databases.append(
-                    {
-                        "name": "OracleDB-Async",
-                        "type": "async",
-                        "sqlspec_config": self._get_oracledb_configs(host, port, mode="async"),
-                        "sqlalchemy_url": None,
-                        "sqlalchemy_async_url": f"oracle+oracledb://system:{self.container_manager.docker_config.ORACLE_DEFAULT_PASSWORD}@{host}:{port}?service_name=FREEPDB1",
-                        "setup_func": self._setup_oracle_async,  # type: ignore[dict-item]
-                        "requires_container": True,
-                    }
-                )
+                databases.append({
+                    "name": "OracleDB",
+                    "type": "sync",
+                    "sqlspec_config": self._get_oracledb_configs(host, port, mode="sync"),
+                    "sqlalchemy_url": f"oracle+oracledb://system:{self.container_manager.docker_config.ORACLE_DEFAULT_PASSWORD}@{host}:{port}?service_name=FREEPDB1",
+                    "sqlalchemy_async_url": None,
+                    "setup_func": self._setup_oracle,
+                    "requires_container": True,
+                })
+                databases.append({
+                    "name": "OracleDB-Async",
+                    "type": "async",
+                    "sqlspec_config": self._get_oracledb_configs(host, port, mode="async"),
+                    "sqlalchemy_url": None,
+                    "sqlalchemy_async_url": f"oracle+oracledb://system:{self.container_manager.docker_config.ORACLE_DEFAULT_PASSWORD}@{host}:{port}?service_name=FREEPDB1",
+                    "setup_func": self._setup_oracle_async,  # type: ignore[dict-item]
+                    "requires_container": True,
+                })
             except Exception as e:
                 self.console.print(f"[yellow]Skipping Oracle tests: {e}[/yellow]")
 
@@ -803,7 +789,35 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
 
             insert_sql = "INSERT INTO users (name, email, status) VALUES (?, ?, ?)"
 
-        # SQLSpec with cache (bulk operations typically benefit from caching)
+        # SQLSpec without cache
+        iteration_counter = 0
+
+        def sqlspec_no_cache_bulk_insert() -> None:
+            nonlocal iteration_counter
+            with config_no_cache.provide_session() as session:
+                # Get fresh data for each iteration
+                if "oracle" in db_name.lower():
+                    insert_data = get_oracle_insert_data(iteration_counter)
+                    tuple_data = [(d["id"], d["name"], d["email"], d["status"]) for d in insert_data]
+                else:
+                    insert_data = get_insert_data()
+                    tuple_data = [(d["name"], d["email"], d["status"]) for d in insert_data]
+                session.execute_many(insert_sql, tuple_data)
+
+                # Clean up after each iteration
+                session.execute(SQL("DELETE FROM users WHERE name LIKE 'bulk_user_%'"))
+            iteration_counter += 1
+
+        times = BenchmarkMetrics.time_operation(
+            sqlspec_no_cache_bulk_insert,
+            iterations=min(10, self.config.iterations),  # Fewer iterations for writes
+            warmup=2,
+        )
+        results["bulk_insert_sqlspec_no_cache"] = TimingResult(
+            operation="bulk_insert_sqlspec_no_cache", iterations=min(10, self.config.iterations), times=times
+        )
+
+        # SQLSpec with cache
         iteration_counter = 0
 
         def sqlspec_bulk_insert() -> None:
@@ -827,8 +841,8 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             iterations=min(10, self.config.iterations),  # Fewer iterations for writes
             warmup=2,
         )
-        results["bulk_insert_sqlspec"] = TimingResult(
-            operation="bulk_insert_sqlspec", iterations=min(10, self.config.iterations), times=times
+        results["bulk_insert_sqlspec_cache"] = TimingResult(
+            operation="bulk_insert_sqlspec_cache", iterations=min(10, self.config.iterations), times=times
         )
 
         # SQLAlchemy Core with bulk operations
@@ -880,14 +894,26 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             {"new_status": "updated", "old_status": "active", "min_id": 100},
         )
 
+        # SQLSpec without cache
+        def sqlspec_no_cache_update() -> None:
+            with config_no_cache.provide_session() as session:
+                session.execute(sql_update)
+
+        times = BenchmarkMetrics.time_operation(
+            sqlspec_no_cache_update, iterations=min(20, self.config.iterations), warmup=5
+        )
+        results["bulk_update_sqlspec_no_cache"] = TimingResult(
+            operation="bulk_update_sqlspec_no_cache", iterations=min(20, self.config.iterations), times=times
+        )
+
         # SQLSpec with cache
         def sqlspec_update() -> None:
             with config_with_cache.provide_session() as session:
                 session.execute(sql_update)
 
         times = BenchmarkMetrics.time_operation(sqlspec_update, iterations=min(20, self.config.iterations), warmup=5)
-        results["bulk_update_sqlspec"] = TimingResult(
-            operation="bulk_update_sqlspec", iterations=min(20, self.config.iterations), times=times
+        results["bulk_update_sqlspec_cache"] = TimingResult(
+            operation="bulk_update_sqlspec_cache", iterations=min(20, self.config.iterations), times=times
         )
 
         # SQLAlchemy Core with proper constructs
@@ -1217,7 +1243,35 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
 
             insert_sql = "INSERT INTO users (name, email, status) VALUES (?, ?, ?)"
 
-        # SQLSpec with cache (bulk operations typically benefit from caching)
+        # SQLSpec without cache
+        iteration_counter = 0
+
+        async def sqlspec_no_cache_bulk_insert() -> None:
+            nonlocal iteration_counter
+            async with config_no_cache.provide_session() as session:
+                # Get fresh data for each iteration
+                if "oracle" in db_name.lower():
+                    insert_data = get_oracle_insert_data(iteration_counter)
+                    tuple_data = [(d["id"], d["name"], d["email"], d["status"]) for d in insert_data]
+                else:
+                    insert_data = get_insert_data()
+                    tuple_data = [(d["name"], d["email"], d["status"]) for d in insert_data]
+                await session.execute_many(insert_sql, tuple_data)
+
+                # Clean up after each iteration
+                await session.execute(SQL("DELETE FROM users WHERE name LIKE 'bulk_user_%'"))
+            iteration_counter += 1
+
+        times = await BenchmarkMetrics.time_operation_async(
+            sqlspec_no_cache_bulk_insert,
+            iterations=min(10, self.config.iterations),  # Fewer iterations for writes
+            warmup=2,
+        )
+        results["bulk_insert_sqlspec_no_cache"] = TimingResult(
+            operation="bulk_insert_sqlspec_no_cache", iterations=min(10, self.config.iterations), times=times
+        )
+
+        # SQLSpec with cache
         iteration_counter = 0
 
         async def sqlspec_bulk_insert() -> None:
@@ -1241,8 +1295,8 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             iterations=min(10, self.config.iterations),  # Fewer iterations for writes
             warmup=2,
         )
-        results["bulk_insert_sqlspec"] = TimingResult(
-            operation="bulk_insert_sqlspec", iterations=min(10, self.config.iterations), times=times
+        results["bulk_insert_sqlspec_cache"] = TimingResult(
+            operation="bulk_insert_sqlspec_cache", iterations=min(10, self.config.iterations), times=times
         )
 
         # SQLAlchemy Core with bulk operations
@@ -1294,6 +1348,18 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             {"new_status": "updated", "old_status": "active", "min_id": 100},
         )
 
+        # SQLSpec without cache
+        async def sqlspec_no_cache_update() -> None:
+            async with config_no_cache.provide_session() as session:
+                await session.execute(sql_update)
+
+        times = await BenchmarkMetrics.time_operation_async(
+            sqlspec_no_cache_update, iterations=min(20, self.config.iterations), warmup=5
+        )
+        results["bulk_update_sqlspec_no_cache"] = TimingResult(
+            operation="bulk_update_sqlspec_no_cache", iterations=min(20, self.config.iterations), times=times
+        )
+
         # SQLSpec with cache
         async def sqlspec_update() -> None:
             async with config_with_cache.provide_session() as session:
@@ -1302,8 +1368,8 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         times = await BenchmarkMetrics.time_operation_async(
             sqlspec_update, iterations=min(20, self.config.iterations), warmup=5
         )
-        results["bulk_update_sqlspec"] = TimingResult(
-            operation="bulk_update_sqlspec", iterations=min(20, self.config.iterations), times=times
+        results["bulk_update_sqlspec_cache"] = TimingResult(
+            operation="bulk_update_sqlspec_cache", iterations=min(20, self.config.iterations), times=times
         )
 
         # SQLAlchemy Core with proper constructs
