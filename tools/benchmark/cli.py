@@ -46,7 +46,16 @@ def cli(ctx: click.Context, config: Optional[Path], storage: Optional[Path], ver
 @cli.command()
 @click.option(
     "--suite",
-    type=click.Choice(["parameters", "sql-compilation", "orm-comparison", "caching-comparison", "async-operations"]),
+    type=click.Choice(
+        [
+            "parameters",
+            "sql-compilation",
+            "orm-comparison",
+            "caching-comparison",
+            "caching-optimization",
+            "async-operations",
+        ]
+    ),
     help="Specific benchmark suite to run",
 )
 @click.option("--adapter", default="all", help="Adapter to test or 'all'")
@@ -88,6 +97,7 @@ def run(
     )
 
     from tools.benchmark.suites.caching_comparison import CachingComparisonBenchmark
+    from tools.benchmark.suites.caching_optimization import CachingOptimizationBenchmark
     from tools.benchmark.suites.orm_comparison import ORMComparisonBenchmark
     from tools.benchmark.suites.parameters import ParametersBenchmark
     from tools.benchmark.suites.sql_compilation import SQLCompilationBenchmark
@@ -99,6 +109,7 @@ def run(
         "sql-compilation": SQLCompilationBenchmark,
         "orm-comparison": ORMComparisonBenchmark,
         "caching-comparison": CachingComparisonBenchmark,
+        "caching-optimization": CachingOptimizationBenchmark,
     }
 
     # Determine which suites to run

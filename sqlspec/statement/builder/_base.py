@@ -17,9 +17,11 @@ from sqlglot.optimizer import optimize
 from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
+from sqlspec.statement.cache import optimized_expression_cache
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import RowT
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.statement_hashing import hash_optimized_expression
 from sqlspec.utils.type_guards import has_sql_method, has_with_method
 
 if TYPE_CHECKING:
@@ -281,7 +283,7 @@ class QueryBuilder(ABC, Generic[RowT]):
         return SafeQuery(sql=sql_string, parameters=self._parameters.copy(), dialect=self.dialect)
 
     def _optimize_expression(self, expression: exp.Expression) -> exp.Expression:
-        """Apply SQLGlot optimizations to the expression.
+        """Apply SQLGlot optimizations to the expression with caching.
 
         Args:
             expression: The expression to optimize
@@ -292,21 +294,38 @@ class QueryBuilder(ABC, Generic[RowT]):
         if not self.enable_optimization:
             return expression
 
+        # Generate cache key based on expression structure and optimization settings
+        optimizer_settings = {
+            "optimize_joins": self.optimize_joins,
+            "pushdown_predicates": self.optimize_predicates,
+            "simplify_expressions": self.simplify_expressions,
+        }
+
+        dialect_name = self.dialect_name or "default"
+        cache_key = hash_optimized_expression(
+            expression, dialect=dialect_name, schema=self.schema, optimizer_settings=optimizer_settings
+        )
+
+        # Check cache first
+        cached_optimized = optimized_expression_cache.get(cache_key)
+        if cached_optimized:
+            logger.debug("Using cached optimized expression")
+            return cast("exp.Expression", cached_optimized.copy())
+
         try:
             # Use SQLGlot's comprehensive optimizer
-            return optimize(
-                expression.copy(),
-                schema=self.schema,
-                dialect=self.dialect_name,
-                optimizer_settings={
-                    "optimize_joins": self.optimize_joins,
-                    "pushdown_predicates": self.optimize_predicates,
-                    "simplify_expressions": self.simplify_expressions,
-                },
+            optimized = optimize(
+                expression.copy(), schema=self.schema, dialect=self.dialect_name, optimizer_settings=optimizer_settings
             )
+
+            # Cache the optimized expression
+            optimized_expression_cache.set(cache_key, optimized.copy())
+
         except Exception:
             # Continue with unoptimized query on failure
             return expression
+        else:
+            return optimized
 
     def to_statement(self, config: "Optional[SQLConfig]" = None) -> "SQL":
         """Converts the built query into a SQL statement object.

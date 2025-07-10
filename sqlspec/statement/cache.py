@@ -11,7 +11,14 @@ from sqlglot.errors import ParseError
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-__all__ = ("ASTFragmentCache", "CachedFragment", "SQLCache", "ast_fragment_cache", "sql_cache")
+__all__ = (
+    "ASTFragmentCache",
+    "CachedFragment",
+    "SQLCache",
+    "ast_fragment_cache",
+    "optimized_expression_cache",
+    "sql_cache",
+)
 
 
 DEFAULT_CACHE_MAX_SIZE = 1000
@@ -21,10 +28,12 @@ DEFAULT_FRAGMENT_CACHE_SIZE = 5000
 class SQLCache:
     """A thread-safe LRU cache for processed SQL states."""
 
-    def __init__(self, max_size: int = DEFAULT_CACHE_MAX_SIZE) -> None:
+    def __init__(self, max_size: int = DEFAULT_CACHE_MAX_SIZE, cache_name: str = "sql") -> None:
         self.cache: OrderedDict[str, Any] = OrderedDict()
         self.max_size = max_size
         self.lock = threading.Lock()
+        self.cache_name = cache_name
+        self._eviction_count = 0
 
     @property
     def size(self) -> int:
@@ -36,7 +45,9 @@ class SQLCache:
         with self.lock:
             if key in self.cache:
                 self.cache.move_to_end(key)
+                self._record_hit()
                 return self.cache[key]
+            self._record_miss()
             return None
 
     def set(self, key: str, value: Any) -> None:
@@ -47,12 +58,50 @@ class SQLCache:
             # Add new entry
             elif len(self.cache) >= self.max_size:
                 self.cache.popitem(last=False)
+                self._eviction_count += 1
+                self._record_eviction()
             self.cache[key] = value
 
     def clear(self) -> None:
         """Clear the cache."""
         with self.lock:
             self.cache.clear()
+
+    def _record_hit(self) -> None:
+        """Record a cache hit in statistics."""
+        try:
+            from sqlspec.statement.cache_config import _cache_stats
+
+            if self.cache_name == "sql":
+                _cache_stats.sql_hits += 1
+            elif self.cache_name == "optimized":
+                _cache_stats.optimized_hits += 1
+        except ImportError:
+            pass
+
+    def _record_miss(self) -> None:
+        """Record a cache miss in statistics."""
+        try:
+            from sqlspec.statement.cache_config import _cache_stats
+
+            if self.cache_name == "sql":
+                _cache_stats.sql_misses += 1
+            elif self.cache_name == "optimized":
+                _cache_stats.optimized_misses += 1
+        except ImportError:
+            pass
+
+    def _record_eviction(self) -> None:
+        """Record a cache eviction in statistics."""
+        try:
+            from sqlspec.statement.cache_config import _cache_stats
+
+            if self.cache_name == "sql":
+                _cache_stats.sql_evictions += 1
+            elif self.cache_name == "optimized":
+                _cache_stats.optimized_evictions += 1
+        except ImportError:
+            pass
 
 
 class CachedFragment:
@@ -248,5 +297,6 @@ class ASTFragmentCache:
         return count
 
 
-sql_cache = SQLCache()
+sql_cache = SQLCache(cache_name="sql")
 ast_fragment_cache = ASTFragmentCache()
+optimized_expression_cache = SQLCache(max_size=500, cache_name="optimized")  # Smaller cache for optimized expressions
