@@ -71,7 +71,7 @@ class TestSyncConfigDialect:
             def __init__(self, **kwargs: Any) -> None:
                 self.statement_config = SQLConfig()
                 self.host = "localhost"
-                self.connection_type = MockConnection  # type: ignore[assignment]
+                self.connection_type = MockConnection  # type: ignore[assignment,misc]
                 self.driver_type = MockDriver  # type: ignore[assignment,misc]
                 super().__init__(**kwargs)
 
@@ -135,7 +135,7 @@ class TestSyncConfigDialect:
             pass
 
         class TestSyncDbConfig(SyncDatabaseConfig[MockConnection, MockPool, MockDriver]):
-            driver_type: type[MockDriver] = MockDriver
+            driver_type: ClassVar[type[MockDriver]] = MockDriver
 
             def __init__(self, **kwargs: Any) -> None:
                 self.statement_config = SQLConfig()
@@ -168,8 +168,8 @@ class TestAsyncConfigDialect:
         """Test that NoPoolAsyncConfig returns dialect from driver class."""
 
         class TestNoPoolAsyncConfig(NoPoolAsyncConfig[MockConnection, MockAsyncDriver]):
-            driver_type: type[MockAsyncDriver] = MockAsyncDriver
-            connection_type: type[MockConnection] = MockConnection
+            driver_type: ClassVar[type[MockAsyncDriver]] = MockAsyncDriver
+            connection_type: ClassVar[type[MockConnection]] = MockConnection
 
             def __init__(self, **kwargs: Any) -> None:
                 self.statement_config = SQLConfig()
@@ -198,7 +198,7 @@ class TestAsyncConfigDialect:
             pass
 
         class TestAsyncDbConfig(AsyncDatabaseConfig[MockConnection, MockAsyncPool, MockAsyncDriver]):
-            driver_type: type[MockAsyncDriver] = MockAsyncDriver
+            driver_type: ClassVar[type[MockAsyncDriver]] = MockAsyncDriver
 
             def __init__(self, **kwargs: Any) -> None:
                 self.statement_config = SQLConfig()
@@ -235,7 +235,7 @@ class TestRealAdapterDialects:
         assert SqliteConfig.driver_type == SqliteDriver
 
         # Create instance and check dialect
-        config = SqliteConfig(database=":memory:")
+        config = SqliteConfig(connection_config={"database": ":memory:"})
         assert config.dialect == "sqlite"
 
     def test_duckdb_config_dialect(self) -> None:
@@ -260,7 +260,9 @@ class TestRealAdapterDialects:
         assert AsyncpgConfig.driver_type == AsyncpgDriver
 
         # Create instance and check dialect
-        config = AsyncpgConfig(host="localhost", port=5432, database="test", user="test", password="test")
+        config = AsyncpgConfig(
+            pool_config={"host": "localhost", "port": 5432, "database": "test", "user": "test", "password": "test"}
+        )
         assert config.dialect == "postgres"
 
     def test_psycopg_config_dialect(self) -> None:
@@ -272,7 +274,7 @@ class TestRealAdapterDialects:
         assert PsycopgSyncConfig.driver_type == PsycopgSyncDriver
 
         # Create instance and check dialect
-        config = PsycopgSyncConfig(conninfo="postgresql://test:test@localhost/test")
+        config = PsycopgSyncConfig(pool_config={"conninfo": "postgresql://test:test@localhost/test"})
         assert config.dialect == "postgres"
 
     @pytest.mark.asyncio

@@ -21,11 +21,13 @@ ParamStyle = Literal["positional_binds", "dict_binds"]
 def oracle_sync_session(oracle_23ai_service: OracleService) -> OracleSyncConfig:
     """Create an Oracle synchronous session."""
     return OracleSyncConfig(
-        host=oracle_23ai_service.host,
-        port=oracle_23ai_service.port,
-        service_name=oracle_23ai_service.service_name,
-        user=oracle_23ai_service.user,
-        password=oracle_23ai_service.password,
+        pool_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+        }
     )
 
 

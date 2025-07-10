@@ -12,7 +12,7 @@ Key Components:
 - `ValidationError`: Represents a single issue found during validation.
 """
 
-from dataclasses import dataclass
+# dataclass import removed for mypyc compatibility
 from typing import TYPE_CHECKING, Optional
 
 import sqlglot
@@ -80,15 +80,17 @@ ResultT = TypeVar("ResultT")
 # Import from context module to avoid duplication
 
 
-@dataclass
 class PipelineResult:
     """Final result of pipeline execution."""
 
-    expression: exp.Expression
-    """The SQL expression after all transformations."""
+    __slots__ = ("context", "expression")
 
-    context: SQLProcessingContext
-    """Contains all collected results."""
+    def __init__(self, expression: exp.Expression, context: SQLProcessingContext) -> None:
+        self.expression = expression
+        """The SQL expression after all transformations."""
+
+        self.context = context
+        """Contains all collected results."""
 
     @property
     def validation_errors(self) -> list[ValidationError]:

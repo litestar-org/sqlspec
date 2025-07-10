@@ -13,8 +13,6 @@ class MockConfig:
     def __init__(self, enable_cache: bool = True, cache_size: int = 100) -> None:
         self.enable_adapter_cache = enable_cache
         self.adapter_cache_size = cache_size
-        self.enable_prepared_statements = False
-        self.prepared_statement_cache_size = 50
 
 
 class MockAdapter(SyncAdapterCacheMixin):

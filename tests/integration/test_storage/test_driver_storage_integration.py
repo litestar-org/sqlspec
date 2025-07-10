@@ -24,7 +24,7 @@ def temp_directory() -> Generator[Path, None, None]:
 @pytest.fixture
 def sqlite_with_test_data() -> Generator[SqliteDriver, None, None]:
     """Create SQLite driver with test data for storage operations."""
-    config = SqliteConfig(database=":memory:", statement_config=SQLConfig())
+    config = SqliteConfig(connection_config={"database": ":memory:"}, statement_config=SQLConfig())
 
     with config.provide_session() as driver:
         # Create test table
@@ -362,7 +362,7 @@ def test_concurrent_storage_operations(temp_directory: Path) -> None:
     db_path = temp_directory / "test_concurrent.db"
 
     # Initialize the database with test data
-    config = SqliteConfig(database=str(db_path))
+    config = SqliteConfig(connection_config={"database": str(db_path)})
     with config.provide_connection() as connection:
         driver = SqliteDriver(connection=connection)
         # Create test table
@@ -397,7 +397,7 @@ def test_concurrent_storage_operations(temp_directory: Path) -> None:
 
     def export_worker(worker_id: int) -> str:
         # Create a new connection for each thread
-        thread_config = SqliteConfig(database=str(db_path))
+        thread_config = SqliteConfig(connection_config={"database": str(db_path)})
         with thread_config.provide_session() as thread_driver:
             output_file = temp_directory / f"concurrent_{worker_id}.parquet"
             # Use simpler query that ensures we get results

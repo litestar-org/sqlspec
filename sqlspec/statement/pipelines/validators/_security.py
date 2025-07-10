@@ -3,7 +3,6 @@
 import contextlib
 import logging
 import re
-from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -42,56 +41,119 @@ class SecurityIssueType(Enum):
     STRUCTURAL_ATTACK = auto()  # New: Structural analysis
 
 
-@dataclass
 class SecurityIssue:
     """Represents a detected security issue in SQL."""
 
-    issue_type: "SecurityIssueType"
-    risk_level: "RiskLevel"
-    description: str
-    location: Optional[str] = None
-    pattern_matched: Optional[str] = None
-    recommendation: Optional[str] = None
-    metadata: "dict[str, Any]" = field(default_factory=dict)
-    ast_node_type: Optional[str] = None  # New: AST node type for AST-based detection
-    confidence: float = 1.0  # New: Confidence level (0.0 to 1.0)
+    __slots__ = (
+        "ast_node_type",
+        "confidence",
+        "description",
+        "issue_type",
+        "location",
+        "metadata",
+        "pattern_matched",
+        "recommendation",
+        "risk_level",
+    )
+
+    def __init__(
+        self,
+        issue_type: "SecurityIssueType",
+        risk_level: "RiskLevel",
+        description: str,
+        location: Optional[str] = None,
+        pattern_matched: Optional[str] = None,
+        recommendation: Optional[str] = None,
+        metadata: Optional["dict[str, Any]"] = None,
+        ast_node_type: Optional[str] = None,
+        confidence: float = 1.0,
+    ) -> None:
+        self.issue_type = issue_type
+        self.risk_level = risk_level
+        self.description = description
+        self.location = location
+        self.pattern_matched = pattern_matched
+        self.recommendation = recommendation
+        self.metadata = metadata if metadata is not None else {}
+        self.ast_node_type = ast_node_type
+        self.confidence = confidence
 
 
-@dataclass
 class SecurityValidatorConfig:
     """Configuration for the unified security validator."""
 
-    # Feature toggles
-    check_injection: bool = True
-    check_tautology: bool = True
-    check_keywords: bool = True
-    check_combined_patterns: bool = True
-    check_ast_anomalies: bool = True  # New: AST-based anomaly detection
-    check_structural_attacks: bool = True  # New: Structural attack detection
+    __slots__ = (
+        "allowed_functions",
+        "allowed_system_schemas",
+        "ast_anomaly_risk_level",
+        "blocked_functions",
+        "check_ast_anomalies",
+        "check_combined_patterns",
+        "check_injection",
+        "check_keywords",
+        "check_structural_attacks",
+        "check_tautology",
+        "custom_injection_patterns",
+        "custom_suspicious_patterns",
+        "default_risk_level",
+        "injection_risk_level",
+        "keyword_risk_level",
+        "max_literal_length",
+        "max_nesting_depth",
+        "max_null_padding",
+        "max_system_tables",
+        "max_union_count",
+        "min_confidence_threshold",
+        "tautology_risk_level",
+    )
 
-    # Risk levels
-    default_risk_level: "RiskLevel" = RiskLevel.HIGH
-    injection_risk_level: "RiskLevel" = RiskLevel.HIGH
-    tautology_risk_level: "RiskLevel" = RiskLevel.MEDIUM
-    keyword_risk_level: "RiskLevel" = RiskLevel.MEDIUM
-    ast_anomaly_risk_level: "RiskLevel" = RiskLevel.MEDIUM
-
-    # Thresholds
-    max_union_count: int = 3
-    max_null_padding: int = 5
-    max_system_tables: int = 2
-    max_nesting_depth: int = 5  # New: Maximum nesting depth
-    max_literal_length: int = 1000  # New: Maximum literal length
-    min_confidence_threshold: float = 0.7  # New: Minimum confidence for reporting
-
-    # Allowed/blocked lists
-    allowed_functions: "list[str]" = field(default_factory=list)
-    blocked_functions: "list[str]" = field(default_factory=list)
-    allowed_system_schemas: "list[str]" = field(default_factory=list)
-
-    # Custom patterns (legacy support)
-    custom_injection_patterns: "list[str]" = field(default_factory=list)
-    custom_suspicious_patterns: "list[str]" = field(default_factory=list)
+    def __init__(
+        self,
+        check_injection: bool = True,
+        check_tautology: bool = True,
+        check_keywords: bool = True,
+        check_combined_patterns: bool = True,
+        check_ast_anomalies: bool = True,
+        check_structural_attacks: bool = True,
+        default_risk_level: "RiskLevel" = RiskLevel.HIGH,
+        injection_risk_level: "RiskLevel" = RiskLevel.HIGH,
+        tautology_risk_level: "RiskLevel" = RiskLevel.MEDIUM,
+        keyword_risk_level: "RiskLevel" = RiskLevel.MEDIUM,
+        ast_anomaly_risk_level: "RiskLevel" = RiskLevel.MEDIUM,
+        max_union_count: int = 3,
+        max_null_padding: int = 5,
+        max_system_tables: int = 2,
+        max_nesting_depth: int = 5,
+        max_literal_length: int = 1000,
+        min_confidence_threshold: float = 0.7,
+        allowed_functions: Optional["list[str]"] = None,
+        blocked_functions: Optional["list[str]"] = None,
+        allowed_system_schemas: Optional["list[str]"] = None,
+        custom_injection_patterns: Optional["list[str]"] = None,
+        custom_suspicious_patterns: Optional["list[str]"] = None,
+    ) -> None:
+        self.check_injection = check_injection
+        self.check_tautology = check_tautology
+        self.check_keywords = check_keywords
+        self.check_combined_patterns = check_combined_patterns
+        self.check_ast_anomalies = check_ast_anomalies
+        self.check_structural_attacks = check_structural_attacks
+        self.default_risk_level = default_risk_level
+        self.injection_risk_level = injection_risk_level
+        self.tautology_risk_level = tautology_risk_level
+        self.keyword_risk_level = keyword_risk_level
+        self.ast_anomaly_risk_level = ast_anomaly_risk_level
+        self.max_union_count = max_union_count
+        self.max_null_padding = max_null_padding
+        self.max_system_tables = max_system_tables
+        self.max_nesting_depth = max_nesting_depth
+        self.max_literal_length = max_literal_length
+        self.min_confidence_threshold = min_confidence_threshold
+        self.allowed_functions = allowed_functions if allowed_functions is not None else []
+        self.blocked_functions = blocked_functions if blocked_functions is not None else []
+        self.allowed_system_schemas = allowed_system_schemas if allowed_system_schemas is not None else []
+        self.custom_injection_patterns = custom_injection_patterns if custom_injection_patterns is not None else []
+        self.custom_suspicious_patterns = custom_suspicious_patterns if custom_suspicious_patterns is not None else []
 
 
 # Common regex patterns used across security checks

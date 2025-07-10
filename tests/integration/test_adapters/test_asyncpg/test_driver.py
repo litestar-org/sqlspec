@@ -18,9 +18,11 @@ ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 async def asyncpg_session(postgres_service: PostgresService) -> AsyncGenerator[AsyncpgDriver, None]:
     """Create an asyncpg session with test table."""
     config = AsyncpgConfig(
-        dsn=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-        min_size=1,
-        max_size=5,
+        pool_config={
+            "dsn": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+            "min_size": 1,
+            "max_size": 5,
+        }
     )
 
     async with config.provide_session() as session:

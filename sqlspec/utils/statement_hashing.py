@@ -2,6 +2,8 @@
 
 This module provides centralized hashing logic for SQL statements,
 including expressions, parameters, filters, and complete SQL objects.
+
+Also supports fine-grained AST sub-expression caching for performance optimization.
 """
 
 from typing import TYPE_CHECKING, Any, Optional
@@ -12,7 +14,13 @@ if TYPE_CHECKING:
     from sqlspec.statement.filters import StatementFilter
     from sqlspec.statement.sql import SQL
 
-__all__ = ("hash_expression", "hash_parameters", "hash_sql_statement")
+__all__ = (
+    "hash_expression",
+    "hash_expression_node",
+    "hash_optimized_expression",
+    "hash_parameters",
+    "hash_sql_statement",
+)
 
 
 def hash_expression(expr: Optional[exp.Expression], _seen: Optional[set[int]] = None) -> int:
@@ -126,6 +134,13 @@ def hash_parameters(
     return param_hash
 
 
+def _hash_filter_value(value: Any) -> int:
+    try:
+        return hash(value)
+    except TypeError:
+        return hash(repr(value))
+
+
 def hash_filters(filters: Optional[list["StatementFilter"]] = None) -> int:
     """Generate hash for statement filters.
 
@@ -145,15 +160,11 @@ def hash_filters(filters: Optional[list["StatementFilter"]] = None) -> int:
         components: list[Any] = [f.__class__.__name__]
 
         # Add any hashable attributes if available
-        if hasattr(f, "__dict__"):
-            for key, value in sorted(f.__dict__.items()):
-                try:
-                    # Try to hash the value
-                    hash(value)
-                    components.append((key, value))
-                except TypeError:  # noqa: PERF203
-                    # If not hashable, use repr
-                    components.append((key, repr(value)))
+        # Use getattr with default instead of hasattr for mypyc compatibility
+        filter_dict = getattr(f, "__dict__", None)
+        if filter_dict is not None:
+            for key, value in sorted(filter_dict.items()):
+                components.append((key, _hash_filter_value(value)))
 
         filter_components.append(tuple(components))
 
@@ -201,3 +212,80 @@ def hash_sql_statement(statement: "SQL") -> str:
     ]
 
     return f"sql:{hash(tuple(state_components))}"
+
+
+def hash_expression_node(node: exp.Expression, include_children: bool = True, dialect: Optional[str] = None) -> str:
+    """Generate a cache key for an individual expression node.
+
+    This is used for sub-expression caching where we want to cache
+    frequently used SQL fragments like complex JOIN clauses or WHERE conditions.
+
+    Args:
+        node: The expression node to hash
+        include_children: Whether to include child nodes in the hash
+        dialect: SQL dialect for context-aware hashing
+
+    Returns:
+        Cache key string for the expression node
+    """
+    if include_children:
+        # Full structural hash including all children
+        node_hash = hash_expression(node)
+    else:
+        # Shallow hash - just the node type and immediate args
+        components: list[Any] = [type(node).__name__]
+        for key, value in sorted(node.args.items()):
+            if not isinstance(value, (list, exp.Expression)):
+                # Only include primitive values, not child expressions
+                components.extend((key, hash(value)))
+        node_hash = hash(tuple(components))
+
+    dialect_part = f":{dialect}" if dialect else ""
+    return f"expr{dialect_part}:{node_hash}"
+
+
+def hash_optimized_expression(
+    expr: exp.Expression,
+    dialect: str,
+    schema: Optional[dict[str, Any]] = None,
+    optimizer_settings: Optional[dict[str, Any]] = None,
+) -> str:
+    """Generate a cache key for optimized expressions.
+
+    This creates a unique key that captures the expression structure,
+    dialect, schema context, and optimizer settings to ensure we only
+    reuse optimized expressions when all context matches.
+
+    Args:
+        expr: The unoptimized expression
+        dialect: Target SQL dialect
+        schema: Schema information used during optimization
+        optimizer_settings: Additional optimizer configuration
+
+    Returns:
+        Cache key string for the optimized expression
+    """
+    # Base expression hash
+    expr_hash = hash_expression(expr)
+
+    # Schema hash - simplified representation
+    schema_hash = 0
+    if schema:
+        # Hash table names and column counts to avoid deep schema hashing
+        schema_items = []
+        for table_name, table_schema in sorted(schema.items()):
+            if isinstance(table_schema, dict):
+                schema_items.append((table_name, len(table_schema)))
+            else:
+                schema_items.append((table_name, hash("unknown")))
+        schema_hash = hash(tuple(schema_items))
+
+    # Optimizer settings hash
+    settings_hash = 0
+    if optimizer_settings:
+        settings_items = sorted(optimizer_settings.items())
+        settings_hash = hash(tuple(settings_items))
+
+    # Combine all components
+    components = (expr_hash, dialect, schema_hash, settings_hash)
+    return f"opt:{hash(components)}"

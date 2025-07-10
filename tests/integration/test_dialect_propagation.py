@@ -22,7 +22,7 @@ from tests.integration.test_adapters.test_adbc.conftest import PostgresService
 # Sync dialect propagation tests
 def test_sqlite_dialect_propagation_through_execute() -> None:
     """Test that SQLite dialect propagates through execute calls."""
-    config = SqliteConfig(database=":memory:")
+    config = SqliteConfig(connection_config={"database": ":memory:"})
 
     # Verify config has correct dialect
     assert config.dialect == "sqlite"
@@ -103,11 +103,13 @@ def test_duckdb_dialect_propagation_with_query_builder() -> None:
 def test_psycopg_dialect_in_execute_script(postgres_service: PostgresService) -> None:
     """Test that Psycopg dialect propagates in execute_script."""
     config = PsycopgSyncConfig(
-        host=postgres_service.host,
-        port=postgres_service.port,
-        user=postgres_service.user,
-        password=postgres_service.password,
-        dbname=postgres_service.database,
+        pool_config={
+            "host": postgres_service.host,
+            "port": postgres_service.port,
+            "user": postgres_service.user,
+            "password": postgres_service.password,
+            "dbname": postgres_service.database,
+        }
     )
 
     # Verify config has correct dialect
@@ -142,11 +144,13 @@ def test_psycopg_dialect_in_execute_script(postgres_service: PostgresService) ->
 async def test_asyncpg_dialect_propagation_through_execute(postgres_service: PostgresService) -> None:
     """Test that AsyncPG dialect propagates through execute calls."""
     config = AsyncpgConfig(
-        host=postgres_service.host,
-        port=postgres_service.port,
-        user=postgres_service.user,
-        password=postgres_service.password,
-        database=postgres_service.database,
+        pool_config={
+            "host": postgres_service.host,
+            "port": postgres_service.port,
+            "user": postgres_service.user,
+            "password": postgres_service.password,
+            "database": postgres_service.database,
+        }
     )
 
     # Verify config has correct dialect
@@ -175,7 +179,7 @@ async def test_asyncpg_dialect_propagation_through_execute(postgres_service: Pos
     # Ensure proper cleanup of the connection pool after the context manager exits
     if config.pool_instance:
         await config.close_pool()
-        config.pool_instance = None
+        config.pool_instance = None  # type: ignore[assignment]
 
 
 @pytest.mark.asyncio
@@ -183,11 +187,13 @@ async def test_asyncpg_dialect_propagation_through_execute(postgres_service: Pos
 async def test_asyncmy_dialect_propagation_with_filters(mysql_service: MySQLService) -> None:
     """Test that AsyncMy dialect propagates with filters."""
     config = AsyncmyConfig(
-        host=mysql_service.host,
-        port=mysql_service.port,
-        user=mysql_service.user,
-        password=mysql_service.password,
-        database=mysql_service.db,
+        pool_config={
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "database": mysql_service.db,
+        }
     )
 
     # Verify config has correct dialect

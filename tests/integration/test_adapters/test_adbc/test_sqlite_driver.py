@@ -21,8 +21,7 @@ from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_m
 def adbc_sqlite_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session with test table."""
     config = AdbcConfig(
-        uri=":memory:",
-        driver_name="adbc_driver_sqlite.dbapi.connect",
+        connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite.dbapi.connect"},
         statement_config=SQLConfig(),  # Allow DDL statements for tests
     )
 
@@ -44,7 +43,7 @@ def adbc_sqlite_session() -> Generator[AdbcDriver, None, None]:
 @xfail_if_driver_missing
 def test_connection() -> None:
     """Test basic ADBC SQLite connection."""
-    config = AdbcConfig(uri=":memory:", driver_name="adbc_driver_sqlite.dbapi.connect")
+    config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite.dbapi.connect"})
 
     # Test connection creation
     with config.create_connection() as conn:

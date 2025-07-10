@@ -8,7 +8,6 @@ supporting all major parameter styles with optimized performance.
 import logging
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Final, Optional, Union
 
@@ -97,27 +96,47 @@ SQLGLOT_INCOMPATIBLE_STYLES: Final = {
 }
 
 
-@dataclass
 class ParameterInfo:
     """Immutable parameter information with optimal memory usage."""
 
-    name: "Optional[str]"
-    """Parameter name for named parameters, None for positional."""
+    __slots__ = ("name", "ordinal", "placeholder_text", "position", "style")
 
-    style: "ParameterStyle"
-    """The parameter style."""
+    def __init__(
+        self, name: "Optional[str]", style: "ParameterStyle", position: int, ordinal: int, placeholder_text: str
+    ) -> None:
+        self.name = name
+        self.style = style
+        self.position = position
+        self.ordinal = ordinal
+        self.placeholder_text = placeholder_text
 
-    position: int
-    """Position in the SQL string (for error reporting)."""
+    def __eq__(self, other: object) -> bool:
+        """Equality comparison (excludes ordinal and placeholder_text like dataclass compare=False)."""
+        if not isinstance(other, type(self)):
+            return False
+        return self.name == other.name and self.style == other.style and self.position == other.position
 
-    ordinal: int = field(compare=False)
-    """Order of appearance in SQL (0-based)."""
+    def __repr__(self) -> str:
+        """String representation compatible with dataclass.__repr__."""
+        # mypyc removes __slots__ at runtime, so we hardcode the fields
+        field_strs = [
+            f"name={self.name!r}",
+            f"ordinal={self.ordinal!r}",
+            f"placeholder_text={self.placeholder_text!r}",
+            f"position={self.position!r}",
+            f"style={self.style!r}",
+        ]
+        return f"{type(self).__name__}({', '.join(field_strs)})"
 
-    placeholder_text: str = field(compare=False)
-    """The original text of the parameter."""
+    def __hash__(self) -> int:
+        """Make ParameterInfo hashable for use in cache keys.
+
+        We hash based on the name, style, and position, which are the key attributes
+        that affect SQL compilation and parameter handling.
+        """
+        return hash((self.name, self.style, self.position))
 
 
-@dataclass
 class TypedParameter:
     """Internal container for parameter values with type metadata.
 
@@ -129,17 +148,15 @@ class TypedParameter:
         The system automatically wraps parameters with type information.
     """
 
-    value: Any
-    """The actual parameter value."""
+    __slots__ = ("semantic_name", "sqlglot_type", "type_hint", "value")
 
-    sqlglot_type: "exp.DataType"
-    """Full SQLGlot DataType instance with all type details."""
-
-    type_hint: str
-    """Simple string hint for adapter type coercion (e.g., 'integer', 'decimal', 'json')."""
-
-    semantic_name: "Optional[str]" = None
-    """Optional semantic name derived from SQL context (e.g., 'user_id', 'email')."""
+    def __init__(
+        self, value: Any, sqlglot_type: "exp.DataType", type_hint: str, semantic_name: "Optional[str]" = None
+    ) -> None:
+        self.value = value
+        self.sqlglot_type = sqlglot_type
+        self.type_hint = type_hint
+        self.semantic_name = semantic_name
 
     def __hash__(self) -> int:
         """Make TypedParameter hashable for use in cache keys.
@@ -157,6 +174,29 @@ class TypedParameter:
 
         return hash((value_hash, self.type_hint, self.semantic_name))
 
+    def __eq__(self, other: object) -> bool:
+        """Equality comparison compatible with dataclass.__eq__."""
+        if not isinstance(other, type(self)):
+            return False
+        # mypyc removes __slots__ at runtime, so we hardcode the comparison
+        return (
+            self.value == other.value
+            and self.sqlglot_type == other.sqlglot_type
+            and self.type_hint == other.type_hint
+            and self.semantic_name == other.semantic_name
+        )
+
+    def __repr__(self) -> str:
+        """String representation compatible with dataclass.__repr__."""
+        # mypyc removes __slots__ at runtime, so we hardcode the fields
+        field_strs = [
+            f"semantic_name={self.semantic_name!r}",
+            f"sqlglot_type={self.sqlglot_type!r}",
+            f"type_hint={self.type_hint!r}",
+            f"value={self.value!r}",
+        ]
+        return f"{type(self).__name__}({', '.join(field_strs)})"
+
 
 class ParameterStyleInfo(TypedDict, total=False):
     """Information about SQL parameter style transformation."""
@@ -166,7 +206,6 @@ class ParameterStyleInfo(TypedDict, total=False):
     original_styles: list[ParameterStyle]
 
 
-@dataclass
 class ParameterStyleConversionState:
     """Encapsulates all information about parameter style transformation.
 
@@ -174,52 +213,131 @@ class ParameterStyleConversionState:
     making it easier to track and reverse transformations applied for SQLGlot compatibility.
     """
 
-    was_transformed: bool = False
-    """Whether parameter transformation was applied."""
+    __slots__ = (
+        "original_param_info",
+        "original_styles",
+        "placeholder_map",
+        "reverse_map",
+        "transformation_style",
+        "was_transformed",
+    )
 
-    original_styles: list[ParameterStyle] = field(default_factory=list)
-    """Original parameter style(s) detected in the SQL."""
+    def __hash__(self) -> int:
+        """Hash based on transformation state and style."""
+        return hash(
+            (
+                self.was_transformed,
+                self.transformation_style,
+                tuple(self.original_styles) if self.original_styles else None,
+                tuple(sorted(self.placeholder_map.items())) if self.placeholder_map else None,
+            )
+        )
 
-    transformation_style: Optional[ParameterStyle] = None
-    """Target style used for transformation (if transformed)."""
+    def __init__(
+        self,
+        was_transformed: bool = False,
+        original_styles: "Optional[list[ParameterStyle]]" = None,
+        transformation_style: "Optional[ParameterStyle]" = None,
+        placeholder_map: "Optional[dict[str, Union[str, int]]]" = None,
+        reverse_map: "Optional[dict[Union[str, int], str]]" = None,
+        original_param_info: "Optional[list[ParameterInfo]]" = None,
+    ) -> None:
+        self.was_transformed = was_transformed
+        self.original_styles = original_styles or []
+        self.transformation_style = transformation_style
+        self.placeholder_map = placeholder_map or {}
+        self.reverse_map = reverse_map or {}
+        self.original_param_info = original_param_info or []
 
-    placeholder_map: dict[str, Union[str, int]] = field(default_factory=dict)
-    """Mapping from transformed names to original names/positions."""
-
-    reverse_map: dict[Union[str, int], str] = field(default_factory=dict)
-    """Reverse mapping for quick lookups."""
-
-    original_param_info: list["ParameterInfo"] = field(default_factory=list)
-    """Original parameter info before conversion."""
-
-    def __post_init__(self) -> None:
-        """Build reverse map if not provided."""
+        # Build reverse map if not provided
         if self.placeholder_map and not self.reverse_map:
             self.reverse_map = {v: k for k, v in self.placeholder_map.items()}
 
+    def __eq__(self, other: object) -> bool:
+        """Equality comparison compatible with dataclass.__eq__."""
+        if not isinstance(other, type(self)):
+            return False
+        # mypyc removes __slots__ at runtime, so we hardcode the comparison
+        return (
+            self.was_transformed == other.was_transformed
+            and self.original_styles == other.original_styles
+            and self.transformation_style == other.transformation_style
+            and self.placeholder_map == other.placeholder_map
+            and self.reverse_map == other.reverse_map
+            and self.original_param_info == other.original_param_info
+        )
 
-@dataclass
+    def __repr__(self) -> str:
+        """String representation compatible with dataclass.__repr__."""
+        # mypyc removes __slots__ at runtime, so we hardcode the fields
+        field_strs = [
+            f"original_param_info={self.original_param_info!r}",
+            f"original_styles={self.original_styles!r}",
+            f"placeholder_map={self.placeholder_map!r}",
+            f"reverse_map={self.reverse_map!r}",
+            f"transformation_style={self.transformation_style!r}",
+            f"was_transformed={self.was_transformed!r}",
+        ]
+        return f"{type(self).__name__}({', '.join(field_strs)})"
+
+
 class ConvertedParameters:
     """Result of parameter conversion with clear structure."""
 
-    transformed_sql: str
-    """SQL after any necessary transformations."""
+    __slots__ = ("conversion_state", "merged_parameters", "parameter_info", "transformed_sql")
 
-    parameter_info: list["ParameterInfo"]
-    """Information about parameters found in the SQL."""
+    def __hash__(self) -> int:
+        """Hash based on transformed SQL and conversion state."""
+        return hash(
+            (
+                self.transformed_sql,
+                self.conversion_state,
+                tuple(param.placeholder_text for param in self.parameter_info),
+            )
+        )
 
-    merged_parameters: "SQLParameterType"
-    """Parameters after merging from various sources."""
+    def __init__(
+        self,
+        transformed_sql: str,
+        parameter_info: "list[ParameterInfo]",
+        merged_parameters: "SQLParameterType",
+        conversion_state: ParameterStyleConversionState,
+    ) -> None:
+        self.transformed_sql = transformed_sql
+        self.parameter_info = parameter_info
+        self.merged_parameters = merged_parameters
+        self.conversion_state = conversion_state
 
-    conversion_state: ParameterStyleConversionState
-    """Complete conversion state for tracking conversions."""
+    def __eq__(self, other: object) -> bool:
+        """Equality comparison compatible with dataclass.__eq__."""
+        if not isinstance(other, type(self)):
+            return False
+        # mypyc removes __slots__ at runtime, so we hardcode the comparison
+        return (
+            self.transformed_sql == other.transformed_sql
+            and self.parameter_info == other.parameter_info
+            and self.merged_parameters == other.merged_parameters
+            and self.conversion_state == other.conversion_state
+        )
+
+    def __repr__(self) -> str:
+        """String representation compatible with dataclass.__repr__."""
+        # mypyc removes __slots__ at runtime, so we hardcode the fields
+        field_strs = [
+            f"conversion_state={self.conversion_state!r}",
+            f"merged_parameters={self.merged_parameters!r}",
+            f"parameter_info={self.parameter_info!r}",
+            f"transformed_sql={self.transformed_sql!r}",
+        ]
+        return f"{type(self).__name__}({', '.join(field_strs)})"
 
 
-@dataclass
 class ParameterValidator:
     """Parameter validation."""
 
-    def __post_init__(self) -> None:
+    __slots__ = ("_parameter_cache",)
+
+    def __init__(self) -> None:
         """Initialize validator."""
         self._parameter_cache: dict[str, list[ParameterInfo]] = {}
 
@@ -518,9 +636,10 @@ class ParameterValidator:
             raise MissingParameterError(msg, original_sql)
 
 
-@dataclass
 class ParameterConverter:
     """Parameter parameter conversion with caching and validation."""
+
+    __slots__ = ("validator",)
 
     def __init__(self) -> None:
         """Initialize converter with validator."""
@@ -677,10 +796,11 @@ class ParameterConverter:
         has_named = any(p.name is not None for p in parameters_info)
         has_mixed_styles = has_positional and has_named
 
+        merged_params: SQLParameterType
         if has_mixed_styles and args and kwargs and parameters is None:
             merged_params = self._merge_mixed_parameters(parameters_info, args, kwargs)
         else:
-            merged_params = self.merge_parameters(parameters, args, kwargs)  # type: ignore[assignment]
+            merged_params = self.merge_parameters(parameters, args, kwargs)
 
         if validate:
             self.validator.validate_parameters(parameters_info, merged_params, sql)
@@ -735,9 +855,8 @@ class ParameterConverter:
 
         return merged
 
-    @staticmethod
     def merge_parameters(
-        parameters: "SQLParameterType", args: "Optional[Sequence[Any]]", kwargs: "Optional[Mapping[str, Any]]"
+        self, parameters: "SQLParameterType", args: "Optional[Sequence[Any]]", kwargs: "Optional[Mapping[str, Any]]"
     ) -> "SQLParameterType":
         """Merge parameters from different sources with proper precedence.
 
@@ -788,7 +907,7 @@ class ParameterConverter:
 
         def infer_type_from_value(value: Any) -> tuple[str, "exp.DataType"]:
             """Infer SQL type hint and SQLGlot DataType from Python value."""
-
+            # TODO: convert to a parameter map?
             # None/NULL
             if value is None:
                 return "null", exp.DataType.build("NULL")
@@ -820,9 +939,11 @@ class ParameterConverter:
 
         def wrap_value(value: Any, semantic_name: Optional[str] = None) -> Any:
             """Wrap a single value with TypedParameter if beneficial."""
-            # Don't wrap if already a TypedParameter
-            if hasattr(value, "__class__") and value.__class__.__name__ == "TypedParameter":
-                return value
+            try:
+                if value.__class__.__name__ == "TypedParameter":
+                    return value
+            except AttributeError:
+                pass
 
             # Don't wrap simple scalar types unless they need special handling
             if isinstance(value, (str, int, float)) and not isinstance(value, bool):
@@ -905,7 +1026,7 @@ class ParameterConverter:
             from sqlspec.exceptions import SQLTransformationError
 
             msg = (
-                f"Parameter count mismatch during deconversion. "
+                f"Parameter count mismatch during conversion back to {target_style}. "
                 f"Expected at least {len(final_parameter_info)} parameters, "
                 f"found {len(canonical_params)} in SQL"
             )

@@ -23,13 +23,15 @@ def psycopg_session(postgres_service: PostgresService) -> Generator[PsycopgSyncD
     from sqlspec.statement.sql import SQLConfig
 
     config = PsycopgSyncConfig(
-        host=postgres_service.host,
-        port=postgres_service.port,
-        user=postgres_service.user,
-        password=postgres_service.password,
-        dbname=postgres_service.database,
-        autocommit=True,  # Enable autocommit for tests
-        statement_config=SQLConfig(enable_transformations=False, enable_validation=False, enable_parsing=False),
+        pool_config={
+            "host": postgres_service.host,
+            "port": postgres_service.port,
+            "user": postgres_service.user,
+            "password": postgres_service.password,
+            "dbname": postgres_service.database,
+            "autocommit": True,  # Enable autocommit for tests
+        },
+        statement_config=SQLConfig(enable_transformations=True, enable_validation=False, enable_parsing=True),
     )
 
     try:

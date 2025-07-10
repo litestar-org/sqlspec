@@ -48,8 +48,8 @@ uuid = ["uuid-utils"]
 
 
 [dependency-groups]
-benchmarks = ["sqlalchemy", "psutil", "types-psutil"]
-build = ["bump-my-version"]
+benchmarks = ["sqlalchemy[asyncio]", "psutil", "types-psutil", "rich", "rich-click", "duckdb"]
+build = ["bump-my-version", "hatch-mypyc"]
 dev = [
   { include-group = "extras" },
   { include-group = "lint" },
@@ -113,7 +113,7 @@ sqlspec = "sqlspec.__main__:run_cli"
 
 [build-system]
 build-backend = "hatchling.build"
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-mypyc"]
 
 [tool.hatch.build.targets.sdist]
 dev-mode-dirs = ["."]
@@ -125,6 +125,78 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 include = ["NOTICE"]
 packages = ["sqlspec"]
+
+
+[tool.hatch.build.targets.wheel.hooks.mypyc]
+dependencies = ["hatch-mypyc"]
+enable-by-default = false
+exclude = [
+  # "tests/**",    # All test directories
+  # "sqlspec/__main__.py", # Main entry points (can't be run directly when compiled)
+  # "sqlspec/_typing.py",  # Type definitions
+  # "sqlspec/cli.py",         # CLI module (not performance-critical)
+  # "sqlspec/**/__init__.py", # Init files (usually just imports)
+]
+include = [
+  # === HOT PATH MODULES (from profiling) ===
+  # SQL parsing and execution (0.2-1.3ms bottleneck)
+  "sqlspec/statement/sql.py",
+  "sqlspec/statement/parameters.py",
+
+  # === PIPELINE COMPONENTS ===
+  # Pipeline context
+  "sqlspec/statement/pipelines/context.py",
+
+  # Transformers (AST transformation hot paths)
+  "sqlspec/statement/pipelines/transformers/_literal_parameterizer.py",
+  "sqlspec/statement/pipelines/transformers/_expression_simplifier.py",
+  "sqlspec/statement/pipelines/transformers/_remove_comments_and_hints.py",
+
+  # Analyzers
+  "sqlspec/statement/pipelines/analyzers/_analyzer.py",
+
+  # Validators
+  "sqlspec/statement/pipelines/validators/_dml_safety.py",
+  "sqlspec/statement/pipelines/validators/_parameter_style.py",
+  "sqlspec/statement/pipelines/validators/_performance.py",
+  "sqlspec/statement/pipelines/validators/_security.py",
+
+  # === ADAPTER-SPECIFIC TRANSFORMERS ===
+  "sqlspec/adapters/adbc/transformers.py",
+  "sqlspec/adapters/psycopg/transformers.py",
+
+  # === CACHING AND UTILITIES ===
+  "sqlspec/statement/cache.py",
+
+  # === DRIVER CORE ===
+  "sqlspec/driver/parameters.py",
+
+  # === STATEMENT PROCESSING ===
+  "sqlspec/statement/splitter.py",
+  "sqlspec/statement/filters.py",
+
+  # === UTILITY MODULES (imported by hot paths) ===
+  "sqlspec/utils/statement_hashing.py",
+  "sqlspec/utils/text.py",
+  "sqlspec/utils/sync_tools.py",
+]
+mypy-args = [
+  "--ignore-missing-imports",
+  "--allow-untyped-defs",
+  "--allow-untyped-globals",
+  "--no-implicit-reexport",
+  "--no-warn-redundant-casts",
+  "--no-warn-unused-ignores",
+  "--follow-imports=skip",
+]
+require-runtime-dependencies = true
+require-runtime-features = ["performance"]
+
+# Mypyc compilation options
+[tool.hatch.build.targets.wheel.hooks.mypyc.options]
+debug_level = "0" # No debug info in production (0-2)
+multi_file = true # Enable cross-module optimization
+opt_level = "3"   # Maximum optimization (0-3)
 
 
 [tool.bumpversion]

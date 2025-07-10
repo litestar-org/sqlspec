@@ -1,7 +1,6 @@
 """Asynchronous driver protocol implementation."""
 
 from abc import ABC, abstractmethod
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Optional, Union, overload
 
 from sqlspec.driver._common import CommonDriverAttributesMixin
@@ -59,7 +58,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
             if parameters or kwargs:
                 new_config = _config
                 if self.dialect and not new_config.dialect:
-                    new_config = replace(new_config, dialect=self.dialect)
+                    new_config = new_config.replace(dialect=self.dialect)
                 # Use raw SQL if available to ensure proper parsing with dialect
                 sql_source = statement._raw_sql or statement._statement
                 # Preserve filters and state when creating new SQL object
@@ -74,7 +73,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
                 return SQL(sql_source, *parameters, config=new_config, _existing_state=existing_state, **kwargs)
             # Even without additional parameters, ensure dialect is set
             if self.dialect and (not statement._config.dialect or statement._config.dialect != self.dialect):
-                new_config = replace(statement._config, dialect=self.dialect)
+                new_config = statement._config.replace(dialect=self.dialect)
                 # Use raw SQL if available to ensure proper parsing with dialect
                 sql_source = statement._raw_sql or statement._statement
                 # Preserve parameters and state when creating new SQL object
@@ -95,7 +94,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
             return statement
         new_config = _config
         if self.dialect and not new_config.dialect:
-            new_config = replace(new_config, dialect=self.dialect)
+            new_config = new_config.replace(dialect=self.dialect)
         return SQL(statement, *parameters, config=new_config, **kwargs)
 
     @abstractmethod

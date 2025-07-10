@@ -19,8 +19,10 @@ from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_m
 def adbc_postgresql_session_returning(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
     """Create an ADBC PostgreSQL session with test table supporting RETURNING."""
     config = AdbcConfig(
-        uri=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-        driver_name="adbc_driver_postgresql",
+        connection_config={
+            "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+            "driver_name": "adbc_driver_postgresql",
+        },
         statement_config=SQLConfig(),
     )
 
@@ -41,7 +43,9 @@ def adbc_postgresql_session_returning(postgres_service: PostgresService) -> Gene
 @pytest.fixture
 def adbc_sqlite_session_returning() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session with test table supporting RETURNING."""
-    config = AdbcConfig(uri=":memory:", driver_name="adbc_driver_sqlite", statement_config=SQLConfig())
+    config = AdbcConfig(
+        connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"}, statement_config=SQLConfig()
+    )
 
     with config.provide_session() as session:
         # Create test table

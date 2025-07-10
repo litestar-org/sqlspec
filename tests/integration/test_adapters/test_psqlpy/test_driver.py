@@ -27,10 +27,7 @@ pytestmark = [pytest.mark.psqlpy, pytest.mark.postgres, pytest.mark.integration]
 def psqlpy_config(postgres_service: PostgresService) -> PsqlpyConfig:
     """Fixture for PsqlpyConfig using the postgres service."""
     dsn = f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-    return PsqlpyConfig(
-        dsn=dsn,
-        max_db_pool_size=5,  # Adjust pool size as needed for tests
-    )
+    return PsqlpyConfig(pool_config={"dsn": dsn, "max_db_pool_size": 5})
 
 
 @pytest.fixture(autouse=True)

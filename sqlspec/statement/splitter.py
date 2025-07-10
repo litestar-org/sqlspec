@@ -7,7 +7,6 @@ handling complex constructs like PL/SQL blocks, T-SQL batches, and nested blocks
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Generator
-from dataclasses import dataclass
 from enum import Enum
 from re import Pattern
 from typing import Callable, Optional, Union
@@ -45,15 +44,17 @@ class TokenType(Enum):
     OTHER = "OTHER"
 
 
-@dataclass
 class Token:
     """Represents a single token in the SQL script."""
 
-    type: TokenType
-    value: str
-    line: int
-    column: int
-    position: int  # Absolute position in the script
+    __slots__ = ("column", "line", "position", "type", "value")
+
+    def __init__(self, type: TokenType, value: str, line: int, column: int, position: int) -> None:
+        self.type = type
+        self.value = value
+        self.line = line
+        self.column = column
+        self.position = position  # Absolute position in the script
 
 
 TokenHandler: TypeAlias = Callable[[str, int, int, int], Optional[Token]]

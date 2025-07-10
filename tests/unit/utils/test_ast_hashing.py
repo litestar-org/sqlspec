@@ -2,7 +2,7 @@
 
 from sqlglot import exp, parse_one
 
-from sqlspec.utils import hash_expression
+from sqlspec.utils.statement_hashing import hash_expression
 
 
 class TestASTHashing:

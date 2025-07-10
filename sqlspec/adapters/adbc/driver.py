@@ -2,7 +2,6 @@ import contextlib
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import replace
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
 
@@ -71,7 +70,7 @@ class AdbcDriver(
     ) -> None:
         dialect = self._get_dialect(connection)
         if config and not config.dialect:
-            config = replace(config, dialect=dialect)
+            config = config.replace(dialect=dialect)
         elif not config:
             # Create config with dialect
             config = SQLConfig(dialect=dialect)

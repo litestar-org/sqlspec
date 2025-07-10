@@ -20,11 +20,13 @@ from sqlspec.statement.sql import SQLConfig
 async def psqlpy_arrow_session(postgres_service: PostgresService) -> "AsyncGenerator[PsqlpyDriver, None]":
     """Create a PSQLPy session for Arrow testing."""
     config = PsqlpyConfig(
-        host=postgres_service.host,
-        port=postgres_service.port,
-        username=postgres_service.user,
-        password=postgres_service.password,
-        db_name=postgres_service.database,
+        pool_config={
+            "host": postgres_service.host,
+            "port": postgres_service.port,
+            "username": postgres_service.user,
+            "password": postgres_service.password,
+            "db_name": postgres_service.database,
+        },
         statement_config=SQLConfig(),
     )
 

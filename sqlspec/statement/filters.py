@@ -3,9 +3,8 @@
 from abc import ABC, abstractmethod
 from collections import abc
 from collections.abc import Sequence
-from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Generic, Literal, Optional, Protocol, Union, runtime_checkable
+from typing import TYPE_CHECKING, Any, Generic, Literal, Optional, Union
 
 from sqlglot import exp
 from typing_extensions import TypeAlias, TypeVar
@@ -43,9 +42,8 @@ FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
 """
 
 
-@runtime_checkable
-class StatementFilter(Protocol):
-    """Protocol for filters that can be appended to a statement."""
+class StatementFilter(ABC):
+    """Abstract base class for filters that can be appended to a statement."""
 
     @abstractmethod
     def append_to_statement(self, statement: "SQL") -> "SQL":
@@ -67,7 +65,6 @@ class StatementFilter(Protocol):
         return [], {}
 
 
-@dataclass
 class BeforeAfterFilter(StatementFilter):
     """Data required to filter a query on a ``datetime`` column.
 
@@ -75,15 +72,21 @@ class BeforeAfterFilter(StatementFilter):
         After applying this filter, only the filter's parameters (e.g., before/after) will be present in the resulting SQL statement's parameters. Original parameters from the statement are not preserved in the result.
     """
 
-    field_name: str
-    """Name of the model attribute to filter on."""
-    before: Optional[datetime] = None
-    """Filter results where field earlier than this."""
-    after: Optional[datetime] = None
-    """Filter results where field later than this."""
+    __slots__ = ("_param_name_after", "_param_name_before", "after", "before", "field_name")
 
-    def __post_init__(self) -> None:
-        """Initialize parameter names."""
+    def __init__(self, field_name: str, before: Optional[datetime] = None, after: Optional[datetime] = None) -> None:
+        """Initialize the BeforeAfterFilter.
+
+        Args:
+            field_name: Name of the model attribute to filter on.
+            before: Filter results where field earlier than this.
+            after: Filter results where field later than this.
+        """
+        self.field_name = field_name
+        self.before = before
+        self.after = after
+
+        # Initialize parameter names
         self._param_name_before: Optional[str] = None
         self._param_name_after: Optional[str] = None
 
@@ -123,19 +126,26 @@ class BeforeAfterFilter(StatementFilter):
         return statement
 
 
-@dataclass
 class OnBeforeAfterFilter(StatementFilter):
     """Data required to filter a query on a ``datetime`` column."""
 
-    field_name: str
-    """Name of the model attribute to filter on."""
-    on_or_before: Optional[datetime] = None
-    """Filter results where field is on or earlier than this."""
-    on_or_after: Optional[datetime] = None
-    """Filter results where field on or later than this."""
+    __slots__ = ("_param_name_on_or_after", "_param_name_on_or_before", "field_name", "on_or_after", "on_or_before")
 
-    def __post_init__(self) -> None:
-        """Initialize parameter names."""
+    def __init__(
+        self, field_name: str, on_or_before: Optional[datetime] = None, on_or_after: Optional[datetime] = None
+    ) -> None:
+        """Initialize the OnBeforeAfterFilter.
+
+        Args:
+            field_name: Name of the model attribute to filter on.
+            on_or_before: Filter results where field is on or earlier than this.
+            on_or_after: Filter results where field on or later than this.
+        """
+        self.field_name = field_name
+        self.on_or_before = on_or_before
+        self.on_or_after = on_or_after
+
+        # Initialize parameter names
         self._param_name_on_or_before: Optional[str] = None
         self._param_name_on_or_after: Optional[str] = None
 
@@ -182,12 +192,10 @@ class OnBeforeAfterFilter(StatementFilter):
 class InAnyFilter(StatementFilter, ABC, Generic[T]):
     """Subclass for methods that have a `prefer_any` attribute."""
 
-    @abstractmethod
     def append_to_statement(self, statement: "SQL") -> "SQL":
         raise NotImplementedError
 
 
-@dataclass
 class InCollectionFilter(InAnyFilter[T]):
     """Data required to construct a ``WHERE ... IN (...)`` clause.
 
@@ -195,15 +203,20 @@ class InCollectionFilter(InAnyFilter[T]):
         After applying this filter, only the filter's parameters (e.g., the generated IN parameters) will be present in the resulting SQL statement's parameters. Original parameters from the statement are not preserved in the result.
     """
 
-    field_name: str
-    """Name of the model attribute to filter on."""
-    values: Optional[abc.Collection[T]]
-    """Values for ``IN`` clause.
+    __slots__ = ("_param_names", "field_name", "values")
 
-    An empty list will return an empty result set, however, if ``None``, the filter is not applied to the query, and all rows are returned. """
+    def __init__(self, field_name: str, values: Optional[abc.Collection[T]]) -> None:
+        """Initialize the InCollectionFilter.
 
-    def __post_init__(self) -> None:
-        """Initialize parameter names."""
+        Args:
+            field_name: Name of the model attribute to filter on.
+            values: Values for ``IN`` clause. An empty list will return an empty result set,
+                however, if ``None``, the filter is not applied to the query, and all rows are returned.
+        """
+        self.field_name = field_name
+        self.values = values
+
+        # Initialize parameter names
         self._param_names: list[str] = []
         if self.values:
             for i, _ in enumerate(self.values):
@@ -235,19 +248,22 @@ class InCollectionFilter(InAnyFilter[T]):
         return result
 
 
-@dataclass
 class NotInCollectionFilter(InAnyFilter[T]):
     """Data required to construct a ``WHERE ... NOT IN (...)`` clause."""
 
-    field_name: str
-    """Name of the model attribute to filter on."""
-    values: Optional[abc.Collection[T]]
-    """Values for ``NOT IN`` clause.
+    __slots__ = ("_param_names", "field_name", "values")
 
-    An empty list or ``None`` will return all rows."""
+    def __init__(self, field_name: str, values: Optional[abc.Collection[T]]) -> None:
+        """Initialize the NotInCollectionFilter.
 
-    def __post_init__(self) -> None:
-        """Initialize parameter names."""
+        Args:
+            field_name: Name of the model attribute to filter on.
+            values: Values for ``NOT IN`` clause. An empty list or ``None`` will return all rows.
+        """
+        self.field_name = field_name
+        self.values = values
+
+        # Initialize parameter names
         self._param_names: list[str] = []
         if self.values:
             for i, _ in enumerate(self.values):
@@ -278,21 +294,24 @@ class NotInCollectionFilter(InAnyFilter[T]):
         return result
 
 
-@dataclass
 class AnyCollectionFilter(InAnyFilter[T]):
     """Data required to construct a ``WHERE column_name = ANY (array_expression)`` clause."""
 
-    field_name: str
-    """Name of the model attribute to filter on."""
-    values: Optional[abc.Collection[T]]
-    """Values for ``= ANY (...)`` clause.
+    __slots__ = ("_param_names", "field_name", "values")
 
-    An empty list will result in a condition that is always false (no rows returned).
-    If ``None``, the filter is not applied to the query, and all rows are returned.
-    """
+    def __init__(self, field_name: str, values: Optional[abc.Collection[T]]) -> None:
+        """Initialize the AnyCollectionFilter.
 
-    def __post_init__(self) -> None:
-        """Initialize parameter names."""
+        Args:
+            field_name: Name of the model attribute to filter on.
+            values: Values for ``= ANY (...)`` clause. An empty list will result in a condition
+                that is always false (no rows returned). If ``None``, the filter is not applied
+                to the query, and all rows are returned.
+        """
+        self.field_name = field_name
+        self.values = values
+
+        # Initialize parameter names
         self._param_names: list[str] = []
         if self.values:
             for i, _ in enumerate(self.values):
@@ -327,21 +346,24 @@ class AnyCollectionFilter(InAnyFilter[T]):
         return result
 
 
-@dataclass
 class NotAnyCollectionFilter(InAnyFilter[T]):
     """Data required to construct a ``WHERE NOT (column_name = ANY (array_expression))`` clause."""
 
-    field_name: str
-    """Name of the model attribute to filter on."""
-    values: Optional[abc.Collection[T]]
-    """Values for ``NOT (... = ANY (...))`` clause.
+    __slots__ = ("_param_names", "field_name", "values")
 
-    An empty list will result in a condition that is always true (all rows returned, filter effectively ignored).
-    If ``None``, the filter is not applied to the query, and all rows are returned.
-    """
+    def __init__(self, field_name: str, values: Optional[abc.Collection[T]]) -> None:
+        """Initialize the NotAnyCollectionFilter.
 
-    def __post_init__(self) -> None:
-        """Initialize parameter names."""
+        Args:
+            field_name: Name of the model attribute to filter on.
+            values: Values for ``NOT (... = ANY (...))`` clause. An empty list will result in a
+                condition that is always true (all rows returned, filter effectively ignored).
+                If ``None``, the filter is not applied to the query, and all rows are returned.
+        """
+        self.field_name = field_name
+        self.values = values
+
+        # Initialize parameter names
         self._param_names: list[str] = []
         if self.values:
             for i, _ in enumerate(self.values):
@@ -383,17 +405,22 @@ class PaginationFilter(StatementFilter, ABC):
         raise NotImplementedError
 
 
-@dataclass
 class LimitOffsetFilter(PaginationFilter):
     """Data required to add limit/offset filtering to a query."""
 
-    limit: int
-    """Value for ``LIMIT`` clause of query."""
-    offset: int
-    """Value for ``OFFSET`` clause of query."""
+    __slots__ = ("_limit_param_name", "_offset_param_name", "limit", "offset")
 
-    def __post_init__(self) -> None:
-        """Initialize parameter names."""
+    def __init__(self, limit: int, offset: int) -> None:
+        """Initialize the LimitOffsetFilter.
+
+        Args:
+            limit: Value for ``LIMIT`` clause of query.
+            offset: Value for ``OFFSET`` clause of query.
+        """
+        self.limit = limit
+        self.offset = offset
+
+        # Initialize parameter names
         # Generate unique parameter names to avoid conflicts
         import uuid
 
@@ -435,14 +462,20 @@ class LimitOffsetFilter(PaginationFilter):
         return result.filter(self)
 
 
-@dataclass
 class OrderByFilter(StatementFilter):
     """Data required to construct a ``ORDER BY ...`` clause."""
 
-    field_name: str
-    """Name of the model attribute to sort on."""
-    sort_order: Literal["asc", "desc"] = "asc"
-    """Sort ascending or descending"""
+    __slots__ = ("field_name", "sort_order")
+
+    def __init__(self, field_name: str, sort_order: Literal["asc", "desc"] = "asc") -> None:
+        """Initialize the OrderByFilter.
+
+        Args:
+            field_name: Name of the model attribute to sort on.
+            sort_order: Sort ascending or descending.
+        """
+        self.field_name = field_name
+        self.sort_order = sort_order
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
@@ -467,7 +500,6 @@ class OrderByFilter(StatementFilter):
         return statement.copy(statement=new_statement)
 
 
-@dataclass
 class SearchFilter(StatementFilter):
     """Data required to construct a ``WHERE field_name LIKE '%' || :value || '%'`` clause.
 
@@ -475,15 +507,21 @@ class SearchFilter(StatementFilter):
         After applying this filter, only the filter's parameters (e.g., the generated search parameter) will be present in the resulting SQL statement's parameters. Original parameters from the statement are not preserved in the result.
     """
 
-    field_name: Union[str, set[str]]
-    """Name of the model attribute to search on."""
-    value: str
-    """Search value."""
-    ignore_case: Optional[bool] = False
-    """Should the search be case insensitive."""
+    __slots__ = ("_param_name", "field_name", "ignore_case", "value")
 
-    def __post_init__(self) -> None:
-        """Initialize parameter names."""
+    def __init__(self, field_name: Union[str, set[str]], value: str, ignore_case: Optional[bool] = False) -> None:
+        """Initialize the SearchFilter.
+
+        Args:
+            field_name: Name of the model attribute to search on.
+            value: Search value.
+            ignore_case: Should the search be case insensitive.
+        """
+        self.field_name = field_name
+        self.value = value
+        self.ignore_case = ignore_case
+
+        # Initialize parameter names
         self._param_name: Optional[str] = None
         if self.value:
             if isinstance(self.field_name, str):
@@ -528,12 +566,21 @@ class SearchFilter(StatementFilter):
         return result
 
 
-@dataclass
 class NotInSearchFilter(SearchFilter):
     """Data required to construct a ``WHERE field_name NOT LIKE '%' || :value || '%'`` clause."""
 
-    def __post_init__(self) -> None:
-        """Initialize parameter names."""
+    def __init__(self, field_name: Union[str, set[str]], value: str, ignore_case: Optional[bool] = False) -> None:
+        """Initialize the NotInSearchFilter.
+
+        Args:
+            field_name: Name of the model attribute to search on.
+            value: Search value.
+            ignore_case: Should the search be case insensitive.
+        """
+        # Call parent __init__ first
+        super().__init__(field_name, value, ignore_case)
+
+        # Override parameter names for NOT search
         self._param_name: Optional[str] = None
         if self.value:
             if isinstance(self.field_name, str):
@@ -578,23 +625,24 @@ class NotInSearchFilter(SearchFilter):
         return result
 
 
-@dataclass
 class OffsetPagination(Generic[T]):
     """Container for data returned using limit/offset pagination."""
 
     __slots__ = ("items", "limit", "offset", "total")
 
-    items: Sequence[T]
-    """List of data being sent as part of the response."""
-    limit: int
-    """Maximal number of items to send."""
-    offset: int
-    """Offset from the beginning of the query.
+    def __init__(self, items: Sequence[T], limit: int, offset: int, total: int) -> None:
+        """Initialize OffsetPagination.
 
-    Identical to an index.
-    """
-    total: int
-    """Total number of items."""
+        Args:
+            items: List of data being sent as part of the response.
+            limit: Maximal number of items to send.
+            offset: Offset from the beginning of the query. Identical to an index.
+            total: Total number of items.
+        """
+        self.items = items
+        self.limit = limit
+        self.offset = offset
+        self.total = total
 
 
 def apply_filter(statement: "SQL", filter_obj: StatementFilter) -> "SQL":

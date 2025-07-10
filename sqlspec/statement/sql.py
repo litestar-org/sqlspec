@@ -1,8 +1,7 @@
 """SQL statement handling with centralized parameter management."""
 
 import operator
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
 
 import sqlglot
 import sqlglot.expressions as exp
@@ -10,7 +9,7 @@ from sqlglot.errors import ParseError
 from typing_extensions import TypeAlias
 
 from sqlspec.exceptions import RiskLevel, SQLParsingError, SQLValidationError
-from sqlspec.statement.cache import sql_cache
+from sqlspec.statement.cache import ast_fragment_cache, sql_cache
 from sqlspec.statement.filters import StatementFilter
 from sqlspec.statement.parameters import (
     SQLGLOT_INCOMPATIBLE_STYLES,
@@ -21,11 +20,16 @@ from sqlspec.statement.parameters import (
 from sqlspec.statement.pipelines import SQLProcessingContext, StatementPipeline
 from sqlspec.statement.pipelines.transformers import CommentAndHintRemover, ParameterizeLiterals
 from sqlspec.statement.pipelines.validators import DMLSafetyValidator, ParameterStyleValidator, SecurityValidator
+from sqlspec.typing import Empty
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.statement_hashing import hash_sql_statement
 from sqlspec.utils.type_guards import (
     can_append_to_statement,
     can_extract_parameters,
+    expression_has_limit,
+    get_initial_expression,
+    get_param_style_and_name,
+    get_value_attribute,
     has_parameter_value,
     has_risk_level,
     is_dict,
@@ -59,19 +63,121 @@ COLON_PARAM_ONE = "1"
 COLON_PARAM_MIN_INDEX = 1
 
 
-@dataclass
 class _ProcessedState:
     """Cached state from pipeline processing."""
 
-    processed_expression: exp.Expression
-    processed_sql: str
-    merged_parameters: Any
-    validation_errors: list[Any] = field(default_factory=list)
-    analysis_results: dict[str, Any] = field(default_factory=dict)
-    transformation_results: dict[str, Any] = field(default_factory=dict)
+    __slots__ = (
+        "analysis_results",
+        "merged_parameters",
+        "processed_expression",
+        "processed_sql",
+        "transformation_results",
+        "validation_errors",
+    )
+
+    def __hash__(self) -> int:
+        """Hash based on processed SQL and expression."""
+        return hash(
+            (
+                self.processed_sql,
+                str(self.processed_expression),  # Convert expression to string for hashing
+                len(self.validation_errors) if self.validation_errors else 0,
+            )
+        )
+
+    def __init__(
+        self,
+        processed_expression: exp.Expression,
+        processed_sql: str,
+        merged_parameters: Any,
+        validation_errors: "Optional[list[Any]]" = None,
+        analysis_results: "Optional[dict[str, Any]]" = None,
+        transformation_results: "Optional[dict[str, Any]]" = None,
+    ) -> None:
+        self.processed_expression = processed_expression
+        self.processed_sql = processed_sql
+        self.merged_parameters = merged_parameters
+        self.validation_errors = validation_errors or []
+        self.analysis_results = analysis_results or {}
+        self.transformation_results = transformation_results or {}
+
+    def replace(self, **changes: Any) -> "_ProcessedState":
+        """Create a new _ProcessedState with specified changes."""
+        # Validate that all changes correspond to valid slots
+        _slots = (
+            "analysis_results",
+            "merged_parameters",
+            "processed_expression",
+            "processed_sql",
+            "transformation_results",
+            "validation_errors",
+        )
+        for key in changes:
+            if key not in _slots:
+                msg = f"{key!r} is not a field in {type(self).__name__}"
+                raise TypeError(msg)
+
+        # Build the keyword arguments for the new instance
+        kwargs = {slot: getattr(self, slot) for slot in _slots}
+        kwargs.update(changes)
+
+        return type(self)(**kwargs)
+
+    def __repr__(self) -> str:
+        """String representation compatible with dataclass.__repr__."""
+        field_strs = []
+        _slots = (
+            "analysis_results",
+            "merged_parameters",
+            "processed_expression",
+            "processed_sql",
+            "transformation_results",
+            "validation_errors",
+        )
+        for slot in _slots:
+            value = getattr(self, slot)
+            field_strs.append(f"{slot}={value!r}")
+        return f"{self.__class__.__name__}({', '.join(field_strs)})"
+
+    def __eq__(self, other: object) -> bool:
+        """Equality comparison compatible with dataclass.__eq__."""
+        if not isinstance(other, type(self)):
+            return False
+        # mypyc removes __slots__ at runtime, so we hardcode the comparison
+        return (
+            self.processed_expression == other.processed_expression
+            and self.processed_sql == other.processed_sql
+            and self.merged_parameters == other.merged_parameters
+            and self.validation_errors == other.validation_errors
+            and self.analysis_results == other.analysis_results
+            and self.transformation_results == other.transformation_results
+        )
 
 
-@dataclass
+# SQLConfig slots definition for mypyc compatibility
+_SQLCONFIG_SLOTS = (
+    "allow_mixed_parameter_styles",
+    "allowed_parameter_styles",
+    "analyzer_output_handler",
+    "analyzers",
+    "default_parameter_style",
+    "dialect",
+    "enable_analysis",
+    "enable_caching",
+    "enable_expression_simplification",
+    "enable_parameter_type_wrapping",
+    "enable_parsing",
+    "enable_transformations",
+    "enable_validation",
+    "input_sql_had_placeholders",
+    "parameter_converter",
+    "parameter_validator",
+    "parse_errors_as_warnings",
+    "transformers",
+    "validators",
+)
+
+
 class SQLConfig:
     """Configuration for SQL statement behavior.
 
@@ -105,28 +211,97 @@ class SQLConfig:
         allow_mixed_parameter_styles: Whether to allow mixing parameter styles in same query
     """
 
-    enable_parsing: bool = True
-    enable_validation: bool = True
-    enable_transformations: bool = True
-    enable_analysis: bool = False
-    enable_expression_simplification: bool = False
-    enable_parameter_type_wrapping: bool = True
-    parse_errors_as_warnings: bool = True
-    enable_caching: bool = True
+    __slots__ = _SQLCONFIG_SLOTS
 
-    transformers: "Optional[list[Any]]" = None
-    validators: "Optional[list[Any]]" = None
-    analyzers: "Optional[list[Any]]" = None
+    def __hash__(self) -> int:
+        """Hash based on key configuration settings."""
+        return hash(
+            (
+                self.enable_parsing,
+                self.enable_validation,
+                self.enable_transformations,
+                self.enable_analysis,
+                self.enable_expression_simplification,
+                self.enable_parameter_type_wrapping,
+                self.enable_caching,
+                self.dialect,
+                self.default_parameter_style,
+                tuple(self.allowed_parameter_styles) if self.allowed_parameter_styles else None,
+            )
+        )
 
-    parameter_converter: ParameterConverter = field(default_factory=ParameterConverter)
-    parameter_validator: ParameterValidator = field(default_factory=ParameterValidator)
-    input_sql_had_placeholders: bool = False
-    dialect: "Optional[DialectType]" = None
+    def __init__(
+        self,
+        enable_parsing: bool = True,
+        enable_validation: bool = True,
+        enable_transformations: bool = True,
+        enable_analysis: bool = False,
+        enable_expression_simplification: bool = False,
+        enable_parameter_type_wrapping: bool = True,
+        parse_errors_as_warnings: bool = True,
+        enable_caching: bool = True,
+        transformers: "Optional[list[Any]]" = None,
+        validators: "Optional[list[Any]]" = None,
+        analyzers: "Optional[list[Any]]" = None,
+        parameter_converter: "Optional[ParameterConverter]" = None,
+        parameter_validator: "Optional[ParameterValidator]" = None,
+        input_sql_had_placeholders: bool = False,
+        dialect: "Optional[DialectType]" = None,
+        allowed_parameter_styles: "Optional[tuple[str, ...]]" = None,
+        default_parameter_style: "Optional[str]" = None,
+        allow_mixed_parameter_styles: bool = False,
+        analyzer_output_handler: "Optional[Callable[[Any], None]]" = None,
+    ) -> None:
+        self.enable_parsing = enable_parsing
+        self.enable_validation = enable_validation
+        self.enable_transformations = enable_transformations
+        self.enable_analysis = enable_analysis
+        self.enable_expression_simplification = enable_expression_simplification
+        self.enable_parameter_type_wrapping = enable_parameter_type_wrapping
+        self.parse_errors_as_warnings = parse_errors_as_warnings
+        self.enable_caching = enable_caching
+        self.transformers = transformers
+        self.validators = validators
+        self.analyzers = analyzers
+        self.parameter_converter = parameter_converter or ParameterConverter()
+        self.parameter_validator = parameter_validator or ParameterValidator()
+        self.input_sql_had_placeholders = input_sql_had_placeholders
+        self.dialect = dialect
+        self.allowed_parameter_styles = allowed_parameter_styles
+        self.default_parameter_style = default_parameter_style
+        self.allow_mixed_parameter_styles = allow_mixed_parameter_styles
+        self.analyzer_output_handler = analyzer_output_handler
 
-    allowed_parameter_styles: "Optional[tuple[str, ...]]" = None
-    default_parameter_style: "Optional[str]" = None
-    allow_mixed_parameter_styles: bool = False
-    analyzer_output_handler: "Optional[Callable[[Any], None]]" = None
+    def replace(self, **changes: Any) -> "SQLConfig":
+        """Create a new SQLConfig with specified changes.
+
+        This replaces the dataclass replace() functionality.
+        """
+        # Validate that all changes correspond to valid slots
+        for key in changes:
+            if key not in _SQLCONFIG_SLOTS:
+                msg = f"{key!r} is not a field in {type(self).__name__}"
+                raise TypeError(msg)
+
+        # Build the keyword arguments for the new instance
+        kwargs = {slot: getattr(self, slot) for slot in _SQLCONFIG_SLOTS}
+        kwargs.update(changes)
+
+        return type(self)(**kwargs)
+
+    def __repr__(self) -> str:
+        """String representation compatible with dataclass.__repr__."""
+        field_strs = []
+        for slot in _SQLCONFIG_SLOTS:
+            value = getattr(self, slot)
+            field_strs.append(f"{slot}={value!r}")
+        return f"{self.__class__.__name__}({', '.join(field_strs)})"
+
+    def __eq__(self, other: object) -> bool:
+        """Equality comparison compatible with dataclass.__eq__."""
+        if not isinstance(other, type(self)):
+            return False
+        return all(getattr(self, slot) == getattr(other, slot) for slot in _SQLCONFIG_SLOTS)
 
     def validate_parameter_style(self, style: "Union[ParameterStyle, str]") -> bool:
         """Check if a parameter style is allowed.
@@ -232,7 +407,7 @@ class SQL:
         self._config = _config or SQLConfig()
         self._dialect = _dialect or self._config.dialect
         self._builder_result_type = _builder_result_type
-        self._processed_state: Optional[_ProcessedState] = None
+        self._processed_state: Any = Empty  # Use Any to avoid mypyc Optional issues
         self._processing_context: Optional[SQLProcessingContext] = None
         self._positional_params: list[Any] = []
         self._named_params: dict[str, Any] = {}
@@ -349,7 +524,8 @@ class SQL:
         This method implements the facade pattern with lazy processing.
         It's called by public methods that need processed state.
         """
-        if self._processed_state is not None:
+        # Check if already processed
+        if self._processed_state is not Empty:
             return
 
         # Check cache first if caching is enabled
@@ -359,7 +535,8 @@ class SQL:
             cached_state = sql_cache.get(cache_key)
 
             if cached_state is not None:
-                self._processed_state = cached_state
+                # Cast to work around mypyc Optional type checking
+                self._processed_state = cast("_ProcessedState", cached_state)
                 return
 
         final_expr, final_params = self._build_final_state()
@@ -374,8 +551,10 @@ class SQL:
         self._finalize_processed_state(result, processed_sql, merged_params)
 
         # Store in cache if caching is enabled
-        if self._config.enable_caching and cache_key is not None and self._processed_state is not None:
-            sql_cache.set(cache_key, self._processed_state)
+        if self._config.enable_caching and cache_key is not None:
+            # We know _processed_state is not Empty after _finalize_processed_state
+            # Use cast to work around mypyc type checking
+            sql_cache.set(cache_key, cast("_ProcessedState", self._processed_state))
 
     def _detect_placeholders(self) -> bool:
         """Detect if the raw SQL has placeholders."""
@@ -481,18 +660,15 @@ class SQL:
         else:
             # Use the initial expression that includes filters, not the processed one
             # The processed expression may have lost LIMIT/OFFSET during pipeline processing
-            if hasattr(context, "initial_expression") and context.initial_expression != processed_expr:
+            initial_expr = get_initial_expression(context)
+            if initial_expr and initial_expr != processed_expr:
                 # Check if LIMIT/OFFSET was stripped during processing
-                has_limit_in_initial = (
-                    context.initial_expression is not None
-                    and hasattr(context.initial_expression, "args")
-                    and "limit" in context.initial_expression.args
-                )
-                has_limit_in_processed = hasattr(processed_expr, "args") and "limit" in processed_expr.args
+                has_limit_in_initial = expression_has_limit(initial_expr)
+                has_limit_in_processed = expression_has_limit(processed_expr)
 
                 if has_limit_in_initial and not has_limit_in_processed:
                     # Restore LIMIT/OFFSET from initial expression
-                    processed_expr = context.initial_expression
+                    processed_expr = initial_expr
 
             processed_sql = (
                 processed_expr.sql(dialect=self._dialect or self._config.dialect, comments=False)
@@ -654,7 +830,8 @@ class SQL:
             raise SQLValidationError(
                 message=highest_risk_error.message,
                 sql=self._raw_sql or processed_sql,
-                risk_level=getattr(highest_risk_error, "risk_level", RiskLevel.HIGH),
+                # Use try/except for mypyc compatibility
+                risk_level=highest_risk_error.risk_level if highest_risk_error else RiskLevel.HIGH,
             )
 
     def _to_expression(self, statement: "Union[str, exp.Expression]") -> exp.Expression:
@@ -698,6 +875,13 @@ class SQL:
         else:
             self._parameter_conversion_state = None
 
+        # Try to get from AST cache first
+        cached_expr = ast_fragment_cache.parse_with_cache(converted_sql, fragment_type="QUERY", dialect=self._dialect)
+
+        if cached_expr:
+            return cached_expr
+
+        # Fall back to regular parsing if not cached
         try:
             expressions = sqlglot.parse(converted_sql, dialect=self._dialect)  # pyright: ignore
             if not expressions:
@@ -706,8 +890,18 @@ class SQL:
             if first_expr is None:
                 return exp.Anonymous(this=statement)
 
+            # Cache the successfully parsed expression
+            ast_fragment_cache.set_fragment(
+                sql=converted_sql,
+                expression=first_expr,
+                fragment_type="QUERY",
+                dialect=self._dialect,
+                parameter_count=len(param_info),
+            )
+
         except ParseError as e:
-            if getattr(self._config, "parse_errors_as_warnings", False):
+            # Use direct attribute access for mypyc compatibility
+            if self._config.parse_errors_as_warnings:
                 logger.warning(
                     "Failed to parse SQL, returning Anonymous expression.", extra={"sql": statement, "error": str(e)}
                 )
@@ -897,10 +1091,10 @@ class SQL:
             return self._raw_sql
 
         self._ensure_processed()
-        if self._processed_state is None:
+        if self._processed_state is Empty:
             msg = "Failed to process SQL statement"
             raise RuntimeError(msg)
-        return self._processed_state.processed_sql
+        return cast("_ProcessedState", self._processed_state).processed_sql
 
     @property
     def config(self) -> "SQLConfig":
@@ -913,10 +1107,10 @@ class SQL:
         if not self._config.enable_parsing:
             return None
         self._ensure_processed()
-        if self._processed_state is None:
+        if self._processed_state is Empty:
             msg = "Failed to process SQL statement"
             raise RuntimeError(msg)
-        return self._processed_state.processed_expression
+        return cast("_ProcessedState", self._processed_state).processed_expression
 
     @property
     def parameters(self) -> Any:
@@ -932,7 +1126,7 @@ class SQL:
             return self._original_parameters
 
         self._ensure_processed()
-        if self._processed_state is None:
+        if self._processed_state is Empty:
             msg = "Failed to process SQL statement"
             raise RuntimeError(msg)
         params = self._processed_state.merged_parameters
@@ -980,7 +1174,7 @@ class SQL:
         param_sets = self._original_parameters or []
 
         # Get any literals extracted during pipeline processing
-        if self._processed_state and self._processing_context:
+        if self._processed_state is not Empty and self._processing_context:
             extracted_literals = self._processing_context.extracted_parameters_from_pipeline
 
             if extracted_literals:
@@ -989,20 +1183,19 @@ class SQL:
                 for param_set in param_sets:
                     if isinstance(param_set, (list, tuple)):
                         # Add extracted literals to the parameter tuple
-                        enhanced_set = list(param_set) + [
-                            p.value if hasattr(p, "value") else p for p in extracted_literals
-                        ]
+                        literal_values = [get_value_attribute(p) for p in extracted_literals]
+                        enhanced_set = list(param_set) + literal_values
                         enhanced_params.append(tuple(enhanced_set))
                     elif isinstance(param_set, dict):
                         # For dict params, add extracted literals with generated names
                         enhanced_dict = dict(param_set)
                         for i, literal in enumerate(extracted_literals):
                             param_name = f"_literal_{i}"
-                            enhanced_dict[param_name] = literal.value if hasattr(literal, "value") else literal
+                            enhanced_dict[param_name] = get_value_attribute(literal)
                         enhanced_params.append(enhanced_dict)
                     else:
                         # Single parameter - convert to tuple with literals
-                        literals = [p.value if hasattr(p, "value") else p for p in extracted_literals]
+                        literals = [get_value_attribute(p) for p in extracted_literals]
                         enhanced_params.append((param_set, *literals))
                 param_sets = enhanced_params
 
@@ -1014,7 +1207,7 @@ class SQL:
     def _get_extracted_parameters(self) -> "list[Any]":
         """Get extracted parameters from pipeline processing."""
         extracted_params = []
-        if self._processed_state and self._processed_state.merged_parameters:
+        if self._processed_state is not Empty and self._processed_state.merged_parameters:
             merged = self._processed_state.merged_parameters
             if isinstance(merged, list):
                 if merged and not isinstance(merged[0], (tuple, list)):
@@ -1059,7 +1252,7 @@ class SQL:
 
         self._ensure_processed()
 
-        if self._processed_state is None:
+        if self._processed_state is Empty:
             msg = "Failed to process SQL statement"
             raise RuntimeError(msg)
         sql = self._processed_state.processed_sql
@@ -1160,8 +1353,8 @@ class SQL:
                 if old_pos < len(params):
                     reordered_list[new_pos] = params[old_pos]  # pyright: ignore
 
-            for i, val in enumerate(reordered_list):
-                if val is None and i < len(params) and i not in mapping:
+            for i in range(len(reordered_list)):
+                if reordered_list[i] is None and i < len(params) and i not in mapping:
                     reordered_list[i] = params[i]  # pyright: ignore
 
             return tuple(reordered_list) if isinstance(params, tuple) else reordered_list
@@ -1352,14 +1545,9 @@ class SQL:
             return f"@{param.name or f'param_{param.ordinal}'}"
         if target_style == ParameterStyle.POSITIONAL_COLON:
             # For Oracle positional colon, preserve the original numeric identifier if it was already :N style
-            if (
-                hasattr(param, "style")
-                and param.style == ParameterStyle.POSITIONAL_COLON
-                and hasattr(param, "name")
-                and param.name
-                and param.name.isdigit()
-            ):
-                return f":{param.name}"
+            style, name = get_param_style_and_name(param)
+            if style == ParameterStyle.POSITIONAL_COLON and name and name.isdigit():
+                return f":{name}"
             return f":{param.ordinal + 1}"
         if target_style == ParameterStyle.POSITIONAL_PYFORMAT:
             return "%s"
@@ -1717,10 +1905,10 @@ class SQL:
         if not self._config.enable_validation:
             return []
         self._ensure_processed()
-        if not self._processed_state:
+        if self._processed_state is Empty:
             msg = "Failed to process SQL statement"
             raise RuntimeError(msg)
-        return self._processed_state.validation_errors
+        return cast("_ProcessedState", self._processed_state).validation_errors
 
     @property
     def has_errors(self) -> bool:

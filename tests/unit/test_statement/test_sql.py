@@ -116,14 +116,16 @@ def test_sql_immutability() -> None:
 # Test SQL lazy processing
 def test_sql_lazy_processing() -> None:
     """Test SQL processing is done lazily."""
+    from sqlspec.typing import Empty
+
     stmt = SQL("SELECT * FROM users")
 
     # Processing not done yet
-    assert stmt._processed_state is None
+    assert stmt._processed_state is Empty
 
     # Accessing sql property triggers processing
     _ = stmt.sql
-    assert stmt._processed_state is not None
+    assert stmt._processed_state is not Empty
 
 
 # Test SQL properties

@@ -19,8 +19,10 @@ from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_m
 def adbc_postgresql_script_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
     """Create an ADBC PostgreSQL session for script testing."""
     config = AdbcConfig(
-        uri=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-        driver_name="adbc_driver_postgresql",
+        connection_config={
+            "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+            "driver_name": "adbc_driver_postgresql",
+        },
         statement_config=SQLConfig(),
     )
 
@@ -31,7 +33,9 @@ def adbc_postgresql_script_session(postgres_service: PostgresService) -> Generat
 @pytest.fixture
 def adbc_sqlite_script_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session for script testing."""
-    config = AdbcConfig(uri=":memory:", driver_name="adbc_driver_sqlite", statement_config=SQLConfig())
+    config = AdbcConfig(
+        connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"}, statement_config=SQLConfig()
+    )
 
     with config.provide_session() as session:
         yield session

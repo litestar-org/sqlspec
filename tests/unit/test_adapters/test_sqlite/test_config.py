@@ -15,50 +15,38 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sqlspec.adapters.sqlite import CONNECTION_FIELDS, SqliteConfig, SqliteDriver
+from sqlspec.adapters.sqlite import SqliteConfig, SqliteConnectionParams, SqliteDriver
 from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import DictRow
 
 if TYPE_CHECKING:
     pass
 
 
-# Constants Tests
-def test_connection_fields_constant() -> None:
-    """Test CONNECTION_FIELDS constant contains all expected fields."""
-    expected_fields = frozenset(
-        {
-            "database",
-            "timeout",
-            "detect_types",
-            "isolation_level",
-            "check_same_thread",
-            "factory",
-            "cached_statements",
-            "uri",
-        }
-    )
-    assert CONNECTION_FIELDS == expected_fields
+# TypedDict Tests
+def test_sqlite_connection_params_typeddict() -> None:
+    """Test SqliteConnectionParams TypedDict accepts all expected fields."""
+    # This test validates that all expected fields are accepted by the TypedDict
+    connection_params: SqliteConnectionParams = {
+        "database": ":memory:",
+        "timeout": 30.0,
+        "detect_types": 0,
+        "isolation_level": "DEFERRED",
+        "check_same_thread": False,
+        "factory": None,
+        "cached_statements": 100,
+        "uri": True,
+    }
+
+    # Create config with the TypedDict
+    config = SqliteConfig(connection_config=connection_params)
+    assert config.connection_config == connection_params
 
 
 # Initialization Tests
 @pytest.mark.parametrize(
-    "kwargs,expected_attrs",
+    "connection_config,expected_config",
     [
-        (
-            {"database": ":memory:"},
-            {
-                "database": ":memory:",
-                "timeout": None,
-                "detect_types": None,
-                "isolation_level": None,
-                "check_same_thread": None,
-                "factory": None,
-                "cached_statements": None,
-                "uri": None,
-                "extras": {},
-            },
-        ),
+        ({"database": ":memory:"}, {"database": ":memory:"}),
         (
             {
                 "database": "/tmp/test.db",
@@ -77,40 +65,27 @@ def test_connection_fields_constant() -> None:
                 "check_same_thread": False,
                 "cached_statements": 100,
                 "uri": True,
-                "extras": {},
             },
         ),
     ],
     ids=["minimal", "full"],
 )
-def test_config_initialization(kwargs: dict[str, Any], expected_attrs: dict[str, Any]) -> None:
+def test_config_initialization(connection_config: dict[str, Any], expected_config: dict[str, Any]) -> None:
     """Test config initialization with various parameters."""
-    config = SqliteConfig(**kwargs)
+    config = SqliteConfig(connection_config=connection_config)
 
-    for attr, expected_value in expected_attrs.items():
-        assert getattr(config, attr) == expected_value
+    # Check that the connection_config is stored properly
+    assert config.connection_config == expected_config
 
     # Check base class attributes
     assert isinstance(config.statement_config, SQLConfig)
-    assert config.default_row_type is DictRow
+    assert config.default_row_type is dict
 
 
-@pytest.mark.parametrize(
-    "init_kwargs,expected_extras",
-    [
-        ({"database": ":memory:", "custom_param": "value", "debug": True}, {"custom_param": "value", "debug": True}),
-        (
-            {"database": ":memory:", "unknown_param": "test", "another_param": 42},
-            {"unknown_param": "test", "another_param": 42},
-        ),
-        ({"database": "/tmp/test.db"}, {}),
-    ],
-    ids=["with_custom_params", "with_unknown_params", "no_extras"],
-)
-def test_extras_handling(init_kwargs: dict[str, Any], expected_extras: dict[str, Any]) -> None:
-    """Test handling of extra parameters."""
-    config = SqliteConfig(**init_kwargs)
-    assert config.extras == expected_extras
+def test_default_connection_config() -> None:
+    """Test default connection config when none is provided."""
+    config = SqliteConfig()
+    assert config.connection_config == {"database": ":memory:"}
 
 
 @pytest.mark.parametrize(
@@ -120,7 +95,7 @@ def test_extras_handling(init_kwargs: dict[str, Any], expected_extras: dict[str,
 )
 def test_statement_config_initialization(statement_config: "SQLConfig | None", expected_type: type[SQLConfig]) -> None:
     """Test statement config initialization."""
-    config = SqliteConfig(database=":memory:", statement_config=statement_config)
+    config = SqliteConfig(connection_config={"database": ":memory:"}, statement_config=statement_config)
     assert isinstance(config.statement_config, expected_type)
 
     if statement_config is not None:
@@ -134,7 +109,7 @@ def test_create_connection(mock_connect: MagicMock) -> None:
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
 
-    config = SqliteConfig(database="/tmp/test.db", timeout=30.0)
+    config = SqliteConfig(connection_config={"database": "/tmp/test.db", "timeout": 30.0})
     connection = config.create_connection()
 
     # Verify connection creation (None values should be filtered out)
@@ -152,7 +127,7 @@ def test_provide_connection_success(mock_connect: MagicMock) -> None:
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
 
-    config = SqliteConfig(database=":memory:")
+    config = SqliteConfig(connection_config={"database": ":memory:"})
 
     with config.provide_connection() as conn:
         assert conn is mock_connection
@@ -167,7 +142,7 @@ def test_provide_connection_error_handling(mock_connect: MagicMock) -> None:
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
 
-    config = SqliteConfig(database=":memory:")
+    config = SqliteConfig(connection_config={"database": ":memory:"})
 
     with pytest.raises(ValueError, match="Test error"):
         with config.provide_connection() as conn:
@@ -184,7 +159,7 @@ def test_provide_session(mock_connect: MagicMock) -> None:
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
 
-    config = SqliteConfig(database=":memory:")
+    config = SqliteConfig(connection_config={"database": ":memory:"})
 
     with config.provide_session() as session:
         assert isinstance(session, SqliteDriver)
@@ -207,7 +182,7 @@ def test_provide_session_with_custom_config(mock_connect: MagicMock) -> None:
 
     # Custom statement config with parameter styles already set
     custom_config = SQLConfig(allowed_parameter_styles=("qmark",), default_parameter_style="qmark")
-    config = SqliteConfig(database=":memory:", statement_config=custom_config)
+    config = SqliteConfig(connection_config={"database": ":memory:"}, statement_config=custom_config)
 
     with config.provide_session() as session:
         # Should use the custom config's parameter styles
@@ -217,7 +192,7 @@ def test_provide_session_with_custom_config(mock_connect: MagicMock) -> None:
 
 # Property Tests
 @pytest.mark.parametrize(
-    "init_kwargs,expected_dict",
+    "connection_config,expected_dict",
     [
         ({"database": ":memory:"}, {"database": ":memory:"}),
         (
@@ -227,21 +202,21 @@ def test_provide_session_with_custom_config(mock_connect: MagicMock) -> None:
     ],
     ids=["minimal", "partial"],
 )
-def test_connection_config_dict(init_kwargs: dict[str, Any], expected_dict: dict[str, Any]) -> None:
-    """Test connection_config_dict property."""
-    config = SqliteConfig(**init_kwargs)
-    assert config.connection_config_dict == expected_dict
+def test_connection_config_storage(connection_config: dict[str, Any], expected_dict: dict[str, Any]) -> None:
+    """Test connection_config storage."""
+    config = SqliteConfig(connection_config=connection_config)
+    assert config.connection_config == expected_dict
 
 
 def test_driver_type() -> None:
     """Test driver_type class attribute."""
-    config = SqliteConfig(database=":memory:")
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     assert config.driver_type is SqliteDriver
 
 
 def test_connection_type() -> None:
     """Test connection_type class attribute."""
-    config = SqliteConfig(database=":memory:")
+    config = SqliteConfig(connection_config={"database": ":memory:"})
     assert config.connection_type is sqlite3.Connection
 
 
@@ -258,14 +233,14 @@ def test_connection_type() -> None:
 )
 def test_database_paths(database: str, uri: "bool | None", description: str) -> None:
     """Test various database path configurations."""
-    kwargs = {"database": database}
+    connection_config = {"database": database}
     if uri is not None:
-        kwargs["uri"] = uri  # pyright: ignore
+        connection_config["uri"] = uri  # type: ignore[assignment]
 
-    config = SqliteConfig(**kwargs)  # type: ignore[arg-type]
-    assert config.database == database
+    config = SqliteConfig(connection_config=connection_config)
+    assert config.connection_config["database"] == database
     if uri is not None:
-        assert config.uri == uri
+        assert config.connection_config["uri"] == uri
 
 
 # SQLite-Specific Parameter Tests
@@ -274,8 +249,12 @@ def test_database_paths(database: str, uri: "bool | None", description: str) -> 
 )
 def test_isolation_levels(isolation_level: "str | None") -> None:
     """Test different isolation levels."""
-    config = SqliteConfig(database=":memory:", isolation_level=isolation_level)
-    assert config.isolation_level == isolation_level
+    connection_config = {"database": ":memory:"}
+    if isolation_level is not None:
+        connection_config["isolation_level"] = isolation_level
+
+    config = SqliteConfig(connection_config=connection_config)
+    assert config.connection_config.get("isolation_level") == isolation_level
 
 
 @pytest.mark.parametrize(
@@ -285,8 +264,8 @@ def test_isolation_levels(isolation_level: "str | None") -> None:
 )
 def test_detect_types(detect_types: int) -> None:
     """Test detect_types parameter."""
-    config = SqliteConfig(database=":memory:", detect_types=detect_types)
-    assert config.detect_types == detect_types
+    config = SqliteConfig(connection_config={"database": ":memory:", "detect_types": detect_types})
+    assert config.connection_config["detect_types"] == detect_types
 
 
 # Parameter Style Tests
@@ -302,18 +281,18 @@ def test_default_parameter_style() -> None:
 
 # Edge Cases
 @pytest.mark.parametrize(
-    "kwargs,expected_error",
+    "connection_config,expected_error",
     [
         ({"database": ""}, None),  # Empty string is allowed
-        ({"database": None}, TypeError),  # None should raise TypeError
+        ({"database": None}, None),  # None is allowed in TypedDict but filtered out
     ],
     ids=["empty_string", "none_database"],
 )
-def test_edge_cases(kwargs: dict[str, Any], expected_error: "type[Exception] | None") -> None:
+def test_edge_cases(connection_config: dict[str, Any], expected_error: "type[Exception] | None") -> None:
     """Test edge cases for config initialization."""
     if expected_error:
         with pytest.raises(expected_error):
-            SqliteConfig(**kwargs)
+            SqliteConfig(connection_config=connection_config)
     else:
-        config = SqliteConfig(**kwargs)
-        assert config.database == kwargs["database"]
+        config = SqliteConfig(connection_config=connection_config)
+        assert config.connection_config == connection_config

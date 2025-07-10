@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 __all__ = ("AsyncAdapterCacheMixin", "SyncAdapterCacheMixin")
 
 
-class SyncAdapterCacheMixin:
+class AdapterCacheMixin:
     """Mixin for adapter-level SQL compilation caching.
 
     This mixin provides:
@@ -47,18 +47,11 @@ class SyncAdapterCacheMixin:
             Tuple of (compiled_sql, parameters)
         """
         if self._compiled_cache is None:
-            # Caching disabled
             return statement.compile(placeholder_style=target_style)
-
-        # Generate cache key
         cache_key = self._adapter_cache_key(statement, target_style)
-
-        # Check cache
         cached = self._compiled_cache.get(cache_key)
         if cached is not None:
             return cached  # type: ignore[no-any-return]
-
-        # Compile and cache
         result = statement.compile(placeholder_style=target_style)
         self._compiled_cache.set(cache_key, result)
         return result
@@ -91,8 +84,6 @@ class SyncAdapterCacheMixin:
         """
         if sql_hash in self._prepared_statements:
             return self._prepared_statements[sql_hash]
-
-        # Create new prepared statement name
         self._prepared_counter += 1
         stmt_name = f"sqlspec_ps_{self._prepared_counter}"
         self._prepared_statements[sql_hash] = stmt_name
@@ -106,7 +97,15 @@ class SyncAdapterCacheMixin:
         self._prepared_counter = 0
 
 
-class AsyncAdapterCacheMixin(SyncAdapterCacheMixin):
+class SyncAdapterCacheMixin(AdapterCacheMixin):
+    """Sync version of AdapterCacheMixin.
+
+    This mixin provides synchronous caching for compiled SQL and prepared statements.
+    It is used by synchronous adapters to manage SQL compilation and prepared statement names.
+    """
+
+
+class AsyncAdapterCacheMixin(AdapterCacheMixin):
     """Async version of AdapterCacheMixin.
 
     Identical to AdapterCacheMixin since caching operations are synchronous.

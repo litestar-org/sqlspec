@@ -1,7 +1,6 @@
 """SQL statement analyzer for extracting metadata and complexity metrics."""
 
 import time
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
 from sqlglot import exp, parse_one
@@ -37,64 +36,119 @@ NESTED_FUNCTION_THRESHOLD = 3
 logger = get_logger("pipelines.analyzers")
 
 
-@dataclass
 class StatementAnalysis:
     """Analysis result for parsed SQL statements."""
 
-    statement_type: str
-    """Type of SQL statement (Insert, Select, Update, Delete, etc.)"""
-    expression: exp.Expression
-    """Parsed SQLGlot expression"""
-    table_name: "Optional[str]" = None
-    """Primary table name if detected"""
-    columns: "list[str]" = field(default_factory=list)
-    """Column names if detected"""
-    has_returning: bool = False
-    """Whether statement has RETURNING clause"""
-    is_from_select: bool = False
-    """Whether this is an INSERT FROM SELECT pattern"""
-    parameters: "dict[str, Any]" = field(default_factory=dict)
-    """Extracted parameters from the SQL"""
-    tables: "list[str]" = field(default_factory=list)
-    """All table names referenced in the query"""
-    complexity_score: int = 0
-    """Complexity score based on query structure"""
-    uses_subqueries: bool = False
-    """Whether the query uses subqueries"""
-    join_count: int = 0
-    """Number of joins in the query"""
-    aggregate_functions: "list[str]" = field(default_factory=list)
-    """List of aggregate functions used"""
+    __slots__ = (
+        "aggregate_functions",
+        "columns",
+        "complexity_issues",
+        "complexity_score",
+        "complexity_warnings",
+        "correlated_subquery_count",
+        "cte_count",
+        "expression",
+        "function_count",
+        "has_aggregation",
+        "has_returning",
+        "has_window_functions",
+        "is_from_select",
+        "join_count",
+        "join_types",
+        "max_subquery_depth",
+        "operations",
+        "parameters",
+        "potential_cartesian_products",
+        "statement_type",
+        "subquery_count",
+        "table_name",
+        "tables",
+        "uses_subqueries",
+        "where_condition_count",
+    )
 
-    # Enhanced complexity metrics
-    join_types: "dict[str, int]" = field(default_factory=dict)
-    """Types and counts of joins"""
-    max_subquery_depth: int = 0
-    """Maximum subquery nesting depth"""
-    correlated_subquery_count: int = 0
-    """Number of correlated subqueries"""
-    function_count: int = 0
-    """Total number of function calls"""
-    where_condition_count: int = 0
-    """Number of WHERE conditions"""
-    potential_cartesian_products: int = 0
-    """Number of potential Cartesian products detected"""
-    complexity_warnings: "list[str]" = field(default_factory=list)
-    """Warnings about query complexity"""
-    complexity_issues: "list[str]" = field(default_factory=list)
-    """Issues with query complexity"""
+    def __init__(
+        self,
+        statement_type: str,
+        expression: exp.Expression,
+        table_name: "Optional[str]" = None,
+        columns: Optional["list[str]"] = None,
+        has_returning: bool = False,
+        is_from_select: bool = False,
+        parameters: Optional["dict[str, Any]"] = None,
+        tables: Optional["list[str]"] = None,
+        complexity_score: int = 0,
+        uses_subqueries: bool = False,
+        join_count: int = 0,
+        aggregate_functions: Optional["list[str]"] = None,
+        join_types: Optional["dict[str, int]"] = None,
+        max_subquery_depth: int = 0,
+        correlated_subquery_count: int = 0,
+        function_count: int = 0,
+        where_condition_count: int = 0,
+        potential_cartesian_products: int = 0,
+        complexity_warnings: Optional["list[str]"] = None,
+        complexity_issues: Optional["list[str]"] = None,
+        subquery_count: int = 0,
+        operations: Optional["list[str]"] = None,
+        has_aggregation: bool = False,
+        has_window_functions: bool = False,
+        cte_count: int = 0,
+    ) -> None:
+        self.statement_type = statement_type
+        """Type of SQL statement (Insert, Select, Update, Delete, etc.)"""
+        self.expression = expression
+        """Parsed SQLGlot expression"""
+        self.table_name = table_name
+        """Primary table name if detected"""
+        self.columns = columns if columns is not None else []
+        """Column names if detected"""
+        self.has_returning = has_returning
+        """Whether statement has RETURNING clause"""
+        self.is_from_select = is_from_select
+        """Whether this is an INSERT FROM SELECT pattern"""
+        self.parameters = parameters if parameters is not None else {}
+        """Extracted parameters from the SQL"""
+        self.tables = tables if tables is not None else []
+        """All table names referenced in the query"""
+        self.complexity_score = complexity_score
+        """Complexity score based on query structure"""
+        self.uses_subqueries = uses_subqueries
+        """Whether the query uses subqueries"""
+        self.join_count = join_count
+        """Number of joins in the query"""
+        self.aggregate_functions = aggregate_functions if aggregate_functions is not None else []
+        """List of aggregate functions used"""
 
-    # Additional attributes for aggregator compatibility
-    subquery_count: int = 0
-    """Total number of subqueries"""
-    operations: "list[str]" = field(default_factory=list)
-    """SQL operations performed (SELECT, JOIN, etc.)"""
-    has_aggregation: bool = False
-    """Whether query uses aggregation functions"""
-    has_window_functions: bool = False
-    """Whether query uses window functions"""
-    cte_count: int = 0
-    """Number of CTEs (Common Table Expressions)"""
+        # Enhanced complexity metrics
+        self.join_types = join_types if join_types is not None else {}
+        """Types and counts of joins"""
+        self.max_subquery_depth = max_subquery_depth
+        """Maximum subquery nesting depth"""
+        self.correlated_subquery_count = correlated_subquery_count
+        """Number of correlated subqueries"""
+        self.function_count = function_count
+        """Total number of function calls"""
+        self.where_condition_count = where_condition_count
+        """Number of WHERE conditions"""
+        self.potential_cartesian_products = potential_cartesian_products
+        """Number of potential Cartesian products detected"""
+        self.complexity_warnings = complexity_warnings if complexity_warnings is not None else []
+        """Warnings about query complexity"""
+        self.complexity_issues = complexity_issues if complexity_issues is not None else []
+        """Issues with query complexity"""
+
+        # Additional attributes for aggregator compatibility
+        self.subquery_count = subquery_count
+        """Total number of subqueries"""
+        self.operations = operations if operations is not None else []
+        """SQL operations performed (SELECT, JOIN, etc.)"""
+        self.has_aggregation = has_aggregation
+        """Whether query uses aggregation functions"""
+        self.has_window_functions = has_window_functions
+        """Whether query uses window functions"""
+        self.cte_count = cte_count
+        """Number of CTEs (Common Table Expressions)"""
 
 
 class StatementAnalyzer(ProcessorProtocol):
