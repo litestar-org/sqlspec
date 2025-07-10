@@ -2,7 +2,7 @@
 
 import logging
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict, Union
 
 import duckdb
 from typing_extensions import NotRequired
@@ -14,12 +14,11 @@ from sqlspec.typing import DictRow, Empty
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
-    from contextlib import AbstractContextManager
 
 
 logger = logging.getLogger(__name__)
 
-__all__ = ("CONNECTION_FIELDS", "DuckDBConfig", "DuckDBExtensionConfig", "DuckDBSecretConfig")
+__all__ = ("DuckDBConfig", "DuckDBConnectionParams", "DuckDBExtensionConfig", "DuckDBSecretConfig")
 
 
 class DuckDBConnectionParams(TypedDict, total=False):
@@ -58,45 +57,7 @@ class DuckDBConnectionParams(TypedDict, total=False):
     binary_as_string: NotRequired[bool]
     arrow_large_buffer_size: NotRequired[bool]
     errors_as_json: NotRequired[bool]
-
-
-CONNECTION_FIELDS = frozenset(
-    {
-        "database",
-        "read_only",
-        "config",
-        "memory_limit",
-        "threads",
-        "temp_directory",
-        "max_temp_directory_size",
-        "autoload_known_extensions",
-        "autoinstall_known_extensions",
-        "allow_community_extensions",
-        "allow_unsigned_extensions",
-        "extension_directory",
-        "custom_extension_repository",
-        "autoinstall_extension_repository",
-        "allow_persistent_secrets",
-        "enable_external_access",
-        "secret_directory",
-        "enable_object_cache",
-        "parquet_metadata_cache",
-        "enable_external_file_cache",
-        "checkpoint_threshold",
-        "enable_progress_bar",
-        "progress_bar_time",
-        "enable_logging",
-        "log_query_path",
-        "logging_level",
-        "preserve_insertion_order",
-        "default_null_order",
-        "default_order",
-        "ieee_floating_point_ops",
-        "binary_as_string",
-        "arrow_large_buffer_size",
-        "errors_as_json",
-    }
-)
+    extra: NotRequired[dict[str, Any]]
 
 
 class DuckDBExtensionConfig(TypedDict, total=False):
@@ -145,120 +106,44 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
     - Performance optimizations for analytics workloads
     """
 
-    is_async: ClassVar[bool] = False
-    supports_connection_pooling: ClassVar[bool] = False
-
-    driver_type: type[DuckDBDriver] = DuckDBDriver
-    connection_type: type[DuckDBConnection] = DuckDBConnection
-
-    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark", "numeric")
-    """DuckDB supports ? (qmark) and $1, $2 (numeric) parameter styles."""
-
-    default_parameter_style: ClassVar[str] = "qmark"
-    """DuckDB's native parameter style is ? (qmark)."""
+    driver_type: "ClassVar[type[DuckDBDriver]]" = DuckDBDriver
+    connection_type: "ClassVar[type[DuckDBConnection]]" = DuckDBConnection
+    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("qmark", "numeric")
+    default_parameter_style: "ClassVar[str]" = "qmark"
 
     def __init__(
         self,
+        connection_config: "Optional[Union[DuckDBConnectionParams, dict[str, Any]]]" = None,
         statement_config: "Optional[SQLConfig]" = None,
+        migration_config: Optional[dict[str, Any]] = None,
         default_row_type: type[DictRow] = DictRow,
-        # Core connection parameters
-        database: Optional[str] = None,
-        read_only: Optional[bool] = None,
-        config: Optional[dict[str, Any]] = None,
-        # Resource management
-        memory_limit: Optional[str] = None,
-        threads: Optional[int] = None,
-        temp_directory: Optional[str] = None,
-        max_temp_directory_size: Optional[str] = None,
-        # Extension configuration
-        autoload_known_extensions: Optional[bool] = None,
-        autoinstall_known_extensions: Optional[bool] = None,
-        allow_community_extensions: Optional[bool] = None,
-        allow_unsigned_extensions: Optional[bool] = None,
-        extension_directory: Optional[str] = None,
-        custom_extension_repository: Optional[str] = None,
-        autoinstall_extension_repository: Optional[str] = None,
-        # Security and access
-        allow_persistent_secrets: Optional[bool] = None,
-        enable_external_access: Optional[bool] = None,
-        secret_directory: Optional[str] = None,
-        # Performance optimizations
-        enable_object_cache: Optional[bool] = None,
-        parquet_metadata_cache: Optional[bool] = None,
-        enable_external_file_cache: Optional[bool] = None,
-        checkpoint_threshold: Optional[str] = None,
-        # User experience
-        enable_progress_bar: Optional[bool] = None,
-        progress_bar_time: Optional[int] = None,
-        # Logging and debugging
-        enable_logging: Optional[bool] = None,
-        log_query_path: Optional[str] = None,
-        logging_level: Optional[str] = None,
-        # Data processing settings
-        preserve_insertion_order: Optional[bool] = None,
-        default_null_order: Optional[str] = None,
-        default_order: Optional[str] = None,
-        ieee_floating_point_ops: Optional[bool] = None,
-        # File format settings
-        binary_as_string: Optional[bool] = None,
-        arrow_large_buffer_size: Optional[bool] = None,
-        # Error handling
-        errors_as_json: Optional[bool] = None,
-        # DuckDB intelligent features
+        enable_adapter_cache: bool = True,
+        adapter_cache_size: int = 1000,
         extensions: "Optional[Sequence[DuckDBExtensionConfig]]" = None,
         secrets: "Optional[Sequence[DuckDBSecretConfig]]" = None,
         on_connection_create: "Optional[Callable[[DuckDBConnection], Optional[DuckDBConnection]]]" = None,
-        **kwargs: Any,
     ) -> None:
         """Initialize DuckDB configuration with intelligent features.
 
         Args:
+            connection_config: Connection configuration parameters
             statement_config: Default SQL statement configuration
             default_row_type: Default row type for results
-            database: Path to the DuckDB database file. Use ':memory:' for in-memory database
-            read_only: Whether to open the database in read-only mode
-            config: DuckDB configuration options passed directly to the connection
-            memory_limit: Maximum memory usage (e.g., '1GB', '80% of RAM')
-            threads: Number of threads to use for parallel query execution
-            temp_directory: Directory for temporary files during spilling
-            max_temp_directory_size: Maximum size of temp directory (e.g., '1GB')
-            autoload_known_extensions: Automatically load known extensions when needed
-            autoinstall_known_extensions: Automatically install known extensions when needed
-            allow_community_extensions: Allow community-built extensions
-            allow_unsigned_extensions: Allow unsigned extensions (development only)
-            extension_directory: Directory to store extensions
-            custom_extension_repository: Custom endpoint for extension installation
-            autoinstall_extension_repository: Override endpoint for autoloading extensions
-            allow_persistent_secrets: Enable persistent secret storage
-            enable_external_access: Allow external file system access
-            secret_directory: Directory for persistent secrets
-            enable_object_cache: Enable caching of objects (e.g., Parquet metadata)
-            parquet_metadata_cache: Cache Parquet metadata for repeated access
-            enable_external_file_cache: Cache external files in memory
-            checkpoint_threshold: WAL size threshold for automatic checkpoints
-            enable_progress_bar: Show progress bar for long queries
-            progress_bar_time: Time in milliseconds before showing progress bar
-            enable_logging: Enable DuckDB logging
-            log_query_path: Path to log queries for debugging
-            logging_level: Log level (DEBUG, INFO, WARNING, ERROR)
-            preserve_insertion_order: Whether to preserve insertion order in results
-            default_null_order: Default NULL ordering (NULLS_FIRST, NULLS_LAST)
-            default_order: Default sort order (ASC, DESC)
-            ieee_floating_point_ops: Use IEEE 754 compliant floating point operations
-            binary_as_string: Interpret binary data as string in Parquet files
-            arrow_large_buffer_size: Use large Arrow buffers for strings, blobs, etc.
-            errors_as_json: Return errors in JSON format
             extensions: List of extension dicts to auto-install/load with keys: name, version, repository, force_install
             secrets: List of secret dicts for AI/API integrations with keys: secret_type, name, value, scope
             on_connection_create: Callback executed when connection is created
-            **kwargs: Additional parameters (stored in extras)
+            migration_config: Migration configuration
+            enable_adapter_cache: Enable SQL compilation caching
+            adapter_cache_size: Max cached SQL statements
 
         Example:
             >>> config = DuckDBConfig(
-            ...     database=":memory:",
-            ...     memory_limit="1GB",
-            ...     threads=4,
-            ...     autoload_known_extensions=True,
+            ...     connection_config={
+            ...         "database": ":memory:",
+            ...         "memory_limit": "1GB",
+            ...         "threads": 4,
+            ...         "autoload_known_extensions": True,
+            ...     },
             ...     extensions=[
             ...         {"name": "spatial", "repository": "core"},
             ...         {"name": "aws", "repository": "core"},
@@ -272,75 +157,57 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
             ...     ],
             ... )
         """
-        # Store connection parameters as instance attributes
-        self.database = database or ":memory:"
-        self.read_only = read_only
-        self.config = config
-        self.memory_limit = memory_limit
-        self.threads = threads
-        self.temp_directory = temp_directory
-        self.max_temp_directory_size = max_temp_directory_size
-        self.autoload_known_extensions = autoload_known_extensions
-        self.autoinstall_known_extensions = autoinstall_known_extensions
-        self.allow_community_extensions = allow_community_extensions
-        self.allow_unsigned_extensions = allow_unsigned_extensions
-        self.extension_directory = extension_directory
-        self.custom_extension_repository = custom_extension_repository
-        self.autoinstall_extension_repository = autoinstall_extension_repository
-        self.allow_persistent_secrets = allow_persistent_secrets
-        self.enable_external_access = enable_external_access
-        self.secret_directory = secret_directory
-        self.enable_object_cache = enable_object_cache
-        self.parquet_metadata_cache = parquet_metadata_cache
-        self.enable_external_file_cache = enable_external_file_cache
-        self.checkpoint_threshold = checkpoint_threshold
-        self.enable_progress_bar = enable_progress_bar
-        self.progress_bar_time = progress_bar_time
-        self.enable_logging = enable_logging
-        self.log_query_path = log_query_path
-        self.logging_level = logging_level
-        self.preserve_insertion_order = preserve_insertion_order
-        self.default_null_order = default_null_order
-        self.default_order = default_order
-        self.ieee_floating_point_ops = ieee_floating_point_ops
-        self.binary_as_string = binary_as_string
-        self.arrow_large_buffer_size = arrow_large_buffer_size
-        self.errors_as_json = errors_as_json
+        # Store connection parameters and extract/merge extras
+        self.connection_config: dict[str, Any] = dict(connection_config) if connection_config else {}
+        if "extra" in self.connection_config:
+            extras = self.connection_config.pop("extra")
+            self.connection_config.update(extras)
 
-        self.extras = kwargs or {}
+        # Set default database if not provided or empty
+        if "database" not in self.connection_config or not self.connection_config["database"]:
+            self.connection_config["database"] = ":memory:"
 
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
-
-        # DuckDB intelligent features
         self.extensions = extensions or []
         self.secrets = secrets or []
         self.on_connection_create = on_connection_create
+        super().__init__(
+            migration_config=migration_config,
+            enable_adapter_cache=enable_adapter_cache,
+            adapter_cache_size=adapter_cache_size,
+        )
 
-        super().__init__()
+    def _get_connection_config_dict(self) -> dict[str, Any]:
+        """Get connection configuration as plain dict for external library.
 
-    @property
-    def connection_config_dict(self) -> dict[str, Any]:
-        """Return the connection configuration as a dict for duckdb.connect()."""
-        # DuckDB connect() only accepts database, read_only, and config parameters
+        Returns:
+            Dictionary with connection parameters properly separated for DuckDB.
+        """
         connect_params: dict[str, Any] = {}
 
-        if hasattr(self, "database") and self.database is not None:
-            connect_params["database"] = self.database
+        # Handle database parameter
+        database = self.connection_config.get("database", ":memory:")
+        connect_params["database"] = database
 
-        if hasattr(self, "read_only") and self.read_only is not None:
-            connect_params["read_only"] = self.read_only
+        # Handle read_only parameter
+        read_only = self.connection_config.get("read_only")
+        if read_only is not None:
+            connect_params["read_only"] = read_only
 
         # All other parameters go into the config dict
-        config_dict = {}
-        for field in CONNECTION_FIELDS:
-            if field not in {"database", "read_only", "config"}:
-                value = getattr(self, field, None)
-                if value is not None and value is not Empty:
-                    config_dict[field] = value
+        config_dict: dict[str, Any] = {
+            field: value
+            for field, value in self.connection_config.items()
+            if field not in {"database", "read_only", "config"} and value is not None and value is not Empty
+        }
 
-        config_dict.update(self.extras)
+        # Add user-provided config dict
+        if "config" in self.connection_config:
+            config_dict.update(self.connection_config["config"])
+
+        config_dict.update(config_dict.pop("extra", {}))
 
         # If we have config parameters, add them
         if config_dict:
@@ -354,8 +221,9 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         logger.info("Creating DuckDB connection", extra={"adapter": "duckdb"})
 
         try:
-            config_dict = self.connection_config_dict
-            connection = duckdb.connect(**config_dict)
+            # Get properly typed configuration dictionary
+            connect_params = self._get_connection_config_dict()
+            connection = duckdb.connect(**connect_params)
             logger.info("DuckDB connection created successfully", extra={"adapter": "duckdb"})
 
             # Install and load extensions
@@ -373,7 +241,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
                     if ext_config.get("force_install", False):
                         install_kwargs["force_install"] = True
 
-                    if install_kwargs or self.autoinstall_known_extensions:
+                    if install_kwargs or self.connection_config.get("autoinstall_known_extensions"):
                         connection.install_extension(ext_name, **install_kwargs)
                     connection.load_extension(ext_name)
                     logger.debug("Loaded DuckDB extension: %s", ext_name, extra={"adapter": "duckdb"})
@@ -448,28 +316,24 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         finally:
             connection.close()
 
-    def provide_session(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[DuckDBDriver]":
+    @contextmanager
+    def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[DuckDBDriver, None, None]":
         """Provide a DuckDB driver session context manager.
 
         Args:
             *args: Additional arguments.
             **kwargs: Additional keyword arguments.
 
-        Returns:
+        Yields:
             A context manager that yields a DuckDBDriver instance.
         """
-
-        @contextmanager
-        def session_manager() -> "Generator[DuckDBDriver, None, None]":
-            with self.provide_connection(*args, **kwargs) as connection:
-                statement_config = self.statement_config
-                # Inject parameter style info if not already set
-                if statement_config.allowed_parameter_styles is None:
-                    statement_config = statement_config.replace(
-                        allowed_parameter_styles=self.supported_parameter_styles,
-                        default_parameter_style=self.default_parameter_style,
-                    )
-                driver = self.driver_type(connection=connection, config=statement_config)
-                yield driver
-
-        return session_manager()
+        with self.provide_connection(*args, **kwargs) as connection:
+            statement_config = self.statement_config
+            # Inject parameter style info if not already set
+            if statement_config.allowed_parameter_styles is None:
+                statement_config = statement_config.replace(
+                    allowed_parameter_styles=self.supported_parameter_styles,
+                    default_parameter_style=self.default_parameter_style,
+                )
+            driver = self.driver_type(connection=connection, config=statement_config)
+            yield driver

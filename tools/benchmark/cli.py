@@ -213,13 +213,26 @@ def import_json(ctx: click.Context, json_dir: Path) -> None:
     console.print(f"[cyan]Found {len(json_files)} JSON files to import[/cyan]")
 
     imported = 0
-    for json_file in json_files:
+    failed_imports = []
+
+    def _import_file(file_path: Path) -> tuple[bool, str]:
         try:
-            runner.storage.import_json_results(json_file)
+            runner.storage.import_json_results(file_path)
+            return True, ""
+        except Exception as e:
+            return False, str(e)
+
+    for json_file in json_files:
+        success, error_msg = _import_file(json_file)
+        if success:
             imported += 1
             console.print(f"  [green]✓[/green] Imported {json_file.name}")
-        except Exception as e:
-            console.print(f"  [red]✗[/red] Failed to import {json_file.name}: {e}")
+        else:
+            failed_imports.append((json_file.name, error_msg))
+
+    # Report failures after the loop
+    for filename, error in failed_imports:
+        console.print(f"  [red]✗[/red] Failed to import {filename}: {error}")
 
     console.print(f"\n[green]Successfully imported {imported} files[/green]")
 

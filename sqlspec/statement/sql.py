@@ -75,6 +75,16 @@ class _ProcessedState:
         "validation_errors",
     )
 
+    def __hash__(self) -> int:
+        """Hash based on processed SQL and expression."""
+        return hash(
+            (
+                self.processed_sql,
+                str(self.processed_expression),  # Convert expression to string for hashing
+                len(self.validation_errors) if self.validation_errors else 0,
+            )
+        )
+
     def __init__(
         self,
         processed_expression: exp.Expression,
@@ -203,6 +213,23 @@ class SQLConfig:
 
     __slots__ = _SQLCONFIG_SLOTS
 
+    def __hash__(self) -> int:
+        """Hash based on key configuration settings."""
+        return hash(
+            (
+                self.enable_parsing,
+                self.enable_validation,
+                self.enable_transformations,
+                self.enable_analysis,
+                self.enable_expression_simplification,
+                self.enable_parameter_type_wrapping,
+                self.enable_caching,
+                self.dialect,
+                self.default_parameter_style,
+                tuple(self.allowed_parameter_styles) if self.allowed_parameter_styles else None,
+            )
+        )
+
     def __init__(
         self,
         enable_parsing: bool = True,
@@ -246,7 +273,10 @@ class SQLConfig:
         self.analyzer_output_handler = analyzer_output_handler
 
     def replace(self, **changes: Any) -> "SQLConfig":
-        """Create a new SQLConfig with specified changes (replaces dataclass replace())."""
+        """Create a new SQLConfig with specified changes.
+
+        This replaces the dataclass replace() functionality.
+        """
         # Validate that all changes correspond to valid slots
         for key in changes:
             if key not in _SQLCONFIG_SLOTS:

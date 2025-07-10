@@ -9,7 +9,9 @@ async def test_async_connection(postgres_service: PostgresService) -> None:
     """Test async connection components."""
     # Test direct connection
     async_config = PsycopgAsyncConfig(
-        conninfo=f"host={postgres_service.host} port={postgres_service.port} user={postgres_service.user} password={postgres_service.password} dbname={postgres_service.database}"
+        pool_config={
+            "conninfo": f"host={postgres_service.host} port={postgres_service.port} user={postgres_service.user} password={postgres_service.password} dbname={postgres_service.database}"
+        }
     )
 
     async with await async_config.create_connection() as conn:
@@ -27,9 +29,11 @@ async def test_async_connection(postgres_service: PostgresService) -> None:
         async_config.pool_instance = None
     # Test connection pool
     another_config = PsycopgAsyncConfig(
-        conninfo=f"host={postgres_service.host} port={postgres_service.port} user={postgres_service.user} password={postgres_service.password} dbname={postgres_service.database}",
-        min_size=1,
-        max_size=5,
+        pool_config={
+            "conninfo": f"host={postgres_service.host} port={postgres_service.port} user={postgres_service.user} password={postgres_service.password} dbname={postgres_service.database}",
+            "min_size": 1,
+            "max_size": 5,
+        }
     )
     # Remove explicit pool creation and manual context management
     async with another_config.provide_connection() as conn:
@@ -51,7 +55,9 @@ def test_sync_connection(postgres_service: PostgresService) -> None:
     """Test sync connection components."""
     # Test direct connection
     sync_config = PsycopgSyncConfig(
-        conninfo=f"host={postgres_service.host} port={postgres_service.port} user={postgres_service.user} password={postgres_service.password} dbname={postgres_service.database}"
+        pool_config={
+            "conninfo": f"host={postgres_service.host} port={postgres_service.port} user={postgres_service.user} password={postgres_service.password} dbname={postgres_service.database}"
+        }
     )
 
     try:
@@ -70,9 +76,11 @@ def test_sync_connection(postgres_service: PostgresService) -> None:
 
     # Test connection pool
     another_config = PsycopgSyncConfig(
-        conninfo=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-        min_size=1,
-        max_size=5,
+        pool_config={
+            "conninfo": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+            "min_size": 1,
+            "max_size": 5,
+        }
     )
     try:
         # Remove explicit pool creation and manual context management

@@ -16,120 +16,103 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sqlspec.adapters.duckdb import CONNECTION_FIELDS, DuckDBConfig, DuckDBDriver, DuckDBSecretConfig
+from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBConnectionParams, DuckDBDriver, DuckDBSecretConfig
 from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import DictRow
 
 if TYPE_CHECKING:
     pass
 
 
-# Constants Tests
-def test_connection_fields_constant() -> None:
-    """Test CONNECTION_FIELDS constant contains all expected fields."""
-    expected_fields = frozenset(
-        {
-            "database",
-            "read_only",
-            "config",
-            "memory_limit",
-            "threads",
-            "temp_directory",
-            "max_temp_directory_size",
-            "autoload_known_extensions",
-            "autoinstall_known_extensions",
-            "allow_community_extensions",
-            "allow_unsigned_extensions",
-            "extension_directory",
-            "custom_extension_repository",
-            "autoinstall_extension_repository",
-            "allow_persistent_secrets",
-            "enable_external_access",
-            "secret_directory",
-            "enable_object_cache",
-            "parquet_metadata_cache",
-            "enable_external_file_cache",
-            "checkpoint_threshold",
-            "enable_progress_bar",
-            "progress_bar_time",
-            "enable_logging",
-            "log_query_path",
-            "logging_level",
-            "preserve_insertion_order",
-            "default_null_order",
-            "default_order",
-            "ieee_floating_point_ops",
-            "binary_as_string",
-            "arrow_large_buffer_size",
-            "errors_as_json",
-        }
-    )
-    assert CONNECTION_FIELDS == expected_fields
+# TypedDict Tests
+def test_duckdb_typed_dict_structure() -> None:
+    """Test DuckDB TypedDict structure."""
+    # Test that we can create valid connection params
+    connection_params: DuckDBConnectionParams = {
+        "database": ":memory:",
+        "read_only": False,
+        "memory_limit": "16GB",
+        "threads": 8,
+        "enable_progress_bar": True,
+        "autoload_known_extensions": True,
+    }
+    assert connection_params["database"] == ":memory:"
+    assert connection_params["read_only"] is False
+    assert connection_params["memory_limit"] == "16GB"
+    assert connection_params["threads"] == 8
+    assert connection_params["enable_progress_bar"] is True
+    assert connection_params["autoload_known_extensions"] is True
 
 
 # Initialization Tests
-@pytest.mark.parametrize(
-    "kwargs,expected_attrs",
-    [
-        (
-            {"database": ":memory:"},
-            {
-                "database": ":memory:",
-                "read_only": None,
-                "config": None,
-                "memory_limit": None,
-                "threads": None,
-                "extras": {},
-            },
-        ),
-        (
-            {
-                "database": "/tmp/test.db",
-                "read_only": False,
-                "memory_limit": "16GB",
-                "threads": 8,
-                "enable_progress_bar": True,
-            },
-            {
-                "database": "/tmp/test.db",
-                "read_only": False,
-                "memory_limit": "16GB",
-                "threads": 8,
-                "enable_progress_bar": True,
-                "extras": {},
-            },
-        ),
-    ],
-    ids=["minimal", "with_options"],
-)
-def test_config_initialization(kwargs: dict[str, Any], expected_attrs: dict[str, Any]) -> None:
-    """Test config initialization with various parameters."""
-    config = DuckDBConfig(**kwargs)
+def test_duckdb_config_basic_creation() -> None:
+    """Test DuckDB config creation with basic parameters."""
+    # Test minimal config creation
+    connection_config = {"database": ":memory:", "read_only": False}
+    config = DuckDBConfig(connection_config=connection_config)
+    assert config.connection_config["database"] == ":memory:"
+    assert config.connection_config["read_only"] is False
 
-    for attr, expected_value in expected_attrs.items():
-        assert getattr(config, attr) == expected_value
+    # Test with additional parameters
+    connection_config_full = {
+        "database": "/tmp/test.db",
+        "read_only": False,
+        "memory_limit": "16GB",
+        "threads": 8,
+        "enable_progress_bar": True,
+    }
+    config_full = DuckDBConfig(connection_config=connection_config_full)
+    assert config_full.connection_config["database"] == "/tmp/test.db"
+    assert config_full.connection_config["read_only"] is False
+    assert config_full.connection_config["memory_limit"] == "16GB"
+    assert config_full.connection_config["threads"] == 8
+    assert config_full.connection_config["enable_progress_bar"] is True
+
+
+def test_duckdb_config_with_no_connection_config() -> None:
+    """Test DuckDB config with no connection config."""
+    config = DuckDBConfig()
+
+    # Should have database set to :memory: as default
+    assert config.connection_config["database"] == ":memory:"
 
     # Check base class attributes
     assert isinstance(config.statement_config, SQLConfig)
-    assert config.default_row_type is DictRow
+    assert config.default_row_type is dict
+
+
+def test_duckdb_config_initialization() -> None:
+    """Test DuckDB config initialization."""
+    # Test with default parameters
+    connection_config = {"database": ":memory:", "threads": 4}
+    config = DuckDBConfig(connection_config=connection_config)
+    assert isinstance(config.statement_config, SQLConfig)
+
+    # Test with custom parameters
+    custom_statement_config = SQLConfig()
+    config = DuckDBConfig(connection_config=connection_config, statement_config=custom_statement_config)
+    assert config.statement_config is custom_statement_config
 
 
 @pytest.mark.parametrize(
-    "init_kwargs,expected_extras",
+    "connection_config,expected_extras",
     [
-        ({"database": ":memory:", "custom_param": "value", "debug": True}, {"custom_param": "value", "debug": True}),
         (
-            {"database": ":memory:", "unknown_param": "test", "another_param": 42},
+            {"database": ":memory:", "extra": {"custom_param": "value", "debug": True}},
+            {"custom_param": "value", "debug": True},
+        ),
+        (
+            {"database": ":memory:", "extra": {"unknown_param": "test", "another_param": 42}},
             {"unknown_param": "test", "another_param": 42},
         ),
         ({"database": "/tmp/test.db"}, {}),
     ],
     ids=["with_custom_params", "with_unknown_params", "no_extras"],
 )
-def test_extras_handling(init_kwargs: dict[str, Any], expected_extras: dict[str, Any]) -> None:
+def test_extras_handling(connection_config: dict[str, Any], expected_extras: dict[str, Any]) -> None:
     """Test handling of extra parameters."""
-    config = DuckDBConfig(**init_kwargs)
-    assert config.extras == expected_extras
+    config = DuckDBConfig(connection_config=connection_config)
+    for key, value in expected_extras.items():
+        assert config.connection_config[key] == value
 
 
 @pytest.mark.parametrize(
@@ -139,7 +122,8 @@ def test_extras_handling(init_kwargs: dict[str, Any], expected_extras: dict[str,
 )
 def test_statement_config_initialization(statement_config: "SQLConfig | None", expected_type: type[SQLConfig]) -> None:
     """Test statement config initialization."""
-    config = DuckDBConfig(database=":memory:", statement_config=statement_config)
+    connection_config = {"database": ":memory:"}
+    config = DuckDBConfig(connection_config=connection_config, statement_config=statement_config)
     assert isinstance(config.statement_config, expected_type)
 
     if statement_config is not None:
@@ -157,13 +141,16 @@ def test_extension_configuration() -> None:
         {"name": "json", "force_install": True},
     ]
 
-    config = DuckDBConfig(
-        database=":memory:", extensions=extensions, autoinstall_known_extensions=True, allow_community_extensions=True
-    )
+    connection_config = {
+        "database": ":memory:",
+        "autoinstall_known_extensions": True,
+        "allow_community_extensions": True,
+    }
+    config = DuckDBConfig(connection_config=connection_config, extensions=extensions)
 
     assert config.extensions == extensions
-    assert config.autoinstall_known_extensions is True
-    assert config.allow_community_extensions is True
+    assert config.connection_config["autoinstall_known_extensions"] is True
+    assert config.connection_config["allow_community_extensions"] is True
 
 
 @pytest.mark.parametrize(
@@ -178,22 +165,24 @@ def test_extension_configuration() -> None:
 )
 def test_extension_flags(extension_flag: str, value: bool) -> None:
     """Test extension-related flags."""
-    config = DuckDBConfig(database=":memory:", **{extension_flag: value})  # type: ignore[arg-type]
-    assert getattr(config, extension_flag) == value
+    connection_config = {"database": ":memory:", extension_flag: value}
+    config = DuckDBConfig(connection_config=connection_config)
+    assert config.connection_config[extension_flag] == value
 
 
 def test_extension_repository_configuration() -> None:
     """Test extension repository configuration."""
-    config = DuckDBConfig(
-        database=":memory:",
-        custom_extension_repository="https://custom.repo/extensions",
-        autoinstall_extension_repository="core",
-        extension_directory="/custom/extensions",
-    )
+    connection_config = {
+        "database": ":memory:",
+        "custom_extension_repository": "https://custom.repo/extensions",
+        "autoinstall_extension_repository": "core",
+        "extension_directory": "/custom/extensions",
+    }
+    config = DuckDBConfig(connection_config=connection_config)
 
-    assert config.custom_extension_repository == "https://custom.repo/extensions"
-    assert config.autoinstall_extension_repository == "core"
-    assert config.extension_directory == "/custom/extensions"
+    assert config.connection_config["custom_extension_repository"] == "https://custom.repo/extensions"
+    assert config.connection_config["autoinstall_extension_repository"] == "core"
+    assert config.connection_config["extension_directory"] == "/custom/extensions"
 
 
 # Secret Management Tests
@@ -204,13 +193,12 @@ def test_secret_configuration() -> None:
         {"secret_type": "aws", "name": "my_aws_creds", "value": {"access_key_id": "test", "secret_access_key": "test"}},
     ]
 
-    config = DuckDBConfig(
-        database=":memory:", secrets=secrets, allow_persistent_secrets=True, secret_directory="/secrets"
-    )
+    connection_config = {"database": ":memory:", "allow_persistent_secrets": True, "secret_directory": "/secrets"}
+    config = DuckDBConfig(connection_config=connection_config, secrets=secrets)
 
     assert config.secrets == secrets
-    assert config.allow_persistent_secrets is True
-    assert config.secret_directory == "/secrets"
+    assert config.connection_config["allow_persistent_secrets"] is True
+    assert config.connection_config["secret_directory"] == "/secrets"
 
 
 # Performance Settings Tests
@@ -227,8 +215,9 @@ def test_secret_configuration() -> None:
 )
 def test_performance_settings(perf_setting: str, value: Any) -> None:
     """Test performance-related settings."""
-    config = DuckDBConfig(database=":memory:", **{perf_setting: value})
-    assert getattr(config, perf_setting) == value
+    connection_config = {"database": ":memory:", perf_setting: value}
+    config = DuckDBConfig(connection_config=connection_config)
+    assert config.connection_config[perf_setting] == value
 
 
 @pytest.mark.parametrize(
@@ -238,8 +227,9 @@ def test_performance_settings(perf_setting: str, value: Any) -> None:
 )
 def test_cache_settings(cache_setting: str, value: bool) -> None:
     """Test cache-related settings."""
-    config = DuckDBConfig(database=":memory:", **{cache_setting: value})  # type: ignore[arg-type]
-    assert getattr(config, cache_setting) == value
+    connection_config = {"database": ":memory:", cache_setting: value}
+    config = DuckDBConfig(connection_config=connection_config)
+    assert config.connection_config[cache_setting] == value
 
 
 # Connection Creation Tests
@@ -249,7 +239,8 @@ def test_create_connection(mock_connect: MagicMock) -> None:
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
 
-    config = DuckDBConfig(database="/tmp/test.db", read_only=False, threads=4)
+    connection_config = {"database": "/tmp/test.db", "read_only": False, "threads": 4}
+    config = DuckDBConfig(connection_config=connection_config)
 
     connection = config.create_connection()
 
@@ -266,7 +257,8 @@ def test_create_connection_with_callbacks(mock_connect: MagicMock) -> None:
     mock_connect.return_value = mock_connection
     on_connection_create = MagicMock()
 
-    config = DuckDBConfig(database=":memory:", on_connection_create=on_connection_create)
+    connection_config = {"database": ":memory:"}
+    config = DuckDBConfig(connection_config=connection_config, on_connection_create=on_connection_create)
 
     connection = config.create_connection()
 
@@ -282,7 +274,8 @@ def test_provide_connection_success(mock_connect: MagicMock) -> None:
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
 
-    config = DuckDBConfig(database=":memory:")
+    connection_config = {"database": ":memory:"}
+    config = DuckDBConfig(connection_config=connection_config)
 
     with config.provide_connection() as conn:
         assert conn is mock_connection
@@ -297,7 +290,8 @@ def test_provide_connection_error_handling(mock_connect: MagicMock) -> None:
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
 
-    config = DuckDBConfig(database=":memory:")
+    connection_config = {"database": ":memory:"}
+    config = DuckDBConfig(connection_config=connection_config)
 
     with pytest.raises(ValueError, match="Test error"):
         with config.provide_connection() as conn:
@@ -314,7 +308,8 @@ def test_provide_session(mock_connect: MagicMock) -> None:
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
 
-    config = DuckDBConfig(database=":memory:")
+    connection_config = {"database": ":memory:"}
+    config = DuckDBConfig(connection_config=connection_config)
 
     with config.provide_session() as session:
         assert isinstance(session, DuckDBDriver)
@@ -332,7 +327,8 @@ def test_provide_session(mock_connect: MagicMock) -> None:
 # Property Tests
 def test_driver_type() -> None:
     """Test driver_type class attribute."""
-    config = DuckDBConfig(database=":memory:")
+    connection_config = {"database": ":memory:"}
+    config = DuckDBConfig(connection_config=connection_config)
     assert config.driver_type is DuckDBDriver
 
 
@@ -340,7 +336,8 @@ def test_connection_type() -> None:
     """Test connection_type class attribute."""
     import duckdb
 
-    config = DuckDBConfig(database=":memory:")
+    connection_config = {"database": ":memory:"}
+    config = DuckDBConfig(connection_config=connection_config)
     assert config.connection_type is duckdb.DuckDBPyConnection
 
 
@@ -348,7 +345,8 @@ def test_is_async() -> None:
     """Test is_async class attribute."""
     assert DuckDBConfig.is_async is False
 
-    config = DuckDBConfig(database=":memory:")
+    connection_config = {"database": ":memory:"}
+    config = DuckDBConfig(connection_config=connection_config)
     assert config.is_async is False
 
 
@@ -356,7 +354,8 @@ def test_supports_connection_pooling() -> None:
     """Test supports_connection_pooling class attribute."""
     assert DuckDBConfig.supports_connection_pooling is False
 
-    config = DuckDBConfig(database=":memory:")
+    connection_config = {"database": ":memory:"}
+    config = DuckDBConfig(connection_config=connection_config)
     assert config.supports_connection_pooling is False
 
 
@@ -379,10 +378,11 @@ def test_default_parameter_style() -> None:
 )
 def test_database_paths(database: str, description: str) -> None:
     """Test various database path configurations."""
-    config = DuckDBConfig(database=database)
+    connection_config = {"database": database} if database else {}
+    config = DuckDBConfig(connection_config=connection_config)
     # Empty string defaults to :memory:
     expected_database = ":memory:" if database == "" else database
-    assert config.database == expected_database
+    assert config.connection_config["database"] == expected_database
 
 
 # Logging Configuration Tests
@@ -393,21 +393,23 @@ def test_database_paths(database: str, description: str) -> None:
 )
 def test_logging_configuration(log_setting: str, value: Any) -> None:
     """Test logging configuration."""
-    config = DuckDBConfig(database=":memory:", **{log_setting: value})
-    assert getattr(config, log_setting) == value
+    connection_config = {"database": ":memory:", log_setting: value}
+    config = DuckDBConfig(connection_config=connection_config)
+    assert config.connection_config[log_setting] == value
 
 
 # Progress Bar Tests
 def test_progress_bar_configuration() -> None:
     """Test progress bar configuration."""
-    config = DuckDBConfig(
-        database=":memory:",
-        enable_progress_bar=True,
-        progress_bar_time=1000,  # milliseconds
-    )
+    connection_config = {
+        "database": ":memory:",
+        "enable_progress_bar": True,
+        "progress_bar_time": 1000,  # milliseconds
+    }
+    config = DuckDBConfig(connection_config=connection_config)
 
-    assert config.enable_progress_bar is True
-    assert config.progress_bar_time == 1000
+    assert config.connection_config["enable_progress_bar"] is True
+    assert config.connection_config["progress_bar_time"] == 1000
 
 
 # Data Type Handling Tests
@@ -425,25 +427,28 @@ def test_progress_bar_configuration() -> None:
 )
 def test_data_type_settings(type_setting: str, value: Any) -> None:
     """Test data type handling settings."""
-    config = DuckDBConfig(database=":memory:", **{type_setting: value})
-    assert getattr(config, type_setting) == value
+    connection_config = {"database": ":memory:", type_setting: value}
+    config = DuckDBConfig(connection_config=connection_config)
+    assert config.connection_config[type_setting] == value
 
 
 # Arrow Integration Tests
 def test_arrow_configuration() -> None:
     """Test Arrow integration configuration."""
-    config = DuckDBConfig(database=":memory:", arrow_large_buffer_size=True)
+    connection_config = {"database": ":memory:", "arrow_large_buffer_size": True}
+    config = DuckDBConfig(connection_config=connection_config)
 
-    assert config.arrow_large_buffer_size is True
+    assert config.connection_config["arrow_large_buffer_size"] is True
 
 
 # Security Tests
 def test_security_configuration() -> None:
     """Test security-related configuration."""
-    config = DuckDBConfig(database=":memory:", enable_external_access=False, allow_persistent_secrets=False)
+    connection_config = {"database": ":memory:", "enable_external_access": False, "allow_persistent_secrets": False}
+    config = DuckDBConfig(connection_config=connection_config)
 
-    assert config.enable_external_access is False
-    assert config.allow_persistent_secrets is False
+    assert config.connection_config["enable_external_access"] is False
+    assert config.connection_config["allow_persistent_secrets"] is False
 
 
 # Edge Cases
@@ -451,18 +456,21 @@ def test_config_with_dict_config() -> None:
     """Test config initialization with dict config parameter."""
     config_dict = {"threads": 8, "memory_limit": "16GB", "temp_directory": "/tmp/duckdb"}
 
-    config = DuckDBConfig(database=":memory:", config=config_dict)
-    assert config.config == config_dict
+    connection_config = {"database": ":memory:", "config": config_dict}
+    config = DuckDBConfig(connection_config=connection_config)
+    assert config.connection_config["config"] == config_dict
 
 
 def test_config_with_empty_database() -> None:
     """Test config with empty database string (defaults to :memory:)."""
-    config = DuckDBConfig(database="")
-    assert config.database == ":memory:"  # Empty string defaults to :memory:
+    connection_config = {"database": ""}
+    config = DuckDBConfig(connection_config=connection_config)
+    assert config.connection_config["database"] == ":memory:"  # Empty string defaults to :memory:
 
 
 def test_config_readonly_memory() -> None:
     """Test read-only in-memory database configuration."""
-    config = DuckDBConfig(database=":memory:", read_only=True)
-    assert config.database == ":memory:"
-    assert config.read_only is True
+    connection_config = {"database": ":memory:", "read_only": True}
+    config = DuckDBConfig(connection_config=connection_config)
+    assert config.connection_config["database"] == ":memory:"
+    assert config.connection_config["read_only"] is True

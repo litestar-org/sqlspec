@@ -23,7 +23,7 @@ def temp_directory() -> Generator[Path, None, None]:
 @pytest.fixture
 def analytics_database() -> Generator[SqliteDriver, None, None]:
     """Create a SQLite database with analytics-style data."""
-    config = SqliteConfig(database=":memory:", statement_config=SQLConfig())
+    config = SqliteConfig(connection_config={"database": ":memory:"}, statement_config=SQLConfig())
 
     with config.provide_session() as driver:
         # Create realistic analytics schema

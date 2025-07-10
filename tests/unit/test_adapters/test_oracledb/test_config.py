@@ -2,113 +2,88 @@
 
 from unittest.mock import MagicMock, patch
 
-from sqlspec.adapters.oracledb import CONNECTION_FIELDS, POOL_FIELDS, OracleSyncConfig, OracleSyncDriver
+from sqlspec.adapters.oracledb import OracleConnectionParams, OraclePoolParams, OracleSyncConfig, OracleSyncDriver
 from sqlspec.statement.sql import SQLConfig
 
 
-def test_oracledb_field_constants() -> None:
-    """Test OracleDB CONNECTION_FIELDS and POOL_FIELDS constants."""
-    expected_connection_fields = {
-        "dsn",
-        "user",
-        "password",
-        "host",
-        "port",
-        "service_name",
-        "sid",
-        "wallet_location",
-        "wallet_password",
-        "config_dir",
-        "tcp_connect_timeout",
-        "retry_count",
-        "retry_delay",
-        "mode",
-        "events",
-        "edition",
+def test_oracledb_typed_dict_structure() -> None:
+    """Test OracleDB TypedDict structure."""
+    # Test that we can create valid connection params
+    connection_params: OracleConnectionParams = {
+        "dsn": "localhost:1521/freepdb1",
+        "user": "test_user",
+        "password": "test_password",
+        "host": "localhost",
+        "port": 1521,
     }
-    assert CONNECTION_FIELDS == expected_connection_fields
+    assert connection_params["dsn"] == "localhost:1521/freepdb1"
+    assert connection_params["user"] == "test_user"
 
-    # POOL_FIELDS should be a superset of CONNECTION_FIELDS
-    assert CONNECTION_FIELDS.issubset(POOL_FIELDS)
-
-    # Check pool-specific fields
-    pool_specific = POOL_FIELDS - CONNECTION_FIELDS
-    expected_pool_specific = {
-        "min",
-        "max",
-        "increment",
-        "threaded",
-        "getmode",
-        "homogeneous",
-        "timeout",
-        "wait_timeout",
-        "max_lifetime_session",
-        "session_callback",
-        "max_sessions_per_shard",
-        "soda_metadata_cache",
-        "ping_interval",
+    # Test that pool params inherit from connection params and add pool-specific fields
+    pool_params: OraclePoolParams = {
+        "dsn": "localhost:1521/freepdb1",
+        "user": "test_user",
+        "password": "test_password",
+        "min": 5,
+        "max": 20,
+        "timeout": 30,
     }
-    assert pool_specific == expected_pool_specific
+    assert pool_params["dsn"] == "localhost:1521/freepdb1"
+    assert pool_params["min"] == 5
 
 
 def test_oracledb_config_basic_creation() -> None:
     """Test OracleDB config creation with basic parameters."""
     # Test minimal config creation
-    config = OracleSyncConfig(dsn="localhost:1521/freepdb1", user="test_user", password="test_password")
-    assert config.dsn == "localhost:1521/freepdb1"
-    assert config.user == "test_user"
-    assert config.password == "test_password"
+    pool_config = {"dsn": "localhost:1521/freepdb1", "user": "test_user", "password": "test_password"}
+    config = OracleSyncConfig(pool_config=pool_config)
+    assert config.pool_config["dsn"] == "localhost:1521/freepdb1"
+    assert config.pool_config["user"] == "test_user"
+    assert config.pool_config["password"] == "test_password"
 
-    # Test with all parameters
-    config_full = OracleSyncConfig(
-        dsn="localhost:1521/freepdb1", user="test_user", password="test_password", custom="value"
-    )
-    assert config_full.dsn == "localhost:1521/freepdb1"
-    assert config_full.user == "test_user"
-    assert config_full.password == "test_password"
-    assert config_full.extras["custom"] == "value"
+    # Test with additional parameters
+    pool_config_full = {
+        "dsn": "localhost:1521/freepdb1",
+        "user": "test_user",
+        "password": "test_password",
+        "custom": "value",
+    }
+    config_full = OracleSyncConfig(pool_config=pool_config_full)
+    assert config_full.pool_config["dsn"] == "localhost:1521/freepdb1"
+    assert config_full.pool_config["user"] == "test_user"
+    assert config_full.pool_config["password"] == "test_password"
+    assert config_full.pool_config["custom"] == "value"
 
 
-def test_oracledb_config_extras_handling() -> None:
-    """Test OracleDB config extras parameter handling."""
-    # Test with kwargs going to extras
-    config = OracleSyncConfig(
-        dsn="localhost:1521/freepdb1", user="test_user", password="test_password", custom_param="value", debug=True
-    )
-    assert config.extras["custom_param"] == "value"
-    assert config.extras["debug"] is True
+def test_oracledb_config_with_no_pool_config() -> None:
+    """Test OracleDB config with no pool config."""
+    config = OracleSyncConfig()
 
-    # Test with kwargs going to extras
-    config2 = OracleSyncConfig(
-        dsn="localhost:1521/freepdb1",
-        user="test_user",
-        password="test_password",
-        unknown_param="test",
-        another_param=42,
-    )
-    assert config2.extras["unknown_param"] == "test"
-    assert config2.extras["another_param"] == 42
+    # Should have empty pool_config
+    assert config.pool_config == {}
+
+    # Check base class attributes
+    assert isinstance(config.statement_config, SQLConfig)
+    assert config.default_row_type is dict
 
 
 def test_oracledb_config_initialization() -> None:
     """Test OracleDB config initialization."""
     # Test with default parameters
-    config = OracleSyncConfig(dsn="localhost:1521/freepdb1", user="test_user", password="test_password")
+    pool_config = {"dsn": "localhost:1521/freepdb1", "user": "test_user", "password": "test_password"}
+    config = OracleSyncConfig(pool_config=pool_config)
     assert isinstance(config.statement_config, SQLConfig)
+
     # Test with custom parameters
     custom_statement_config = SQLConfig()
-    config = OracleSyncConfig(
-        dsn="localhost:1521/freepdb1",
-        user="test_user",
-        password="test_password",
-        statement_config=custom_statement_config,
-    )
+    config = OracleSyncConfig(pool_config=pool_config, statement_config=custom_statement_config)
     assert config.statement_config is custom_statement_config
 
 
 def test_oracledb_config_provide_session() -> None:
     """Test OracleDB config provide_session context manager."""
-    config = OracleSyncConfig(dsn="localhost:1521/freepdb1", user="test_user", password="test_password")
+    pool_config = {"dsn": "localhost:1521/freepdb1", "user": "test_user", "password": "test_password"}
+    config = OracleSyncConfig(pool_config=pool_config)
 
     # Mock the pool creation to avoid real database connection
     with patch.object(OracleSyncConfig, "create_pool") as mock_create_pool:
@@ -127,19 +102,22 @@ def test_oracledb_config_provide_session() -> None:
 
 def test_oracledb_config_driver_type() -> None:
     """Test OracleDB config driver_type property."""
-    config = OracleSyncConfig(dsn="localhost:1521/freepdb1", user="test_user", password="test_password")
+    pool_config = {"dsn": "localhost:1521/freepdb1", "user": "test_user", "password": "test_password"}
+    config = OracleSyncConfig(pool_config=pool_config)
     assert config.driver_type is OracleSyncDriver
 
 
 def test_oracledb_config_is_async() -> None:
     """Test OracleDB config is_async attribute."""
-    config = OracleSyncConfig(dsn="localhost:1521/freepdb1", user="test_user", password="test_password")
+    pool_config = {"dsn": "localhost:1521/freepdb1", "user": "test_user", "password": "test_password"}
+    config = OracleSyncConfig(pool_config=pool_config)
     assert config.is_async is False
     assert OracleSyncConfig.is_async is False
 
 
 def test_oracledb_config_supports_connection_pooling() -> None:
     """Test OracleDB config supports_connection_pooling attribute."""
-    config = OracleSyncConfig(dsn="localhost:1521/freepdb1", user="test_user", password="test_password")
+    pool_config = {"dsn": "localhost:1521/freepdb1", "user": "test_user", "password": "test_password"}
+    config = OracleSyncConfig(pool_config=pool_config)
     assert config.supports_connection_pooling is True
     assert OracleSyncConfig.supports_connection_pooling is True

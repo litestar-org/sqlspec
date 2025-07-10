@@ -147,14 +147,21 @@ class TestSQLCaching:
         # Access sql property to trigger processing
         result1 = sql1.sql
 
-        # Mock the pipeline to verify it's not called on cache hit
-        with patch.object(sql2._config, "get_statement_pipeline") as mock_pipeline:
-            result2 = sql2.sql
+        # Store the current cache size
+        cache_size_before = len(sql_cache.cache)
 
-            # Pipeline should not be called due to cache hit
-            mock_pipeline.assert_not_called()
+        # Access sql property on second object
+        result2 = sql2.sql
 
+        # Cache size should not increase (cache hit)
+        cache_size_after = len(sql_cache.cache)
+        assert cache_size_after == cache_size_before
+
+        # Both should have the same result
         assert result1 == result2
+
+        # Both should have the same processed state (cache hit)
+        assert sql2._processed_state is sql1._processed_state
 
     def test_sql_cache_miss_different_queries(self) -> None:
         """Test cache miss for different SQL queries."""

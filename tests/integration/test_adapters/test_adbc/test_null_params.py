@@ -16,8 +16,10 @@ from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_m
 def adbc_postgresql_null_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
     """Create an ADBC PostgreSQL session for NULL parameter testing."""
     config = AdbcConfig(
-        uri=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-        driver_name="adbc_driver_postgresql",
+        connection_config={
+            "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+            "driver_name": "adbc_driver_postgresql",
+        },
         statement_config=SQLConfig(),
     )
 

@@ -15,8 +15,32 @@ def create_permissive_config(**kwargs: Any) -> DuckDBConfig:
     statement_config = SQLConfig(enable_validation=False)
     if "statement_config" not in kwargs:
         kwargs["statement_config"] = statement_config
-    if "database" not in kwargs:
-        kwargs["database"] = ":memory:"
+
+    # Extract connection config parameters
+    connection_config = kwargs.pop("connection_config", {})
+
+    # Move individual connection parameters to connection_config
+    for param in [
+        "database",
+        "read_only",
+        "memory_limit",
+        "threads",
+        "enable_object_cache",
+        "preserve_insertion_order",
+        "default_null_order",
+        "default_order",
+        "autoload_known_extensions",
+        "autoinstall_known_extensions",
+        "allow_community_extensions",
+    ]:
+        if param in kwargs:
+            connection_config[param] = kwargs.pop(param)
+
+    # Set default database if not provided
+    if "database" not in connection_config:
+        connection_config["database"] = ":memory:"
+
+    kwargs["connection_config"] = connection_config
     return DuckDBConfig(**kwargs)
 
 
@@ -109,7 +133,7 @@ def test_connection_with_data_processing_settings() -> None:
 def test_connection_with_instrumentation() -> None:
     """Test DuckDB connection with instrumentation configuration."""
     statement_config = SQLConfig(enable_validation=False)
-    config = DuckDBConfig(database=":memory:", statement_config=statement_config)
+    config = DuckDBConfig(connection_config={"database": ":memory:"}, statement_config=statement_config)
 
     with config.provide_session() as session:
         # Test that instrumentation doesn't interfere with operations
@@ -130,7 +154,11 @@ def test_connection_with_hook() -> None:
         conn.execute("SET threads = 1")
 
     statement_config = SQLConfig(enable_validation=False)
-    config = DuckDBConfig(database=":memory:", statement_config=statement_config, on_connection_create=connection_hook)
+    config = DuckDBConfig(
+        connection_config={"database": ":memory:"},
+        statement_config=statement_config,
+        on_connection_create=connection_hook,
+    )
 
     with config.provide_session() as session:
         assert hook_executed is True

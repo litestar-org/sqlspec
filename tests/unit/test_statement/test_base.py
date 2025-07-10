@@ -45,6 +45,10 @@ class MockAsyncPool:
 class MockDatabaseConfig(SyncDatabaseConfig[MockConnection, MockPool, Any]):
     """Mock database configuration that supports pooling."""
 
+    def __init__(self) -> None:
+        """Initialize mock database config."""
+        super().__init__(pool_instance=None)
+
     def create_connection(self) -> MockConnection:
         return MockConnection()
 

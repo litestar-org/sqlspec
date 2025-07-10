@@ -12,7 +12,7 @@ from sqlspec.statement.sql import SQLConfig
 @pytest.fixture
 def duckdb_batch_session() -> "Generator[DuckDBDriver, None, None]":
     """Create a DuckDB session for batch operation testing."""
-    config = DuckDBConfig(database=":memory:", statement_config=SQLConfig())
+    config = DuckDBConfig(connection_config={"database": ":memory:"}, statement_config=SQLConfig())
 
     with config.provide_session() as session:
         # Create test table

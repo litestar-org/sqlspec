@@ -31,5 +31,7 @@ def xfail_if_driver_missing(func: F) -> F:
 def adbc_session(postgres_service: PostgresService) -> AdbcConfig:
     """Create an ADBC session for PostgreSQL."""
     return AdbcConfig(
-        uri=f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        connection_config={
+            "uri": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        }
     )

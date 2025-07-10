@@ -9,20 +9,20 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgAsyncDriver
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQLConfig
 
 
 @pytest.fixture
 async def psycopg_async_session(postgres_service: PostgresService) -> AsyncGenerator[PsycopgAsyncDriver, None]:
     """Create a psycopg async session with test table."""
     config = PsycopgAsyncConfig(
-        host=postgres_service.host,
-        port=postgres_service.port,
-        user=postgres_service.user,
-        password=postgres_service.password,
-        dbname=postgres_service.database,
-        autocommit=True,  # Enable autocommit for tests
-        statement_config=SQLConfig(enable_transformations=False, enable_validation=False, enable_parsing=False),
+        pool_config={
+            "host": postgres_service.host,
+            "port": postgres_service.port,
+            "user": postgres_service.user,
+            "password": postgres_service.password,
+            "dbname": postgres_service.database,
+            "autocommit": True,  # Enable autocommit for tests
+        }
     )
 
     # Manually create and manage the pool to ensure proper cleanup
@@ -165,9 +165,7 @@ async def test_psycopg_async_copy_csv_format_keyword(psycopg_async_session: Psyc
 
     # Test COPY FROM STDIN with CSV format using keyword parameter
     csv_data = "6,test6,600\n7,test7,700\n8,test8,800\n"
-    result = await psycopg_async_session.execute(
-        "COPY copy_csv_async_kw FROM STDIN WITH (FORMAT csv)", parameters=csv_data
-    )
+    result = await psycopg_async_session.execute("COPY copy_csv_async_kw FROM STDIN WITH (FORMAT csv)", csv_data)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
 

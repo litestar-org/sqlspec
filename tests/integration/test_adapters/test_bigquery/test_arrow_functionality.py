@@ -21,10 +21,12 @@ def bigquery_arrow_session(bigquery_service: BigQueryService) -> "Generator[BigQ
     from google.auth.credentials import AnonymousCredentials
 
     config = BigQueryConfig(
-        project=bigquery_service.project,
-        dataset_id=bigquery_service.dataset,
-        client_options=ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
-        credentials=AnonymousCredentials(),  # type: ignore[no-untyped-call]
+        connection_config={
+            "project": bigquery_service.project,
+            "dataset_id": bigquery_service.dataset,
+            "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
+            "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
+        },
         statement_config=SQLConfig(dialect="bigquery"),
     )
 

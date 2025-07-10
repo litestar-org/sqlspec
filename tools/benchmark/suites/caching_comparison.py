@@ -76,8 +76,8 @@ class CachingComparisonBenchmark(BaseBenchmarkSuite):
                 # Test WITHOUT caching
                 sql_cache.clear()
 
-                def no_cache_operation() -> tuple[str, Any]:
-                    stmt = SQL(sql_text, config=SQLConfig(enable_caching=False))
+                def no_cache_operation(text: str = sql_text) -> tuple[str, Any]:
+                    stmt = SQL(text, config=SQLConfig(enable_caching=False))
                     return stmt.compile()
 
                 times = BenchmarkMetrics.time_operation(
@@ -95,8 +95,8 @@ class CachingComparisonBenchmark(BaseBenchmarkSuite):
                 # Test WITH caching
                 sql_cache.clear()
 
-                def with_cache_operation() -> tuple[str, Any]:
-                    stmt = SQL(sql_text, config=SQLConfig(enable_caching=True))
+                def with_cache_operation(text: str = sql_text) -> tuple[str, Any]:
+                    stmt = SQL(text, config=SQLConfig(enable_caching=True))
                     return stmt.compile()
 
                 # Warmup cache first

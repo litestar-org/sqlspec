@@ -12,11 +12,13 @@ from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
 async def test_async_connection(oracle_23ai_service: OracleService) -> None:
     """Test async connection components for OracleDB."""
     async_config = OracleAsyncConfig(
-        host=oracle_23ai_service.host,
-        port=oracle_23ai_service.port,
-        service_name=oracle_23ai_service.service_name,
-        user=oracle_23ai_service.user,
-        password=oracle_23ai_service.password,
+        pool_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+        }
     )
 
     # Test direct connection (if applicable, depends on adapter design)
@@ -35,13 +37,15 @@ async def test_async_connection(oracle_23ai_service: OracleService) -> None:
 
     # Test pool re-creation and connection acquisition with pool parameters
     another_config = OracleAsyncConfig(
-        host=oracle_23ai_service.host,
-        port=oracle_23ai_service.port,
-        service_name=oracle_23ai_service.service_name,
-        user=oracle_23ai_service.user,
-        password=oracle_23ai_service.password,
-        min=1,
-        max=5,
+        pool_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+            "min": 1,
+            "max": 5,
+        }
     )
     pool = await another_config.create_pool()
     assert pool is not None
@@ -60,11 +64,13 @@ async def test_async_connection(oracle_23ai_service: OracleService) -> None:
 def test_sync_connection(oracle_23ai_service: OracleService) -> None:
     """Test sync connection components for OracleDB."""
     sync_config = OracleSyncConfig(
-        host=oracle_23ai_service.host,
-        port=oracle_23ai_service.port,
-        service_name=oracle_23ai_service.service_name,
-        user=oracle_23ai_service.user,
-        password=oracle_23ai_service.password,
+        pool_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+        }
     )
 
     # Test direct connection (if applicable, depends on adapter design)
@@ -83,13 +89,15 @@ def test_sync_connection(oracle_23ai_service: OracleService) -> None:
 
     # Test pool re-creation and connection acquisition with pool parameters
     another_config = OracleSyncConfig(
-        host=oracle_23ai_service.host,
-        port=oracle_23ai_service.port,
-        service_name=oracle_23ai_service.service_name,
-        user=oracle_23ai_service.user,
-        password=oracle_23ai_service.password,
-        min=1,
-        max=5,
+        pool_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+            "min": 1,
+            "max": 5,
+        }
     )
     pool = another_config.create_pool()
     assert pool is not None

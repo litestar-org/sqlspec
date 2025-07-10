@@ -25,7 +25,7 @@ def duckdb_session() -> Generator[DuckDBDriver, None, None]:
     Returns:
         A DuckDB session with a test table.
     """
-    adapter = DuckDBConfig()
+    adapter = DuckDBConfig(connection_config={"database": ":memory:"})
     with adapter.provide_session() as session:
         session.execute_script("CREATE SEQUENCE IF NOT EXISTS test_id_seq START 1")
         create_table_sql = """

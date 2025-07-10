@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, Optional, TypeVar, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Optional, TypeVar, Union, cast
 
 from sqlspec.typing import ConnectionT, PoolT  # pyright: ignore
 from sqlspec.utils.logging import get_logger
@@ -23,7 +23,6 @@ __all__ = (
     "ConfigT",
     "DatabaseConfigProtocol",
     "DriverT",
-    "GenericPoolConfig",
     "NoPoolAsyncConfig",
     "NoPoolSyncConfig",
     "StatementResultType",
@@ -48,51 +47,34 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     __slots__ = (
         "_dialect",
         "adapter_cache_size",
-        "connection_type",
         "default_row_type",
-        "driver_type",
         "enable_adapter_cache",
-        "enable_prepared_statements",
         "migration_config",
         "pool_instance",
-        "prepared_statement_cache_size",
     )
-
-    # ClassVar fields (not in __slots__)
+    driver_type: "ClassVar[type[Any]]"
+    connection_type: "ClassVar[type[Any]]"
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = False
     supports_native_arrow_import: "ClassVar[bool]" = False
     supports_native_arrow_export: "ClassVar[bool]" = False
     supports_native_parquet_import: "ClassVar[bool]" = False
     supports_native_parquet_export: "ClassVar[bool]" = False
-    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ()
-    """Parameter styles supported by this database adapter (e.g., ('qmark', 'named_colon'))."""
-    default_parameter_style: "ClassVar[str]" = "none"
-    """The preferred/native parameter style for this database."""
+    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("qmark",)
+    default_parameter_style: "ClassVar[str]" = "qmark"
 
     def __init__(
         self,
+        *,
         pool_instance: "Optional[PoolT]" = None,
         migration_config: "Optional[dict[str, Any]]" = None,
         enable_adapter_cache: bool = True,
-        adapter_cache_size: int = 500,
-        enable_prepared_statements: bool = False,
-        prepared_statement_cache_size: int = 100,
+        adapter_cache_size: int = 1000,
     ) -> None:
         self.pool_instance = pool_instance
         self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
-        """Migration configuration settings."""
         self.enable_adapter_cache = enable_adapter_cache
-        """Enable adapter-level SQL compilation caching."""
         self.adapter_cache_size = adapter_cache_size
-        """Maximum number of compiled SQL statements to cache per adapter."""
-        self.enable_prepared_statements = enable_prepared_statements
-        """Enable prepared statement pooling for supported databases."""
-        self.prepared_statement_cache_size = prepared_statement_cache_size
-        """Maximum number of prepared statements to maintain."""
-        # Non-init fields - subclasses must set these
-        self.connection_type: type[ConnectionT]
-        self.driver_type: type[DriverT]
         self.default_row_type: type[Any] = dict
         self._dialect: Optional[DialectType] = None
 
@@ -108,8 +90,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             and self.migration_config == other.migration_config
             and self.enable_adapter_cache == other.enable_adapter_cache
             and self.adapter_cache_size == other.adapter_cache_size
-            and self.enable_prepared_statements == other.enable_prepared_statements
-            and self.prepared_statement_cache_size == other.prepared_statement_cache_size
         )
 
     def _repr_parts(self) -> list[str]:
@@ -119,8 +99,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             f"migration_config={self.migration_config!r}",
             f"enable_adapter_cache={self.enable_adapter_cache!r}",
             f"adapter_cache_size={self.adapter_cache_size!r}",
-            f"enable_prepared_statements={self.enable_prepared_statements!r}",
-            f"prepared_statement_cache_size={self.prepared_statement_cache_size!r}",
         ]
 
     def __repr__(self) -> str:
@@ -152,7 +130,8 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         Returns:
             The SQL dialect type.
         """
-        return self.driver_type.dialect
+        driver_type = type(self).driver_type
+        return cast("DialectType", driver_type.dialect)
 
     @abstractmethod
     def create_connection(self) -> "Union[ConnectionT, Awaitable[ConnectionT]]":
@@ -171,12 +150,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         self, *args: Any, **kwargs: Any
     ) -> "Union[AbstractContextManager[DriverT], AbstractAsyncContextManager[DriverT]]":
         """Provide a database session context manager."""
-        raise NotImplementedError
-
-    @property
-    @abstractmethod
-    def connection_config_dict(self) -> "dict[str, Any]":
-        """Return the connection configuration as a dict."""
         raise NotImplementedError
 
     @abstractmethod
@@ -219,19 +192,16 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
 
     def __init__(
         self,
+        *,
         migration_config: "Optional[dict[str, Any]]" = None,
         enable_adapter_cache: bool = True,
-        adapter_cache_size: int = 500,
-        enable_prepared_statements: bool = False,
-        prepared_statement_cache_size: int = 100,
+        adapter_cache_size: int = 1000,
     ) -> None:
         super().__init__(
             pool_instance=None,
             migration_config=migration_config,
             enable_adapter_cache=enable_adapter_cache,
             adapter_cache_size=adapter_cache_size,
-            enable_prepared_statements=enable_prepared_statements,
-            prepared_statement_cache_size=prepared_statement_cache_size,
         )
 
     def create_connection(self) -> ConnectionT:
@@ -266,19 +236,16 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
 
     def __init__(
         self,
+        *,
         migration_config: "Optional[dict[str, Any]]" = None,
         enable_adapter_cache: bool = True,
-        adapter_cache_size: int = 500,
-        enable_prepared_statements: bool = False,
-        prepared_statement_cache_size: int = 100,
+        adapter_cache_size: int = 1000,
     ) -> None:
         super().__init__(
             pool_instance=None,
             migration_config=migration_config,
             enable_adapter_cache=enable_adapter_cache,
             adapter_cache_size=adapter_cache_size,
-            enable_prepared_statements=enable_prepared_statements,
-            prepared_statement_cache_size=prepared_statement_cache_size,
         )
 
     async def create_connection(self) -> ConnectionT:
@@ -303,25 +270,10 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         return None
 
 
-class GenericPoolConfig:
-    """Generic Database Pool Configuration."""
-
-    __slots__ = ()
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, type(self)):
-            return NotImplemented
-        # No fields to compare in this empty class
-        return True
-
-    def __repr__(self) -> str:
-        return f"{type(self).__name__}()"
-
-
 class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Generic Sync Database Configuration."""
 
-    __slots__ = ()  # No additional fields beyond parent
+    __slots__ = ()
 
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = True

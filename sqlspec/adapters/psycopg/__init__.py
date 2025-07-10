@@ -1,4 +1,9 @@
-from sqlspec.adapters.psycopg.config import CONNECTION_FIELDS, POOL_FIELDS, PsycopgAsyncConfig, PsycopgSyncConfig
+from sqlspec.adapters.psycopg.config import (
+    PsycopgAsyncConfig,
+    PsycopgConnectionParams,
+    PsycopgPoolParams,
+    PsycopgSyncConfig,
+)
 from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncConnection,
     PsycopgAsyncDriver,
@@ -7,11 +12,11 @@ from sqlspec.adapters.psycopg.driver import (
 )
 
 __all__ = (
-    "CONNECTION_FIELDS",
-    "POOL_FIELDS",
     "PsycopgAsyncConfig",
     "PsycopgAsyncConnection",
     "PsycopgAsyncDriver",
+    "PsycopgConnectionParams",
+    "PsycopgPoolParams",
     "PsycopgSyncConfig",
     "PsycopgSyncConnection",
     "PsycopgSyncDriver",

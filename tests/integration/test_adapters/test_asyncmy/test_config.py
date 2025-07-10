@@ -3,113 +3,92 @@
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 
-from sqlspec.adapters.asyncmy import CONNECTION_FIELDS, POOL_FIELDS, AsyncmyConfig, AsyncmyDriver
+from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyConnectionParams, AsyncmyDriver, AsyncmyPoolParams
 from sqlspec.statement.sql import SQLConfig
 
 
-def test_asyncmy_field_constants() -> None:
-    """Test Asyncmy CONNECTION_FIELDS and POOL_FIELDS constants."""
-    expected_connection_fields = {
-        "host",
-        "user",
-        "password",
-        "database",
-        "port",
-        "unix_socket",
-        "charset",
-        "connect_timeout",
-        "read_default_file",
-        "read_default_group",
-        "autocommit",
-        "local_infile",
-        "ssl",
-        "sql_mode",
-        "init_command",
-        "cursor_class",
+def test_asyncmy_typed_dict_structure() -> None:
+    """Test Asyncmy TypedDict structure."""
+    # Test that we can create valid connection params
+    connection_params: AsyncmyConnectionParams = {
+        "host": "localhost",
+        "port": 3306,
+        "user": "test_user",
+        "password": "test_password",
+        "database": "test_db",
     }
-    assert CONNECTION_FIELDS == expected_connection_fields
+    assert connection_params["host"] == "localhost"
+    assert connection_params["port"] == 3306
 
-    # POOL_FIELDS should be a superset of CONNECTION_FIELDS
-    assert CONNECTION_FIELDS.issubset(POOL_FIELDS)
-
-    # Check pool-specific fields
-    pool_specific = POOL_FIELDS - CONNECTION_FIELDS
-    expected_pool_specific = {"minsize", "maxsize", "echo", "pool_recycle"}
-    assert pool_specific == expected_pool_specific
+    # Test that pool params inherit from connection params and add pool-specific fields
+    pool_params: AsyncmyPoolParams = {"host": "localhost", "port": 3306, "minsize": 5, "maxsize": 20, "echo": True}
+    assert pool_params["host"] == "localhost"
+    assert pool_params["minsize"] == 5
 
 
 def test_asyncmy_config_basic_creation() -> None:
     """Test Asyncmy config creation with basic parameters."""
     # Test minimal config creation
-    config = AsyncmyConfig(host="localhost", port=3306, user="test_user", password="test_password", database="test_db")
-    assert config.host == "localhost"
-    assert config.port == 3306
-    assert config.user == "test_user"
-    assert config.password == "test_password"
-    assert config.database == "test_db"
+    pool_config = {
+        "host": "localhost",
+        "port": 3306,
+        "user": "test_user",
+        "password": "test_password",
+        "database": "test_db",
+    }
+    config = AsyncmyConfig(pool_config=pool_config)
+    assert config.pool_config["host"] == "localhost"
+    assert config.pool_config["port"] == 3306
+    assert config.pool_config["user"] == "test_user"
+    assert config.pool_config["password"] == "test_password"
+    assert config.pool_config["database"] == "test_db"
 
-    # Test with all parameters
-    config_full = AsyncmyConfig(
-        host="localhost",
-        port=3306,
-        user="test_user",
-        password="test_password",
-        database="test_db",
-        custom="value",  # Additional parameters are stored in extras
-    )
-    assert config_full.host == "localhost"
-    assert config_full.port == 3306
-    assert config_full.user == "test_user"
-    assert config_full.password == "test_password"
-    assert config_full.database == "test_db"
-    assert config_full.extras["custom"] == "value"
+    # Test with additional parameters
+    pool_config_full = {
+        "host": "localhost",
+        "port": 3306,
+        "user": "test_user",
+        "password": "test_password",
+        "database": "test_db",
+        "custom": "value",  # Additional parameters
+    }
+    config_full = AsyncmyConfig(pool_config=pool_config_full)
+    assert config_full.pool_config["host"] == "localhost"
+    assert config_full.pool_config["port"] == 3306
+    assert config_full.pool_config["user"] == "test_user"
+    assert config_full.pool_config["password"] == "test_password"
+    assert config_full.pool_config["database"] == "test_db"
+    assert config_full.pool_config["custom"] == "value"
 
 
-def test_asyncmy_config_extras_handling() -> None:
-    """Test Asyncmy config extras parameter handling."""
-    # Test with kwargs going to extras
-    config = AsyncmyConfig(
-        host="localhost",
-        port=3306,
-        user="test_user",
-        password="test_password",
-        database="test_db",
-        custom_param="value",
-        debug=True,
-    )
-    assert config.extras["custom_param"] == "value"
-    assert config.extras["debug"] is True
+def test_asyncmy_config_with_no_pool_config() -> None:
+    """Test Asyncmy config with no pool config."""
+    config = AsyncmyConfig()
 
-    # Test with kwargs going to extras
-    config2 = AsyncmyConfig(
-        host="localhost",
-        port=3306,
-        user="test_user",
-        password="test_password",
-        database="test_db",
-        unknown_param="test",
-        another_param=42,
-    )
-    assert config2.extras["unknown_param"] == "test"
-    assert config2.extras["another_param"] == 42
+    # Should have empty pool_config
+    assert config.pool_config == {}
+
+    # Check base class attributes
+    assert isinstance(config.statement_config, SQLConfig)
+    assert config.default_row_type is dict
 
 
 def test_asyncmy_config_initialization() -> None:
     """Test Asyncmy config initialization."""
     # Test with default parameters
-    config = AsyncmyConfig(host="localhost", port=3306, user="test_user", password="test_password", database="test_db")
+    pool_config = {
+        "host": "localhost",
+        "port": 3306,
+        "user": "test_user",
+        "password": "test_password",
+        "database": "test_db",
+    }
+    config = AsyncmyConfig(pool_config=pool_config)
     assert isinstance(config.statement_config, SQLConfig)
+
     # Test with custom parameters
     custom_statement_config = SQLConfig()
-
-    config = AsyncmyConfig(
-        host="localhost",
-        port=3306,
-        user="test_user",
-        password="test_password",
-        database="test_db",
-        statement_config=custom_statement_config,
-    )
+    config = AsyncmyConfig(pool_config=pool_config, statement_config=custom_statement_config)
     assert config.statement_config is custom_statement_config
 
 
@@ -118,13 +97,14 @@ def test_asyncmy_config_initialization() -> None:
 async def test_asyncmy_config_provide_session(mysql_service: MySQLService) -> None:
     """Test Asyncmy config provide_session context manager."""
 
-    config = AsyncmyConfig(
-        host=mysql_service.host,
-        port=mysql_service.port,
-        user=mysql_service.user,
-        password=mysql_service.password,
-        database=mysql_service.db,
-    )
+    pool_config = {
+        "host": mysql_service.host,
+        "port": mysql_service.port,
+        "user": mysql_service.user,
+        "password": mysql_service.password,
+        "database": mysql_service.db,
+    }
+    config = AsyncmyConfig(pool_config=pool_config)
 
     # Test session context manager behavior
     async with config.provide_session() as session:
@@ -136,19 +116,40 @@ async def test_asyncmy_config_provide_session(mysql_service: MySQLService) -> No
 
 def test_asyncmy_config_driver_type() -> None:
     """Test Asyncmy config driver_type property."""
-    config = AsyncmyConfig(host="localhost", port=3306, user="test_user", password="test_password", database="test_db")
+    pool_config = {
+        "host": "localhost",
+        "port": 3306,
+        "user": "test_user",
+        "password": "test_password",
+        "database": "test_db",
+    }
+    config = AsyncmyConfig(pool_config=pool_config)
     assert config.driver_type is AsyncmyDriver
 
 
 def test_asyncmy_config_is_async() -> None:
     """Test Asyncmy config is_async attribute."""
-    config = AsyncmyConfig(host="localhost", port=3306, user="test_user", password="test_password", database="test_db")
+    pool_config = {
+        "host": "localhost",
+        "port": 3306,
+        "user": "test_user",
+        "password": "test_password",
+        "database": "test_db",
+    }
+    config = AsyncmyConfig(pool_config=pool_config)
     assert config.is_async is True
     assert AsyncmyConfig.is_async is True
 
 
 def test_asyncmy_config_supports_connection_pooling() -> None:
     """Test Asyncmy config supports_connection_pooling attribute."""
-    config = AsyncmyConfig(host="localhost", port=3306, user="test_user", password="test_password", database="test_db")
+    pool_config = {
+        "host": "localhost",
+        "port": 3306,
+        "user": "test_user",
+        "password": "test_password",
+        "database": "test_db",
+    }
+    config = AsyncmyConfig(pool_config=pool_config)
     assert config.supports_connection_pooling is True
     assert AsyncmyConfig.supports_connection_pooling is True

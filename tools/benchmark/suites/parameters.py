@@ -95,8 +95,8 @@ class ParametersBenchmark(BaseBenchmarkSuite):
         for name, query, params in test_cases:
             sql = SQL(query, params)
 
-            def convert_params() -> None:
-                sql.compile(placeholder_style=target_style.value)
+            def convert_params(stmt: "SQL" = sql) -> None:
+                stmt.compile(placeholder_style=target_style.value)
 
             times = BenchmarkMetrics.time_operation(
                 convert_params, iterations=self.config.iterations, warmup=self.config.warmup_iterations
@@ -117,8 +117,8 @@ class ParametersBenchmark(BaseBenchmarkSuite):
 
         for name, value in test_cases:
             # Benchmark wrapping
-            def wrap_param() -> None:
-                TypedParameter(value, sqlglot_type="str", type_hint="str")
+            def wrap_param(val: Any = value) -> None:
+                TypedParameter(val, sqlglot_type="str", type_hint="str")
 
             times = BenchmarkMetrics.time_operation(
                 wrap_param, iterations=self.config.iterations, warmup=self.config.warmup_iterations
@@ -130,9 +130,8 @@ class ParametersBenchmark(BaseBenchmarkSuite):
             # Benchmark access
             param = TypedParameter(value, sqlglot_type="str", type_hint="str")
 
-            def access_param() -> None:
-                _ = param.value
-                ()
+            def access_param(p: "TypedParameter" = param) -> None:
+                _ = p.value
 
             times = BenchmarkMetrics.time_operation(
                 access_param, iterations=self.config.iterations, warmup=self.config.warmup_iterations

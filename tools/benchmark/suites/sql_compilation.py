@@ -81,7 +81,7 @@ class SQLCompilationBenchmark(BaseBenchmarkSuite):
         self.console.print("\n[cyan]SQLGlot Parsing:[/cyan]")
         for name, query in test_cases:
             times = BenchmarkMetrics.time_operation(
-                lambda: parse_one(query), iterations=self.config.iterations, warmup=self.config.warmup_iterations
+                lambda q=query: parse_one(q), iterations=self.config.iterations, warmup=self.config.warmup_iterations
             )
 
             result = TimingResult(operation=f"parse_{name}", iterations=self.config.iterations, times=times)
@@ -96,7 +96,7 @@ class SQLCompilationBenchmark(BaseBenchmarkSuite):
             params = {"status": "active", "date": "2024-01-01", "limit": 100}
 
             times = BenchmarkMetrics.time_operation(
-                lambda: SQL(query, params).compile(),
+                lambda q=query, p=params: SQL(q, p).compile(),
                 iterations=self.config.iterations,
                 warmup=self.config.warmup_iterations,
             )

@@ -19,7 +19,7 @@ from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_m
 def adbc_duckdb_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC DuckDB session with test table."""
     config = AdbcConfig(
-        driver_name="adbc_driver_duckdb.dbapi.connect",
+        connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"},
         statement_config=SQLConfig(),  # Allow DDL statements for tests
     )
 
@@ -41,7 +41,7 @@ def adbc_duckdb_session() -> Generator[AdbcDriver, None, None]:
 @xfail_if_driver_missing
 def test_connection() -> None:
     """Test basic ADBC DuckDB connection."""
-    config = AdbcConfig(driver_name="adbc_driver_duckdb.dbapi.connect")
+    config = AdbcConfig(connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"})
 
     # Test connection creation
     with config.provide_connection() as conn:

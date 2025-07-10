@@ -40,8 +40,10 @@ def ensure_test_table(session: AdbcDriver) -> None:
 def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
     """Create an ADBC PostgreSQL session with test table."""
     config = AdbcConfig(
-        uri=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-        driver_name="adbc_driver_postgresql.dbapi.connect",
+        connection_config={
+            "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+            "driver_name": "adbc_driver_postgresql.dbapi.connect",
+        },
         statement_config=SQLConfig(),  # Allow DDL statements for tests
     )
 
@@ -65,8 +67,10 @@ def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[Adbc
 def test_connection(postgres_service: PostgresService) -> None:
     """Test basic ADBC PostgreSQL connection."""
     config = AdbcConfig(
-        uri=f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-        driver_name="adbc_driver_postgresql.dbapi.connect",
+        connection_config={
+            "uri": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+            "driver_name": "adbc_driver_postgresql.dbapi.connect",
+        }
     )
 
     # Test connection creation

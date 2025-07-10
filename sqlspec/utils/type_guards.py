@@ -268,9 +268,10 @@ def is_dataclass_instance(obj: Any) -> "TypeGuard[DataclassProtocol]":
     try:
         # Check if type has __dataclass_fields__
         _ = type(obj).__dataclass_fields__
-        return True
     except AttributeError:
         return False
+    else:
+        return True
 
 
 def is_dataclass(obj: Any) -> "TypeGuard[DataclassProtocol]":
@@ -285,9 +286,10 @@ def is_dataclass(obj: Any) -> "TypeGuard[DataclassProtocol]":
     if isinstance(obj, type):
         try:
             _ = obj.__dataclass_fields__  # type: ignore[attr-defined]
-            return True
         except AttributeError:
             return False
+        else:
+            return True
     return is_dataclass_instance(obj)
 
 
@@ -305,9 +307,10 @@ def is_dataclass_with_field(obj: Any, field_name: str) -> "TypeGuard[object]":
         return False
     try:
         _ = getattr(obj, field_name)
-        return True
     except AttributeError:
         return False
+    else:
+        return True
 
 
 def is_dataclass_without_field(obj: Any, field_name: str) -> "TypeGuard[object]":
@@ -324,9 +327,10 @@ def is_dataclass_without_field(obj: Any, field_name: str) -> "TypeGuard[object]"
         return False
     try:
         _ = getattr(obj, field_name)
-        return False
     except AttributeError:
         return True
+    else:
+        return False
 
 
 def is_pydantic_model(obj: Any) -> "TypeGuard[BaseModel]":
@@ -355,9 +359,10 @@ def is_pydantic_model_with_field(obj: Any, field_name: str) -> "TypeGuard[BaseMo
         return False
     try:
         _ = getattr(obj, field_name)
-        return True
     except AttributeError:
         return False
+    else:
+        return True
 
 
 def is_pydantic_model_without_field(obj: Any, field_name: str) -> "TypeGuard[BaseModel]":
@@ -374,9 +379,10 @@ def is_pydantic_model_without_field(obj: Any, field_name: str) -> "TypeGuard[Bas
         return False
     try:
         _ = getattr(obj, field_name)
-        return False
     except AttributeError:
         return True
+    else:
+        return False
 
 
 def is_msgspec_struct(obj: Any) -> "TypeGuard[Struct]":

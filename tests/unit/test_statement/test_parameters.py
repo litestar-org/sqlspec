@@ -2,7 +2,6 @@
 
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Optional
-from unittest.mock import patch
 
 import pytest
 
@@ -412,11 +411,15 @@ def test_parameter_conversion_error_handling(converter: ParameterConverter) -> N
     """Test parameter conversion error handling with validation disabled."""
     sql = "SELECT * FROM users WHERE id = ?"
 
-    # Mock validation error
-    with patch.object(converter.validator, "validate_parameters", side_effect=ValueError("Test error")):
-        result = converter.convert_parameters(sql, {"id": 123}, None, None, validate=False)
+    # Since validate=False, validation should be skipped anyway
+    result = converter.convert_parameters(sql, {"id": 123}, None, None, validate=False)
+    assert result.merged_parameters == {"id": 123}
 
-        assert result.merged_parameters == {"id": 123}
+    # Test that validation errors are properly raised when validate=True
+    # by using SQL with missing parameters
+    sql_missing = "SELECT * FROM users WHERE id = ? AND name = ?"
+    with pytest.raises(MissingParameterError):
+        converter.convert_parameters(sql_missing, [1], None, None, validate=True)
 
 
 @pytest.mark.parametrize(

@@ -61,7 +61,7 @@ class DockerConfig:
     POSTGRES_CONTAINER_NAME: Final[str] = "sqlspec-benchmark-postgres"
     POSTGRES_DEFAULT_PORT: Final[int] = 5432
     POSTGRES_DEFAULT_USER: Final[str] = "postgres"
-    POSTGRES_DEFAULT_PASSWORD: Final[str] = "postgres"
+    POSTGRES_DEFAULT_PASSWORD: Final[str] = "postgres"  # noqa: S105
     POSTGRES_DEFAULT_DB: Final[str] = "postgres"
 
     # Oracle
@@ -69,7 +69,7 @@ class DockerConfig:
     ORACLE_CONTAINER_NAME: Final[str] = "sqlspec-benchmark-oracle"
     ORACLE_DEFAULT_PORT: Final[int] = 1521
     ORACLE_DEFAULT_USER: Final[str] = "system"
-    ORACLE_DEFAULT_PASSWORD: Final[str] = "oracle"
+    ORACLE_DEFAULT_PASSWORD: Final[str] = "oracle"  # noqa: S105
     ORACLE_DEFAULT_SERVICE_NAME: Final[str] = "FREEPDB1"
 
     # MySQL
@@ -77,7 +77,7 @@ class DockerConfig:
     MYSQL_CONTAINER_NAME: Final[str] = "sqlspec-benchmark-mysql"
     MYSQL_DEFAULT_PORT: Final[int] = 3306
     MYSQL_DEFAULT_USER: Final[str] = "root"
-    MYSQL_DEFAULT_PASSWORD: Final[str] = "mysql"
+    MYSQL_DEFAULT_PASSWORD: Final[str] = "mysql"  # noqa: S105
     MYSQL_DEFAULT_DB: Final[str] = "test"
 
 

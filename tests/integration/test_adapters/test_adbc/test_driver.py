@@ -25,8 +25,10 @@ ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
     """Create an ADBC PostgreSQL session with test table."""
     config = AdbcConfig(
-        uri=f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-        driver_name="adbc_driver_postgresql",
+        connection_config={
+            "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+            "driver_name": "adbc_driver_postgresql",
+        },
         statement_config=SQLConfig(),  # Allow DDL statements for tests
     )
 
@@ -58,8 +60,7 @@ def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[Adbc
 def adbc_sqlite_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session with test table."""
     config = AdbcConfig(
-        uri=":memory:",
-        driver_name="adbc_driver_sqlite",
+        connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"},
         statement_config=SQLConfig(),  # Allow DDL statements for tests
     )
 
@@ -81,7 +82,7 @@ def adbc_sqlite_session() -> Generator[AdbcDriver, None, None]:
 def adbc_duckdb_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC DuckDB session with test table."""
     config = AdbcConfig(
-        driver_name="adbc_driver_duckdb.dbapi.connect",
+        connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"},
         statement_config=SQLConfig(),  # Allow DDL statements for tests
     )
 
@@ -104,13 +105,15 @@ def adbc_bigquery_session(bigquery_service: BigQueryService) -> Generator[AdbcDr
     """Create an ADBC BigQuery session using emulator."""
 
     config = AdbcConfig(
-        driver_name="adbc_driver_bigquery",
-        project_id=bigquery_service.project,
-        dataset_id=bigquery_service.dataset,
-        db_kwargs={
+        connection_config={
+            "driver_name": "adbc_driver_bigquery",
             "project_id": bigquery_service.project,
-            "client_options": {"api_endpoint": f"http://{bigquery_service.host}:{bigquery_service.port}"},
-            "credentials": None,
+            "dataset_id": bigquery_service.dataset,
+            "db_kwargs": {
+                "project_id": bigquery_service.project,
+                "client_options": {"api_endpoint": f"http://{bigquery_service.host}:{bigquery_service.port}"},
+                "credentials": None,
+            },
         },
         statement_config=SQLConfig(),
     )
@@ -471,9 +474,11 @@ def test_adbc_bigquery_basic_operations() -> None:
     # 3. Configured dataset
 
     config = AdbcConfig(
-        driver_name="adbc_driver_bigquery",
-        project_id="test-project",  # Would need to be real
-        dataset_id="test_dataset",  # Would need to be real
+        connection_config={
+            "driver_name": "adbc_driver_bigquery",
+            "project_id": "test-project",  # Would need to be real
+            "dataset_id": "test_dataset",  # Would need to be real
+        }
     )
 
     # Since we don't have real credentials, this will fail and be xfailed
@@ -494,9 +499,11 @@ def test_adbc_bigquery_basic_operations() -> None:
 def test_adbc_bigquery_data_types() -> None:
     """Test BigQuery-specific data types with ADBC (requires valid GCP setup)."""
     config = AdbcConfig(
-        driver_name="adbc_driver_bigquery",
-        project_id="test-project",  # Would need to be real
-        dataset_id="test_dataset",  # Would need to be real
+        connection_config={
+            "driver_name": "adbc_driver_bigquery",
+            "project_id": "test-project",  # Would need to be real
+            "dataset_id": "test_dataset",  # Would need to be real
+        }
     )
 
     with config.provide_session() as session:

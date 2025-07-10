@@ -23,13 +23,15 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 def oracle_async_session(oracle_23ai_service: OracleService) -> OracleAsyncConfig:
     """Create an Oracle asynchronous session."""
     return OracleAsyncConfig(
-        host=oracle_23ai_service.host,
-        port=oracle_23ai_service.port,
-        service_name=oracle_23ai_service.service_name,
-        user=oracle_23ai_service.user,
-        password=oracle_23ai_service.password,
-        min=1,
-        max=5,
+        pool_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+            "min": 1,
+            "max": 5,
+        }
     )
 
 

@@ -8,6 +8,29 @@ from rich.table import Table
 
 from tools.benchmark.core.metrics import TimingResult
 
+# Performance thresholds
+SPEEDUP_EXCELLENT = 1.5
+SPEEDUP_GOOD = 1.1
+SPEEDUP_SIGNIFICANT = 2.0
+SPEEDUP_MODERATE = 1.2
+IMPROVEMENT_GOOD = 1.2
+WIN_RATE_HIGH = 60
+WIN_RATE_MODERATE = 40
+CACHE_RATE_HIGH = 50
+SIGNIFICANT_RATE_HIGH = 30
+IMPROVEMENT_TARGET = 15
+CRITICAL_REGRESSION = 25
+HIGH_REGRESSION = 10
+MEDIUM_REGRESSION = 5
+
+# Performance categories (ops/sec)
+OPS_LIGHTNING_FAST = 100000
+OPS_VERY_FAST = 10000
+OPS_FAST = 1000
+
+# Split counts
+SPLIT_COUNT_TWO = 2
+
 
 class BenchmarkSummary:
     """Generate comprehensive summaries of benchmark results."""
@@ -116,7 +139,9 @@ class BenchmarkSummary:
                 cache_benefit = ((no_cache.avg_ms - with_cache.avg_ms) / no_cache.avg_ms) * 100
 
                 # Color coding for speedup
-                speedup_color = "green" if speedup > 1.5 else "yellow" if speedup > 1.1 else "red"
+                speedup_color = (
+                    "green" if speedup > SPEEDUP_EXCELLENT else "yellow" if speedup > SPEEDUP_GOOD else "red"
+                )
 
                 table.add_row(
                     sql_type.replace("_", " ").title(),
@@ -141,9 +166,9 @@ class BenchmarkSummary:
             self.console.print(f"• Best Case: [bold green]{max_speedup:.2f}x faster[/bold green]")
             self.console.print(f"• Worst Case: [bold red]{min_speedup:.2f}x faster[/bold red]")
 
-            if avg_speedup > 2.0:
+            if avg_speedup > SPEEDUP_SIGNIFICANT:
                 self.console.print("• [bold green]✅ Caching provides significant performance benefits[/bold green]")
-            elif avg_speedup > 1.2:
+            elif avg_speedup > SPEEDUP_MODERATE:
                 self.console.print("• [bold yellow]⚠ Caching provides moderate benefits[/bold yellow]")
             else:
                 self.console.print("• [bold red]❌ Caching provides minimal benefits[/bold red]")
@@ -223,7 +248,7 @@ class BenchmarkSummary:
         db_results: dict[str, dict[str, TimingResult]] = {}
         for key, result in orm_results.items():
             parts = key.split("_", 1)
-            if len(parts) == 2:
+            if len(parts) == SPLIT_COUNT_TWO:
                 db_name = parts[0]
                 op_key = parts[1]
 
@@ -506,7 +531,7 @@ class BenchmarkSummary:
                     if best_sqlspec and best_sqlspec.avg_ms < core_result.avg_ms:
                         sqlspec_wins += 1
                         gain = core_result.avg_ms / best_sqlspec.avg_ms
-                        if gain > 1.2:  # 20% improvement
+                        if gain > IMPROVEMENT_GOOD:  # 20% improvement
                             significant_gains += 1
 
                     # Check cache benefit
@@ -531,11 +556,11 @@ class BenchmarkSummary:
 
             # Recommendations
             self.console.print("\n[bold yellow]💡 Migration Recommendations:[/bold yellow]")
-            if win_rate > 60:
+            if win_rate > WIN_RATE_HIGH:
                 self.console.print(
                     "  • [green]Strong case for SQLSpec adoption[/green] - majority of operations show performance gains"
                 )
-            elif win_rate > 40:
+            elif win_rate > WIN_RATE_MODERATE:
                 self.console.print(
                     "  • [yellow]Moderate case for SQLSpec adoption[/yellow] - evaluate specific use cases"
                 )
@@ -544,12 +569,12 @@ class BenchmarkSummary:
                     "  • [red]Limited case for SQLSpec adoption[/red] - SQLAlchemy performs competitively"
                 )
 
-            if cache_rate > 50:
+            if cache_rate > CACHE_RATE_HIGH:
                 self.console.print(
                     "  • [blue]Enable caching for best performance[/blue] - significant impact across operations"
                 )
 
-            if significant_rate > 30:
+            if significant_rate > SIGNIFICANT_RATE_HIGH:
                 self.console.print(
                     "  • [green]Focus on high-impact operations[/green] - some workloads see substantial gains"
                 )
@@ -566,7 +591,7 @@ class BenchmarkSummary:
         modules = {}
         for key, result in mypyc_results.items():
             parts = key.split("_")
-            if len(parts) >= 2:
+            if len(parts) >= SPLIT_COUNT_TWO:
                 module_name = parts[0]
                 variant = "baseline" if "_baseline" in key else "compiled"
 
@@ -617,7 +642,7 @@ class BenchmarkSummary:
                 f"• Best Improvement: [bold cyan]{best_module}[/bold cyan] with [bold green]{best_improvement:.1f}%[/bold green]"
             )
 
-            if avg_improvement >= 15:
+            if avg_improvement >= IMPROVEMENT_TARGET:
                 self.console.print("• [bold green]✅ Target of 15%+ improvement achieved![/bold green]")
             else:
                 self.console.print(
@@ -660,10 +685,10 @@ class BenchmarkSummary:
         slowest = min(all_results.items(), key=lambda x: x[1].ops_per_sec)
 
         # Performance categories
-        very_fast = [(k, v) for k, v in all_results.items() if v.ops_per_sec > 100000]
-        fast = [(k, v) for k, v in all_results.items() if 10000 <= v.ops_per_sec <= 100000]
-        moderate = [(k, v) for k, v in all_results.items() if 1000 <= v.ops_per_sec < 10000]
-        slow = [(k, v) for k, v in all_results.items() if v.ops_per_sec < 1000]
+        very_fast = [(k, v) for k, v in all_results.items() if v.ops_per_sec > OPS_LIGHTNING_FAST]
+        fast = [(k, v) for k, v in all_results.items() if OPS_VERY_FAST <= v.ops_per_sec <= OPS_LIGHTNING_FAST]
+        moderate = [(k, v) for k, v in all_results.items() if OPS_FAST <= v.ops_per_sec < OPS_VERY_FAST]
+        slow = [(k, v) for k, v in all_results.items() if v.ops_per_sec < OPS_FAST]
 
         # Create summary panel
         summary_text = f"""
@@ -721,11 +746,11 @@ class BenchmarkSummary:
 
         for i, (operation, result) in enumerate(sorted_results[:count], 1):
             # Performance indicator
-            if result.ops_per_sec > 100000:
+            if result.ops_per_sec > OPS_LIGHTNING_FAST:
                 perf_indicator = "🚀"
-            elif result.ops_per_sec > 10000:
+            elif result.ops_per_sec > OPS_VERY_FAST:
                 perf_indicator = "⚡"
-            elif result.ops_per_sec > 1000:
+            elif result.ops_per_sec > OPS_FAST:
                 perf_indicator = "✅"
             else:
                 perf_indicator = "🐌"
@@ -741,12 +766,16 @@ class BenchmarkSummary:
 
         # Categorize operations
         categories = {
-            "🚀 Lightning Fast (>100K ops/sec)": [(k, v) for k, v in all_results.items() if v.ops_per_sec > 100000],
-            "⚡ Very Fast (10K-100K ops/sec)": [
-                (k, v) for k, v in all_results.items() if 10000 <= v.ops_per_sec <= 100000
+            "🚀 Lightning Fast (>100K ops/sec)": [
+                (k, v) for k, v in all_results.items() if v.ops_per_sec > OPS_LIGHTNING_FAST
             ],
-            "✅ Fast (1K-10K ops/sec)": [(k, v) for k, v in all_results.items() if 1000 <= v.ops_per_sec < 10000],
-            "🐌 Slow (<1K ops/sec)": [(k, v) for k, v in all_results.items() if v.ops_per_sec < 1000],
+            "⚡ Very Fast (10K-100K ops/sec)": [
+                (k, v) for k, v in all_results.items() if OPS_VERY_FAST <= v.ops_per_sec <= OPS_LIGHTNING_FAST
+            ],
+            "✅ Fast (1K-10K ops/sec)": [
+                (k, v) for k, v in all_results.items() if OPS_FAST <= v.ops_per_sec < OPS_VERY_FAST
+            ],
+            "🐌 Slow (<1K ops/sec)": [(k, v) for k, v in all_results.items() if v.ops_per_sec < OPS_FAST],
         }
 
         for category_name, operations in categories.items():
@@ -781,11 +810,11 @@ class BenchmarkSummary:
 
         for operation, info, pct_change in regressions:
             # Categorize impact
-            if pct_change > 25:
+            if pct_change > CRITICAL_REGRESSION:
                 impact = "🔴 Critical"
-            elif pct_change > 10:
+            elif pct_change > HIGH_REGRESSION:
                 impact = "🟠 High"
-            elif pct_change > 5:
+            elif pct_change > MEDIUM_REGRESSION:
                 impact = "🟡 Medium"
             else:
                 impact = "🟢 Low"

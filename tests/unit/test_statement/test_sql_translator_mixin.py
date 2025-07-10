@@ -51,8 +51,8 @@ class MockConfig(NoPoolSyncConfig[MockConnection, MockDriver]):
         self.connection_config = {"host": "localhost"}
         super().__init__()
 
-    connection_type: "type[MockConnection]" = MockConnection
-    driver_type: "type[MockDriver]" = MockDriver
+    connection_type: "ClassVar[type[MockConnection]]" = MockConnection
+    driver_type: "ClassVar[type[MockDriver]]" = MockDriver
 
     @property
     def connection_config_dict(self) -> dict[str, Any]:

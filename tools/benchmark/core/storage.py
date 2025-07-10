@@ -116,7 +116,7 @@ class BenchmarkStorage:
                 """,
                 [
                     run_id,
-                    dt.datetime.now(),
+                    dt.datetime.now(dt.timezone.utc),
                     benchmark_type,
                     adapter,
                     iterations,
@@ -223,7 +223,7 @@ class BenchmarkStorage:
         """Import legacy JSON results into DuckDB."""
         import uuid
 
-        with open(json_path) as f:
+        with json_path.open() as f:
             data = json.load(f)
 
         # Generate run ID

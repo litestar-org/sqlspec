@@ -4,7 +4,7 @@ import contextlib
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union, cast
 
 import oracledb
 from typing_extensions import NotRequired
@@ -17,7 +17,7 @@ from sqlspec.adapters.oracledb.driver import (
 )
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import DictRow, Empty
+from sqlspec.typing import DictRow
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from oracledb.pool import AsyncConnectionPool, ConnectionPool
 
 
-__all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "OracleAsyncConfig", "OracleSyncConfig")
+__all__ = ("OracleAsyncConfig", "OracleConnectionParams", "OraclePoolParams", "OracleSyncConfig")
 
 logger = logging.getLogger(__name__)
 
@@ -68,46 +68,7 @@ class OraclePoolParams(OracleConnectionParams, total=False):
     max_sessions_per_shard: NotRequired[int]
     soda_metadata_cache: NotRequired[bool]
     ping_interval: NotRequired[int]
-
-
-CONNECTION_FIELDS = frozenset(
-    {
-        "dsn",
-        "user",
-        "password",
-        "host",
-        "port",
-        "service_name",
-        "sid",
-        "wallet_location",
-        "wallet_password",
-        "config_dir",
-        "tcp_connect_timeout",
-        "retry_count",
-        "retry_delay",
-        "mode",
-        "events",
-        "edition",
-    }
-)
-
-POOL_FIELDS = CONNECTION_FIELDS.union(
-    {
-        "min",
-        "max",
-        "increment",
-        "threaded",
-        "getmode",
-        "homogeneous",
-        "timeout",
-        "wait_timeout",
-        "max_lifetime_session",
-        "session_callback",
-        "max_sessions_per_shard",
-        "soda_metadata_cache",
-        "ping_interval",
-    }
-)
+    extra: NotRequired[dict[str, Any]]
 
 
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool", OracleSyncDriver]):
@@ -116,8 +77,8 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
     is_async: ClassVar[bool] = False
     supports_connection_pooling: ClassVar[bool] = True
 
-    driver_type: type[OracleSyncDriver] = OracleSyncDriver
-    connection_type: type[OracleSyncConnection] = OracleSyncConnection
+    driver_type: ClassVar[type[OracleSyncDriver]] = OracleSyncDriver
+    connection_type: ClassVar[type[OracleSyncConnection]] = OracleSyncConnection
 
     # Parameter style support information
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_colon", "positional_colon")
@@ -128,124 +89,46 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
 
     def __init__(
         self,
+        *,
+        pool_instance: "Optional[ConnectionPool]" = None,
+        pool_config: "Optional[Union[OraclePoolParams, dict[str, Any]]]" = None,
         statement_config: "Optional[SQLConfig]" = None,
         default_row_type: "type[DictRow]" = DictRow,
-        # Connection parameters
-        dsn: Optional[str] = None,
-        user: Optional[str] = None,
-        password: Optional[str] = None,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
-        service_name: Optional[str] = None,
-        sid: Optional[str] = None,
-        wallet_location: Optional[str] = None,
-        wallet_password: Optional[str] = None,
-        config_dir: Optional[str] = None,
-        tcp_connect_timeout: Optional[float] = None,
-        retry_count: Optional[int] = None,
-        retry_delay: Optional[int] = None,
-        mode: Optional["AuthMode"] = None,
-        events: Optional[bool] = None,
-        edition: Optional[str] = None,
-        # Pool parameters
-        min: Optional[int] = None,
-        max: Optional[int] = None,
-        increment: Optional[int] = None,
-        threaded: Optional[bool] = None,
-        getmode: Optional[int] = None,
-        homogeneous: Optional[bool] = None,
-        timeout: Optional[int] = None,
-        wait_timeout: Optional[int] = None,
-        max_lifetime_session: Optional[int] = None,
-        session_callback: Optional["Callable[[Any, Any], None]"] = None,
-        max_sessions_per_shard: Optional[int] = None,
-        soda_metadata_cache: Optional[bool] = None,
-        ping_interval: Optional[int] = None,
-        pool_instance: Optional["ConnectionPool"] = None,
-        **kwargs: Any,
+        migration_config: Optional[dict[str, Any]] = None,
+        enable_adapter_cache: bool = True,
+        adapter_cache_size: int = 1000,
     ) -> None:
         """Initialize Oracle synchronous configuration.
 
         Args:
+            pool_config: Pool configuration parameters
+            pool_instance: Existing pool instance to use
             statement_config: Default SQL statement configuration
             default_row_type: Default row type for results
-            dsn: Connection string for the database
-            user: Username for database authentication
-            password: Password for database authentication
-            host: Database server hostname
-            port: Database server port number
-            service_name: Oracle service name
-            sid: Oracle System ID (SID)
-            wallet_location: Location of Oracle Wallet
-            wallet_password: Password for accessing Oracle Wallet
-            config_dir: Directory containing Oracle configuration files
-            tcp_connect_timeout: Timeout for establishing TCP connections
-            retry_count: Number of attempts to connect
-            retry_delay: Time in seconds between connection attempts
-            mode: Session mode (SYSDBA, SYSOPER, etc.)
-            events: If True, enables Oracle events for FAN and RLB
-            edition: Edition name for edition-based redefinition
-            min: Minimum number of connections in the pool
-            max: Maximum number of connections in the pool
-            increment: Number of connections to create when pool needs to grow
-            threaded: Whether the pool should be threaded
-            getmode: How connections are returned from the pool
-            homogeneous: Whether all connections use the same credentials
-            timeout: Time in seconds after which idle connections are closed
-            wait_timeout: Time in seconds to wait for an available connection
-            max_lifetime_session: Maximum time in seconds that a connection can remain in the pool
-            session_callback: Callback function called when a connection is returned to the pool
-            max_sessions_per_shard: Maximum number of sessions per shard
-            soda_metadata_cache: Whether to enable SODA metadata caching
-            ping_interval: Interval for pinging pooled connections
-            pool_instance: Optional existing connection pool instance
-            **kwargs: Additional parameters (stored in extras)
+            migration_config: Migration configuration
+            enable_adapter_cache: Enable SQL compilation caching
+            adapter_cache_size: Max cached SQL statements
         """
-        # Store connection parameters as instance attributes
-        self.dsn = dsn
-        self.user = user
-        self.password = password
-        self.host = host
-        self.port = port
-        self.service_name = service_name
-        self.sid = sid
-        self.wallet_location = wallet_location
-        self.wallet_password = wallet_password
-        self.config_dir = config_dir
-        self.tcp_connect_timeout = tcp_connect_timeout
-        self.retry_count = retry_count
-        self.retry_delay = retry_delay
-        self.mode = mode
-        self.events = events
-        self.edition = edition
+        # Store the pool config as a dict and extract/merge extras
+        self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
+        if "extra" in self.pool_config:
+            extras = self.pool_config.pop("extra")
+            self.pool_config.update(extras)
 
-        # Store pool parameters as instance attributes
-        self.min = min
-        self.max = max
-        self.increment = increment
-        self.threaded = threaded
-        self.getmode = getmode
-        self.homogeneous = homogeneous
-        self.timeout = timeout
-        self.wait_timeout = wait_timeout
-        self.max_lifetime_session = max_lifetime_session
-        self.session_callback = session_callback
-        self.max_sessions_per_shard = max_sessions_per_shard
-        self.soda_metadata_cache = soda_metadata_cache
-        self.ping_interval = ping_interval
-
-        self.extras = kwargs or {}
-
-        # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
 
-        super().__init__()
+        super().__init__(
+            pool_instance=pool_instance,
+            migration_config=migration_config,
+            enable_adapter_cache=enable_adapter_cache,
+            adapter_cache_size=adapter_cache_size,
+        )
 
     def _create_pool(self) -> "ConnectionPool":
         """Create the actual connection pool."""
 
-        return oracledb.create_pool(**self.connection_config_dict)
+        return oracledb.create_pool(**dict(self.pool_config))
 
     def _close_pool(self) -> None:
         """Close the actual connection pool."""
@@ -326,42 +209,6 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         namespace.update({"OracleSyncConnection": OracleSyncConnection, "OracleAsyncConnection": OracleAsyncConnection})
         return namespace
 
-    @property
-    def connection_config_dict(self) -> dict[str, Any]:
-        """Return the connection configuration as a dict for Oracle operations.
-
-        Returns all configuration parameters merged together.
-        """
-        # Gather non-None parameters from all fields (connection + pool)
-        config = {
-            field: getattr(self, field)
-            for field in CONNECTION_FIELDS
-            if getattr(self, field, None) is not None and getattr(self, field) is not Empty
-        }
-
-        # Merge extras parameters
-        config.update(self.extras)
-
-        return config
-
-    @property
-    def pool_config_dict(self) -> dict[str, Any]:
-        """Return the pool configuration as a dict for Oracle operations.
-
-        Returns all configuration parameters merged together.
-        """
-        # Gather non-None parameters from all fields (connection + pool)
-        config = {
-            field: getattr(self, field)
-            for field in POOL_FIELDS
-            if getattr(self, field, None) is not None and getattr(self, field) is not Empty
-        }
-
-        # Merge extras parameters
-        config.update(self.extras)
-
-        return config
-
 
 class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnectionPool", OracleAsyncDriver]):
     """Configuration for Oracle asynchronous database connections with direct field-based configuration."""
@@ -369,8 +216,8 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
     is_async: ClassVar[bool] = True
     supports_connection_pooling: ClassVar[bool] = True
 
-    connection_type: type[OracleAsyncConnection] = OracleAsyncConnection
-    driver_type: type[OracleAsyncDriver] = OracleAsyncDriver
+    connection_type: ClassVar[type[OracleAsyncConnection]] = OracleAsyncConnection
+    driver_type: ClassVar[type[OracleAsyncDriver]] = OracleAsyncDriver
 
     # Parameter style support information
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_colon", "positional_colon")
@@ -381,152 +228,46 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
 
     def __init__(
         self,
+        *,
+        pool_config: "Optional[Union[OraclePoolParams, dict[str, Any]]]" = None,
+        pool_instance: "Optional[AsyncConnectionPool]" = None,
         statement_config: "Optional[SQLConfig]" = None,
         default_row_type: "type[DictRow]" = DictRow,
-        # Connection parameters
-        dsn: Optional[str] = None,
-        user: Optional[str] = None,
-        password: Optional[str] = None,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
-        service_name: Optional[str] = None,
-        sid: Optional[str] = None,
-        wallet_location: Optional[str] = None,
-        wallet_password: Optional[str] = None,
-        config_dir: Optional[str] = None,
-        tcp_connect_timeout: Optional[float] = None,
-        retry_count: Optional[int] = None,
-        retry_delay: Optional[int] = None,
-        mode: Optional["AuthMode"] = None,
-        events: Optional[bool] = None,
-        edition: Optional[str] = None,
-        # Pool parameters
-        min: Optional[int] = None,
-        max: Optional[int] = None,
-        increment: Optional[int] = None,
-        threaded: Optional[bool] = None,
-        getmode: Optional[int] = None,
-        homogeneous: Optional[bool] = None,
-        timeout: Optional[int] = None,
-        wait_timeout: Optional[int] = None,
-        max_lifetime_session: Optional[int] = None,
-        session_callback: Optional["Callable[[Any, Any], None]"] = None,
-        max_sessions_per_shard: Optional[int] = None,
-        soda_metadata_cache: Optional[bool] = None,
-        ping_interval: Optional[int] = None,
-        pool_instance: Optional["AsyncConnectionPool"] = None,
-        **kwargs: Any,
+        migration_config: Optional[dict[str, Any]] = None,
+        enable_adapter_cache: bool = True,
+        adapter_cache_size: int = 1000,
     ) -> None:
         """Initialize Oracle asynchronous configuration.
 
         Args:
+            pool_config: Pool configuration parameters
+            pool_instance: Existing pool instance to use
             statement_config: Default SQL statement configuration
             default_row_type: Default row type for results
-            dsn: Connection string for the database
-            user: Username for database authentication
-            password: Password for database authentication
-            host: Database server hostname
-            port: Database server port number
-            service_name: Oracle service name
-            sid: Oracle System ID (SID)
-            wallet_location: Location of Oracle Wallet
-            wallet_password: Password for accessing Oracle Wallet
-            config_dir: Directory containing Oracle configuration files
-            tcp_connect_timeout: Timeout for establishing TCP connections
-            retry_count: Number of attempts to connect
-            retry_delay: Time in seconds between connection attempts
-            mode: Session mode (SYSDBA, SYSOPER, etc.)
-            events: If True, enables Oracle events for FAN and RLB
-            edition: Edition name for edition-based redefinition
-            min: Minimum number of connections in the pool
-            max: Maximum number of connections in the pool
-            increment: Number of connections to create when pool needs to grow
-            threaded: Whether the pool should be threaded
-            getmode: How connections are returned from the pool
-            homogeneous: Whether all connections use the same credentials
-            timeout: Time in seconds after which idle connections are closed
-            wait_timeout: Time in seconds to wait for an available connection
-            max_lifetime_session: Maximum time in seconds that a connection can remain in the pool
-            session_callback: Callback function called when a connection is returned to the pool
-            max_sessions_per_shard: Maximum number of sessions per shard
-            soda_metadata_cache: Whether to enable SODA metadata caching
-            ping_interval: Interval for pinging pooled connections
-            pool_instance: Optional existing async connection pool instance
-            **kwargs: Additional parameters (stored in extras)
+            migration_config: Migration configuration
+            enable_adapter_cache: Enable SQL compilation caching
+            adapter_cache_size: Max cached SQL statements
         """
-        # Store connection parameters as instance attributes
-        self.dsn = dsn
-        self.user = user
-        self.password = password
-        self.host = host
-        self.port = port
-        self.service_name = service_name
-        self.sid = sid
-        self.wallet_location = wallet_location
-        self.wallet_password = wallet_password
-        self.config_dir = config_dir
-        self.tcp_connect_timeout = tcp_connect_timeout
-        self.retry_count = retry_count
-        self.retry_delay = retry_delay
-        self.mode = mode
-        self.events = events
-        self.edition = edition
+        # Store the pool config as a dict and extract/merge extras
+        self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
+        if "extra" in self.pool_config:
+            extras = self.pool_config.pop("extra")
+            self.pool_config.update(extras)
 
-        # Store pool parameters as instance attributes
-        self.min = min
-        self.max = max
-        self.increment = increment
-        self.threaded = threaded
-        self.getmode = getmode
-        self.homogeneous = homogeneous
-        self.timeout = timeout
-        self.wait_timeout = wait_timeout
-        self.max_lifetime_session = max_lifetime_session
-        self.session_callback = session_callback
-        self.max_sessions_per_shard = max_sessions_per_shard
-        self.soda_metadata_cache = soda_metadata_cache
-        self.ping_interval = ping_interval
-
-        self.extras = kwargs or {}
-
-        # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
 
-        super().__init__()
-
-    @property
-    def connection_config_dict(self) -> dict[str, Any]:
-        """Return the connection configuration as a dict for Oracle async operations.
-
-        Returns all configuration parameters merged together.
-        """
-        # Gather non-None parameters
-        config = {field: getattr(self, field) for field in CONNECTION_FIELDS if getattr(self, field, None) is not None}
-
-        # Merge extras parameters
-        config.update(self.extras)
-
-        return config
-
-    @property
-    def pool_config_dict(self) -> dict[str, Any]:
-        """Return the connection configuration as a dict for Oracle async operations.
-
-        Returns all configuration parameters merged together.
-        """
-        # Gather non-None parameters
-        config = {field: getattr(self, field) for field in POOL_FIELDS if getattr(self, field, None) is not None}
-
-        # Merge extras parameters
-        config.update(self.extras)
-
-        return config
+        super().__init__(
+            pool_instance=pool_instance,
+            migration_config=migration_config,
+            enable_adapter_cache=enable_adapter_cache,
+            adapter_cache_size=adapter_cache_size,
+        )
 
     async def _create_pool(self) -> "AsyncConnectionPool":
         """Create the actual async connection pool."""
 
-        return oracledb.create_pool_async(**self.pool_config_dict)
+        return oracledb.create_pool_async(**dict(self.pool_config))
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""

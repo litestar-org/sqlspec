@@ -20,7 +20,7 @@ class ContainerManager:
     def is_docker_running(self) -> bool:
         """Check if Docker daemon is running."""
         try:
-            subprocess.run(["docker", "info"], check=True, capture_output=True, text=True)
+            subprocess.run(["docker", "info"], check=True, capture_output=True, text=True)  # noqa: S607
             return True
         except (subprocess.CalledProcessError, FileNotFoundError):
             return False
@@ -29,7 +29,7 @@ class ContainerManager:
         """Check if a specific container is running."""
         try:
             result = subprocess.run(
-                ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+                ["docker", "inspect", "-f", "{{.State.Running}}", container_name],  # noqa: S607
                 check=True,
                 capture_output=True,
                 text=True,
@@ -66,7 +66,7 @@ class ContainerManager:
         port = self.find_available_port(self.docker_config.POSTGRES_DEFAULT_PORT)
 
         # Remove existing container if it exists
-        subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True, text=True)
+        subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True, text=True)  # noqa: S607
 
         # Start container
         cmd = [
@@ -113,7 +113,7 @@ class ContainerManager:
         port = self.find_available_port(self.docker_config.ORACLE_DEFAULT_PORT)
 
         # Remove existing container if it exists
-        subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True, text=True)
+        subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True, text=True)  # noqa: S607
 
         # Start container
         cmd = [
@@ -147,8 +147,8 @@ class ContainerManager:
     def stop_container(self, container_name: str) -> None:
         """Stop and remove a container."""
         try:
-            subprocess.run(["docker", "stop", container_name], check=True, capture_output=True, text=True)
-            subprocess.run(["docker", "rm", container_name], check=True, capture_output=True, text=True)
+            subprocess.run(["docker", "stop", container_name], check=True, capture_output=True, text=True)  # noqa: S607
+            subprocess.run(["docker", "rm", container_name], check=True, capture_output=True, text=True)  # noqa: S607
             self.console.print(f"[green]Stopped container '{container_name}'[/green]")
         except subprocess.CalledProcessError:
             pass  # Container might not exist
@@ -169,20 +169,25 @@ class ContainerManager:
         import psycopg
 
         start_time = time.time()
+        conn_str = (
+            f"host={host} port={port} "
+            f"user={self.docker_config.POSTGRES_DEFAULT_USER} "
+            f"password={self.docker_config.POSTGRES_DEFAULT_PASSWORD} "
+            f"dbname={self.docker_config.POSTGRES_DEFAULT_DB}"
+        )
 
-        while time.time() - start_time < timeout:
+        def _test_connection() -> bool:
             try:
-                conn_str = (
-                    f"host={host} port={port} "
-                    f"user={self.docker_config.POSTGRES_DEFAULT_USER} "
-                    f"password={self.docker_config.POSTGRES_DEFAULT_PASSWORD} "
-                    f"dbname={self.docker_config.POSTGRES_DEFAULT_DB}"
-                )
                 with psycopg.connect(conn_str) as conn, conn.cursor() as cur:
                     cur.execute("SELECT 1")
                     return True
             except Exception:
-                time.sleep(1)
+                return False
+
+        while time.time() - start_time < timeout:
+            if _test_connection():
+                return True
+            time.sleep(1)
 
         return False
 

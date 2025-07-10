@@ -145,10 +145,11 @@ class PsycopgSyncDriver(
         # Use provided connection or driver's default connection
         conn = connection if connection is not None else self._connection(None)
 
-        # Handle COPY commands separately (they don't use transactions)
-        sql_upper = sql.strip().upper()
-        if sql_upper.startswith("COPY") and ("FROM STDIN" in sql_upper or "TO STDOUT" in sql_upper):
-            return self._handle_copy_command(sql, parameters, conn)
+        # Check if this is a COPY command based on context metadata
+        context = getattr(statement, "_processing_context", None)
+        if context and context.metadata.get("is_copy_command"):
+            copy_data = context.metadata.get("copy_data", parameters)
+            return self._handle_copy_command(sql, copy_data, conn)
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # For Psycopg, pass parameters directly to the driver
@@ -180,14 +181,13 @@ class PsycopgSyncDriver(
 
     def _handle_copy_command(self, sql: str, data: Any, connection: PsycopgSyncConnection) -> SQLResult[RowT]:
         """Handle PostgreSQL COPY commands using cursor.copy() method."""
-        sql_upper = sql.strip().upper()
-
         # Handle case where data is wrapped in a single-element tuple (from positional args)
         if isinstance(data, tuple) and len(data) == 1:
             data = data[0]
 
         with connection.cursor() as cursor:
-            if "TO STDOUT" in sql_upper:
+            # Check if it's TO STDOUT by looking for it in SQL (safe after AST validation)
+            if "TO STDOUT" in sql.upper():
                 # COPY TO STDOUT - read data from the database
                 output_data: list[Any] = []
                 with cursor.copy(cast("Query", sql)) as copy:
@@ -591,6 +591,14 @@ class PsycopgAsyncDriver(
         if isinstance(params, tuple) and len(params) == 1 and isinstance(params[0], (tuple, dict, list)):
             params = params[0]
 
+        # Check if this is a COPY command based on context metadata
+        context = getattr(statement, "_processing_context", None)
+        if context and context.metadata.get("is_copy_command"):
+            # For COPY commands, pass the data from context metadata
+            exec_kwargs = {k: v for k, v in kwargs.items() if k != "parameters"}
+            exec_kwargs["_copy_data"] = context.metadata.get("copy_data", params)
+            return await self._execute(sql, None, statement, connection=connection, **exec_kwargs)
+
         # Remove 'parameters' from kwargs to avoid conflicts in _execute method signature
         exec_kwargs = {k: v for k, v in kwargs.items() if k != "parameters"}
         return await self._execute(sql, params, statement, connection=connection, **exec_kwargs)
@@ -606,10 +614,15 @@ class PsycopgAsyncDriver(
         # Use provided connection or driver's default connection
         conn = connection if connection is not None else self._connection(None)
 
-        # Handle COPY commands separately (they don't use transactions)
-        sql_upper = sql.strip().upper()
-        if sql_upper.startswith("COPY") and ("FROM STDIN" in sql_upper or "TO STDOUT" in sql_upper):
-            return await self._handle_copy_command(sql, parameters, conn)
+        # Check if this is a COPY command based on context metadata or kwargs
+        context = getattr(statement, "_processing_context", None)
+        if context and context.metadata.get("is_copy_command"):
+            copy_data = context.metadata.get("copy_data", parameters)
+            return await self._handle_copy_command(sql, copy_data, conn)
+        if "_copy_data" in kwargs:
+            # Handle case where copy data is passed via kwargs from _execute_statement
+            copy_data = kwargs.get("_copy_data", parameters)
+            return await self._handle_copy_command(sql, copy_data, conn)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
             # For Psycopg, pass parameters directly to the driver
@@ -653,14 +666,13 @@ class PsycopgAsyncDriver(
 
     async def _handle_copy_command(self, sql: str, data: Any, connection: PsycopgAsyncConnection) -> SQLResult[RowT]:
         """Handle PostgreSQL COPY commands using cursor.copy() method."""
-        sql_upper = sql.strip().upper()
-
         # Handle case where data is wrapped in a single-element tuple (from positional args)
         if isinstance(data, tuple) and len(data) == 1:
             data = data[0]
 
         async with connection.cursor() as cursor:
-            if "TO STDOUT" in sql_upper:
+            # Check if it's TO STDOUT by looking for it in SQL (safe after AST validation)
+            if "TO STDOUT" in sql.upper():
                 # COPY TO STDOUT - read data from the database
                 output_data = []
                 async with cursor.copy(cast("Query", sql)) as copy:

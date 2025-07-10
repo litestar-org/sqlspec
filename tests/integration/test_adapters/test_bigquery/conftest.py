@@ -23,9 +23,11 @@ def table_schema_prefix(bigquery_service: BigQueryService) -> str:
 def bigquery_session(bigquery_service: BigQueryService, table_schema_prefix: str) -> BigQueryConfig:
     """Create a BigQuery sync config session."""
     return BigQueryConfig(
-        project=bigquery_service.project,
-        dataset_id=table_schema_prefix,
-        client_options=ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
-        credentials=AnonymousCredentials(),  # type: ignore[no-untyped-call]
+        connection_config={
+            "project": bigquery_service.project,
+            "dataset_id": table_schema_prefix,
+            "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
+            "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
+        },
         statement_config=SQLConfig(dialect="bigquery"),
     )

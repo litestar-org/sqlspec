@@ -19,13 +19,15 @@ async def asyncpg_params_session(postgres_service: PostgresService) -> "AsyncGen
     Optimized to avoid connection pool exhaustion.
     """
     config = AsyncpgConfig(
-        host=postgres_service.host,
-        port=postgres_service.port,
-        user=postgres_service.user,
-        password=postgres_service.password,
-        database=postgres_service.database,
-        min_size=1,  # Minimal pool size
-        max_size=3,  # Very small pool to conserve connections
+        pool_config={
+            "host": postgres_service.host,
+            "port": postgres_service.port,
+            "user": postgres_service.user,
+            "password": postgres_service.password,
+            "database": postgres_service.database,
+            "min_size": 1,  # Minimal pool size
+            "max_size": 3,  # Very small pool to conserve connections
+        },
         statement_config=SQLConfig(enable_transformations=False),
     )
 

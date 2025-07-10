@@ -3,30 +3,29 @@
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union
 
 from asyncpg import Connection, Record
 from asyncpg import create_pool as asyncpg_create_pool
 from asyncpg.connection import ConnectionMeta
 from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
-from typing_extensions import NotRequired, Unpack
+from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncpg.driver import AsyncpgConnection, AsyncpgDriver
 from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import DictRow, Empty
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from asyncio.events import AbstractEventLoop
 
 
-__all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "AsyncpgConfig")
+__all__ = ("AsyncpgConfig", "AsyncpgConnectionConfig", "AsyncpgPoolConfig")
 
 logger = logging.getLogger("sqlspec")
 
 
-class AsyncpgConnectionParams(TypedDict, total=False):
+class AsyncpgConnectionConfig(TypedDict, total=False):
     """TypedDict for AsyncPG connection parameters."""
 
     dsn: NotRequired[str]
@@ -35,7 +34,7 @@ class AsyncpgConnectionParams(TypedDict, total=False):
     user: NotRequired[str]
     password: NotRequired[str]
     database: NotRequired[str]
-    ssl: NotRequired[Any]  # Can be bool, SSLContext, or specific string
+    ssl: NotRequired[Any]
     passfile: NotRequired[str]
     direct_tls: NotRequired[bool]
     connect_timeout: NotRequired[float]
@@ -46,7 +45,7 @@ class AsyncpgConnectionParams(TypedDict, total=False):
     server_settings: NotRequired[dict[str, str]]
 
 
-class AsyncpgPoolParams(AsyncpgConnectionParams, total=False):
+class AsyncpgPoolConfig(AsyncpgConnectionConfig, total=False):
     """TypedDict for AsyncPG pool parameters, inheriting connection parameters."""
 
     min_size: NotRequired[int]
@@ -58,181 +57,74 @@ class AsyncpgPoolParams(AsyncpgConnectionParams, total=False):
     loop: NotRequired["AbstractEventLoop"]
     connection_class: NotRequired[type["AsyncpgConnection"]]
     record_class: NotRequired[type[Record]]
-
-
-class DriverParameters(AsyncpgPoolParams, total=False):
-    """TypedDict for additional parameters that can be passed to AsyncPG."""
-
-    statement_config: NotRequired[SQLConfig]
-    default_row_type: NotRequired[type[DictRow]]
-    json_serializer: NotRequired[Callable[[Any], str]]
-    json_deserializer: NotRequired[Callable[[str], Any]]
-    pool_instance: NotRequired["Pool[Record]"]
-    extras: NotRequired[dict[str, Any]]
-
-
-CONNECTION_FIELDS = {
-    "dsn",
-    "host",
-    "port",
-    "user",
-    "password",
-    "database",
-    "ssl",
-    "passfile",
-    "direct_tls",
-    "connect_timeout",
-    "command_timeout",
-    "statement_cache_size",
-    "max_cached_statement_lifetime",
-    "max_cacheable_statement_size",
-    "server_settings",
-}
-POOL_FIELDS = CONNECTION_FIELDS.union(
-    {
-        "min_size",
-        "max_size",
-        "max_queries",
-        "max_inactive_connection_lifetime",
-        "setup",
-        "init",
-        "loop",
-        "connection_class",
-        "record_class",
-    }
-)
+    extra: NotRequired[dict[str, Any]]
 
 
 class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", AsyncpgDriver]):
     """Configuration for AsyncPG database connections using TypedDict."""
 
-    driver_type: type[AsyncpgDriver] = AsyncpgDriver
-    connection_type: type[AsyncpgConnection] = type(AsyncpgConnection)  # type: ignore[assignment]
+    driver_type: "ClassVar[type[AsyncpgDriver]]" = AsyncpgDriver
+    connection_type: ClassVar[type[AsyncpgConnection]] = type(AsyncpgConnection)  # type: ignore[assignment]
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("numeric",)
     default_parameter_style: ClassVar[str] = "numeric"
 
-    def __init__(self, **kwargs: "Unpack[DriverParameters]") -> None:
-        """Initialize AsyncPG configuration."""
-        # Known fields that are part of the config
-        known_fields = {
-            "dsn",
-            "host",
-            "port",
-            "user",
-            "password",
-            "database",
-            "ssl",
-            "passfile",
-            "direct_tls",
-            "connect_timeout",
-            "command_timeout",
-            "statement_cache_size",
-            "max_cached_statement_lifetime",
-            "max_cacheable_statement_size",
-            "server_settings",
-            "min_size",
-            "max_size",
-            "max_queries",
-            "max_inactive_connection_lifetime",
-            "setup",
-            "init",
-            "loop",
-            "connection_class",
-            "record_class",
-            "extras",
-            "statement_config",
-            "default_row_type",
-            "json_serializer",
-            "json_deserializer",
-            "pool_instance",
-        }
+    def __init__(
+        self,
+        *,
+        pool_instance: "Optional[Pool[Record]]" = None,
+        pool_config: "Optional[Union[AsyncpgPoolConfig, dict[str, Any]]]" = None,
+        statement_config: "Optional[SQLConfig]" = None,
+        default_row_type: type[Any] = dict,
+        migration_config: "Optional[dict[str, Any]]" = None,
+        enable_adapter_cache: bool = True,
+        adapter_cache_size: int = 1000,
+        json_serializer: "Optional[Callable[[Any], str]]" = None,
+        json_deserializer: "Optional[Callable[[str], Any]]" = None,
+    ) -> None:
+        """Initialize AsyncPG configuration.
 
-        self.dsn = kwargs.get("dsn")
-        self.host = kwargs.get("host")
-        self.port = kwargs.get("port")
-        self.user = kwargs.get("user")
-        self.password = kwargs.get("password")
-        self.database = kwargs.get("database")
-        self.ssl = kwargs.get("ssl")
-        self.passfile = kwargs.get("passfile")
-        self.direct_tls = kwargs.get("direct_tls")
-        self.connect_timeout = kwargs.get("connect_timeout")
-        self.command_timeout = kwargs.get("command_timeout")
-        self.statement_cache_size = kwargs.get("statement_cache_size")
-        self.max_cached_statement_lifetime = kwargs.get("max_cached_statement_lifetime")
-        self.max_cacheable_statement_size = kwargs.get("max_cacheable_statement_size")
-        self.server_settings = kwargs.get("server_settings")
-        self.min_size = kwargs.get("min_size")
-        self.max_size = kwargs.get("max_size")
-        self.max_queries = kwargs.get("max_queries")
-        self.max_inactive_connection_lifetime = kwargs.get("max_inactive_connection_lifetime")
-        self.setup = kwargs.get("setup")
-        self.init = kwargs.get("init")
-        self.loop = kwargs.get("loop")
-        self.connection_class = kwargs.get("connection_class")
-        self.record_class = kwargs.get("record_class")
-
-        # Collect unknown parameters into extras
-        provided_extras = kwargs.get("extras", {})
-        unknown_params = {k: v for k, v in kwargs.items() if k not in known_fields}
-        self.extras = {**provided_extras, **unknown_params}
-
-        self.statement_config = (
-            SQLConfig() if kwargs.get("statement_config") is None else kwargs.get("statement_config")
-        )
-        self.default_row_type = kwargs.get("default_row_type", dict[str, Any])
-        self.json_serializer = kwargs.get("json_serializer", to_json)
-        self.json_deserializer = kwargs.get("json_deserializer", from_json)
-        pool_instance_from_kwargs = kwargs.get("pool_instance")
-
-        super().__init__()
-
-        # Override prepared statements to True for PostgreSQL since it supports them well
-        self.enable_prepared_statements = kwargs.get("enable_prepared_statements", True)  # type: ignore[assignment]
-
-        if pool_instance_from_kwargs is not None:
-            self.pool_instance = pool_instance_from_kwargs
-
-    @property
-    def connection_config_dict(self) -> dict[str, Any]:
-        """Return the connection configuration as a dict for asyncpg.connect().
-
-        This method filters out pool-specific parameters that are not valid for asyncpg.connect().
+        Args:
+            pool_config: Pool configuration parameters (TypedDict or dict)
+            pool_instance: Existing pool instance to use
+            statement_config: SQL statement configuration
+            default_row_type: Default row type for results
+            json_serializer: JSON serialization function
+            json_deserializer: JSON deserialization function
+            migration_config: Migration configuration
+            enable_adapter_cache: Enable SQL compilation caching
+            adapter_cache_size: Max cached SQL statements
         """
-        # Gather non-None connection parameters
-        config = {
-            field: getattr(self, field)
-            for field in CONNECTION_FIELDS
-            if getattr(self, field, None) is not None and getattr(self, field) is not Empty
-        }
+        # Store the pool config as a dict
+        self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
 
-        config.update(self.extras)
+        self.statement_config = statement_config or SQLConfig()
+        self.default_row_type = default_row_type
+        self.json_serializer = json_serializer or to_json
+        self.json_deserializer = json_deserializer or from_json
+        super().__init__(
+            pool_instance=pool_instance,
+            migration_config=migration_config,
+            enable_adapter_cache=enable_adapter_cache,
+            adapter_cache_size=adapter_cache_size,
+        )
 
-        return config
-
-    @property
-    def pool_config_dict(self) -> dict[str, Any]:
-        """Return the full pool configuration as a dict for asyncpg.create_pool().
+    def _get_pool_config_dict(self) -> dict[str, Any]:
+        """Get pool configuration as plain dict for external library.
 
         Returns:
-            A dictionary containing all pool configuration parameters.
+            Dictionary with pool parameters, filtering out None values.
         """
-        # All AsyncPG parameter names (connection + pool)
-        config = {
-            field: getattr(self, field)
-            for field in POOL_FIELDS
-            if getattr(self, field, None) is not None and getattr(self, field) is not Empty
-        }
-
-        # Merge extras parameters
-        config.update(self.extras)
-
-        return config
+        config: dict[str, Any] = dict(self.pool_config)
+        # Extract extra parameters if they exist
+        extras = config.pop("extra", {})
+        config.update(extras)
+        # Filter out None values since external libraries may not handle them
+        return {k: v for k, v in config.items() if v is not None}
 
     async def _create_pool(self) -> "Pool[Record]":
         """Create the actual async connection pool."""
-        pool_args = self.pool_config_dict
-        return await asyncpg_create_pool(**pool_args)
+        config = self._get_pool_config_dict()
+        return await asyncpg_create_pool(**config)
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
@@ -240,7 +132,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             await self.pool_instance.close()
 
     async def create_connection(self) -> AsyncpgConnection:
-        """Create a single async connection (not from pool).
+        """Create a single async connection from the pool.
 
         Returns:
             An AsyncPG connection instance.
@@ -271,7 +163,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                 await self.pool_instance.release(connection)
 
     @asynccontextmanager
-    async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AsyncpgDriver, None]:
+    async def provide_session(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[AsyncpgDriver, None]":
         """Provide an async driver session context manager.
 
         Args:
@@ -283,7 +175,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """
         async with self.provide_connection(*args, **kwargs) as connection:
             statement_config = self.statement_config
-            # Inject parameter style info if not already set
             if statement_config is not None and statement_config.allowed_parameter_styles is None:
                 statement_config = statement_config.replace(
                     allowed_parameter_styles=self.supported_parameter_styles,

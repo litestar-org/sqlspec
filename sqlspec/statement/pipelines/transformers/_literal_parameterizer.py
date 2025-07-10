@@ -784,13 +784,11 @@ class ParameterizeLiterals(ProcessorProtocol):
         # Check if this literal is being used as an alias value in SELECT
         # e.g., 'computed' as process_status should be preserved
         parent = get_literal_parent(literal, None)
-        if parent is not None:
-            # Check if it's an Alias node and the literal is the expression (not the alias name)
-            if isinstance(parent, exp.Alias) and parent.this == literal:
-                # Check if this alias is in a SELECT clause
-                for ancestor in context.parent_stack:
-                    if isinstance(ancestor, exp.Select):
-                        return True
+        if parent is not None and isinstance(parent, exp.Alias) and parent.this == literal:
+            # Check if this alias is in a SELECT clause
+            for ancestor in context.parent_stack:
+                if isinstance(ancestor, exp.Select):
+                    return True
 
         # Check parent context more intelligently
         for parent in context.parent_stack:
