@@ -4,7 +4,6 @@ This module provides protocols that can be used for static type checking
 and runtime isinstance() checks, replacing defensive hasattr() patterns.
 """
 
-from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Protocol, Union, runtime_checkable
 
 from typing_extensions import Self
@@ -15,7 +14,6 @@ if TYPE_CHECKING:
 
     from sqlglot import exp
 
-    from sqlspec.statement.pipelines.context import SQLProcessingContext
     from sqlspec.storage.capabilities import StorageCapabilities
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
@@ -46,7 +44,6 @@ __all__ = (
     "ObjectStoreItemProtocol",
     "ObjectStoreProtocol",
     "ParameterValueProtocol",
-    "ProcessorProtocol",
     "SQLBuilderProtocol",
     "SelectBuilderProtocol",
     "SyncCloseableConnectionProtocol",
@@ -188,23 +185,7 @@ class DictProtocol(Protocol):
     __dict__: dict[str, Any]
 
 
-class ProcessorProtocol(Protocol):
-    """Defines the interface for a single processing step in the SQL pipeline."""
-
-    @abstractmethod
-    def process(
-        self, expression: "Optional[exp.Expression]", context: "SQLProcessingContext"
-    ) -> "Optional[exp.Expression]":
-        """Processes an SQL expression.
-
-        Args:
-            expression: The SQL expression to process.
-            context: The SQLProcessingContext holding the current state and config.
-
-        Returns:
-            The (possibly modified) SQL expression for transformers, or None for validators/analyzers.
-        """
-        ...
+# ProcessorProtocol removed as part of pipeline removal in Phase 4
 
 
 @runtime_checkable

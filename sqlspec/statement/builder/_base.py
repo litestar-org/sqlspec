@@ -17,7 +17,7 @@ from sqlglot.optimizer import optimize
 from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.cache import optimized_expression_cache
+from sqlspec.statement.cache import expression_cache
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import RowT
 from sqlspec.utils.logging import get_logger
@@ -307,7 +307,7 @@ class QueryBuilder(ABC, Generic[RowT]):
         )
 
         # Check cache first
-        cached_optimized = optimized_expression_cache.get(cache_key)
+        cached_optimized = expression_cache.get(cache_key)
         if cached_optimized:
             logger.debug("Using cached optimized expression")
             return cast("exp.Expression", cached_optimized.copy())
@@ -319,7 +319,7 @@ class QueryBuilder(ABC, Generic[RowT]):
             )
 
             # Cache the optimized expression
-            optimized_expression_cache.set(cache_key, optimized.copy())
+            expression_cache.set(cache_key, optimized.copy())
 
         except Exception:
             # Continue with unoptimized query on failure

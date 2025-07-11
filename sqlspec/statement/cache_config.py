@@ -168,7 +168,7 @@ def update_cache_config(config: CacheConfig) -> None:
     _cache_config = config
 
     # Apply new configuration to caches
-    from sqlspec.statement.cache import ast_fragment_cache, optimized_expression_cache, sql_cache
+    from sqlspec.statement.cache import ast_fragment_cache, expression_cache, sql_cache
 
     if config.sql_cache_enabled:
         sql_cache.max_size = config.sql_cache_size
@@ -181,19 +181,19 @@ def update_cache_config(config: CacheConfig) -> None:
         ast_fragment_cache.clear()
 
     if config.optimized_cache_enabled:
-        optimized_expression_cache.max_size = config.optimized_cache_size
+        expression_cache.max_size = config.optimized_cache_size
     else:
-        optimized_expression_cache.clear()
+        expression_cache.clear()
 
 
 def get_cache_stats() -> CacheStats:
     """Get current cache statistics."""
-    from sqlspec.statement.cache import ast_fragment_cache, optimized_expression_cache, sql_cache
+    from sqlspec.statement.cache import ast_fragment_cache, expression_cache, sql_cache
 
     # Update sizes
     _cache_stats.sql_size = sql_cache.size
     _cache_stats.fragment_size = ast_fragment_cache.size
-    _cache_stats.optimized_size = optimized_expression_cache.size
+    _cache_stats.optimized_size = expression_cache.size
 
     # Update fragment cache stats
     if hasattr(ast_fragment_cache, "_hit_count"):

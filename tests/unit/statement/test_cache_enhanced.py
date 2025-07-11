@@ -1,7 +1,6 @@
 """Tests for enhanced caching functionality."""
 
 import threading
-import time
 from unittest.mock import patch
 
 import pytest
@@ -9,7 +8,7 @@ import sqlglot
 import sqlglot.expressions as exp
 from sqlglot.errors import ParseError
 
-from sqlspec.statement.cache import BaseStatementCache, FilteredASTCache
+from sqlspec.statement.cache import BaseStatementCache
 
 
 class TestBaseStatementCache:
@@ -98,18 +97,18 @@ class TestBaseStatementCache:
         stats_before = cache.get_stats()
         cache.get_or_parse("SELECT 1")  # miss - was evicted
         # After this, cache has [3, 4, 1] (SELECT 2 was evicted)
-        
+
         stats_after = cache.get_stats()
         # Verify it was a miss
         assert stats_after["miss_count"] == stats_before["miss_count"] + 1
         assert stats_after["hit_count"] == stats_before["hit_count"]
-        
+
         # Now let's verify what's still in cache
         # Based on LRU, cache should have [3, 4, 1]
         cache.get_or_parse("SELECT 2")  # miss - was evicted when we added 1
         cache.get_or_parse("SELECT 3")  # miss - was evicted when we added 2
         cache.get_or_parse("SELECT 4")  # miss - was evicted when we added 3
-        
+
         # Actually, with size 3 and continuous additions, everything gets evicted
         # This test needs to be rewritten to test actual LRU behavior properly
         stats_final = cache.get_stats()
@@ -146,14 +145,9 @@ class TestBaseStatementCache:
         cache = BaseStatementCache(max_size=10)
 
         # These should all use the same cache entry
-        sqls = [
-            "SELECT * FROM users",
-            "  SELECT * FROM users  ",
-            "\nSELECT * FROM users\n",
-            "SELECT * FROM users   "
-        ]
+        sqls = ["SELECT * FROM users", "  SELECT * FROM users  ", "\nSELECT * FROM users\n", "SELECT * FROM users   "]
 
-        expressions = [cache.get_or_parse(sql) for sql in sqls]
+        [cache.get_or_parse(sql) for sql in sqls]
 
         # Should only have one cache entry
         assert cache.size == 1
@@ -205,11 +199,11 @@ class TestBaseStatementCache:
     def test_double_check_locking(self):
         """Test double-check locking pattern helps reduce cache stampede."""
         cache = BaseStatementCache(max_size=10)
-        
+
         # Pre-populate cache with a value
         sql = "SELECT * FROM users"
         cache.get_or_parse(sql)
-        
+
         # Now test that multiple threads getting the same value don't parse
         parse_count = 0
         original_parse = sqlglot.parse_one
@@ -237,7 +231,7 @@ class TestBaseStatementCache:
 
             # Should not parse at all since value is cached
             assert parse_count == 0
-            
+
         # Also verify the cache had hits
         stats = cache.get_stats()
         assert stats["hit_count"] >= 10  # All threads should hit
@@ -283,176 +277,4 @@ class TestBaseStatementCache:
         assert stats["size"] == 2
         assert stats["hit_count"] == 1
         assert stats["miss_count"] == 2
-        assert stats["hit_rate"] == 1/3
-
-
-class TestFilteredASTCache:
-    """Test the FilteredASTCache class."""
-
-    def test_cache_initialization(self):
-        """Test cache initialization."""
-        cache = FilteredASTCache()
-        assert cache.size == 0
-        assert cache.hit_rate == 0.0
-        assert cache._max_size == 1000  # Default size
-
-    def test_get_and_set(self):
-        """Test basic get and set operations."""
-        cache = FilteredASTCache(max_size=10)
-
-        # Create a test expression
-        expr = exp.Select().select("*").from_("users").where("active = true")
-        key = (12345, ("filter1", "filter2"))
-
-        # Cache miss
-        result = cache.get(key)
-        assert result is None
-        assert cache._miss_count == 1
-
-        # Set value
-        cache.set(key, expr)
-        assert cache.size == 1
-
-        # Cache hit
-        result = cache.get(key)
-        assert result is not None
-        assert result is not expr  # Should be a copy
-        assert result.sql() == expr.sql()
-        assert cache._hit_count == 1
-
-    def test_cache_key_format(self):
-        """Test that cache keys work correctly."""
-        cache = FilteredASTCache(max_size=10)
-        expr = exp.Select().select("*").from_("users")
-
-        # Different key formats
-        keys = [
-            (12345, ()),  # No filters
-            (12345, ("filter1",)),  # Single filter
-            (12345, ("filter1", "filter2")),  # Multiple filters
-            (67890, ("filter1", "filter2")),  # Different base hash
-        ]
-
-        # Set all keys
-        for i, key in enumerate(keys):
-            cache.set(key, expr)
-
-        assert cache.size == len(keys)
-
-        # All should be retrievable
-        for key in keys:
-            result = cache.get(key)
-            assert result is not None
-
-    def test_lru_eviction(self):
-        """Test LRU eviction."""
-        cache = FilteredASTCache(max_size=3)
-        expr = exp.Select()
-
-        # Fill cache
-        cache.set((1, ()), expr)
-        cache.set((2, ()), expr)
-        cache.set((3, ()), expr)
-
-        assert cache.size == 3
-
-        # Add one more - should evict oldest
-        cache.set((4, ()), expr)
-        assert cache.size == 3
-
-        # First should be evicted
-        assert cache.get((1, ())) is None
-        assert cache.get((2, ())) is not None
-        assert cache.get((3, ())) is not None
-        assert cache.get((4, ())) is not None
-
-    def test_update_existing_key(self):
-        """Test that setting existing key doesn't increase size."""
-        cache = FilteredASTCache(max_size=10)
-        expr1 = exp.Select().select("1")
-        expr2 = exp.Select().select("2")
-        key = (12345, ("filter",))
-
-        # Set initial value
-        cache.set(key, expr1)
-        assert cache.size == 1
-
-        # Update with new value
-        cache.set(key, expr2)
-        assert cache.size == 1  # Size shouldn't increase
-
-        # Should get the original value (not updated)
-        result = cache.get(key)
-        assert result.sql() == expr1.sql()
-
-    def test_clear_cache(self):
-        """Test clearing the cache."""
-        cache = FilteredASTCache(max_size=10)
-        expr = exp.Select()
-
-        # Add entries
-        cache.set((1, ()), expr)
-        cache.set((2, ()), expr)
-        cache.set((3, ()), expr)
-
-        # Clear
-        cache.clear()
-
-        assert cache.size == 0
-        assert cache._hit_count == 0
-        assert cache._miss_count == 0
-
-        # Verify entries are gone
-        assert cache.get((1, ())) is None
-
-    def test_get_stats(self):
-        """Test cache statistics."""
-        cache = FilteredASTCache(max_size=10)
-        expr = exp.Select()
-
-        # Initial stats
-        stats = cache.get_stats()
-        assert stats["size"] == 0
-        assert stats["max_size"] == 10
-        assert stats["hit_count"] == 0
-        assert stats["miss_count"] == 0
-        assert stats["hit_rate"] == 0.0
-
-        # Add activity
-        cache.set((1, ()), expr)
-        cache.get((1, ()))  # Hit
-        cache.get((2, ()))  # Miss
-
-        stats = cache.get_stats()
-        assert stats["size"] == 1
-        assert stats["hit_count"] == 1
-        assert stats["miss_count"] == 1
-        assert stats["hit_rate"] == 0.5
-
-    def test_thread_safety(self):
-        """Test thread-safe operations."""
-        cache = FilteredASTCache(max_size=100)
-        errors = []
-
-        def worker(worker_id: int):
-            try:
-                expr = exp.Select().select(str(worker_id))
-                for i in range(10):
-                    key = (worker_id * 10 + i, ("filter",))
-                    cache.set(key, expr)
-                    result = cache.get(key)
-                    assert result is not None
-            except Exception as e:
-                errors.append(e)
-
-        # Launch threads
-        threads = []
-        for i in range(5):
-            t = threading.Thread(target=worker, args=(i,))
-            threads.append(t)
-            t.start()
-
-        for t in threads:
-            t.join()
-
-        assert len(errors) == 0
+        assert stats["hit_rate"] == 1 / 3

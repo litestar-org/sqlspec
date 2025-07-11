@@ -60,10 +60,12 @@ def compose_pipeline(steps: list[PipelineStep]) -> PipelineStep:
     Returns:
         Single function that applies all steps in sequence
     """
+
     def composed(context: SQLTransformContext) -> SQLTransformContext:
         for step in steps:
             context = step(context)
         return context
+
     return composed
 
 
@@ -92,6 +94,15 @@ def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformCont
         if isinstance(node, exp.Literal):
             # Skip literals that are already parameterized or special values
             if isinstance(node.parent, exp.Placeholder):
+                return node
+
+            # Skip literals in LIMIT, OFFSET, and other structural SQL contexts
+            parent = node.parent
+            if parent and isinstance(parent, (exp.Limit, exp.Offset)):
+                return node
+
+            # Skip numeric literals used as column references (e.g., ORDER BY 1)
+            if parent and isinstance(parent, exp.Order):
                 return node
 
             # Generate parameter name
@@ -145,8 +156,14 @@ def validate_step(context: SQLTransformContext) -> SQLTransformContext:
 
     # Define suspicious functions that might indicate security issues
     suspicious_functions = {
-        "sleep", "benchmark", "load_file", "outfile",
-        "dumpfile", "exec", "xp_cmdshell", "sp_executesql"
+        "sleep",
+        "benchmark",
+        "load_file",
+        "outfile",
+        "dumpfile",
+        "exec",
+        "xp_cmdshell",
+        "sp_executesql",
     }
 
     for node in context.current_expression.walk():
@@ -158,22 +175,18 @@ def validate_step(context: SQLTransformContext) -> SQLTransformContext:
 
         # Check for UNION injection patterns
         if isinstance(node, exp.Union) and isinstance(node.expression, exp.Select):
-                select_expr = node.expression
-                if hasattr(select_expr, "expressions"):
-                    null_count = sum(
-                        1 for expr in select_expr.expressions
-                        if isinstance(expr, exp.Null)
-                    )
-                    # Suspicious NULL padding (UNION injection often uses multiple NULLs)
-                    SUSPICIOUS_NULL_COUNT = 3
-                    if null_count > SUSPICIOUS_NULL_COUNT:
-                        warnings.append("Potential UNION injection pattern detected")
+            select_expr = node.expression
+            if hasattr(select_expr, "expressions"):
+                null_count = sum(1 for expr in select_expr.expressions if isinstance(expr, exp.Null))
+                # Suspicious NULL padding (UNION injection often uses multiple NULLs)
+                SUSPICIOUS_NULL_COUNT = 3
+                if null_count > SUSPICIOUS_NULL_COUNT:
+                    warnings.append("Potential UNION injection pattern detected")
 
         # Check for tautologies (1=1, 'a'='a', etc.)
         if isinstance(node, exp.EQ):
             left, right = node.this, node.expression
-            if (isinstance(left, exp.Literal) and isinstance(right, exp.Literal)
-                and left.this == right.this):
+            if isinstance(left, exp.Literal) and isinstance(right, exp.Literal) and left.this == right.this:
                 warnings.append(f"Tautology condition detected: {node.sql()}")
 
         # Check for comment injection
