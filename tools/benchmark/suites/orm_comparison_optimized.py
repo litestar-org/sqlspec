@@ -55,14 +55,17 @@ class OptimizedORMComparisonBenchmark(BaseBenchmarkSuite):
         self.sqlspec_statements = {
             "simple_select": SQL("SELECT * FROM users LIMIT 100"),
             "filtered_select": SQL("SELECT * FROM users WHERE status = :status LIMIT 50", {"status": "active"}),
-            "join_query": SQL("""
+            "join_query": SQL(
+                """
                 SELECT u1.name, COUNT(u2.id) as colleague_count
                 FROM users u1
                 LEFT JOIN users u2 ON u1.status = u2.status AND u1.id != u2.id
                 WHERE u1.status = :status
                 GROUP BY u1.name
                 LIMIT 20
-            """, {"status": "active"}),
+            """,
+                {"status": "active"},
+            ),
             "aggregation": SQL("""
                 SELECT status, COUNT(*) as count,
                        COUNT(DISTINCT email) as unique_emails
@@ -151,16 +154,16 @@ class OptimizedORMComparisonBenchmark(BaseBenchmarkSuite):
             connection_config={"database": db_path},
             statement_config=SQLConfig(
                 enable_caching=False,
-                enable_expression_simplification=False  # Disable optimization to reduce overhead
-            )
+                enable_expression_simplification=False,  # Disable optimization to reduce overhead
+            ),
         )
 
         config_with_cache = SqliteConfig(
             connection_config={"database": db_path},
             statement_config=SQLConfig(
                 enable_caching=True,
-                enable_expression_simplification=True  # Enable optimization for cached version
-            )
+                enable_expression_simplification=True,  # Enable optimization for cached version
+            ),
         )
 
         return config_no_cache, config_with_cache
@@ -502,9 +505,7 @@ class OptimizedORMComparisonBenchmark(BaseBenchmarkSuite):
         times = BenchmarkMetrics.time_operation(
             sqlalchemy_core, iterations=min(self.config.iterations // 5, 20), warmup=2
         )
-        results["complex_query_core"] = TimingResult(
-            operation="complex_query_core", iterations=len(times), times=times
-        )
+        results["complex_query_core"] = TimingResult(operation="complex_query_core", iterations=len(times), times=times)
 
         return results
 
@@ -513,4 +514,3 @@ class OptimizedORMComparisonBenchmark(BaseBenchmarkSuite):
         # Close any containers if needed
         if hasattr(self.container_manager, "cleanup"):
             self.container_manager.cleanup()
-

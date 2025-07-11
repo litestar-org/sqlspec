@@ -9,7 +9,7 @@ from sqlglot.errors import ParseError
 from typing_extensions import TypeAlias
 
 from sqlspec.exceptions import RiskLevel, SQLParsingError, SQLValidationError
-from sqlspec.statement.cache import ast_fragment_cache, sql_cache
+from sqlspec.statement.cache import ast_fragment_cache, base_statement_cache, sql_cache
 from sqlspec.statement.filters import StatementFilter
 from sqlspec.statement.parameters import (
     SQLGLOT_INCOMPATIBLE_STYLES,
@@ -373,6 +373,7 @@ class SQL:
     """
 
     __slots__ = (
+        "_base_statement_key",
         "_builder_result_type",
         "_config",
         "_dialect",
@@ -420,6 +421,7 @@ class SQL:
         self._parameter_conversion_state: Optional[ParameterStyleConversionState] = None
         self._is_many: bool = False
         self._is_script: bool = False
+        self._base_statement_key: Optional[tuple[str, str]] = None
 
         if isinstance(statement, SQL):
             self._init_from_sql_object(statement, _dialect, _config or SQLConfig(), _builder_result_type)
@@ -449,6 +451,7 @@ class SQL:
         self._original_sql = statement._original_sql
         self._placeholder_mapping = statement._placeholder_mapping.copy()
         self._parameter_conversion_state = statement._parameter_conversion_state
+        self._base_statement_key = statement._base_statement_key
         self._positional_params.extend(statement._positional_params)
         self._named_params.update(statement._named_params)
         self._filters.extend(statement._filters)
@@ -875,11 +878,25 @@ class SQL:
         else:
             self._parameter_conversion_state = None
 
-        # Try to get from AST cache first
-        cached_expr = ast_fragment_cache.parse_with_cache(converted_sql, fragment_type="QUERY", dialect=self._dialect)
+        # Check if this is a base statement without parameters
+        # Only use base_statement_cache for raw SQL without any parameters
+        use_base_cache = not needs_conversion and not param_info and isinstance(statement, str)
 
-        if cached_expr:
-            return cached_expr
+        if use_base_cache:
+            # Set the base statement key for later caching operations
+            self._base_statement_key = (statement.strip(), str(self._dialect) if self._dialect else "default")
+            try:
+                # Use base_statement_cache for huge performance boost
+                return base_statement_cache.get_or_parse(statement, str(self._dialect) if self._dialect else None)
+            except ParseError:
+                # Let the error handling below take care of this
+                pass
+        else:
+            # Try to get from AST cache first
+            cached_expr = ast_fragment_cache.parse_with_cache(converted_sql, fragment_type="QUERY", dialect=self._dialect)
+
+            if cached_expr:
+                return cached_expr
 
         # Fall back to regular parsing if not cached
         try:
@@ -890,14 +907,16 @@ class SQL:
             if first_expr is None:
                 return exp.Anonymous(this=statement)
 
-            # Cache the successfully parsed expression
-            ast_fragment_cache.set_fragment(
-                sql=converted_sql,
-                expression=first_expr,
-                fragment_type="QUERY",
-                dialect=self._dialect,
-                parameter_count=len(param_info),
-            )
+            # Only cache in ast_fragment_cache if not using base_statement_cache
+            if not use_base_cache:
+                # Cache the successfully parsed expression
+                ast_fragment_cache.set_fragment(
+                    sql=converted_sql,
+                    expression=first_expr,
+                    fragment_type="QUERY",
+                    dialect=self._dialect,
+                    parameter_count=len(param_info),
+                )
 
         except ParseError as e:
             # Use direct attribute access for mypyc compatibility

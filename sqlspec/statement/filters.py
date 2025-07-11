@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 __all__ = (
     "AnyCollectionFilter",
     "BeforeAfterFilter",
+    "CacheableFilter",
     "FilterTypeT",
     "FilterTypes",
     "InAnyFilter",
@@ -63,6 +64,27 @@ class StatementFilter(ABC):
             - named_params: Dict of parameter name to value
         """
         return [], {}
+
+
+class CacheableFilter(StatementFilter):
+    """Base class for filters that support caching.
+
+    Filters that extend this class must implement get_cache_key() to
+    provide a stable, hashable representation of their configuration
+    for use in the filter result cache.
+    """
+
+    @abstractmethod
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return a tuple of stable, hashable components that uniquely represent the filter's configuration.
+
+        The cache key should include all parameters that affect the filter's behavior.
+        For example, a LimitOffsetFilter would return (limit, offset).
+
+        Returns:
+            Tuple of hashable values representing the filter's configuration
+        """
+        ...
 
 
 class BeforeAfterFilter(StatementFilter):
