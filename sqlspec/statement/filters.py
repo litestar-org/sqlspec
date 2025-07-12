@@ -137,6 +137,11 @@ class BeforeAfterFilter(StatementFilter):
             return result
         return statement
 
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        # Include field name and datetime values (or None) to uniquely identify this filter
+        return ("BeforeAfterFilter", self.field_name, self.before, self.after)
+
 
 class OnBeforeAfterFilter(StatementFilter):
     """Data required to filter a query on a ``datetime`` column."""
@@ -200,6 +205,11 @@ class OnBeforeAfterFilter(StatementFilter):
             return result
         return statement
 
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        # Include field name and datetime values (or None) to uniquely identify this filter
+        return ("OnBeforeAfterFilter", self.field_name, self.on_or_before, self.on_or_after)
+
 
 class InAnyFilter(StatementFilter, ABC, Generic[T]):
     """Subclass for methods that have a `prefer_any` attribute."""
@@ -259,6 +269,12 @@ class InCollectionFilter(InAnyFilter[T]):
             result = result.add_named_parameter(name, value)
         return result
 
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        # Include field name and values (converted to tuple for hashability)
+        values_tuple = tuple(self.values) if self.values is not None else None
+        return ("InCollectionFilter", self.field_name, values_tuple)
+
 
 class NotInCollectionFilter(InAnyFilter[T]):
     """Data required to construct a ``WHERE ... NOT IN (...)`` clause."""
@@ -304,6 +320,12 @@ class NotInCollectionFilter(InAnyFilter[T]):
         for name, value in named_params.items():
             result = result.add_named_parameter(name, value)
         return result
+
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        # Include field name and values (converted to tuple for hashability)
+        values_tuple = tuple(self.values) if self.values is not None else None
+        return ("NotInCollectionFilter", self.field_name, values_tuple)
 
 
 class AnyCollectionFilter(InAnyFilter[T]):
@@ -357,6 +379,12 @@ class AnyCollectionFilter(InAnyFilter[T]):
             result = result.add_named_parameter(name, value)
         return result
 
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        # Include field name and values (converted to tuple for hashability)
+        values_tuple = tuple(self.values) if self.values is not None else None
+        return ("AnyCollectionFilter", self.field_name, values_tuple)
+
 
 class NotAnyCollectionFilter(InAnyFilter[T]):
     """Data required to construct a ``WHERE NOT (column_name = ANY (array_expression))`` clause."""
@@ -407,6 +435,12 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
         for name, value in named_params.items():
             result = result.add_named_parameter(name, value)
         return result
+
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        # Include field name and values (converted to tuple for hashability)
+        values_tuple = tuple(self.values) if self.values is not None else None
+        return ("NotAnyCollectionFilter", self.field_name, values_tuple)
 
 
 class PaginationFilter(StatementFilter, ABC):
@@ -473,6 +507,11 @@ class LimitOffsetFilter(PaginationFilter):
             result = result.add_named_parameter(name, value)
         return result.filter(self)
 
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        # Include limit and offset values
+        return ("LimitOffsetFilter", self.limit, self.offset)
+
 
 class OrderByFilter(StatementFilter):
     """Data required to construct a ``ORDER BY ...`` clause."""
@@ -510,6 +549,11 @@ class OrderByFilter(StatementFilter):
             new_statement = exp.Select().from_(statement._statement).order_by(order_expr)
 
         return statement.copy(statement=new_statement)
+
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        # Include field name and sort order
+        return ("OrderByFilter", self.field_name, self.sort_order)
 
 
 class SearchFilter(StatementFilter):
@@ -577,6 +621,12 @@ class SearchFilter(StatementFilter):
             result = result.add_named_parameter(name, value)
         return result
 
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        # Include field name(s), value, and ignore_case flag
+        field_names = tuple(sorted(self.field_name)) if isinstance(self.field_name, set) else self.field_name
+        return ("SearchFilter", field_names, self.value, self.ignore_case)
+
 
 class NotInSearchFilter(SearchFilter):
     """Data required to construct a ``WHERE field_name NOT LIKE '%' || :value || '%'`` clause."""
@@ -635,6 +685,12 @@ class NotInSearchFilter(SearchFilter):
         for name, value in named_params.items():
             result = result.add_named_parameter(name, value)
         return result
+
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        # Include field name(s), value, and ignore_case flag
+        field_names = tuple(sorted(self.field_name)) if isinstance(self.field_name, set) else self.field_name
+        return ("NotInSearchFilter", field_names, self.value, self.ignore_case)
 
 
 class OffsetPagination(Generic[T]):

@@ -94,12 +94,14 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         )
 
     def __repr__(self) -> str:
-        parts = ", ".join([
-            f"pool_instance={self.pool_instance!r}",
-            f"migration_config={self.migration_config!r}",
-            f"enable_adapter_cache={self.enable_adapter_cache!r}",
-            f"adapter_cache_size={self.adapter_cache_size!r}",
-        ])
+        parts = ", ".join(
+            [
+                f"pool_instance={self.pool_instance!r}",
+                f"migration_config={self.migration_config!r}",
+                f"enable_adapter_cache={self.enable_adapter_cache!r}",
+                f"adapter_cache_size={self.adapter_cache_size!r}",
+            ]
+        )
         return f"{type(self).__name__}({parts})"
 
     @property

@@ -776,11 +776,6 @@ class SQL:
         # Get parameters from context in appropriate format
         merged_params = context.merged_parameters
 
-        # Debug logging for ADBC NULL parameter handling
-        if context.metadata.get("adbc_null_transform_applied"):
-            logger.debug(f"ADBC NULL transform was applied - context.parameters: {context.parameters}")
-            logger.debug(f"ADBC NULL transform was applied - merged_params: {merged_params}")
-
         # Check if we have extracted literals from parameterize_literals_step
         if context.metadata.get("literals_parameterized") and context.parameters:
             # Count how many parameters were there before literal extraction
@@ -792,7 +787,7 @@ class SQL:
             # If we started with no parameters, use the extracted ones
             if final_params is None and original_param_count < len(context.parameters):
                 # We have extracted literals, return them in the appropriate format
-                if self._config.dialect in ["mysql", "sqlite"]:
+                if self._config.dialect in {"mysql", "sqlite"}:
                     # Return as list for positional parameter styles
                     return list(context.parameters.values())
                 # Return as dict for named parameter styles

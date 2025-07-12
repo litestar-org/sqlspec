@@ -174,8 +174,7 @@ def test_postgresql_null_parameters(adbc_postgresql_params_session: AdbcDriver) 
     # Insert a record with NULL description using string SQL (not SQL object)
     # This allows the driver's custom pipeline to handle NULL transformation
     adbc_postgresql_params_session.execute(
-        "INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)", 
-        "null_test", 300, None
+        "INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)", "null_test", 300, None
     )
 
     # Query for NULL values
