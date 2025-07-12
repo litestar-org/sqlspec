@@ -570,10 +570,7 @@ class PsycopgAsyncDriver(
                 sql, params = self._get_compiled_sql(statement, target_style)
             # DEBUG: Check parameter style conversion
             if "script_test" in sql:
-                print("DEBUG psycopg compile:")
-                print(f"  Target style: {target_style}")
-                print(f"  SQL: {sql}")
-                print(f"  Params: {params}")
+                pass
             if params is not None:
                 processed_params = [self._process_parameters(param_set) for param_set in params]
                 params = processed_params

@@ -776,6 +776,11 @@ class SQL:
         # Get parameters from context in appropriate format
         merged_params = context.merged_parameters
 
+        # Debug logging for ADBC NULL parameter handling
+        if context.metadata.get("adbc_null_transform_applied"):
+            logger.debug(f"ADBC NULL transform was applied - context.parameters: {context.parameters}")
+            logger.debug(f"ADBC NULL transform was applied - merged_params: {merged_params}")
+
         # Check if we have extracted literals from parameterize_literals_step
         if context.metadata.get("literals_parameterized") and context.parameters:
             # Count how many parameters were there before literal extraction
@@ -1573,18 +1578,18 @@ class SQL:
             result = []
             i = 0
             while i < len(sql):
-                if sql[i] == '%':
+                if sql[i] == "%":
                     # Check if this is a placeholder we just added
-                    if i + 1 < len(sql) and (sql[i + 1] == 's' or sql[i + 1] == '('):
+                    if i + 1 < len(sql) and (sql[i + 1] == "s" or sql[i + 1] == "("):
                         # This is a placeholder, don't escape
                         result.append(sql[i])
                     else:
                         # This is a literal %, escape it
-                        result.append('%%')
+                        result.append("%%")
                 else:
                     result.append(sql[i])
                 i += 1
-            sql = ''.join(result)
+            sql = "".join(result)
 
         return sql
 
@@ -1652,17 +1657,17 @@ class SQL:
             # Check if we have mixed parameter styles
             has_numeric = any(p.style == ParameterStyle.NUMERIC for p in param_info)
             has_other_styles = any(p.style != ParameterStyle.NUMERIC for p in param_info)
-            
+
             if has_numeric and has_other_styles:
                 # Mixed parameter styles: assign parameters in order of appearance in SQL
                 sorted_params = sorted(param_info, key=lambda p: p.position)
-                for i, param_info_item in enumerate(sorted_params):
+                for i, _param_info_item in enumerate(sorted_params):
                     if i < len(params):
                         # Use sequential numbering for all parameters in mixed mode
                         # This ensures first appearance gets "1", second gets "2", etc.
                         result_dict[str(i + 1)] = params[i]
                 return result_dict
-            
+
             all_numeric = all(p.name and p.name.isdigit() for p in param_info)
             if all_numeric:
                 for i, value in enumerate(params):
@@ -1846,10 +1851,10 @@ class SQL:
         if is_dict(params):
             # Check if this is a mixed parameter style conversion scenario
             # where we have sequential numeric keys ('1', '2', etc.) that should map to position order
-            if all(k.isdigit() for k in params.keys()):
+            if all(k.isdigit() for k in params):
                 # Sequential numeric keys - map in order of appearance
                 sorted_params = sorted(param_info, key=lambda p: p.position)
-                for i, param_info_item in enumerate(sorted_params):
+                for i, _param_info_item in enumerate(sorted_params):
                     key = str(i + 1)
                     if key in params:
                         val = params[key]
@@ -1860,7 +1865,7 @@ class SQL:
                     else:
                         result_list.append(None)
                 return result_list
-            
+
             # Standard dict parameter handling
             param_values_by_ordinal: dict[int, Any] = {}
 
@@ -1913,9 +1918,9 @@ class SQL:
 
                 # Create mapping of parameter values to their final positions
                 param_values_by_final_position = {}
-                
+
                 # Assign parameters in order of appearance in SQL to sequential final positions
-                for final_pos, param_info_item in enumerate(sorted_params):
+                for final_pos, _param_info_item in enumerate(sorted_params):
                     if final_pos < len(params):
                         val = params[final_pos]
                         if has_parameter_value(val):

@@ -118,6 +118,7 @@ class PsqlpyDriver(
     async def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
+        _ = kwargs  # Unused but required for protocol compatibility
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -166,6 +167,7 @@ class PsqlpyDriver(
     async def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
+        _ = kwargs  # Unused but required for protocol compatibility
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -232,6 +234,7 @@ class PsqlpyDriver(
             )
 
     async def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
+        _ = options  # Unused but may be used in future implementations
         self._ensure_pyarrow_installed()
         import pyarrow.csv as pacsv
 

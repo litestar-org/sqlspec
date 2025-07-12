@@ -113,7 +113,7 @@ def test_adbc_postgres_transformer_complex_mixed_nulls() -> None:
             "param_1": None,
             "param_2": "value3",
             "param_3": None,
-            "param_4": "value5"
+            "param_4": "value5",
         },  # Mixed NULLs
     )
 
@@ -132,9 +132,5 @@ def test_adbc_postgres_transformer_complex_mixed_nulls() -> None:
     assert result_sql.count("NULL") == 2  # Two NULLs in the SQL
 
     # Parameters should be modified to remove NULLs
-    assert result.parameters == {
-        "param_0": "value1",
-        "param_2": "value3",
-        "param_4": "value5"
-    }
+    assert result.parameters == {"param_0": "value1", "param_2": "value3", "param_4": "value5"}
     assert result.metadata["null_parameter_count"] == 2

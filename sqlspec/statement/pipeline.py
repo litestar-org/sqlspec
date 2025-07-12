@@ -93,17 +93,17 @@ def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformCont
     # First, collect all literals in SQL order
     literals_in_order: list[tuple[exp.Literal, str]] = []
     sql_before = context.current_expression.sql(dialect=context.dialect)
-    
+
     def collect_literals(node: exp.Expression) -> exp.Expression:
         if isinstance(node, exp.Literal) and not isinstance(node.parent, exp.Placeholder):
             # Get the SQL position by finding the literal in the SQL string
             literal_sql = node.sql(dialect=context.dialect)
             literals_in_order.append((node, literal_sql))
         return node
-    
+
     # First pass: collect literals
     context.current_expression.walk(collect_literals)
-    
+
     # Sort by position in SQL string
     literal_positions = []
     remaining_sql = sql_before
@@ -111,26 +111,26 @@ def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformCont
         pos = remaining_sql.find(literal_sql)
         if pos >= 0:
             literal_positions.append((pos + len(sql_before) - len(remaining_sql), literal, literal_sql))
-            remaining_sql = remaining_sql[pos + len(literal_sql):]
-    
+            remaining_sql = remaining_sql[pos + len(literal_sql) :]
+
     literal_positions.sort(key=lambda x: x[0])
-    
+
     # Create parameter mapping
     param_index = len(context.parameters)
     literal_to_param: dict[int, str] = {}
-    
+
     for _, literal, _ in literal_positions:
         param_name = f"param_{param_index}"
         context.parameters[param_name] = literal.this
         literal_to_param[id(literal)] = param_name
         param_index += 1
-    
+
     # Second pass: replace literals with placeholders
     def replace_literal(node: exp.Expression) -> exp.Expression:
         if isinstance(node, exp.Literal) and id(node) in literal_to_param:
             return exp.Placeholder(this=literal_to_param[id(node)])
         return node
-    
+
     # Transform the expression tree
     context.current_expression = context.current_expression.transform(replace_literal)
 

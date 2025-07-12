@@ -18,11 +18,7 @@ class TestSQLTransformContext:
     def test_context_initialization(self):
         """Test basic context initialization."""
         expr = exp.Select().select("*").from_("users")
-        context = SQLTransformContext(
-            current_expression=expr,
-            original_expression=expr,
-            dialect="postgres"
-        )
+        context = SQLTransformContext(current_expression=expr, original_expression=expr, dialect="postgres")
 
         assert context.current_expression == expr
         assert context.original_expression == expr
@@ -37,7 +33,7 @@ class TestSQLTransformContext:
             current_expression=expr,
             original_expression=expr,
             dialect="mysql",
-            parameters={"param_0": "value1", "param_1": "value2", "param_2": "value3"}
+            parameters={"param_0": "value1", "param_1": "value2", "param_2": "value3"},
         )
 
         # Should return positional list in sorted order
@@ -51,7 +47,7 @@ class TestSQLTransformContext:
             current_expression=expr,
             original_expression=expr,
             dialect="postgres",
-            parameters={"name": "John", "age": 30}
+            parameters={"name": "John", "age": 30},
         )
 
         # Should return dict as-is
@@ -66,16 +62,14 @@ class TestPipelineComposition:
         pipeline = compose_pipeline([])
 
         expr = exp.Select()
-        context = SQLTransformContext(
-            current_expression=expr,
-            original_expression=expr
-        )
+        context = SQLTransformContext(current_expression=expr, original_expression=expr)
 
         result = pipeline(context)
         assert result == context
 
     def test_compose_pipeline_single_step(self):
         """Test composing single-step pipeline."""
+
         def test_step(context: SQLTransformContext) -> SQLTransformContext:
             context.metadata["test"] = True
             return context
@@ -83,16 +77,14 @@ class TestPipelineComposition:
         pipeline = compose_pipeline([test_step])
 
         expr = exp.Select()
-        context = SQLTransformContext(
-            current_expression=expr,
-            original_expression=expr
-        )
+        context = SQLTransformContext(current_expression=expr, original_expression=expr)
 
         result = pipeline(context)
         assert result.metadata["test"] is True
 
     def test_compose_pipeline_multiple_steps(self):
         """Test composing multi-step pipeline."""
+
         def step1(context: SQLTransformContext) -> SQLTransformContext:
             context.metadata["step1"] = True
             return context
@@ -108,10 +100,7 @@ class TestPipelineComposition:
         pipeline = compose_pipeline([step1, step2, step3])
 
         expr = exp.Select()
-        context = SQLTransformContext(
-            current_expression=expr,
-            original_expression=expr
-        )
+        context = SQLTransformContext(current_expression=expr, original_expression=expr)
 
         result = pipeline(context)
         assert result.metadata["step1"] is True
@@ -125,10 +114,7 @@ class TestNormalizeStep:
     def test_normalize_step_passthrough(self):
         """Test that normalize step passes through context unchanged (for now)."""
         expr = exp.Select()
-        context = SQLTransformContext(
-            current_expression=expr,
-            original_expression=expr
-        )
+        context = SQLTransformContext(current_expression=expr, original_expression=expr)
 
         result = normalize_step(context)
         assert result == context
@@ -142,10 +128,7 @@ class TestParameterizeLiteralsStep:
         # Create SQL with literal: SELECT * FROM users WHERE name = 'John'
         expr = exp.Select().select("*").from_("users").where("name = 'John'")
 
-        context = SQLTransformContext(
-            current_expression=expr,
-            original_expression=expr
-        )
+        context = SQLTransformContext(current_expression=expr, original_expression=expr)
 
         result = parameterize_literals_step(context)
 
@@ -163,15 +146,9 @@ class TestParameterizeLiteralsStep:
     def test_parameterize_multiple_literals(self):
         """Test parameterizing multiple literals."""
         # SELECT * FROM users WHERE name = 'John' AND age = 30
-        expr = (exp.Select()
-                .select("*")
-                .from_("users")
-                .where("name = 'John' AND age = 30"))
+        expr = exp.Select().select("*").from_("users").where("name = 'John' AND age = 30")
 
-        context = SQLTransformContext(
-            current_expression=expr,
-            original_expression=expr
-        )
+        context = SQLTransformContext(current_expression=expr, original_expression=expr)
 
         result = parameterize_literals_step(context)
 
@@ -186,10 +163,7 @@ class TestParameterizeLiteralsStep:
         # SELECT * FROM users
         expr = exp.Select().select("*").from_("users")
 
-        context = SQLTransformContext(
-            current_expression=expr,
-            original_expression=expr
-        )
+        context = SQLTransformContext(current_expression=expr, original_expression=expr)
 
         result = parameterize_literals_step(context)
 
@@ -204,15 +178,9 @@ class TestOptimizeStep:
     def test_optimize_simple_expression(self):
         """Test optimizing a simple expression."""
         # Create expression with redundant condition: WHERE 1 = 1 AND name = 'John'
-        expr = (exp.Select()
-                .select("*")
-                .from_("users")
-                .where("1 = 1 AND name = 'John'"))
+        expr = exp.Select().select("*").from_("users").where("1 = 1 AND name = 'John'")
 
-        context = SQLTransformContext(
-            current_expression=expr,
-            original_expression=expr
-        )
+        context = SQLTransformContext(current_expression=expr, original_expression=expr)
 
         result = optimize_step(context)
 
@@ -231,10 +199,7 @@ class TestValidateStep:
         """Test validating clean SQL."""
         expr = exp.Select().select("*").from_("users")
 
-        context = SQLTransformContext(
-            current_expression=expr,
-            original_expression=expr
-        )
+        context = SQLTransformContext(current_expression=expr, original_expression=expr)
 
         result = validate_step(context)
 
@@ -247,10 +212,7 @@ class TestValidateStep:
         # SELECT SLEEP(5) FROM users
         expr = exp.Select().select(exp.func("SLEEP", 5)).from_("users")
 
-        context = SQLTransformContext(
-            current_expression=expr,
-            original_expression=expr
-        )
+        context = SQLTransformContext(current_expression=expr, original_expression=expr)
 
         result = validate_step(context)
 
@@ -263,10 +225,7 @@ class TestValidateStep:
         # WHERE 'a' = 'a'
         expr = exp.Select().select("*").from_("users").where("'a' = 'a'")
 
-        context = SQLTransformContext(
-            current_expression=expr,
-            original_expression=expr
-        )
+        context = SQLTransformContext(current_expression=expr, original_expression=expr)
 
         result = validate_step(context)
 
@@ -277,16 +236,11 @@ class TestValidateStep:
     def test_validate_union_injection_pattern(self):
         """Test detecting potential UNION injection patterns."""
         # Create a UNION with many NULLs (suspicious pattern)
-        union_select = exp.Select().select(
-            exp.Null(), exp.Null(), exp.Null(), exp.Null(), exp.Null()
-        )
+        union_select = exp.Select().select(exp.Null(), exp.Null(), exp.Null(), exp.Null(), exp.Null())
         main_select = exp.Select().select("*").from_("users")
         expr = exp.Union(this=main_select, expression=union_select)
 
-        context = SQLTransformContext(
-            current_expression=expr,
-            original_expression=expr
-        )
+        context = SQLTransformContext(current_expression=expr, original_expression=expr)
 
         result = validate_step(context)
 
@@ -301,24 +255,12 @@ class TestFullPipeline:
     def test_full_pipeline_execution(self):
         """Test running a full pipeline with all steps."""
         # Create SQL with literals and potential issues
-        expr = (exp.Select()
-                .select("*")
-                .from_("users")
-                .where("name = 'John' AND 1 = 1"))
+        expr = exp.Select().select("*").from_("users").where("name = 'John' AND 1 = 1")
 
-        context = SQLTransformContext(
-            current_expression=expr,
-            original_expression=expr,
-            dialect="postgres"
-        )
+        context = SQLTransformContext(current_expression=expr, original_expression=expr, dialect="postgres")
 
         # Create and run full pipeline
-        pipeline = compose_pipeline([
-            normalize_step,
-            parameterize_literals_step,
-            optimize_step,
-            validate_step
-        ])
+        pipeline = compose_pipeline([normalize_step, parameterize_literals_step, optimize_step, validate_step])
 
         result = pipeline(context)
 

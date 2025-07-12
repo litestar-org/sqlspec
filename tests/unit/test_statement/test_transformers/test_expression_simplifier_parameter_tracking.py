@@ -42,10 +42,7 @@ def test_expression_simplifier_no_tracking_without_parameters() -> None:
 
     # Create context without parameters
     context = SQLTransformContext(
-        current_expression=expression,
-        original_expression=expression,
-        dialect="duckdb",
-        parameters={},
+        current_expression=expression, original_expression=expression, dialect="duckdb", parameters={}
     )
 
     # Process with optimize step

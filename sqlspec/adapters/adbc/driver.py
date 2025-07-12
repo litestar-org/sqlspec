@@ -196,6 +196,12 @@ class AdbcDriver(
         statement._ensure_processed()
         sql, params = self._get_compiled_sql(statement, target_style)
         params = self._process_parameters(params)
+
+        # Handle empty parameters - ADBC PostgreSQL doesn't handle empty dicts well
+        if self.dialect == "postgres" and isinstance(params, dict) and not params:
+            # Convert empty dict to None to avoid "Can't map Arrow type 'struct' to Postgres type" error
+            params = None
+
         if statement.is_many:
             return self._execute_many(sql, params, connection=connection, **kwargs)
 
@@ -209,7 +215,7 @@ class AdbcDriver(
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             cursor_params = (
-                parameters if parameters is not None and not isinstance(parameters, (list, tuple)) else [parameters]
+                parameters if isinstance(parameters, (list, tuple)) else [parameters] if parameters is not None else []
             )
             with self._get_cursor(txn_conn) as cursor:
                 try:
@@ -368,11 +374,17 @@ class AdbcDriver(
         conn = self._connection(connection)
 
         with wrap_exceptions(), self._get_cursor(conn) as cursor:
-            params = sql.get_parameters(style=self.default_parameter_style)
-            cursor.execute(
-                sql.to_sql(placeholder_style=self.default_parameter_style),
-                [params] if params is not None and not isinstance(params, (list, tuple)) else params or [],
-            )
+            # Ensure SQL is processed and get compiled version
+            sql._ensure_processed()
+            compiled_sql, params = self._get_compiled_sql(sql, self.default_parameter_style)
+            params = self._process_parameters(params)
+
+            # Handle empty parameters - ADBC PostgreSQL doesn't handle empty dicts well
+            if self.dialect == "postgres" and isinstance(params, dict) and not params:
+                params = None
+
+            cursor_params = params if isinstance(params, (list, tuple)) else [params] if params is not None else []
+            cursor.execute(compiled_sql, cursor_params)
             arrow_table = cursor.fetch_arrow_table()
             return ArrowResult(statement=sql, data=arrow_table)
 

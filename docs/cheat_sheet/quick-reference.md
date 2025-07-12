@@ -246,7 +246,7 @@ def _coerce_array(self, value: Any) -> Any:
 
 ```python
 # Problem: ADBC can't determine NULL types
-# Solution: AST transformation 
+# Solution: AST transformation
 ```
 
 @sqlspec/adapters/adbc/pipeline_steps.py

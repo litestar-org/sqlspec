@@ -162,26 +162,24 @@ def test_sqlite_multiple_parameters(adbc_sqlite_params_session: AdbcDriver) -> N
 
 @pytest.mark.xdist_group("postgres")
 @xfail_if_driver_missing
-@pytest.mark.xfail(
-    reason="ADBC PostgreSQL driver has issues with null parameter handling - Known limitation: https://github.com/apache/arrow-adbc/issues/81"
-)
 def test_postgresql_null_parameters(adbc_postgresql_params_session: AdbcDriver) -> None:
     """Test handling of NULL parameters on PostgreSQL.
 
-    This test is marked as xfail due to a known limitation in the ADBC PostgreSQL driver.
-    The driver currently has incomplete support for null values in bind parameters.
+    The ADBC PostgreSQL driver has issues with null values in bind parameters.
     This is tracked upstream in: https://github.com/apache/arrow-adbc/issues/81
 
-    The test represents a reasonable user case (inserting NULL values as parameters),
-    and should pass once the upstream driver is fixed.
+    Our custom pipeline step transforms NULL parameters to NULL literals in the SQL,
+    which works around this limitation when using string SQL (not SQL objects).
     """
-    # Insert a record with NULL description
+    # Insert a record with NULL description using string SQL (not SQL object)
+    # This allows the driver's custom pipeline to handle NULL transformation
     adbc_postgresql_params_session.execute(
-        SQL("INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)", ("null_test", 300, None))
+        "INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)", 
+        "null_test", 300, None
     )
 
     # Query for NULL values
-    result = adbc_postgresql_params_session.execute(SQL("SELECT * FROM test_params WHERE description IS NULL"))
+    result = adbc_postgresql_params_session.execute("SELECT * FROM test_params WHERE description IS NULL")
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
