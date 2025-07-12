@@ -2,13 +2,14 @@ import csv
 import logging
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 import aiosqlite
 from typing_extensions import TypeAlias
 
-from sqlspec.driver import AsyncDriverAdapterProtocol
+from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.driver.connection import managed_transaction_async
 from sqlspec.driver.mixins import (
     AsyncAdapterCacheMixin,
@@ -18,7 +19,6 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -36,7 +36,7 @@ AiosqliteConnection: TypeAlias = aiosqlite.Connection
 
 
 class AiosqliteDriver(
-    AsyncDriverAdapterProtocol[AiosqliteConnection, RowT],
+    AsyncDriverAdapterBase[AiosqliteConnection, RowT],
     AsyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -68,9 +68,7 @@ class AiosqliteDriver(
     def _coerce_decimal(self, value: Any) -> Any:
         """AIOSQLite/SQLite stores decimals as strings to preserve precision."""
         if isinstance(value, str):
-            return value  # Already a string
-        from decimal import Decimal
-
+            return value
         if isinstance(value, Decimal):
             return str(value)
         return value
@@ -107,7 +105,7 @@ class AiosqliteDriver(
             return await self._execute_script(sql, connection=connection, **kwargs)
 
         detected_styles = set()
-        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
+        sql_str = statement.to_sql(placeholder_style=None)
         validator = self.config.parameter_validator if self.config else ParameterValidator()
         param_infos = validator.extract_parameters(sql_str)
         if param_infos:
@@ -144,13 +142,10 @@ class AiosqliteDriver(
         conn = self._connection(connection)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            converted_params = convert_parameter_sequence(parameters)
-
-            # Extract the actual parameters from the converted list
-            actual_params = converted_params[0] if converted_params and len(converted_params) == 1 else converted_params
+            actual_params = parameters
 
             # AIOSQLite expects tuple or dict - handle parameter conversion
-            if ":param_" in sql or (isinstance(actual_params, dict)):
+            if ":param_" in sql or (isinstance(actual_params, dict)):  # TODO: this is not acceptable
                 # SQL has named placeholders, ensure params are dict
                 converted_params = self._convert_parameters_to_driver_format(
                     sql, actual_params, target_style=ParameterStyle.NAMED_COLON
@@ -162,7 +157,6 @@ class AiosqliteDriver(
                 )
 
             async with self._get_cursor(txn_conn) as cursor:
-                # Aiosqlite handles both dict and tuple parameters
                 await cursor.execute(sql, converted_params or ())
                 if self.returns_rows(statement.expression):
                     fetched_data = await cursor.fetchall()
@@ -188,11 +182,11 @@ class AiosqliteDriver(
         self, sql: str, param_list: Any, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # Normalize parameter list using consolidated utility
-            converted_param_list = convert_parameter_sequence(param_list)
+            # TypeCoercionMixin handles parameter processing
+            converted_param_list = param_list
 
             params_list: list[tuple[Any, ...]] = []
             if converted_param_list and isinstance(converted_param_list, Sequence):
@@ -215,27 +209,20 @@ class AiosqliteDriver(
     async def _execute_script(
         self, script: str, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
-        # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # Split script into individual statements for validation
             statements = self._split_script_statements(script)
             suppress_warnings = kwargs.get("_suppress_warnings", False)
 
             executed_count = 0
             total_rows = 0
-
-            # Execute each statement individually for better control and validation
             async with self._get_cursor(txn_conn) as cursor:
                 for statement in statements:
                     if statement.strip():
-                        # Validate each statement unless warnings suppressed
                         if not suppress_warnings:
-                            # Run validation through pipeline
                             temp_sql = SQL(statement, config=self.config)
                             temp_sql._ensure_processed()
-                            # Validation errors are logged as warnings by default
 
                         await cursor.execute(statement)
                         executed_count += 1
@@ -253,7 +240,7 @@ class AiosqliteDriver(
 
     async def _bulk_load_file(self, file_path: Path, table_name: str, format: str, mode: str, **options: Any) -> int:
         """Database-specific bulk load implementation using storage backend."""
-        if format != "csv":
+        if format != "csv":  # TODO: this is not acceptable
             msg = f"aiosqlite driver only supports CSV for bulk loading, not {format}."
             raise NotImplementedError(msg)
 

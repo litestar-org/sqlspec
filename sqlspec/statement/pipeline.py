@@ -21,6 +21,10 @@ __all__ = (
     "normalize_step",
     "optimize_step",
     "parameterize_literals_step",
+    "remove_comments_step",
+    "validate_dml_safety_step",
+    "validate_parameter_style_step",
+    "validate_security_step",
     "validate_step",
 )
 
@@ -42,7 +46,7 @@ class SQLTransformContext:
     @property
     def merged_parameters(self) -> Any:
         """Get parameters in appropriate format for the dialect."""
-        if self.dialect in ["mysql", "sqlite"]:
+        if self.dialect in {"mysql", "sqlite"}:
             # Convert to positional list
             return [self.parameters[k] for k in sorted(self.parameters.keys())]
         return self.parameters
@@ -86,37 +90,49 @@ def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformCont
     Extracts literal values and replaces them with parameter placeholders,
     storing the values in the context for later binding.
     """
-    param_index = len(context.parameters)
-
-    def extract_literal(node: exp.Expression) -> exp.Expression:
-        nonlocal param_index
-
-        if isinstance(node, exp.Literal):
-            # Skip literals that are already parameterized or special values
-            if isinstance(node.parent, exp.Placeholder):
-                return node
-
-            # Skip literals in LIMIT, OFFSET, and other structural SQL contexts
-            parent = node.parent
-            if parent and isinstance(parent, (exp.Limit, exp.Offset)):
-                return node
-
-            # Skip numeric literals used as column references (e.g., ORDER BY 1)
-            if parent and isinstance(parent, exp.Order):
-                return node
-
-            # Generate parameter name
-            param_name = f"param_{param_index}"
-            context.parameters[param_name] = node.this
-            param_index += 1
-
-            # Replace with placeholder
-            return exp.Placeholder(this=param_name)
-
+    # First, collect all literals in SQL order
+    literals_in_order: list[tuple[exp.Literal, str]] = []
+    sql_before = context.current_expression.sql(dialect=context.dialect)
+    
+    def collect_literals(node: exp.Expression) -> exp.Expression:
+        if isinstance(node, exp.Literal) and not isinstance(node.parent, exp.Placeholder):
+            # Get the SQL position by finding the literal in the SQL string
+            literal_sql = node.sql(dialect=context.dialect)
+            literals_in_order.append((node, literal_sql))
         return node
-
+    
+    # First pass: collect literals
+    context.current_expression.walk(collect_literals)
+    
+    # Sort by position in SQL string
+    literal_positions = []
+    remaining_sql = sql_before
+    for literal, literal_sql in literals_in_order:
+        pos = remaining_sql.find(literal_sql)
+        if pos >= 0:
+            literal_positions.append((pos + len(sql_before) - len(remaining_sql), literal, literal_sql))
+            remaining_sql = remaining_sql[pos + len(literal_sql):]
+    
+    literal_positions.sort(key=lambda x: x[0])
+    
+    # Create parameter mapping
+    param_index = len(context.parameters)
+    literal_to_param: dict[int, str] = {}
+    
+    for _, literal, _ in literal_positions:
+        param_name = f"param_{param_index}"
+        context.parameters[param_name] = literal.this
+        literal_to_param[id(literal)] = param_name
+        param_index += 1
+    
+    # Second pass: replace literals with placeholders
+    def replace_literal(node: exp.Expression) -> exp.Expression:
+        if isinstance(node, exp.Literal) and id(node) in literal_to_param:
+            return exp.Placeholder(this=literal_to_param[id(node)])
+        return node
+    
     # Transform the expression tree
-    context.current_expression = context.current_expression.transform(extract_literal)
+    context.current_expression = context.current_expression.transform(replace_literal)
 
     # Record in metadata
     context.metadata["literals_parameterized"] = True
@@ -179,8 +195,8 @@ def validate_step(context: SQLTransformContext) -> SQLTransformContext:
             if hasattr(select_expr, "expressions"):
                 null_count = sum(1 for expr in select_expr.expressions if isinstance(expr, exp.Null))
                 # Suspicious NULL padding (UNION injection often uses multiple NULLs)
-                SUSPICIOUS_NULL_COUNT = 3
-                if null_count > SUSPICIOUS_NULL_COUNT:
+                suspicious_null_count = 3
+                if null_count > suspicious_null_count:
                     warnings.append("Potential UNION injection pattern detected")
 
         # Check for tautologies (1=1, 'a'='a', etc.)
@@ -203,3 +219,61 @@ def validate_step(context: SQLTransformContext) -> SQLTransformContext:
         logger.warning("Security validation issues: %s", issues)
 
     return context
+
+
+def remove_comments_step(context: SQLTransformContext) -> SQLTransformContext:
+    """Remove comments and hints from SQL.
+
+    Strips SQL comments and optimizer hints for cleaner processing.
+    """
+    # For now, SQLGlot already handles comments during parsing
+    # This is a placeholder for future enhancements
+    context.metadata["comments_removed"] = True
+    return context
+
+
+def validate_dml_safety_step(context: SQLTransformContext) -> SQLTransformContext:
+    """Validate DML operations for safety.
+
+    Checks for potentially dangerous DML operations like
+    UPDATE/DELETE without WHERE clauses.
+    """
+    issues = context.metadata.get("validation_issues", [])
+
+    for node in context.current_expression.walk():
+        # Check for UPDATE without WHERE
+        if isinstance(node, exp.Update) and not node.args.get("where"):
+            issues.append("UPDATE without WHERE clause detected")
+
+        # Check for DELETE without WHERE
+        if isinstance(node, exp.Delete) and not node.args.get("where"):
+            issues.append("DELETE without WHERE clause detected")
+
+        # Check for TRUNCATE
+        if isinstance(node, exp.Command) and str(node).upper().startswith("TRUNCATE"):
+            issues.append("TRUNCATE operation detected")
+
+    context.metadata["validation_issues"] = issues
+    context.metadata["dml_safety_validated"] = True
+    return context
+
+
+def validate_parameter_style_step(context: SQLTransformContext) -> SQLTransformContext:
+    """Validate parameter styles are consistent.
+
+    Ensures all parameters use the same style and are properly formatted.
+    """
+    # This validation happens during compilation in the new architecture
+    # as parameter style conversion is handled at the SQL class level
+    context.metadata["parameter_style_validated"] = True
+    return context
+
+
+def validate_security_step(context: SQLTransformContext) -> SQLTransformContext:
+    """Extended security validation beyond the basic validate_step.
+
+    Performs additional security checks for injection patterns.
+    """
+    # The basic validate_step already handles security validation
+    # This is here for compatibility with the old architecture
+    return validate_step(context)

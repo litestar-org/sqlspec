@@ -132,7 +132,7 @@ class SQLTransformContext:
 
 ```python
 from typing import Optional, Any, ClassVar
-from sqlspec.driver import SyncDriverAdapterProtocol
+from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.driver.mixins import (
     TypeCoercionMixin,
     SyncPipelinedExecutionMixin,
@@ -144,7 +144,7 @@ from sqlspec.statement.sql import SQL
 from sqlspec.typing import ConnectionT, RowT
 
 class MyDriver(
-    SyncDriverAdapterProtocol[ConnectionT, RowT],
+    SyncDriverAdapterBase[ConnectionT, RowT],
     TypeCoercionMixin,            # REQUIRED
     SyncPipelinedExecutionMixin,  # REQUIRED
     SyncStorageMixin,             # REQUIRED
@@ -153,33 +153,33 @@ class MyDriver(
     dialect: ClassVar[str] = "mydialect"
     supported_parameter_styles: ClassVar[tuple[ParameterStyle, ...]] = (ParameterStyle.QMARK,)
     default_parameter_style: ClassVar[ParameterStyle] = ParameterStyle.QMARK
-    
+
     def _execute_statement(
-        self, 
-        statement: SQL, 
-        connection: Optional[ConnectionT] = None, 
+        self,
+        statement: SQL,
+        connection: Optional[ConnectionT] = None,
         **kwargs: Any
     ) -> SQLResult[RowT]:
         # 1. Handle scripts first
         if statement.is_script:
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, statement=statement, **kwargs)
-        
+
         # 2. Get target parameter style
         target_style = self._determine_target_style(statement)
-        
+
         # 3. Compile SQL
         sql, params = self._get_compiled_sql(statement, target_style)
-        
+
         # 4. Process parameters (DO NOT ADD MORE PROCESSING)
         params = self._process_parameters(params)
-        
+
         # 5. Route to method
         if statement.is_many:
             return self._execute_many(sql, params, connection=connection, **kwargs)
         else:
             return self._execute(sql, params, statement, connection=connection, **kwargs)
-    
+
     def _execute(
         self,
         sql: str,
@@ -190,7 +190,7 @@ class MyDriver(
     ) -> SQLResult[RowT]:
         """Execute single statement"""
         raise NotImplementedError
-    
+
     def _execute_many(
         self,
         sql: str,
@@ -200,7 +200,7 @@ class MyDriver(
     ) -> SQLResult[RowT]:
         """Execute with multiple parameter sets"""
         raise NotImplementedError
-    
+
     def _execute_script(
         self,
         script: str,
@@ -246,21 +246,19 @@ def _coerce_array(self, value: Any) -> Any:
 
 ```python
 # Problem: ADBC can't determine NULL types
-# Solution: AST transformation
-def _handle_null_parameters(self, sql, params):
-    # Transform: INSERT INTO t VALUES ($1, $2)
-    # To: INSERT INTO t VALUES (CAST(NULL AS text), $1)
-    # When params = [None, "value"]
+# Solution: AST transformation 
 ```
+
+@sqlspec/adapters/adbc/pipeline_steps.py
 
 ### Psycopg COPY
 
 ```python
 # Problem: COPY data isn't a SQL parameter
 # Solution: Detect and skip parameter extraction
-if "COPY" in sql and "FROM STDIN" in sql:
-    return []  # No params to extract
 ```
+
+@sqlspec/adapters/psycopg/pipeline_steps.py
 
 ## Parameter Styles
 
@@ -314,7 +312,7 @@ def _execute(
     # Extract known kwargs
     timeout = kwargs.get('timeout', None)
     fetch_size = kwargs.get('fetch_size', 1000)
-    
+
     # Pass remaining kwargs to cursor if supported
     cursor.execute(sql, parameters, **kwargs)
 ```
@@ -343,7 +341,7 @@ def execute(self, statement, /, *parameters, **kwargs):
 ```python
 #!/usr/bin/env python
 # .tmp/debug_issue.py
-from sqlspec.adapters.mydb.config import MyDbConfig
+from sqlspec.adapters.mydb import MyDbConfig
 
 config = MyDbConfig(
     connection_config={"host": "localhost"},
@@ -403,12 +401,12 @@ from sqlspec.statement.filters import StatementFilter
 ```python
 class StatementFilter(ABC):
     """Filters that can be appended to SQL statements."""
-    
+
     @abstractmethod
     def append_to_statement(self, statement: SQL) -> SQL:
         """Apply filter and return NEW SQL instance (immutability!)."""
         ...
-    
+
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract (positional_params, named_params) from filter."""
         return [], {}

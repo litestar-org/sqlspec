@@ -3,20 +3,18 @@
 from typing import Union
 
 from sqlspec.driver import mixins
-from sqlspec.driver._async import AsyncDriverAdapterProtocol
+from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._common import CommonDriverAttributesMixin
-from sqlspec.driver._sync import SyncDriverAdapterProtocol
+from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.typing import ConnectionT, RowT
 
 __all__ = (
-    "AsyncDriverAdapterProtocol",
+    "AsyncDriverAdapterBase",
     "CommonDriverAttributesMixin",
     "DriverAdapterProtocol",
-    "SyncDriverAdapterProtocol",
+    "SyncDriverAdapterBase",
     "mixins",
 )
 
 # Type alias for convenience
-DriverAdapterProtocol = Union[
-    SyncDriverAdapterProtocol[ConnectionT, RowT], AsyncDriverAdapterProtocol[ConnectionT, RowT]
-]
+DriverAdapterProtocol = Union[SyncDriverAdapterBase[ConnectionT, RowT], AsyncDriverAdapterBase[ConnectionT, RowT]]

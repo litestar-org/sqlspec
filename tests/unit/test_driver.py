@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 import pytest
 from sqlglot import exp
 
-from sqlspec.driver import AsyncDriverAdapterProtocol, CommonDriverAttributesMixin, SyncDriverAdapterProtocol
+from sqlspec.driver import AsyncDriverAdapterBase, CommonDriverAttributesMixin, SyncDriverAdapterBase
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -62,7 +62,7 @@ class MockAsyncConnection:
         self.connected = False
 
 
-class MockSyncDriver(SyncDriverAdapterProtocol[MockConnection, DictRow]):
+class MockSyncDriver(SyncDriverAdapterBase[MockConnection, DictRow]):
     """Test sync driver implementation."""
 
     dialect = "sqlite"  # Use valid SQLGlot dialect
@@ -124,7 +124,7 @@ class MockSyncDriver(SyncDriverAdapterProtocol[MockConnection, DictRow]):
         return result  # type: ignore
 
 
-class MockAsyncDriver(AsyncDriverAdapterProtocol[MockAsyncConnection, DictRow]):
+class MockAsyncDriver(AsyncDriverAdapterBase[MockAsyncConnection, DictRow]):
     """Test async driver implementation."""
 
     dialect = "postgres"  # Use valid SQLGlot dialect
@@ -479,7 +479,7 @@ def test_sync_driver_execute_with_parameters() -> None:
         assert result == mock_result
 
 
-# AsyncDriverAdapterProtocol Tests
+# AsyncDriverAdapterBase Tests
 
 
 async def test_async_driver_build_statement() -> None:

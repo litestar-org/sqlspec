@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Optional, cast
 
 from psqlpy import Connection
 
-from sqlspec.driver import AsyncDriverAdapterProtocol
+from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.driver.connection import managed_transaction_async
 from sqlspec.driver.mixins import (
     AsyncAdapterCacheMixin,
@@ -31,7 +31,7 @@ logger = logging.getLogger("sqlspec")
 
 
 class PsqlpyDriver(
-    AsyncDriverAdapterProtocol[PsqlpyConnection, RowT],
+    AsyncDriverAdapterBase[PsqlpyConnection, RowT],
     AsyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -119,7 +119,7 @@ class PsqlpyDriver(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
             # PSQLPy expects parameters as a list (for $1, $2, etc.) or dict
@@ -128,7 +128,8 @@ class PsqlpyDriver(
             if isinstance(parameters, (list, tuple)):
                 final_params = list(parameters)
             elif isinstance(parameters, dict):
-                final_params = parameters
+                # PSQLPy doesn't like empty dicts, convert to empty list
+                final_params = parameters or []
             elif parameters is None:
                 final_params = []
             else:
@@ -166,7 +167,7 @@ class PsqlpyDriver(
         self, sql: str, param_list: Any, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
             # PSQLPy expects a list of parameter lists/tuples for execute_many
@@ -196,7 +197,7 @@ class PsqlpyDriver(
         self, script: str, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
             # Split script into individual statements for validation

@@ -1,5 +1,6 @@
 """Cache implementation for SQL statement processing."""
 
+import copy
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -16,17 +17,20 @@ __all__ = (
     "ASTFragmentCache",
     "BaseStatementCache",
     "CachedFragment",
+    "FilterCache",
     "SQLCache",
     "ast_fragment_cache",
     "base_statement_cache",
-    "expression_cache",
+    "filtered_ast_cache",
+    "optimized_expression_cache",
     "sql_cache",
 )
 
 
-DEFAULT_CACHE_MAX_SIZE = 5000
+DEFAULT_CACHE_MAX_SIZE = 1000
 DEFAULT_FRAGMENT_CACHE_SIZE = 5000
 DEFAULT_BASE_STATEMENT_CACHE_SIZE = 2000
+DEFAULT_FILTER_CACHE_SIZE = 1000
 
 
 class SQLCache:
@@ -50,7 +54,7 @@ class SQLCache:
             if key in self.cache:
                 self.cache.move_to_end(key)
                 self._record_hit()
-                return self.cache[key]
+                return self._safe_copy(self.cache[key])
             self._record_miss()
             return None
 
@@ -70,6 +74,35 @@ class SQLCache:
         """Clear the cache."""
         with self.lock:
             self.cache.clear()
+
+    def _safe_copy(self, value: Any) -> Any:
+        """Create a safe copy of cached values to prevent mutation.
+
+        For compiled SQL results, we need to copy the parameters list/dict
+        but can reuse immutable strings and expressions.
+        """
+        if value is None:
+            return None
+
+        # Handle tuple of (sql_string, parameters) - common for compiled SQL cache
+        if isinstance(value, tuple) and len(value) == 2:
+            sql_string, parameters = value
+            # SQL string is immutable, but parameters might be mutable
+            return (sql_string, self._safe_copy(parameters))
+
+        # Handle mutable parameter containers
+        if isinstance(value, list):
+            return value.copy()
+        if isinstance(value, dict):
+            return value.copy()
+
+        # For complex objects or when in doubt, use deep copy
+        # This handles nested structures safely
+        if isinstance(value, (tuple, list, dict, set)):
+            return copy.deepcopy(value)
+
+        # Immutable objects can be returned as-is
+        return value
 
     def _record_hit(self) -> None:
         """Record a cache hit in statistics."""
@@ -376,7 +409,89 @@ class BaseStatementCache:
             }
 
 
+class FilterCache:
+    """Thread-safe cache for filter chain results.
+
+    This cache stores the results of applying filter chains to base statements.
+    Since only StatementFilters modify SQL after creation, this cache has high
+    hit rates for common filter patterns.
+    """
+
+    def __init__(self, max_size: int = DEFAULT_FILTER_CACHE_SIZE) -> None:
+        self._cache: OrderedDict[tuple[int, tuple[Any, ...]], exp.Expression] = OrderedDict()
+        self._max_size = max_size
+        self._lock = threading.Lock()
+        self._hit_count = 0
+        self._miss_count = 0
+
+    @property
+    def size(self) -> int:
+        """Get current cache size."""
+        return len(self._cache)
+
+    @property
+    def hit_rate(self) -> float:
+        """Get cache hit rate."""
+        total = self._hit_count + self._miss_count
+        return self._hit_count / total if total > 0 else 0.0
+
+    def get(self, key: tuple[int, tuple[Any, ...]]) -> Optional[exp.Expression]:
+        """Get cached filter result.
+
+        Args:
+            key: Tuple of (base_ast_hash, filter_chain_hash)
+
+        Returns:
+            Cached expression (copy) if found, None otherwise
+        """
+        with self._lock:
+            if key in self._cache:
+                self._hit_count += 1
+                self._cache.move_to_end(key)
+                return self._cache[key].copy()
+
+            self._miss_count += 1
+            return None
+
+    def set(self, key: tuple[int, tuple[Any, ...]], value: exp.Expression) -> None:
+        """Cache filter result.
+
+        Args:
+            key: Tuple of (base_ast_hash, filter_chain_hash)
+            value: Expression to cache
+        """
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+                return
+
+            if len(self._cache) >= self._max_size:
+                self._cache.popitem(last=False)
+
+            self._cache[key] = value
+
+    def clear(self) -> None:
+        """Clear the cache."""
+        with self._lock:
+            self._cache.clear()
+            self._hit_count = 0
+            self._miss_count = 0
+
+    def get_stats(self) -> dict[str, Any]:
+        """Get cache statistics."""
+        with self._lock:
+            return {
+                "size": self.size,
+                "max_size": self._max_size,
+                "hit_count": self._hit_count,
+                "miss_count": self._miss_count,
+                "hit_rate": self.hit_rate,
+            }
+
+
+# Global cache instances
 sql_cache = SQLCache(cache_name="sql")
 ast_fragment_cache = ASTFragmentCache()
-expression_cache = SQLCache(max_size=5000, cache_name="optimized")
+optimized_expression_cache = SQLCache(max_size=1500, cache_name="optimized")
 base_statement_cache = BaseStatementCache()
+filtered_ast_cache = FilterCache()

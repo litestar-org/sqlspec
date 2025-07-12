@@ -171,20 +171,20 @@ SQLSpec uses mixins to compose driver functionality. Each mixin provides specifi
 def _process_parameters(self, parameters: Any) -> Any:
     """Main entry point - processes all parameters"""
     # DO NOT BYPASS THIS METHOD
-    
+
 def _coerce_parameter_type(self, param: Any) -> Any:
     """Process single parameter"""
-    
+
 # Override these for specific databases:
 def _coerce_boolean(self, value: Any) -> Any:
     """SQLite/MySQL need 0/1 instead of True/False"""
-    
+
 def _coerce_decimal(self, value: Any) -> Any:
     """Some DBs need string decimals"""
-    
+
 def _coerce_json(self, value: Any) -> Any:
     """Some DBs need JSON as strings"""
-    
+
 def _coerce_array(self, value: Any) -> Any:
     """DBs without array support need JSON"""
 ```
@@ -253,7 +253,8 @@ SQLSpec uses a **multi-pass pipeline architecture** that balances performance wi
 ### Current Architecture (KEEP THIS)
 
 The current system uses separate pipeline stages:
-- **Transformers**: Modify AST (parameterize literals, simplify expressions)  
+
+- **Transformers**: Modify AST (parameterize literals, simplify expressions)
 - **Validators**: Check safety/security without modifying
 - **Analyzers**: Extract metadata without modifying
 
@@ -262,39 +263,102 @@ The current system uses separate pipeline stages:
 ### Why NOT Single-Pass?
 
 The master plan analyzed single-pass refactoring but **rejected it** because:
+
 - **Minimal gain**: Only saves 0.1-0.2ms (< 10% improvement)
 - **High cost**: Loss of modularity, flexibility, testability
 - **Current design**: Already excellent performance with clean separation
 
-### Pipeline Transformers
+### Custom Pipeline Steps (NEW Architecture)
 
-For special cases like ADBC null handling, add pipeline transformers:
+With the new pipeline architecture, adapters can add custom pipeline steps for special handling:
 
 ```python
-# In adapter config
-if statement_config and dialect == "postgres":
-    from sqlspec.adapters.adbc.transformers import adbc_postgres_null_step
-    
-    transformers = list(statement_config.pipeline_transformers or [])
-    if adbc_postgres_null_step not in transformers:
-        transformers.append(adbc_postgres_null_step)
-        statement_config = statement_config.replace(pipeline_transformers=transformers)
+# In adapter config's provide_session method:
+if self._get_dialect() == "postgres":
+    # Add the ADBC null transform step to custom pipeline steps
+    custom_pipeline_steps = [adbc_null_transform_step]
+
+    # Preserve user's custom steps
+    if statement_config.custom_pipeline_steps:
+        custom_pipeline_steps.extend(statement_config.custom_pipeline_steps)
+
+    statement_config = statement_config.replace(custom_pipeline_steps=custom_pipeline_steps)
 ```
 
-### Transform Step Example
+### Creating Custom Pipeline Steps
+
+Custom pipeline steps follow a simple pattern:
 
 ```python
-def adbc_postgres_null_step(context: SQLTransformContext) -> SQLTransformContext:
-    """Transform NULL parameters for ADBC PostgreSQL driver."""
-    if context.dialect != "postgres":
-        return context
-    
-    # Transform AST to replace NULL placeholders with typed NULLs
-    # Remove NULL values from parameters
-    # Update metadata
-    
+from sqlspec.statement.pipeline import SQLTransformContext
+
+def custom_transform_step(context: SQLTransformContext) -> SQLTransformContext:
+    """Description of what this step does."""
+    # Access the current AST
+    expression = context.current_expression
+
+    # Access parameters dictionary
+    params = context.parameters
+
+    # Transform the AST if needed
+    context.current_expression = expression.transform(transform_func)
+
+    # Store metadata for driver
+    context.metadata["custom_key"] = value
+
     return context
 ```
+
+### Key Patterns
+
+1. **Parameter Manipulation** (ADBC NULL handling example):
+   - Pipeline steps run BEFORE `parameterize_literals_step` to see actual parameter values
+   - Use `context.parameters` dictionary to access/modify parameters
+   - Remove parameters that shouldn't be sent to database: `del context.parameters[key]`
+   - Transform AST nodes based on parameter values
+
+2. **Special Command Detection** (psycopg COPY example):
+   - Check expression type: `isinstance(expression, exp.Copy)`
+   - Extract metadata from AST: `expression.args.get("files", [])`
+   - Move special data from parameters to metadata
+   - Store flags in metadata for driver to check later
+
+3. **AST Transformation**:
+
+   ```python
+   def transform_node(node: exp.Expression) -> exp.Expression:
+       if isinstance(node, exp.Placeholder):
+           # Transform placeholder nodes
+           if should_transform(node):
+               return exp.Null()  # or other node type
+       return node
+
+   context.current_expression = context.current_expression.transform(transform_node)
+   ```
+
+### Real Examples
+
+**ADBC NULL Transformer** (`adbc_null_transform_step`):
+
+- Finds parameters with `None` values
+- Transforms Placeholder/Parameter nodes to Null nodes
+- Removes NULL parameters from context
+- Prevents "Can't map Arrow type 'na' to Postgres type" errors
+
+**Psycopg COPY Transformer** (`psycopg_copy_transform_step`):
+
+- Detects COPY FROM STDIN/TO STDOUT commands
+- Extracts data from first positional parameter
+- Moves data to metadata for driver bypass of validation
+- Enables proper COPY command handling
+
+### Important Notes
+
+1. Custom steps are added to `SQLConfig.custom_pipeline_steps` list
+2. They run at the beginning of the pipeline (before standard steps)
+3. Always return the context object
+4. Use metadata dictionary to pass information to driver
+5. Modify parameters dictionary to control what gets sent to database
 
 ### Literal Parameterization
 
@@ -319,7 +383,7 @@ SELECT * FROM users WHERE name = :param_0 AND age = :param_1
 
 Every driver must:
 
-1. Inherit from `SyncDriverAdapterProtocol` or `AsyncDriverAdapterProtocol`
+1. Inherit from `SyncDriverAdapterBase` or `AsyncDriverAdapterBase`
 2. Include required mixins
 3. Implement four execution methods
 4. Handle database-specific quirks
@@ -328,19 +392,19 @@ Every driver must:
 
 ```python
 class MyDriver(
-    SyncDriverAdapterProtocol[ConnectionT, RowT],
+    SyncDriverAdapterBase[ConnectionT, RowT],
     TypeCoercionMixin,
     SyncStorageMixin,
     SyncPipelinedExecutionMixin,
 ):
     def _execute_statement(
-        self, 
-        statement: SQL, 
+        self,
+        statement: SQL,
         connection: Optional[ConnectionT] = None,
         **kwargs: Any
     ) -> SQLResult[RowT]:
         """Main dispatcher - routes to appropriate method"""
-        
+
     def _execute(
         self,
         sql: str,
@@ -350,7 +414,7 @@ class MyDriver(
         **kwargs: Any
     ) -> SQLResult[RowT]:
         """Execute single statement"""
-        
+
     def _execute_many(
         self,
         sql: str,
@@ -359,7 +423,7 @@ class MyDriver(
         **kwargs: Any
     ) -> SQLResult[RowT]:
         """Execute with multiple parameter sets"""
-        
+
     def _execute_script(
         self,
         script: str,
@@ -377,16 +441,16 @@ def _execute_statement(self, statement: SQL, connection: Optional[ConnectionT] =
     if statement.is_script:
         sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
         return self._execute_script(sql, connection=connection, **kwargs)
-    
+
     # 2. Determine parameter style based on detected placeholders
     target_style = self._determine_target_style(statement)
-    
+
     # 3. Get compiled SQL
     sql, params = self._get_compiled_sql(statement, target_style)
-    
+
     # 4. Process parameters through TypeCoercionMixin
     params = self._process_parameters(params)
-    
+
     # 5. Route to appropriate method
     if statement.is_many:
         return self._execute_many(sql, params, connection=connection, **kwargs)
@@ -490,13 +554,13 @@ def _handle_null_parameters(self, sql: str, params: list[Any]) -> tuple[str, lis
     """Replace NULL parameters with typed CAST expressions"""
     # Parse SQL into AST
     ast = sqlglot.parse_one(sql)
-    
+
     # Find NULL parameters and their positions
     null_indices = [i for i, p in enumerate(params) if p is None]
-    
+
     # Transform AST: $1 → CAST(NULL AS text)
     # Remove NULLs from params and renumber
-    
+
     return modified_sql, non_null_params
 ```
 
@@ -508,7 +572,7 @@ COPY FROM STDIN passes data as a parameter, but it's not a SQL parameter.
 # In parameter extraction
 if "COPY" in sql and "FROM STDIN" in sql:
     return []  # No parameters to extract
-    
+
 # In driver
 if is_copy_command:
     # Handle data separately from SQL parameters
@@ -556,7 +620,7 @@ sqlspec/
    # .bugs/parameter-duplication.md
    ## Issue
    ADBC sees 6 parameters instead of 3
-   
+
    ## Reproduction
    ...
    ```

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
 
 from adbc_driver_manager.dbapi import Connection, Cursor
 
-from sqlspec.driver import SyncDriverAdapterProtocol
+from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
@@ -17,7 +17,6 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.exceptions import wrap_exceptions
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
@@ -36,7 +35,7 @@ AdbcConnection = Connection
 
 
 class AdbcDriver(
-    SyncDriverAdapterProtocol["AdbcConnection", RowT],
+    SyncDriverAdapterBase["AdbcConnection", RowT],
     SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -59,7 +58,7 @@ class AdbcDriver(
 
     supports_native_arrow_import: ClassVar[bool] = True
     supports_native_arrow_export: ClassVar[bool] = True
-    supports_native_parquet_export: ClassVar[bool] = False  # Not implemented yet
+    supports_native_parquet_export: ClassVar[bool] = False  # TODO: Implement native Parquet export
     supports_native_parquet_import: ClassVar[bool] = True
 
     def __init__(
@@ -72,13 +71,11 @@ class AdbcDriver(
         if config and not config.dialect:
             config = config.replace(dialect=dialect)
         elif not config:
-            # Create config with dialect
             config = SQLConfig(dialect=dialect)
 
         super().__init__(connection=connection, config=config, default_row_type=default_row_type)
         self.dialect: DialectType = dialect
-        self.default_parameter_style = self._get_parameter_style_for_dialect(self.dialect)
-        # Override supported parameter styles based on actual dialect capabilities
+        self.default_parameter_style = self._get_default_parameter_style_for_dialect(self.dialect)
         self.supported_parameter_styles = self._get_supported_parameter_styles_for_dialect(self.dialect)
 
     def _coerce_boolean(self, value: Any) -> Any:
@@ -137,8 +134,8 @@ class AdbcDriver(
         return "postgres"
 
     @staticmethod
-    def _get_parameter_style_for_dialect(dialect: str) -> ParameterStyle:
-        """Get the parameter style for a given dialect."""
+    def _get_default_parameter_style_for_dialect(dialect: str) -> ParameterStyle:
+        """Get the default parameter style for a given dialect."""
         dialect_style_map = {
             "postgres": ParameterStyle.NUMERIC,
             "postgresql": ParameterStyle.NUMERIC,
@@ -185,7 +182,6 @@ class AdbcDriver(
             return self._execute_script(sql, connection=connection, **kwargs)
 
         detected_styles = {p.style for p in statement.parameter_info}
-
         target_style = self.default_parameter_style
         unsupported_styles = detected_styles - set(self.supported_parameter_styles)
 
@@ -197,6 +193,7 @@ class AdbcDriver(
                     target_style = style
                     break
 
+        statement._ensure_processed()
         sql, params = self._get_compiled_sql(statement, target_style)
         params = self._process_parameters(params)
         if statement.is_many:
@@ -208,15 +205,12 @@ class AdbcDriver(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional["AdbcConnection"] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            converted_params = convert_parameter_sequence(parameters)
-            if converted_params is not None and not isinstance(converted_params, (list, tuple)):
-                cursor_params = [converted_params]
-            else:
-                cursor_params = converted_params
-
+            cursor_params = (
+                parameters if parameters is not None and not isinstance(parameters, (list, tuple)) else [parameters]
+            )
             with self._get_cursor(txn_conn) as cursor:
                 try:
                     # ADBC PostgreSQL has issues with NULL parameters in some cases
@@ -226,7 +220,9 @@ class AdbcDriver(
                 except Exception as e:
                     # Rollback transaction on error for PostgreSQL to avoid
                     # "current transaction is aborted" errors
-                    if self.dialect == "postgres":
+                    if (
+                        self.dialect == "postgres"
+                    ):  # TODO: determine why we need this; if it's to satisfy a test, we should remove
                         with contextlib.suppress(Exception):
                             cursor.execute("ROLLBACK")
                     raise e from e
@@ -261,11 +257,11 @@ class AdbcDriver(
         self, sql: str, param_list: Any, connection: Optional["AdbcConnection"] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # Normalize parameter list using consolidated utility
-            converted_param_list = convert_parameter_sequence(param_list)
+            # TypeCoercionMixin already processed parameters
+            converted_param_list = param_list
 
             # Handle empty parameter list case for PostgreSQL
             if not converted_param_list and self.dialect == "postgres":
@@ -282,7 +278,9 @@ class AdbcDriver(
                 try:
                     cursor.executemany(sql, converted_param_list or [])
                 except Exception as e:
-                    if self.dialect == "postgres":
+                    if (
+                        self.dialect == "postgres"
+                    ):  # TODO: determine why we need this; if it's to satisfy a test, we should remove
                         with contextlib.suppress(Exception):
                             cursor.execute("ROLLBACK")
                     # Always re-raise the original exception
@@ -300,25 +298,20 @@ class AdbcDriver(
         self, script: str, connection: Optional["AdbcConnection"] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # ADBC drivers don't support multiple statements in a single execute
             statements = self._split_script_statements(script)
-            suppress_warnings = kwargs.get("_suppress_warnings", False)
-
             executed_count = 0
             total_rows = 0
             with self._get_cursor(txn_conn) as cursor:
                 for statement in statements:
                     if statement.strip():
                         # Validate each statement unless warnings suppressed
-                        if not suppress_warnings:
-                            # Run validation through pipeline
+                        if not kwargs.get("_suppress_warnings"):
                             temp_sql = SQL(statement, config=self.config)
                             temp_sql._ensure_processed()
-                            # Validation errors are logged as warnings by default
-
                         rows = self._execute_single_script_statement(cursor, statement)
                         executed_count += 1
                         total_rows += rows
@@ -348,7 +341,9 @@ class AdbcDriver(
         except Exception as e:
             # Rollback transaction on error for PostgreSQL to avoid
             # "current transaction is aborted" errors
-            if self.dialect == "postgres":
+            if (
+                self.dialect == "postgres"
+            ):  # TODO: determine why we need this; if it's to satisfy a test, we should remove
                 with contextlib.suppress(Exception):
                     cursor.execute("ROLLBACK")
             raise e from e
@@ -373,11 +368,11 @@ class AdbcDriver(
         conn = self._connection(connection)
 
         with wrap_exceptions(), self._get_cursor(conn) as cursor:
-            # Execute the query
             params = sql.get_parameters(style=self.default_parameter_style)
-            # ADBC expects parameters as a list for most drivers
-            cursor_params = [params] if params is not None and not isinstance(params, (list, tuple)) else params
-            cursor.execute(sql.to_sql(placeholder_style=self.default_parameter_style), cursor_params or [])
+            cursor.execute(
+                sql.to_sql(placeholder_style=self.default_parameter_style),
+                [params] if params is not None and not isinstance(params, (list, tuple)) else params or [],
+            )
             arrow_table = cursor.fetch_arrow_table()
             return ArrowResult(statement=sql, data=arrow_table)
 

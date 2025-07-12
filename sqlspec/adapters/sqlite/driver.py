@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Optional, cast
 
 from typing_extensions import TypeAlias
 
-from sqlspec.driver import SyncDriverAdapterProtocol
+from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
@@ -19,7 +19,6 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -38,7 +37,7 @@ SqliteConnection: TypeAlias = sqlite3.Connection
 
 
 class SqliteDriver(
-    SyncDriverAdapterProtocol[SqliteConnection, RowT],
+    SyncDriverAdapterBase[SqliteConnection, RowT],
     SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -134,11 +133,31 @@ class SqliteDriver(
             else:
                 target_style = self.default_parameter_style
 
+        # When literals have been parameterized (creating :param_N placeholders),
+        # force QMARK style to ensure correct parameter ordering
+        # BUT only if there are no other named parameters in the SQL
+        # TODO: fix this
+        if hasattr(statement, "_processing_context") and statement._processing_context:
+            if statement._processing_context.metadata.get("literals_parameterized"):
+                # Check if there are other named parameters
+                if detected_styles and ParameterStyle.NAMED_COLON in detected_styles:
+                    # Keep named style to preserve user parameters
+                    pass
+                else:
+                    # No user parameters, safe to use QMARK for literals
+                    target_style = self.default_parameter_style
+
         if statement.is_many:
             sql, params = self._get_compiled_sql(statement, target_style)
             return self._execute_many(sql, params, connection=connection, statement=statement, **kwargs)
 
         sql, params = self._get_compiled_sql(statement, target_style)
+
+        # SQLite only supports QMARK style, so we need to convert
+        # if the SQL contains other parameter styles
+        if target_style != ParameterStyle.QMARK:
+            # Force conversion to QMARK style
+            sql, params = statement.compile(placeholder_style="qmark")
 
         params = self._process_parameters(params)
 
@@ -153,20 +172,10 @@ class SqliteDriver(
     ) -> SQLResult[RowT]:
         """Execute a single statement with parameters."""
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
-            # Convert parameters using consolidated utility
-            converted_params_list = convert_parameter_sequence(parameters)
-            params_for_execute: Any
-            if converted_params_list and len(converted_params_list) == 1:
-                # Single parameter should be tuple for SQLite
-                if not isinstance(converted_params_list[0], (tuple, list, dict)):
-                    params_for_execute = (converted_params_list[0],)
-                else:
-                    params_for_execute = converted_params_list[0]
-            else:
-                # Multiple parameters
-                params_for_execute = tuple(converted_params_list) if converted_params_list else ()
+            # TypeCoercionMixin already processed parameters
+            params_for_execute = parameters
 
             cursor.execute(sql, params_for_execute)
             if self.returns_rows(statement.expression):
@@ -198,19 +207,10 @@ class SqliteDriver(
     ) -> SQLResult[RowT]:
         """Execute a statement many times with a list of parameter tuples."""
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # Normalize parameter list using consolidated utility
-            converted_param_list = convert_parameter_sequence(param_list)
-            formatted_params: list[tuple[Any, ...]] = []
-            if converted_param_list:
-                for param_set in converted_param_list:
-                    if isinstance(param_set, (list, tuple)):
-                        formatted_params.append(tuple(param_set))
-                    elif param_set is None:
-                        formatted_params.append(())
-                    else:
-                        formatted_params.append((param_set,))
+            # TypeCoercionMixin already processed parameters
+            formatted_params = param_list
 
             with self._get_cursor(txn_conn) as cursor:
                 cursor.executemany(sql, formatted_params)
@@ -232,7 +232,7 @@ class SqliteDriver(
         """Execute script using splitter for per-statement validation."""
         from sqlspec.statement.splitter import split_sql_script
 
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
         statements = split_sql_script(script, dialect="sqlite")
 
         total_rows = 0
@@ -253,7 +253,7 @@ class SqliteDriver(
                     successful += 1
                     total_rows += cursor.rowcount or 0
                 except Exception as e:  # noqa: PERF203
-                    if not kwargs.get("continue_on_error", False):
+                    if not kwargs.get("continue_on_error"):
                         raise
                     logger.warning("Script statement failed: %s", e)
 

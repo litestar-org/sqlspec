@@ -37,8 +37,8 @@ All driver methods must match these exact signatures:
 
 ```python
 def _execute_statement(
-    self, 
-    statement: SQL, 
+    self,
+    statement: SQL,
     connection: Optional[ConnectionT] = None,
     **kwargs: Any
 ) -> SQLResult[RowT]:

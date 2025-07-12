@@ -17,7 +17,6 @@ if TYPE_CHECKING:
 __all__ = (
     "AnyCollectionFilter",
     "BeforeAfterFilter",
-    "CacheableFilter",
     "FilterTypeT",
     "FilterTypes",
     "InAnyFilter",
@@ -44,27 +43,14 @@ FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
 
 
 class StatementFilter(ABC):
-    """Abstract base class for filters that can be appended to a statement.
-
-    All filters must follow the immutability pattern: the append_to_statement
-    method must return a new SQL instance and never modify the input statement.
-    """
+    """Abstract base class for filters that can be appended to a statement."""
 
     @abstractmethod
     def append_to_statement(self, statement: "SQL") -> "SQL":
         """Append the filter to the statement.
 
-        This method must return a new SQL instance with the filter applied.
-        The original statement must not be modified (immutability requirement).
-
-        Filter parameters should be added to the result using the SQL.add_named_parameter()
-        method, which preserves existing parameters.
-
-        Args:
-            statement: The SQL instance to filter
-
-        Returns:
-            A new SQL instance with the filter applied
+        This method should modify the SQL expression only, not the parameters.
+        Parameters should be provided via extract_parameters().
         """
         ...
 
@@ -77,15 +63,6 @@ class StatementFilter(ABC):
             - named_params: Dict of parameter name to value
         """
         return [], {}
-
-
-class CacheableFilter(StatementFilter):
-    """Base class for filters that support caching.
-
-    Filters that extend this class must implement get_cache_key() to
-    provide a stable, hashable representation of their configuration
-    for use in the filter result cache.
-    """
 
     @abstractmethod
     def get_cache_key(self) -> tuple[Any, ...]:
@@ -104,7 +81,7 @@ class BeforeAfterFilter(StatementFilter):
     """Data required to filter a query on a ``datetime`` column.
 
     Note:
-        This filter adds its parameters to the SQL statement while preserving any existing parameters.
+        After applying this filter, only the filter's parameters (e.g., before/after) will be present in the resulting SQL statement's parameters. Original parameters from the statement are not preserved in the result.
     """
 
     __slots__ = ("_param_name_after", "_param_name_before", "after", "before", "field_name")
@@ -235,7 +212,7 @@ class InCollectionFilter(InAnyFilter[T]):
     """Data required to construct a ``WHERE ... IN (...)`` clause.
 
     Note:
-        This filter adds its parameters to the SQL statement while preserving any existing parameters.
+        After applying this filter, only the filter's parameters (e.g., the generated IN parameters) will be present in the resulting SQL statement's parameters. Original parameters from the statement are not preserved in the result.
     """
 
     __slots__ = ("_param_names", "field_name", "values")
@@ -494,7 +471,7 @@ class LimitOffsetFilter(PaginationFilter):
         _, named_params = self.extract_parameters()
         for name, value in named_params.items():
             result = result.add_named_parameter(name, value)
-        return result
+        return result.filter(self)
 
 
 class OrderByFilter(StatementFilter):
@@ -539,7 +516,7 @@ class SearchFilter(StatementFilter):
     """Data required to construct a ``WHERE field_name LIKE '%' || :value || '%'`` clause.
 
     Note:
-        This filter adds its parameters to the SQL statement while preserving any existing parameters.
+        After applying this filter, only the filter's parameters (e.g., the generated search parameter) will be present in the resulting SQL statement's parameters. Original parameters from the statement are not preserved in the result.
     """
 
     __slots__ = ("_param_name", "field_name", "ignore_case", "value")

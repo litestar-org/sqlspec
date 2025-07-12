@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
-    from sqlspec.driver import AsyncDriverAdapterProtocol
+    from sqlspec.driver import AsyncDriverAdapterBase
 
 __all__ = ("create_migration_file", "drop_all", "get_author")
 
@@ -69,7 +69,7 @@ def get_author() -> str:
 
 
 async def drop_all(
-    engine: "AsyncDriverAdapterProtocol[Any]", version_table_name: str, metadata: Optional[Any] = None
+    engine: "AsyncDriverAdapterBase[Any]", version_table_name: str, metadata: Optional[Any] = None
 ) -> None:
     """Drop all tables from the database.
 

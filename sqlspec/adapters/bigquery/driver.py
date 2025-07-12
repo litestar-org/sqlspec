@@ -20,7 +20,7 @@ from google.cloud.bigquery import (
 )
 from google.cloud.bigquery.table import Row as BigQueryRow
 
-from sqlspec.driver import SyncDriverAdapterProtocol
+from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
@@ -30,7 +30,6 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import ArrowResult, SQLResult
@@ -57,7 +56,7 @@ TIMESTAMP_ERROR_MSG_LENGTH = 189  # Length check for timestamp parsing error
 
 
 class BigQueryDriver(
-    SyncDriverAdapterProtocol["BigQueryConnection", RowT],
+    SyncDriverAdapterBase["BigQueryConnection", RowT],
     SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -382,19 +381,20 @@ class BigQueryDriver(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[BigQueryConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         # BigQuery doesn't have traditional transactions, but we'll use the pattern for consistency
         # The managed_transaction_sync will just pass through for BigQuery Client objects
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # Convert parameters using consolidated utility
-            converted_params = convert_parameter_sequence(parameters)
+            # TypeCoercionMixin handles parameter processing
             param_dict: dict[str, Any] = {}
-            if converted_params:
-                if isinstance(converted_params[0], dict):
-                    param_dict = converted_params[0]
+            if parameters:
+                if isinstance(parameters, dict):
+                    param_dict = parameters
+                elif isinstance(parameters, (list, tuple)):
+                    param_dict = {f"param_{i}": val for i, val in enumerate(parameters)}
                 else:
-                    param_dict = {f"param_{i}": val for i, val in enumerate(converted_params)}
+                    param_dict = {"param_0": parameters}
 
             bq_params = self._prepare_bq_query_parameters(param_dict)
 
@@ -409,11 +409,11 @@ class BigQueryDriver(
         self, sql: str, param_list: Any, connection: Optional[BigQueryConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # Normalize parameter list using consolidated utility
-            converted_param_list = convert_parameter_sequence(param_list)
+            # TypeCoercionMixin handles parameter processing
+            converted_param_list = param_list
 
             # Use a multi-statement script for batch execution
             script_parts = []
@@ -465,7 +465,7 @@ class BigQueryDriver(
         self, script: str, connection: Optional[BigQueryConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # BigQuery does not support multi-statement scripts in a single job

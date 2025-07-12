@@ -7,7 +7,7 @@ import pytest
 from sqlglot.dialects.dialect import Dialect
 
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
-from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
+from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow
@@ -19,7 +19,7 @@ class MockConnection:
     pass
 
 
-class MockDriver(SyncDriverAdapterProtocol[MockConnection, DictRow]):
+class MockDriver(SyncDriverAdapterBase[MockConnection, DictRow]):
     """Mock driver for testing."""
 
     dialect = "sqlite"  # Use a real dialect for testing
@@ -38,7 +38,7 @@ class MockDriver(SyncDriverAdapterProtocol[MockConnection, DictRow]):
         return ParameterStyle.QMARK
 
 
-class MockAsyncDriver(AsyncDriverAdapterProtocol[MockConnection, DictRow]):
+class MockAsyncDriver(AsyncDriverAdapterBase[MockConnection, DictRow]):
     """Mock async driver for testing."""
 
     dialect = "postgres"  # Use a real dialect for testing
@@ -89,7 +89,7 @@ class TestSyncConfigDialect:
         """Test that config raises AttributeError when driver_type is not set and driver has no dialect."""
 
         # Create a driver without dialect attribute
-        class DriverWithoutDialect(SyncDriverAdapterProtocol[MockConnection, DictRow]):
+        class DriverWithoutDialect(SyncDriverAdapterBase[MockConnection, DictRow]):
             # No dialect attribute
             parameter_style = ParameterStyle.QMARK
 
@@ -367,7 +367,7 @@ class TestDialectValidation:
         """Test proper error when accessing dialect on config without driver_type."""
 
         # Create a driver without dialect attribute
-        class DriverWithoutDialect(SyncDriverAdapterProtocol[MockConnection, DictRow]):
+        class DriverWithoutDialect(SyncDriverAdapterBase[MockConnection, DictRow]):
             # No dialect attribute
             parameter_style = ParameterStyle.QMARK
 

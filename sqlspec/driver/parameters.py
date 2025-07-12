@@ -13,7 +13,6 @@ if TYPE_CHECKING:
     from sqlspec.typing import StatementParameters
 
 __all__ = (
-    "convert_parameter_sequence",
     "convert_parameters_to_positional",
     "process_execute_many_parameters",
     "separate_filters_and_parameters",
@@ -61,14 +60,16 @@ def process_execute_many_parameters(
     # Use first parameter as the sequence for execute_many
     param_sequence = param_values[0] if param_values else None
 
-    # Normalize the parameter sequence
-    param_sequence = convert_parameter_sequence(param_sequence)
-
+    # TypeCoercionMixin handles parameter normalization in drivers
+    # Just pass through the parameter sequence as-is
     return filters, param_sequence
 
 
 def convert_parameter_sequence(params: Any) -> Optional[list[Any]]:
     """Normalize a parameter sequence to a list format.
+
+    DEPRECATED: This function is deprecated. TypeCoercionMixin now handles
+    all parameter processing in the driver layer.
 
     Args:
         params: Parameter sequence in various formats

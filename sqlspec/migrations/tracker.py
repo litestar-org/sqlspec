@@ -8,15 +8,15 @@ from typing import TYPE_CHECKING, Any, Optional
 from sqlspec.migrations.base import BaseMigrationTracker
 
 if TYPE_CHECKING:
-    from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
+    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 
 __all__ = ("AsyncMigrationTracker", "SyncMigrationTracker")
 
 
-class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterProtocol[Any]"]):
+class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase[Any]"]):
     """Sync version - tracks applied migrations in the database."""
 
-    def ensure_tracking_table(self, driver: "SyncDriverAdapterProtocol[Any]") -> None:
+    def ensure_tracking_table(self, driver: "SyncDriverAdapterBase[Any]") -> None:
         """Create the migration tracking table if it doesn't exist.
 
         Args:
@@ -24,7 +24,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterProtocol[Any]"
         """
         driver.execute(self._get_create_table_sql())
 
-    def get_current_version(self, driver: "SyncDriverAdapterProtocol[Any]") -> Optional[str]:
+    def get_current_version(self, driver: "SyncDriverAdapterBase[Any]") -> Optional[str]:
         """Get the latest applied migration version.
 
         Args:
@@ -36,7 +36,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterProtocol[Any]"
         result = driver.execute(self._get_current_version_sql())
         return result.data[0]["version_num"] if result.data else None
 
-    def get_applied_migrations(self, driver: "SyncDriverAdapterProtocol[Any]") -> "list[dict[str, Any]]":
+    def get_applied_migrations(self, driver: "SyncDriverAdapterBase[Any]") -> "list[dict[str, Any]]":
         """Get all applied migrations in order.
 
         Args:
@@ -50,7 +50,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterProtocol[Any]"
 
     def record_migration(
         self,
-        driver: "SyncDriverAdapterProtocol[Any]",
+        driver: "SyncDriverAdapterBase[Any]",
         version: str,
         description: str,
         execution_time_ms: int,
@@ -72,7 +72,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterProtocol[Any]"
 
         driver.execute(self._get_record_migration_sql(version, description, execution_time_ms, checksum, applied_by))
 
-    def remove_migration(self, driver: "SyncDriverAdapterProtocol[Any]", version: str) -> None:
+    def remove_migration(self, driver: "SyncDriverAdapterBase[Any]", version: str) -> None:
         """Remove a migration record (used during downgrade).
 
         Args:
@@ -83,10 +83,10 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterProtocol[Any]"
         driver.execute(self._get_remove_migration_sql(version))
 
 
-class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterProtocol[Any]"]):
+class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase[Any]"]):
     """Async version - tracks applied migrations in the database."""
 
-    async def ensure_tracking_table(self, driver: "AsyncDriverAdapterProtocol[Any]") -> None:
+    async def ensure_tracking_table(self, driver: "AsyncDriverAdapterBase[Any]") -> None:
         """Create the migration tracking table if it doesn't exist.
 
         Args:
@@ -94,7 +94,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterProtocol[Any
         """
         await driver.execute(self._get_create_table_sql())
 
-    async def get_current_version(self, driver: "AsyncDriverAdapterProtocol[Any]") -> Optional[str]:
+    async def get_current_version(self, driver: "AsyncDriverAdapterBase[Any]") -> Optional[str]:
         """Get the latest applied migration version.
 
         Args:
@@ -106,7 +106,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterProtocol[Any
         result = await driver.execute(self._get_current_version_sql())
         return result.data[0]["version_num"] if result.data else None
 
-    async def get_applied_migrations(self, driver: "AsyncDriverAdapterProtocol[Any]") -> "list[dict[str, Any]]":
+    async def get_applied_migrations(self, driver: "AsyncDriverAdapterBase[Any]") -> "list[dict[str, Any]]":
         """Get all applied migrations in order.
 
         Args:
@@ -120,7 +120,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterProtocol[Any
 
     async def record_migration(
         self,
-        driver: "AsyncDriverAdapterProtocol[Any]",
+        driver: "AsyncDriverAdapterBase[Any]",
         version: str,
         description: str,
         execution_time_ms: int,
@@ -143,7 +143,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterProtocol[Any
             self._get_record_migration_sql(version, description, execution_time_ms, checksum, applied_by)
         )
 
-    async def remove_migration(self, driver: "AsyncDriverAdapterProtocol[Any]", version: str) -> None:
+    async def remove_migration(self, driver: "AsyncDriverAdapterBase[Any]", version: str) -> None:
         """Remove a migration record (used during downgrade).
 
         Args:

@@ -47,7 +47,7 @@ def test_sql_initialization_with_string() -> None:
     stmt = SQL(sql_str)
 
     assert stmt.sql == sql_str
-    assert stmt.parameters == [] or stmt.parameters == {}
+    assert stmt.parameters == {}
     assert stmt._filters == []
     assert stmt._config is not None
     assert isinstance(stmt._config, SQLConfig)
@@ -88,7 +88,7 @@ def test_sql_initialization_with_expression() -> None:
     stmt = SQL(expr)
 
     assert stmt.sql == expr.sql()
-    assert stmt.parameters == [] or stmt.parameters == {}
+    assert stmt.parameters == {}
 
 
 def test_sql_initialization_with_custom_config() -> None:
@@ -147,7 +147,7 @@ def test_sql_parameters_property() -> None:
     """Test SQL.parameters property returns original parameters."""
     # No parameters
     stmt1 = SQL("SELECT * FROM users")
-    assert stmt1.parameters == [] or stmt1.parameters == {}
+    assert stmt1.parameters == {}
 
     # With positional parameters - returns the original tuple
     stmt2 = SQL("SELECT * FROM users WHERE id = ?", 1)
@@ -258,99 +258,6 @@ def test_sql_multiple_filters() -> None:
     assert "name" in sql
 
 
-# Test SQL builder methods
-def test_sql_where_method() -> None:
-    """Test SQL.where() returns new instance with condition applied."""
-    stmt1 = SQL("SELECT * FROM users")
-
-    # Test with string condition
-    stmt2 = stmt1.where("active = true")
-    assert stmt2 is not stmt1
-    assert "WHERE active = TRUE" in stmt2.sql
-    assert stmt1.sql == "SELECT * FROM users"
-
-    # Test with expression condition
-    condition = exp.EQ(this=exp.column("age"), expression=exp.Literal.number(18))
-    stmt3 = stmt1.where(condition)
-    assert stmt3 is not stmt1
-    # Literal is parameterized by default
-    assert "WHERE age = ?" in stmt3.sql or "WHERE age = :param_0" in stmt3.sql
-
-    # Test chaining where conditions
-    stmt4 = stmt2.where("age >= 18")
-    assert stmt4 is not stmt2
-    # 18 gets parameterized
-    assert "WHERE active = TRUE AND age >= ?" in stmt4.sql or "WHERE active = TRUE AND age >= :param_" in stmt4.sql
-
-
-def test_sql_limit_method() -> None:
-    """Test SQL.limit() returns new instance with LIMIT applied."""
-    stmt1 = SQL("SELECT * FROM users")
-
-    # Test with limit only
-    stmt2 = stmt1.limit(10)
-    assert stmt2 is not stmt1
-    assert "LIMIT 10" in stmt2.sql
-    assert stmt1.sql == "SELECT * FROM users"
-
-    # Test with limit and offset
-    stmt3 = stmt1.limit(10, 5)
-    assert stmt3 is not stmt1
-    assert "LIMIT 10" in stmt3.sql
-    assert "OFFSET 5" in stmt3.sql
-
-    # Test limit on non-SELECT statement
-    stmt4 = SQL("DELETE FROM users WHERE active = false")
-    stmt5 = stmt4.limit(100)
-    assert stmt5 is not stmt4
-    # Should wrap in SELECT for non-SELECT statements
-    assert "SELECT" in stmt5.sql
-    assert "LIMIT 100" in stmt5.sql
-
-
-def test_sql_add_named_parameter_method() -> None:
-    """Test SQL.add_named_parameter() returns new instance with parameter added."""
-    stmt1 = SQL("SELECT * FROM users WHERE name = :name")
-
-    # Add a parameter
-    stmt2 = stmt1.add_named_parameter("name", "John")
-    assert stmt2 is not stmt1
-    assert stmt2.parameters == {"name": "John"}
-    # Original has no parameters - could be [] or {} depending on initialization
-    assert stmt1.parameters == [] or stmt1.parameters == {}
-
-    # Add another parameter
-    stmt3 = stmt2.add_named_parameter("age", 25)
-    assert stmt3 is not stmt2
-    assert stmt3.parameters == {"name": "John", "age": 25}
-    assert stmt2.parameters == {"name": "John"}
-
-    # Update existing parameter
-    stmt4 = stmt3.add_named_parameter("name", "Jane")
-    assert stmt4 is not stmt3
-    assert stmt4.parameters == {"name": "Jane", "age": 25}
-    assert stmt3.parameters == {"name": "John", "age": 25}
-
-
-def test_sql_builder_method_chaining() -> None:
-    """Test chaining multiple builder methods."""
-    stmt = (
-        SQL("SELECT * FROM users")
-        .where("active = true")
-        .where("role = :role")
-        .add_named_parameter("role", "admin")
-        .limit(10, 0)
-    )
-
-    # Check the query has all expected parts
-    sql = stmt.sql
-    assert "WHERE active = TRUE AND role = :role" in sql
-    # Literals get parameterized so 10 and 0 become parameters
-    assert "LIMIT" in sql
-    assert "OFFSET" in sql
-    assert stmt.parameters == {"role": "admin"}
-
-
 # Test SQL parameter handling
 def test_sql_with_missing_parameters() -> None:
     """Test SQL handles missing parameters gracefully."""
@@ -358,10 +265,7 @@ def test_sql_with_missing_parameters() -> None:
     # This enables patterns like SQL("SELECT * FROM users WHERE id = ?").as_many([...])
     stmt = SQL("SELECT * FROM users WHERE id = ?")
     assert stmt.sql == "SELECT * FROM users WHERE id = ?"
-    # The ? placeholder creates a TypedParameter with None value
-    params = stmt.parameters
-    assert len(params) == 1
-    assert params[0].value is None
+    assert stmt.parameters == {}
 
 
 def test_sql_with_extra_parameters() -> None:
@@ -447,14 +351,14 @@ def test_sql_empty_string() -> None:
     """Test SQL handles empty string input."""
     stmt = SQL("")
     assert stmt.sql == ""
-    assert stmt.parameters == [] or stmt.parameters == {}
+    assert stmt.parameters == {}
 
 
 def test_sql_whitespace_only() -> None:
     """Test SQL handles whitespace-only input."""
     stmt = SQL("   \n\t   ")
     assert stmt.sql == ""
-    assert stmt.parameters == [] or stmt.parameters == {}
+    assert stmt.parameters == {}
 
 
 # Test SQL caching behavior

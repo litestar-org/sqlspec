@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from typing import Literal
 
     from sqlspec.config import DriverT
-    from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
+    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.typing import StatementParameters
 
 __all__ = (
@@ -74,7 +74,7 @@ class SyncPipelinedExecutionMixin:
             A new Pipeline instance for queuing operations
         """
         return Pipeline(
-            driver=cast("SyncDriverAdapterProtocol[Any, Any]", self),
+            driver=cast("SyncDriverAdapterBase[Any, Any]", self),
             isolation_level=isolation_level,
             continue_on_error=continue_on_error,
             max_operations=max_operations,
@@ -95,7 +95,7 @@ class AsyncPipelinedExecutionMixin:
     ) -> "AsyncPipeline":
         """Create a new async pipeline for batch operations."""
         return AsyncPipeline(
-            driver=cast("AsyncDriverAdapterProtocol[Any, Any]", self),
+            driver=cast("AsyncDriverAdapterBase[Any, Any]", self),
             isolation_level=isolation_level,
             continue_on_error=continue_on_error,
             max_operations=max_operations,
@@ -341,7 +341,7 @@ class AsyncPipeline:
 
     def __init__(
         self,
-        driver: "AsyncDriverAdapterProtocol[Any, Any]",
+        driver: "AsyncDriverAdapterBase[Any, Any]",
         isolation_level: "Optional[str]" = None,
         continue_on_error: bool = False,
         max_operations: int = 1000,

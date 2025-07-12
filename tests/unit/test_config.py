@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
-from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
+from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
@@ -35,7 +35,7 @@ class MockPool:
         self.closed = True
 
 
-class MockSyncDriver(SyncDriverAdapterProtocol["MockConnection", "dict[str, Any]"]):
+class MockSyncDriver(SyncDriverAdapterBase["MockConnection", "dict[str, Any]"]):
     """Mock sync driver."""
 
     dialect = "mock"
@@ -66,7 +66,7 @@ class MockSyncDriver(SyncDriverAdapterProtocol["MockConnection", "dict[str, Any]
         return Mock(affected_count=result.get("rowcount", 0), last_insert_id=None)
 
 
-class MockAsyncDriver(AsyncDriverAdapterProtocol["MockConnection", "dict[str, Any]"]):
+class MockAsyncDriver(AsyncDriverAdapterBase["MockConnection", "dict[str, Any]"]):
     """Mock async driver."""
 
     dialect = "mock"

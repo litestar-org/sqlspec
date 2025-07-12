@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 from duckdb import DuckDBPyConnection
 from sqlglot import exp
 
-from sqlspec.driver import SyncDriverAdapterProtocol
+from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
@@ -18,7 +18,6 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -38,7 +37,7 @@ logger = get_logger("adapters.duckdb")
 
 
 class DuckDBDriver(
-    SyncDriverAdapterProtocol["DuckDBConnection", RowT],
+    SyncDriverAdapterBase["DuckDBConnection", RowT],
     SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -102,12 +101,11 @@ class DuckDBDriver(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # Convert parameters using consolidated utility
-            converted_params = convert_parameter_sequence(parameters)
-            final_params = converted_params or []
+            # TypeCoercionMixin handles parameter processing
+            final_params = parameters or []
 
             if self.returns_rows(statement.expression):
                 result = txn_conn.execute(sql, final_params)
@@ -154,12 +152,11 @@ class DuckDBDriver(
         self, sql: str, param_list: Any, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # Normalize parameter list using consolidated utility
-            converted_param_list = convert_parameter_sequence(param_list)
-            final_param_list = converted_param_list or []
+            # TypeCoercionMixin handles parameter processing
+            final_param_list = param_list or []
 
             # DuckDB throws an error if executemany is called with empty parameter list
             if not final_param_list:
@@ -189,7 +186,7 @@ class DuckDBDriver(
         self, script: str, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # Split script into individual statements for validation
@@ -336,7 +333,7 @@ class DuckDBDriver(
         count_result = count_result_rel.fetchone() if count_result_rel else None
         return int(count_result[0]) if count_result else 0
 
-    def _read_parquet_native(
+    def _read_parquet_native(  # TODO: this is very wrong.  It should be using our native parsing pipeline for statements / builder API
         self, source_uri: Union[str, Path], columns: Optional[list[str]] = None, **options: Any
     ) -> "SQLResult[dict[str, Any]]":
         conn = self._connection(None)

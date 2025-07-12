@@ -17,13 +17,13 @@ if TYPE_CHECKING:
 
 logger = get_logger("sqlspec")
 
-__all__ = ("AsyncDriverAdapterProtocol",)
+__all__ = ("AsyncDriverAdapterBase",)
 
 
 EMPTY_FILTERS: "list[StatementFilter]" = []
 
 
-class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], ABC):
+class AsyncDriverAdapterBase(CommonDriverAttributesMixin[ConnectionT, RowT], ABC):
     __slots__ = ()
 
     def __init__(
@@ -235,7 +235,7 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
         *parameters: "Union[StatementParameters, StatementFilter]",
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
-        _suppress_warnings: bool = False,  # New parameter for migrations
+        _suppress_warnings: bool = False,
         **kwargs: Any,
     ) -> "SQLResult[RowT]":
         """Execute a multi-statement script.
@@ -244,14 +244,8 @@ class AsyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT],
         operations. Use _suppress_warnings=True for migrations and admin scripts.
         """
         script_config = _config or self.config
-
-        # Keep validation enabled by default
-        # Validators will log warnings for dangerous operations
-
         sql_statement = self._build_statement(statement, *parameters, _config=script_config, **kwargs)
         sql_statement = sql_statement.as_script()
-
-        # Pass suppress warnings flag to execution
         if _suppress_warnings:
             kwargs["_suppress_warnings"] = True
 

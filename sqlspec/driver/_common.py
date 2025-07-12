@@ -9,7 +9,7 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.tokens import TokenType
 
-from sqlspec.driver.parameters import convert_parameter_sequence
+# convert_parameter_sequence removed - TypeCoercionMixin handles all parameter processing
 from sqlspec.exceptions import NotFoundError
 from sqlspec.statement import SQLConfig
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator, TypedParameter
@@ -336,11 +336,16 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             Parameters with TypedParameter objects unwrapped to primitive values
         """
 
-        converted = convert_parameter_sequence(parameters)
-        if not converted:
+        # TypeCoercionMixin handles parameter normalization
+        if not parameters:
             return []
 
-        return [self._coerce_parameter(p) if isinstance(p, TypedParameter) else p for p in converted]
+        # Handle single parameter
+        if not isinstance(parameters, (list, tuple)):
+            return [self._coerce_parameter(parameters) if isinstance(parameters, TypedParameter) else parameters]
+
+        # Handle list of parameters
+        return [self._coerce_parameter(p) if isinstance(p, TypedParameter) else p for p in parameters]
 
     def _prepare_driver_parameters_many(self, parameters: Any) -> "list[Any]":
         """Prepare parameter sequences for executemany operations.

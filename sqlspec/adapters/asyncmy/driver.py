@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 from asyncmy import Connection
 from typing_extensions import TypeAlias
 
-from sqlspec.driver import AsyncDriverAdapterProtocol
+from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.driver.connection import managed_transaction_async
 from sqlspec.driver.mixins import (
     AsyncAdapterCacheMixin,
@@ -16,7 +16,6 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -33,8 +32,9 @@ logger = logging.getLogger("sqlspec")
 AsyncmyConnection: TypeAlias = Connection
 
 
+# TODO: this is incorrectly using auto-commit for some reason.  we want to leave the commit up. to the user at this this point.
 class AsyncmyDriver(
-    AsyncDriverAdapterProtocol[AsyncmyConnection, RowT],
+    AsyncDriverAdapterBase[AsyncmyConnection, RowT],
     AsyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -74,16 +74,13 @@ class AsyncmyDriver(
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
-        # Detect parameter styles in the SQL
-        detected_styles = set()
-        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
         validator = self.config.parameter_validator if self.config else ParameterValidator()
-        param_infos = validator.extract_parameters(sql_str)
-        if param_infos:
-            detected_styles = {p.style for p in param_infos}
+        detected_styles = {p.style for p in validator.extract_parameters(statement.to_sql())}
 
         # Determine target style based on what's in the SQL
-        target_style = self.default_parameter_style
+        target_style = (
+            self.default_parameter_style
+        )  # TODO: ensure it only converts parameters if it's unsupported format
 
         # Check if there are unsupported styles
         unsupported_styles = detected_styles - set(self.supported_parameter_styles)
@@ -111,50 +108,37 @@ class AsyncmyDriver(
         self, sql: str, parameters: Any, statement: SQL, connection: "Optional[AsyncmyConnection]" = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
-        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # Convert parameters using consolidated utility
-            converted_params = convert_parameter_sequence(parameters)
-            # AsyncMy doesn't like empty lists/tuples, convert to None
-            final_params = converted_params[0] if converted_params and len(converted_params) == 1 else converted_params
-            if not final_params:
-                final_params = None
+        async with managed_transaction_async(conn) as txn_conn, self._get_cursor(txn_conn) as cursor:
+            await cursor.execute(sql, parameters or None)
 
-            async with self._get_cursor(txn_conn) as cursor:
-                # AsyncMy expects list/tuple parameters or dict for named params
-                await cursor.execute(sql, final_params)
-
-                if self.returns_rows(statement.expression):
-                    # For SELECT queries, fetch data and return SQLResult
-                    data = await cursor.fetchall()
-                    column_names = [desc[0] for desc in cursor.description or []]
-                    return SQLResult(
-                        statement=statement,
-                        data=data,
-                        column_names=column_names,
-                        rows_affected=len(data),
-                        operation_type="SELECT",
-                    )
-
-                # For DML/DDL queries
+            if self.returns_rows(statement.expression):
+                data = await cursor.fetchall()
+                column_names = [desc[0] for desc in cursor.description or []]
                 return SQLResult(
                     statement=statement,
-                    data=[],
-                    rows_affected=cursor.rowcount if cursor.rowcount is not None else -1,
-                    operation_type=self._determine_operation_type(statement),
-                    metadata={"status_message": "OK"},
+                    data=data,
+                    column_names=column_names,
+                    rows_affected=len(data),
+                    operation_type="SELECT",
                 )
+            return SQLResult(
+                statement=statement,
+                data=[],
+                rows_affected=cursor.rowcount if cursor.rowcount is not None else -1,
+                operation_type=self._determine_operation_type(statement),
+                metadata={"status_message": "OK"},
+            )
 
     async def _execute_many(
         self, sql: str, param_list: Any, connection: "Optional[AsyncmyConnection]" = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
-        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # Normalize parameter list using consolidated utility
-            converted_param_list = convert_parameter_sequence(param_list)
+        async with managed_transaction_async(conn) as txn_conn:
+            converted_param_list = param_list
 
             params_list: list[Union[list[Any], tuple[Any, ...]]] = []
             if converted_param_list and isinstance(converted_param_list, Sequence):
@@ -180,9 +164,9 @@ class AsyncmyDriver(
         self, script: str, connection: "Optional[AsyncmyConnection]" = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
-        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+        async with managed_transaction_async(conn) as txn_conn:
             # AsyncMy may not support multi-statement scripts without CLIENT_MULTI_STATEMENTS flag
             statements = self._split_script_statements(script)
             suppress_warnings = kwargs.get("_suppress_warnings", False)
@@ -216,7 +200,7 @@ class AsyncmyDriver(
     async def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
         self._ensure_pyarrow_installed()
         conn = self._connection(None)
-        async with managed_transaction_async(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
+        async with managed_transaction_async(conn) as txn_conn, self._get_cursor(txn_conn) as cursor:
             if mode == "replace":
                 await cursor.execute(f"TRUNCATE TABLE {table_name}")
             elif mode == "create":

@@ -15,7 +15,7 @@ from sqlspec.adapters.psycopg.driver import (
     PsycopgSyncConnection,
     PsycopgSyncDriver,
 )
-from sqlspec.adapters.psycopg.transformers import PsycopgCopyTransformer
+from sqlspec.adapters.psycopg.pipeline_steps import psycopg_copy_transform_step
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import DictRow
@@ -237,11 +237,14 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                     default_parameter_style=self.default_parameter_style,
                 )
 
-            # Add the COPY transformer
-            pipeline = statement_config.get_statement_pipeline()
-            existing_transformers = list(pipeline.transformers)
-            existing_transformers.append(PsycopgCopyTransformer())
-            statement_config = statement_config.replace(transformers=existing_transformers)
+            # Add the COPY pipeline step
+            custom_pipeline_steps = [psycopg_copy_transform_step]
+
+            # If user has custom steps, append them after psycopg step
+            if statement_config.custom_pipeline_steps:
+                custom_pipeline_steps.extend(statement_config.custom_pipeline_steps)
+
+            statement_config = statement_config.replace(custom_pipeline_steps=custom_pipeline_steps)
 
             driver = self.driver_type(connection=conn, config=statement_config)
             yield driver
@@ -299,9 +302,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             migration_config: Migration configuration
             enable_adapter_cache: Enable SQL compilation caching
             adapter_cache_size: Max cached SQL statements
-
-        Raises:
-            ImproperConfigurationError: If neither pool_config nor pool_instance is provided
         """
         # Store the pool config as a dict and extract/merge extras
         self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
@@ -431,11 +431,14 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
                     default_parameter_style=self.default_parameter_style,
                 )
 
-            # Add the COPY transformer
-            pipeline = statement_config.get_statement_pipeline()
-            existing_transformers = list(pipeline.transformers)
-            existing_transformers.append(PsycopgCopyTransformer())
-            statement_config = statement_config.replace(transformers=existing_transformers)
+            # Add the COPY pipeline step
+            custom_pipeline_steps = [psycopg_copy_transform_step]
+
+            # If user has custom steps, append them after psycopg step
+            if statement_config.custom_pipeline_steps:
+                custom_pipeline_steps.extend(statement_config.custom_pipeline_steps)
+
+            statement_config = statement_config.replace(custom_pipeline_steps=custom_pipeline_steps)
 
             driver = self.driver_type(connection=conn, config=statement_config)
             yield driver

@@ -10,7 +10,7 @@ from psycopg import AsyncConnection, Connection
 from psycopg.rows import DictRow as PsycopgDictRow
 from sqlglot.dialects.dialect import DialectType
 
-from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
+from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.driver.connection import managed_transaction_async, managed_transaction_sync
 from sqlspec.driver.mixins import (
     AsyncAdapterCacheMixin,
@@ -23,7 +23,6 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import convert_parameter_sequence
 from sqlspec.exceptions import PipelineExecutionError
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import ArrowResult, SQLResult
@@ -44,7 +43,7 @@ PsycopgAsyncConnection = AsyncConnection[PsycopgDictRow]
 
 
 class PsycopgSyncDriver(
-    SyncDriverAdapterProtocol[PsycopgSyncConnection, RowT],
+    SyncDriverAdapterBase[PsycopgSyncConnection, RowT],
     SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -89,15 +88,19 @@ class PsycopgSyncDriver(
         if param_infos:
             detected_styles = {p.style for p in param_infos}
 
-        target_style = self.default_parameter_style
-        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
-        if unsupported_styles:
+        # Only set target_style if there are actual parameters
+        if param_infos:
             target_style = self.default_parameter_style
-        elif detected_styles:
-            for style in detected_styles:
-                if style in self.supported_parameter_styles:
-                    target_style = style
-                    break
+            unsupported_styles = detected_styles - set(self.supported_parameter_styles)
+            if unsupported_styles:
+                target_style = self.default_parameter_style
+            elif detected_styles:
+                for style in detected_styles:
+                    if style in self.supported_parameter_styles:
+                        target_style = style
+                        break
+        else:
+            target_style = None
 
         if statement.is_many:
             # Check if parameters were provided in kwargs first
@@ -121,6 +124,12 @@ class PsycopgSyncDriver(
             # Use the SQL string directly if parameters come from kwargs
             sql = statement.to_sql(placeholder_style=target_style)
             params = kwargs_params
+        elif target_style is None:
+            # No parameters, use raw SQL without conversion
+            sql = statement.to_sql(placeholder_style=None)
+            # For psycopg, we need to escape literal % characters even when there are no parameters
+            sql = sql.replace("%", "%%")
+            params = {}
         else:
             sql, params = self._get_compiled_sql(statement, target_style)
         params = self._process_parameters(params)
@@ -143,7 +152,7 @@ class PsycopgSyncDriver(
         **kwargs: Any,
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         # Check if this is a COPY command based on context metadata
         context = getattr(statement, "_processing_context", None)
@@ -229,12 +238,11 @@ class PsycopgSyncDriver(
         self, sql: str, param_list: Any, connection: Optional[PsycopgSyncConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # Normalize parameter list using consolidated utility
-            converted_param_list = convert_parameter_sequence(param_list)
-            final_param_list = converted_param_list or []
+            # TypeCoercionMixin handles parameter processing
+            final_param_list = param_list or []
 
             with self._get_cursor(txn_conn) as cursor:
                 cursor.executemany(sql, final_param_list)
@@ -255,7 +263,7 @@ class PsycopgSyncDriver(
         self, script: str, connection: Optional[PsycopgSyncConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
             # Split script into individual statements for validation
@@ -494,7 +502,7 @@ class PsycopgSyncDriver(
 
 
 class PsycopgAsyncDriver(
-    AsyncDriverAdapterProtocol[PsycopgAsyncConnection, RowT],
+    AsyncDriverAdapterBase[PsycopgAsyncConnection, RowT],
     AsyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -560,6 +568,12 @@ class PsycopgAsyncDriver(
                 params = kwargs_params
             else:
                 sql, params = self._get_compiled_sql(statement, target_style)
+            # DEBUG: Check parameter style conversion
+            if "script_test" in sql:
+                print("DEBUG psycopg compile:")
+                print(f"  Target style: {target_style}")
+                print(f"  SQL: {sql}")
+                print(f"  Params: {params}")
             if params is not None:
                 processed_params = [self._process_parameters(param_set) for param_set in params]
                 params = processed_params
@@ -582,6 +596,12 @@ class PsycopgAsyncDriver(
             # Use the SQL string directly if parameters come from kwargs
             sql = statement.to_sql(placeholder_style=target_style)
             params = kwargs_params
+        elif target_style is None:
+            # No parameters, use raw SQL without conversion
+            sql = statement.to_sql(placeholder_style=None)
+            # For psycopg, we need to escape literal % characters even when there are no parameters
+            sql = sql.replace("%", "%%")
+            params = {}
         else:
             sql, params = self._get_compiled_sql(statement, target_style)
         params = self._process_parameters(params)
@@ -612,7 +632,7 @@ class PsycopgAsyncDriver(
         **kwargs: Any,
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         # Check if this is a COPY command based on context metadata or kwargs
         context = getattr(statement, "_processing_context", None)
@@ -714,12 +734,11 @@ class PsycopgAsyncDriver(
         self, sql: str, param_list: Any, connection: Optional[PsycopgAsyncConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # Normalize parameter list using consolidated utility
-            converted_param_list = convert_parameter_sequence(param_list)
-            final_param_list = converted_param_list or []
+            # TypeCoercionMixin handles parameter processing
+            final_param_list = param_list or []
 
             async with txn_conn.cursor() as cursor:
                 await cursor.executemany(cast("Query", sql), final_param_list)
@@ -735,7 +754,7 @@ class PsycopgAsyncDriver(
         self, script: str, connection: Optional[PsycopgAsyncConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn, txn_conn.cursor() as cursor:
             # Split script into individual statements for validation

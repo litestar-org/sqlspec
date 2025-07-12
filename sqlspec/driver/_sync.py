@@ -17,13 +17,13 @@ if TYPE_CHECKING:
 
 logger = get_logger("sqlspec")
 
-__all__ = ("SyncDriverAdapterProtocol",)
+__all__ = ("SyncDriverAdapterBase",)
 
 
 EMPTY_FILTERS: "list[StatementFilter]" = []
 
 
-class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], ABC):
+class SyncDriverAdapterBase(CommonDriverAttributesMixin[ConnectionT, RowT], ABC):
     __slots__ = ()
 
     def __init__(
@@ -86,10 +86,8 @@ class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], 
                     "positional_params": statement._positional_params,
                     "named_params": statement._named_params,
                 }
-                if statement.parameters:
-                    return SQL(
-                        sql_source, parameters=statement.parameters, config=new_config, _existing_state=existing_state
-                    )
+                # Fix: Don't pass parameters= keyword argument when recreating SQL object
+                # The existing_state already contains all the parameter information
                 return SQL(sql_source, config=new_config, _existing_state=existing_state)
             return statement
         new_config = _config

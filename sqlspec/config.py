@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
+    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.statement.result import StatementResult
 
 
@@ -36,9 +36,10 @@ ConfigT = TypeVar(
     "ConfigT",
     bound="Union[Union[AsyncDatabaseConfig[Any, Any, Any], NoPoolAsyncConfig[Any, Any]], SyncDatabaseConfig[Any, Any, Any], NoPoolSyncConfig[Any, Any]]",
 )
-DriverT = TypeVar("DriverT", bound="Union[SyncDriverAdapterProtocol[Any], AsyncDriverAdapterProtocol[Any]]")
+DriverT = TypeVar("DriverT", bound="Union[SyncDriverAdapterBase[Any], AsyncDriverAdapterBase[Any]]")
 
 logger = get_logger("config")
+DEFAULT_ADAPTER_CACHE_SIZE = 5000
 
 
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
@@ -69,7 +70,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         pool_instance: "Optional[PoolT]" = None,
         migration_config: "Optional[dict[str, Any]]" = None,
         enable_adapter_cache: bool = True,
-        adapter_cache_size: int = 1000,
+        adapter_cache_size: int = DEFAULT_ADAPTER_CACHE_SIZE,
     ) -> None:
         self.pool_instance = pool_instance
         self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
@@ -92,17 +93,13 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             and self.adapter_cache_size == other.adapter_cache_size
         )
 
-    def _repr_parts(self) -> list[str]:
-        # Only include fields that had repr=True in dataclass
-        return [
+    def __repr__(self) -> str:
+        parts = ", ".join([
             f"pool_instance={self.pool_instance!r}",
             f"migration_config={self.migration_config!r}",
             f"enable_adapter_cache={self.enable_adapter_cache!r}",
             f"adapter_cache_size={self.adapter_cache_size!r}",
-        ]
-
-    def __repr__(self) -> str:
-        parts = ", ".join(self._repr_parts())
+        ])
         return f"{type(self).__name__}({parts})"
 
     @property
@@ -195,7 +192,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         *,
         migration_config: "Optional[dict[str, Any]]" = None,
         enable_adapter_cache: bool = True,
-        adapter_cache_size: int = 1000,
+        adapter_cache_size: int = DEFAULT_ADAPTER_CACHE_SIZE,
     ) -> None:
         super().__init__(
             pool_instance=None,
@@ -239,7 +236,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         *,
         migration_config: "Optional[dict[str, Any]]" = None,
         enable_adapter_cache: bool = True,
-        adapter_cache_size: int = 1000,
+        adapter_cache_size: int = DEFAULT_ADAPTER_CACHE_SIZE,
     ) -> None:
         super().__init__(
             pool_instance=None,

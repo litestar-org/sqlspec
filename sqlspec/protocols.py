@@ -185,9 +185,6 @@ class DictProtocol(Protocol):
     __dict__: dict[str, Any]
 
 
-# ProcessorProtocol removed as part of pipeline removal in Phase 4
-
-
 @runtime_checkable
 class BytesConvertibleProtocol(Protocol):
     """Protocol for objects that can be converted to bytes."""

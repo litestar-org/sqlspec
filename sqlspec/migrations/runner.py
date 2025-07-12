@@ -11,7 +11,7 @@ from sqlspec.migrations.base import BaseMigrationRunner
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
+    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.statement.sql import SQL
 
 __all__ = ("AsyncMigrationRunner", "SyncMigrationRunner")
@@ -19,7 +19,7 @@ __all__ = ("AsyncMigrationRunner", "SyncMigrationRunner")
 logger = get_logger("migrations.runner")
 
 
-class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterProtocol[Any]"]):
+class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase[Any]"]):
     """Sync version - executes migrations using SQLFileLoader."""
 
     def get_migration_files(self) -> "list[tuple[str, Path]]":
@@ -42,7 +42,7 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterProtocol[Any]"])
         return self._load_migration_metadata(file_path)
 
     def execute_upgrade(
-        self, driver: "SyncDriverAdapterProtocol[Any]", migration: "dict[str, Any]"
+        self, driver: "SyncDriverAdapterBase[Any]", migration: "dict[str, Any]"
     ) -> "tuple[Optional[str], int]":
         """Execute an upgrade migration.
 
@@ -66,7 +66,7 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterProtocol[Any]"])
         return None, execution_time
 
     def execute_downgrade(
-        self, driver: "SyncDriverAdapterProtocol[Any]", migration: "dict[str, Any]"
+        self, driver: "SyncDriverAdapterBase[Any]", migration: "dict[str, Any]"
     ) -> "tuple[Optional[str], int]":
         """Execute a downgrade migration.
 
@@ -116,7 +116,7 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterProtocol[Any]"])
         return all_queries
 
 
-class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterProtocol[Any]"]):
+class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase[Any]"]):
     """Async version - executes migrations using SQLFileLoader."""
 
     async def get_migration_files(self) -> "list[tuple[str, Path]]":
@@ -141,7 +141,7 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterProtocol[Any]"
         return self._load_migration_metadata(file_path)
 
     async def execute_upgrade(
-        self, driver: "AsyncDriverAdapterProtocol[Any]", migration: "dict[str, Any]"
+        self, driver: "AsyncDriverAdapterBase[Any]", migration: "dict[str, Any]"
     ) -> "tuple[Optional[str], int]":
         """Execute an upgrade migration.
 
@@ -165,7 +165,7 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterProtocol[Any]"
         return None, execution_time
 
     async def execute_downgrade(
-        self, driver: "AsyncDriverAdapterProtocol[Any]", migration: "dict[str, Any]"
+        self, driver: "AsyncDriverAdapterBase[Any]", migration: "dict[str, Any]"
     ) -> "tuple[Optional[str], int]":
         """Execute a downgrade migration.
 

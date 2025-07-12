@@ -5,7 +5,7 @@ from asyncpg import Connection as AsyncpgNativeConnection
 from asyncpg import Record
 from typing_extensions import TypeAlias
 
-from sqlspec.driver import AsyncDriverAdapterProtocol
+from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.driver.connection import managed_transaction_async
 from sqlspec.driver.mixins import (
     AsyncAdapterCacheMixin,
@@ -15,7 +15,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import convert_parameter_sequence
+from sqlspec.exceptions import PipelineExecutionError
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -46,7 +46,7 @@ EXPECTED_REGEX_GROUPS = 3
 
 
 class AsyncpgDriver(
-    AsyncDriverAdapterProtocol[AsyncpgConnection, RowT],
+    AsyncDriverAdapterBase[AsyncpgConnection, RowT],
     SQLTranslatorMixin,
     TypeCoercionMixin,
     AsyncStorageMixin,
@@ -79,7 +79,6 @@ class AsyncpgDriver(
 
     def _coerce_json(self, value: Any) -> Any:
         """AsyncPG/PostgreSQL has native JSON/JSONB support."""
-        # AsyncPG can handle dict/list directly for JSON columns
         return value
 
     def _coerce_array(self, value: Any) -> Any:
@@ -96,7 +95,7 @@ class AsyncpgDriver(
             return await self._execute_script(sql, connection=connection, **kwargs)
 
         detected_styles = set()
-        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
+        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL string without parameters
         validator = self.config.parameter_validator if self.config else ParameterValidator()
         param_infos = validator.extract_parameters(sql_str)
         if param_infos:
@@ -123,20 +122,19 @@ class AsyncpgDriver(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         if statement.is_many:
             # This should have gone to _execute_many, redirect it
             return await self._execute_many(sql, parameters, connection=connection, **kwargs)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # Convert parameters using consolidated utility
-            converted_params = convert_parameter_sequence(parameters)
+            # TypeCoercionMixin handles parameter processing
             # AsyncPG expects parameters as *args, not a single list
             args_for_driver: list[Any] = []
-            if converted_params:
-                # converted_params is already a list, just use it directly
-                args_for_driver = converted_params
+            if parameters:
+                # parameters might be a list or tuple already
+                args_for_driver = list(parameters) if isinstance(parameters, (list, tuple)) else [parameters]
 
             if self.returns_rows(statement.expression):
                 records = await txn_conn.fetch(sql, *args_for_driver)
@@ -171,11 +169,11 @@ class AsyncpgDriver(
         self, sql: str, param_list: Any, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # Normalize parameter list using consolidated utility
-            converted_param_list = convert_parameter_sequence(param_list)
+            # TypeCoercionMixin handles parameter processing
+            converted_param_list = param_list
 
             params_list: list[tuple[Any, ...]] = []
             rows_affected = 0
@@ -205,32 +203,22 @@ class AsyncpgDriver(
         self, script: str, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
     ) -> SQLResult[RowT]:
         # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        conn = self._connection(connection)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
             # Split script into individual statements for validation
             statements = self._split_script_statements(script)
-            suppress_warnings = kwargs.get("_suppress_warnings", False)
-
             executed_count = 0
             total_rows = 0
             last_status = None
-
-            # Execute each statement individually for better control and validation
             for statement in statements:
                 if statement.strip():
-                    # Validate each statement unless warnings suppressed
-                    if not suppress_warnings:
-                        # Run validation through pipeline
+                    if not kwargs.get("_suppress_warnings"):
                         temp_sql = SQL(statement, config=self.config)
                         temp_sql._ensure_processed()
-                        # Validation errors are logged as warnings by default
-
                     status = await txn_conn.execute(statement)
                     executed_count += 1
                     last_status = status
-                    # AsyncPG doesn't provide row count from execute()
-
             return SQLResult(
                 statement=SQL(script, _dialect=self.dialect).as_script(),
                 data=[],
@@ -262,8 +250,6 @@ class AsyncpgDriver(
 
         results: list[Any] = []
         connection = self._connection()
-
-        # Use a single transaction for all operations
         async with connection.transaction():
             for i, op in enumerate(operations):
                 await self._execute_pipeline_operation(connection, i, op, options, results)
@@ -274,7 +260,6 @@ class AsyncpgDriver(
         self, connection: Any, i: int, op: Any, options: dict[str, Any], results: list[Any]
     ) -> None:
         """Execute a single pipeline operation with error handling."""
-        from sqlspec.exceptions import PipelineExecutionError
 
         try:
             sql_str = op.sql.to_sql(placeholder_style=ParameterStyle.NUMERIC)

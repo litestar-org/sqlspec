@@ -16,13 +16,41 @@ from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import AIOSQL_INSTALLED, RowT
 
 if TYPE_CHECKING:
-    from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
+    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 
 logger = logging.getLogger("sqlspec.extensions.aiosql")
 
 __all__ = ("AiosqlAsyncAdapter", "AiosqlSyncAdapter")
 
 T = TypeVar("T")
+
+
+class AsyncCursorLike:
+    def __init__(self, result: Any) -> None:
+        self.result = result
+
+    async def fetchall(self) -> list[Any]:
+        if isinstance(self.result, SQLResult) and self.result.data is not None:
+            return list(self.result.data)
+        return []
+
+    async def fetchone(self) -> Optional[Any]:
+        rows = await self.fetchall()
+        return rows[0] if rows else None
+
+
+class CursorLike:
+    def __init__(self, result: Any) -> None:
+        self.result = result
+
+    def fetchall(self) -> list[Any]:
+        if isinstance(self.result, SQLResult) and self.result.data is not None:
+            return list(self.result.data)
+        return []
+
+    def fetchone(self) -> Optional[Any]:
+        rows = self.fetchall()
+        return rows[0] if rows else None
 
 
 def _check_aiosql_available() -> None:
@@ -67,9 +95,7 @@ def _normalize_dialect(dialect: "Union[str, Any, None]") -> str:
 class _AiosqlAdapterBase:
     """Base adapter for common logic."""
 
-    def __init__(
-        self, driver: "Union[SyncDriverAdapterProtocol[Any, Any], AsyncDriverAdapterProtocol[Any, Any]]"
-    ) -> None:
+    def __init__(self, driver: "Union[SyncDriverAdapterBase[Any, Any], AsyncDriverAdapterBase[Any, Any]]") -> None:
         """Initialize the base adapter.
 
         Args:
@@ -99,7 +125,7 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
 
     is_aio_driver: ClassVar[bool] = False
 
-    def __init__(self, driver: "SyncDriverAdapterProtocol[Any, Any]") -> None:
+    def __init__(self, driver: "SyncDriverAdapterBase[Any, Any]") -> None:
         """Initialize the sync adapter.
 
         Args:
@@ -165,7 +191,6 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
             )
 
         sql_obj = self._create_sql_object(sql, parameters)
-
         result = cast("SQLResult[RowT]", self.driver.execute(sql_obj, connection=conn))
 
         if hasattr(result, "data") and result.data and isinstance(result, SQLResult):
@@ -209,19 +234,6 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
         """
         sql_obj = self._create_sql_object(sql, parameters)
         result = self.driver.execute(sql_obj, connection=conn)
-
-        class CursorLike:
-            def __init__(self, result: Any) -> None:
-                self.result = result
-
-            def fetchall(self) -> list[Any]:
-                if isinstance(result, SQLResult) and result.data is not None:
-                    return list(result.data)
-                return []
-
-            def fetchone(self) -> Optional[Any]:
-                rows = self.fetchall()
-                return rows[0] if rows else None
 
         yield CursorLike(result)
 
@@ -288,7 +300,7 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
 
     is_aio_driver: ClassVar[bool] = True
 
-    def __init__(self, driver: "AsyncDriverAdapterProtocol[Any, Any]") -> None:
+    def __init__(self, driver: "AsyncDriverAdapterBase[Any, Any]") -> None:
         """Initialize the async adapter.
 
         Args:
@@ -399,20 +411,6 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
         """
         sql_obj = self._create_sql_object(sql, parameters)
         result = await self.driver.execute(sql_obj, connection=conn)  # type: ignore[misc]
-
-        class AsyncCursorLike:
-            def __init__(self, result: Any) -> None:
-                self.result = result
-
-            @staticmethod
-            async def fetchall() -> list[Any]:
-                if isinstance(result, SQLResult) and result.data is not None:
-                    return list(result.data)
-                return []
-
-            async def fetchone(self) -> Optional[Any]:
-                rows = await self.fetchall()
-                return rows[0] if rows else None
 
         yield AsyncCursorLike(result)
 

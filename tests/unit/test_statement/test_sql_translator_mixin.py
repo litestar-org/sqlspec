@@ -7,7 +7,7 @@ import pytest
 from sqlglot import exp
 
 from sqlspec.config import NoPoolSyncConfig
-from sqlspec.driver import SyncDriverAdapterProtocol
+from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.driver.mixins._sql_translator import SQLTranslatorMixin
 from sqlspec.exceptions import SQLConversionError
 from sqlspec.statement.parameters import ParameterStyle
@@ -21,7 +21,7 @@ class MockConnection:
     pass
 
 
-class MockDriver(SyncDriverAdapterProtocol[MockConnection, DictRow], SQLTranslatorMixin):
+class MockDriver(SyncDriverAdapterBase[MockConnection, DictRow], SQLTranslatorMixin):
     """Mock driver with SQLTranslatorMixin for testing."""
 
     dialect = "sqlite"  # Use a real dialect for testing

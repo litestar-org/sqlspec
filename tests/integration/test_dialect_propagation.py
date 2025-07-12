@@ -13,7 +13,8 @@ from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.driver.mixins import SQLTranslatorMixin
 from sqlspec.statement.builder import Select
-from sqlspec.statement.pipelines.context import SQLProcessingContext
+
+# Import removed - SQLProcessingContext no longer exists in new architecture
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from tests.integration.test_adapters.test_adbc.conftest import PostgresService
@@ -224,14 +225,18 @@ async def test_asyncmy_dialect_propagation_with_filters(mysql_service: MySQLServ
 
 
 # SQL processing tests
-def test_sql_processing_context_with_dialect() -> None:
-    """Test that SQLProcessingContext properly handles dialect."""
+def test_sql_transform_context_with_dialect() -> None:
+    """Test that SQLTransformContext properly handles dialect."""
+    from sqlglot import parse_one
+
+    from sqlspec.statement.pipeline import SQLTransformContext
 
     # Create context with dialect
-    context = SQLProcessingContext(initial_sql_string="SELECT * FROM users", dialect="postgres", config=SQLConfig())
+    expression = parse_one("SELECT * FROM users", dialect="postgres")
+    context = SQLTransformContext(current_expression=expression, original_expression=expression, dialect="postgres")
 
     assert context.dialect == "postgres"
-    assert context.initial_sql_string == "SELECT * FROM users"
+    assert context.original_expression.sql() == "SELECT * FROM users"
 
 
 def test_query_builder_dialect_inheritance() -> None:

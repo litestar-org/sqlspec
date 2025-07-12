@@ -5,7 +5,7 @@ from typing import Any, ClassVar, Optional, cast
 from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
 from sqlglot.dialects.dialect import DialectType
 
-from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
+from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.driver.connection import managed_transaction_async, managed_transaction_sync
 from sqlspec.driver.mixins import (
     AsyncAdapterCacheMixin,
@@ -18,8 +18,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.driver.parameters import convert_parameter_sequence
-from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
+from sqlspec.statement.parameters import ParameterStyle, ParameterValidator, TypedParameter
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import DictRow, RowT, SQLParameterType
@@ -40,7 +39,6 @@ def _process_oracle_parameters(params: Any) -> Any:
     - Extract values from TypedParameter objects
     - Convert tuples to lists (Oracle doesn't support tuples)
     """
-    from sqlspec.statement.parameters import TypedParameter
 
     if params is None:
         return None
@@ -64,7 +62,7 @@ def _process_oracle_parameters(params: Any) -> Any:
 
 
 class OracleSyncDriver(
-    SyncDriverAdapterProtocol[OracleSyncConnection, RowT],
+    SyncDriverAdapterBase[OracleSyncConnection, RowT],
     SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -192,8 +190,8 @@ class OracleSyncDriver(
         conn = self._connection(connection)
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # Normalize parameter list using consolidated utility
-            converted_param_list = convert_parameter_sequence(param_list)
+            # TypeCoercionMixin handles parameter processing
+            converted_param_list = param_list
 
             # Process parameters for Oracle
             if converted_param_list is None:
@@ -320,7 +318,7 @@ class OracleSyncDriver(
 
 
 class OracleAsyncDriver(
-    AsyncDriverAdapterProtocol[OracleAsyncConnection, RowT],
+    AsyncDriverAdapterBase[OracleAsyncConnection, RowT],
     AsyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -465,8 +463,8 @@ class OracleAsyncDriver(
         conn = self._connection(connection)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # Normalize parameter list using consolidated utility
-            converted_param_list = convert_parameter_sequence(param_list)
+            # TypeCoercionMixin handles parameter processing
+            converted_param_list = param_list
 
             # Process parameters for Oracle
             if converted_param_list is None:
