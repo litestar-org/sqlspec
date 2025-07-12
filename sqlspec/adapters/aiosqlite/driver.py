@@ -1,5 +1,6 @@
 import csv
 import logging
+import re
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from decimal import Decimal
@@ -49,6 +50,7 @@ class AiosqliteDriver(
     dialect: "DialectType" = "sqlite"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK, ParameterStyle.NAMED_COLON)
     default_parameter_style: ParameterStyle = ParameterStyle.QMARK
+    supported_bulk_formats: "tuple[str, ...]" = ("csv",)
 
     def __init__(
         self,
@@ -144,14 +146,18 @@ class AiosqliteDriver(
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
             actual_params = parameters
 
-            # AIOSQLite expects tuple or dict - handle parameter conversion
-            if ":param_" in sql or (isinstance(actual_params, dict)):  # TODO: this is not acceptable
+            # AIOSQLite supports both QMARK (?) and NAMED_COLON (:name) styles
+            # Detect style from SQL: if it contains ':' followed by alphanumeric, it's named style
+            # This is more reliable than checking for specific patterns
+            has_named_params = bool(re.search(r":\w+", sql))
+
+            if has_named_params:
                 # SQL has named placeholders, ensure params are dict
                 converted_params = self._convert_parameters_to_driver_format(
                     sql, actual_params, target_style=ParameterStyle.NAMED_COLON
                 )
             else:
-                # SQL has positional placeholders, ensure params are list/tuple
+                # SQL has positional placeholders (? style), ensure params are list/tuple
                 converted_params = self._convert_parameters_to_driver_format(
                     sql, actual_params, target_style=ParameterStyle.QMARK
                 )
@@ -240,8 +246,9 @@ class AiosqliteDriver(
 
     async def _bulk_load_file(self, file_path: Path, table_name: str, format: str, mode: str, **options: Any) -> int:
         """Database-specific bulk load implementation using storage backend."""
-        if format != "csv":  # TODO: this is not acceptable
-            msg = f"aiosqlite driver only supports CSV for bulk loading, not {format}."
+        if format not in self.supported_bulk_formats:
+            supported = ", ".join(self.supported_bulk_formats)
+            msg = f"aiosqlite driver supports {supported} for bulk loading, not {format}."
             raise NotImplementedError(msg)
 
         conn = await self._create_connection()  # type: ignore[attr-defined]

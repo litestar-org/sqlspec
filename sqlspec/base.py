@@ -13,6 +13,15 @@ from sqlspec.config import (
     SyncConfigT,
     SyncDatabaseConfig,
 )
+from sqlspec.statement.cache import (
+    CacheConfig,
+    CacheStats,
+    get_cache_config,
+    get_cache_stats,
+    log_cache_stats,
+    reset_cache_stats,
+    update_cache_config,
+)
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -29,11 +38,12 @@ logger = get_logger()
 class SQLSpec:
     """Type-safe configuration manager and registry for database connections and pools."""
 
-    __slots__ = ("_configs",)
+    __slots__ = ("_configs", "_instance_cache_config")
 
     def __init__(self) -> None:
         self._configs: dict[Any, DatabaseConfigProtocol[Any, Any, Any]] = {}
         atexit.register(self._cleanup_pools)
+        self._instance_cache_config: Optional[CacheConfig] = None
 
     @staticmethod
     def _get_config_name(obj: Any) -> str:
@@ -473,3 +483,129 @@ class SQLSpec:
 
         logger.debug("Config %s does not support connection pooling - nothing to close", config_name)
         return None
+
+    @staticmethod
+    def get_cache_config() -> CacheConfig:
+        """Get the current global cache configuration.
+
+        Returns:
+            The current cache configuration.
+        """
+        return get_cache_config()
+
+    @staticmethod
+    def update_cache_config(config: CacheConfig) -> None:
+        """Update the global cache configuration.
+
+        This affects all SQL statement processing globally. Changes take
+        effect immediately for all new SQL operations.
+
+        Note: This will clear all existing caches when sizes are reduced.
+
+        Args:
+            config: The new cache configuration to apply.
+
+        Example:
+            >>> config = CacheConfig(
+            ...     sql_cache_size=5000,
+            ...     fragment_cache_size=10000,
+            ...     optimized_cache_size=2000,
+            ... )
+            >>> SQLSpec.update_cache_config(config)
+        """
+        update_cache_config(config)
+
+    @staticmethod
+    def get_cache_stats() -> CacheStats:
+        """Get current cache statistics.
+
+        Returns performance metrics for all cache layers including hit rates,
+        sizes, and eviction counts.
+
+        Returns:
+            Cache statistics object with detailed metrics.
+
+        Example:
+            >>> stats = SQLSpec.get_cache_stats()
+            >>> print(f"SQL Cache Hit Rate: {stats.sql_hit_rate:.2%}")
+            >>> print(
+            ...     f"Total Cache Size: {stats.sql_size + stats.fragment_size}"
+            ... )
+        """
+        return get_cache_stats()
+
+    @staticmethod
+    def reset_cache_stats() -> None:
+        """Reset all cache statistics to zero.
+
+        Useful for benchmarking specific operations or monitoring cache
+        performance over specific time periods.
+
+        Example:
+            >>> SQLSpec.reset_cache_stats()
+            >>> # Run operations to benchmark
+            >>> stats = SQLSpec.get_cache_stats()
+        """
+        reset_cache_stats()
+
+    @staticmethod
+    def log_cache_stats() -> None:
+        """Log current cache statistics using the configured logger.
+
+        Outputs detailed cache metrics to the logging system for monitoring
+        and debugging purposes.
+        """
+        log_cache_stats()
+
+    @staticmethod
+    def configure_cache(
+        *,
+        sql_cache_size: Optional[int] = None,
+        fragment_cache_size: Optional[int] = None,
+        optimized_cache_size: Optional[int] = None,
+        sql_cache_enabled: Optional[bool] = None,
+        fragment_cache_enabled: Optional[bool] = None,
+        optimized_cache_enabled: Optional[bool] = None,
+    ) -> None:
+        """Convenience method to update cache configuration with partial values.
+
+        Only specified parameters will be updated; others retain current values.
+
+        Args:
+            sql_cache_size: Size of the SQL statement cache
+            fragment_cache_size: Size of the AST fragment cache
+            optimized_cache_size: Size of the optimized expression cache
+            sql_cache_enabled: Enable/disable SQL cache
+            fragment_cache_enabled: Enable/disable fragment cache
+            optimized_cache_enabled: Enable/disable optimized cache
+
+        Example:
+            >>> # Just increase SQL cache size
+            >>> SQLSpec.configure_cache(sql_cache_size=10000)
+            >>> # Disable fragment cache
+            >>> SQLSpec.configure_cache(fragment_cache_enabled=False)
+        """
+        current_config = get_cache_config()
+        kwargs = {}
+        if sql_cache_size is not None:
+            kwargs["sql_cache_size"] = sql_cache_size
+        if fragment_cache_size is not None:
+            kwargs["fragment_cache_size"] = fragment_cache_size
+        if optimized_cache_size is not None:
+            kwargs["optimized_cache_size"] = optimized_cache_size
+        if sql_cache_enabled is not None:
+            kwargs["sql_cache_enabled"] = sql_cache_enabled
+        if fragment_cache_enabled is not None:
+            kwargs["fragment_cache_enabled"] = fragment_cache_enabled
+        if optimized_cache_enabled is not None:
+            kwargs["optimized_cache_enabled"] = optimized_cache_enabled
+        new_config = CacheConfig(
+            sql_cache_size=kwargs.get("sql_cache_size", current_config.sql_cache_size),
+            fragment_cache_size=kwargs.get("fragment_cache_size", current_config.fragment_cache_size),
+            optimized_cache_size=kwargs.get("optimized_cache_size", current_config.optimized_cache_size),
+            sql_cache_enabled=kwargs.get("sql_cache_enabled", current_config.sql_cache_enabled),
+            fragment_cache_enabled=kwargs.get("fragment_cache_enabled", current_config.fragment_cache_enabled),
+            optimized_cache_enabled=kwargs.get("optimized_cache_enabled", current_config.optimized_cache_enabled),
+        )
+
+        update_cache_config(new_config)

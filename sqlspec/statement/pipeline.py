@@ -5,8 +5,9 @@ SQL objects through composable functions in a single pass, replacing
 the complex multi-stage processing with a clean, efficient approach.
 """
 
+import operator
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Union
 
 import sqlglot.expressions as exp
 
@@ -39,14 +40,14 @@ class SQLTransformContext:
 
     current_expression: exp.Expression
     original_expression: exp.Expression
-    parameters: dict[str, Any] = field(default_factory=dict)
+    parameters: "Union[dict[str, Any], list[Any], tuple[Any, ...]]" = field(default_factory=dict)
     dialect: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def merged_parameters(self) -> Any:
         """Get parameters in appropriate format for the dialect."""
-        if self.dialect in {"mysql", "sqlite"}:
+        if isinstance(self.parameters, dict) and self.dialect in {"mysql", "sqlite"}:
             # Convert to positional list
             return [self.parameters[k] for k in sorted(self.parameters.keys())]
         return self.parameters
@@ -90,19 +91,31 @@ def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformCont
     Extracts literal values and replaces them with parameter placeholders,
     storing the values in the context for later binding.
     """
+    # If parameters already exist, skip literal parameterization to avoid conflicts
+    # This preserves existing parameter styles (named, positional, etc.)
+    if context.parameters:
+        context.metadata["literals_parameterized"] = False
+        context.metadata["parameter_count"] = (
+            len(context.parameters) if isinstance(context.parameters, (dict, list, tuple)) else 0
+        )
+        return context
+
     # First, collect all literals in SQL order
     literals_in_order: list[tuple[exp.Literal, str]] = []
     sql_before = context.current_expression.sql(dialect=context.dialect)
 
-    def collect_literals(node: exp.Expression) -> exp.Expression:
-        if isinstance(node, exp.Literal) and not isinstance(node.parent, exp.Placeholder):
+    # First pass: collect literals
+    for node in context.current_expression.walk():
+        # Skip literals that shouldn't be parameterized
+        if isinstance(node, exp.Literal) and not isinstance(
+            node.parent, (exp.Placeholder, exp.Parameter, exp.Limit, exp.Offset)
+        ):
+            # Skip literals that are direct aliases (like 'processed' as status)
+            if isinstance(node.parent, exp.Alias) and node.parent.this == node:
+                continue
             # Get the SQL position by finding the literal in the SQL string
             literal_sql = node.sql(dialect=context.dialect)
             literals_in_order.append((node, literal_sql))
-        return node
-
-    # First pass: collect literals
-    context.current_expression.walk(collect_literals)
 
     # Sort by position in SQL string
     literal_positions = []
@@ -113,22 +126,36 @@ def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformCont
             literal_positions.append((pos + len(sql_before) - len(remaining_sql), literal, literal_sql))
             remaining_sql = remaining_sql[pos + len(literal_sql) :]
 
-    literal_positions.sort(key=lambda x: x[0])
+    literal_positions.sort(key=operator.itemgetter(0))
+
+    # Ensure parameters is a dict for parameterization
+    if not isinstance(context.parameters, dict):
+        context.parameters = {}
 
     # Create parameter mapping
     param_index = len(context.parameters)
-    literal_to_param: dict[int, str] = {}
+    literal_to_param: dict[tuple[str, str], str] = {}
 
-    for _, literal, _ in literal_positions:
+    for _, literal, literal_sql in literal_positions:
         param_name = f"param_{param_index}"
-        context.parameters[param_name] = literal.this
-        literal_to_param[id(literal)] = param_name
+        # Use SQLGlot's to_py() method to get the proper Python type
+        context.parameters[param_name] = literal.to_py()
+        # Use literal value and SQL representation as key for more reliable lookup
+        literal_key = (str(literal.this), literal_sql)
+        literal_to_param[literal_key] = param_name
         param_index += 1
 
     # Second pass: replace literals with placeholders
     def replace_literal(node: exp.Expression) -> exp.Expression:
-        if isinstance(node, exp.Literal) and id(node) in literal_to_param:
-            return exp.Placeholder(this=literal_to_param[id(node)])
+        if isinstance(node, exp.Literal) and not isinstance(
+            node.parent, (exp.Placeholder, exp.Parameter, exp.Limit, exp.Offset)
+        ):
+            # Skip literals that are direct aliases (like 'processed' as status)
+            if isinstance(node.parent, exp.Alias) and node.parent.this == node:
+                return node
+            literal_key = (str(node.this), node.sql(dialect=context.dialect))
+            if literal_key in literal_to_param:
+                return exp.Placeholder(this=literal_to_param[literal_key])
         return node
 
     # Transform the expression tree

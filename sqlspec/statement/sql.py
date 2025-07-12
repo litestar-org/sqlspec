@@ -68,19 +68,43 @@ DEFAULT_CACHE_SIZE = 1000
 # Oracle/Colon style parameter constants
 COLON_PARAM_ONE = "1"
 COLON_PARAM_MIN_INDEX = 1
+PROCESSED_STATE_SLOTS = (
+    "analysis_results",
+    "merged_parameters",
+    "processed_expression",
+    "processed_sql",
+    "transformation_results",
+    "validation_errors",
+)
+# SQLConfig slots definition for mypyc compatibility
+SQL_CONFIG_SLOTS = (
+    "allow_mixed_parameter_styles",
+    "allowed_parameter_styles",
+    "analyzer_output_handler",
+    "analyzers",
+    "custom_pipeline_steps",
+    "default_parameter_style",
+    "dialect",
+    "enable_analysis",
+    "enable_caching",
+    "enable_expression_simplification",
+    "enable_parameter_type_wrapping",
+    "enable_parsing",
+    "enable_transformations",
+    "enable_validation",
+    "input_sql_had_placeholders",
+    "parameter_converter",
+    "parameter_validator",
+    "parse_errors_as_warnings",
+    "transformers",
+    "validators",
+)
 
 
 class _ProcessedState:
     """Cached state from pipeline processing."""
 
-    __slots__ = (
-        "analysis_results",
-        "merged_parameters",
-        "processed_expression",
-        "processed_sql",
-        "transformation_results",
-        "validation_errors",
-    )
+    __slots__ = PROCESSED_STATE_SLOTS
 
     def __hash__(self) -> int:
         """Hash based on processed SQL and expression."""
@@ -111,21 +135,14 @@ class _ProcessedState:
     def replace(self, **changes: Any) -> "_ProcessedState":
         """Create a new _ProcessedState with specified changes."""
         # Validate that all changes correspond to valid slots
-        _slots = (
-            "analysis_results",
-            "merged_parameters",
-            "processed_expression",
-            "processed_sql",
-            "transformation_results",
-            "validation_errors",
-        )
+
         for key in changes:
-            if key not in _slots:
+            if key not in PROCESSED_STATE_SLOTS:
                 msg = f"{key!r} is not a field in {type(self).__name__}"
                 raise TypeError(msg)
 
         # Build the keyword arguments for the new instance
-        kwargs = {slot: getattr(self, slot) for slot in _slots}
+        kwargs = {slot: getattr(self, slot) for slot in PROCESSED_STATE_SLOTS}
         kwargs.update(changes)
 
         return type(self)(**kwargs)
@@ -133,15 +150,7 @@ class _ProcessedState:
     def __repr__(self) -> str:
         """String representation compatible with dataclass.__repr__."""
         field_strs = []
-        _slots = (
-            "analysis_results",
-            "merged_parameters",
-            "processed_expression",
-            "processed_sql",
-            "transformation_results",
-            "validation_errors",
-        )
-        for slot in _slots:
+        for slot in PROCESSED_STATE_SLOTS:
             value = getattr(self, slot)
             field_strs.append(f"{slot}={value!r}")
         return f"{self.__class__.__name__}({', '.join(field_strs)})"
@@ -159,31 +168,6 @@ class _ProcessedState:
             and self.analysis_results == other.analysis_results
             and self.transformation_results == other.transformation_results
         )
-
-
-# SQLConfig slots definition for mypyc compatibility
-_SQLCONFIG_SLOTS = (
-    "allow_mixed_parameter_styles",
-    "allowed_parameter_styles",
-    "analyzer_output_handler",
-    "analyzers",
-    "custom_pipeline_steps",
-    "default_parameter_style",
-    "dialect",
-    "enable_analysis",
-    "enable_caching",
-    "enable_expression_simplification",
-    "enable_parameter_type_wrapping",
-    "enable_parsing",
-    "enable_transformations",
-    "enable_validation",
-    "input_sql_had_placeholders",
-    "parameter_converter",
-    "parameter_validator",
-    "parse_errors_as_warnings",
-    "transformers",
-    "validators",
-)
 
 
 class SQLConfig:
@@ -219,7 +203,7 @@ class SQLConfig:
         allow_mixed_parameter_styles: Whether to allow mixing parameter styles in same query
     """
 
-    __slots__ = _SQLCONFIG_SLOTS
+    __slots__ = SQL_CONFIG_SLOTS
 
     def __hash__(self) -> int:
         """Hash based on key configuration settings."""
@@ -289,12 +273,12 @@ class SQLConfig:
         """
         # Validate that all changes correspond to valid slots
         for key in changes:
-            if key not in _SQLCONFIG_SLOTS:
+            if key not in SQL_CONFIG_SLOTS:
                 msg = f"{key!r} is not a field in {type(self).__name__}"
                 raise TypeError(msg)
 
         # Build the keyword arguments for the new instance
-        kwargs = {slot: getattr(self, slot) for slot in _SQLCONFIG_SLOTS}
+        kwargs = {slot: getattr(self, slot) for slot in SQL_CONFIG_SLOTS}
         kwargs.update(changes)
 
         return type(self)(**kwargs)
@@ -302,7 +286,7 @@ class SQLConfig:
     def __repr__(self) -> str:
         """String representation compatible with dataclass.__repr__."""
         field_strs = []
-        for slot in _SQLCONFIG_SLOTS:
+        for slot in SQL_CONFIG_SLOTS:
             value = getattr(self, slot)
             field_strs.append(f"{slot}={value!r}")
         return f"{self.__class__.__name__}({', '.join(field_strs)})"
@@ -311,7 +295,7 @@ class SQLConfig:
         """Equality comparison compatible with dataclass.__eq__."""
         if not isinstance(other, type(self)):
             return False
-        return all(getattr(self, slot) == getattr(other, slot) for slot in _SQLCONFIG_SLOTS)
+        return all(getattr(self, slot) == getattr(other, slot) for slot in SQL_CONFIG_SLOTS)
 
     def validate_parameter_style(self, style: "Union[ParameterStyle, str]") -> bool:
         """Check if a parameter style is allowed.
@@ -621,6 +605,7 @@ class SQL:
         """Create SQL processing context."""
         # Convert parameters to dict format for the context
         param_dict = {}
+        param_info = None  # Initialize to avoid unbound variable
         if final_params:
             if is_dict(final_params):
                 param_dict = final_params
@@ -663,7 +648,7 @@ class SQL:
             context.metadata["parameter_conversion"] = self._parameter_conversion_state
 
         # Extract and store parameter info (reuse if already extracted above)
-        if final_params and isinstance(final_params, (list, tuple)):
+        if final_params and isinstance(final_params, (list, tuple)) and param_info is not None:
             # We already extracted it above
             context.metadata["parameter_info"] = param_info
         else:
@@ -789,9 +774,15 @@ class SQL:
                 # We have extracted literals, return them in the appropriate format
                 if self._config.dialect in {"mysql", "sqlite"}:
                     # Return as list for positional parameter styles
-                    return list(context.parameters.values())
+                    if isinstance(context.parameters, dict):
+                        return list(context.parameters.values())
+                    if isinstance(context.parameters, (list, tuple)):
+                        return list(context.parameters)
+                    return []
                 # Return as dict for named parameter styles
-                return dict(context.parameters)
+                if isinstance(context.parameters, dict):
+                    return dict(context.parameters)
+                return {}
 
         # If we had original parameters, they should already be in the context
         return merged_params
@@ -1656,7 +1647,7 @@ class SQL:
             if has_numeric and has_other_styles:
                 # Mixed parameter styles: assign parameters in order of appearance in SQL
                 sorted_params = sorted(param_info, key=lambda p: p.position)
-                for i, _param_info_item in enumerate(sorted_params):
+                for i, _ in enumerate(sorted_params):
                     if i < len(params):
                         # Use sequential numbering for all parameters in mixed mode
                         # This ensures first appearance gets "1", second gets "2", etc.
@@ -1842,104 +1833,108 @@ class SQL:
         Returns:
             List of parameters
         """
-        result_list: list[Any] = []
         if is_dict(params):
-            # Check if this is a mixed parameter style conversion scenario
-            # where we have sequential numeric keys ('1', '2', etc.) that should map to position order
-            if all(k.isdigit() for k in params):
-                # Sequential numeric keys - map in order of appearance
-                sorted_params = sorted(param_info, key=lambda p: p.position)
-                for i, _param_info_item in enumerate(sorted_params):
-                    key = str(i + 1)
-                    if key in params:
-                        val = params[key]
-                        if has_parameter_value(val):
-                            result_list.append(val.value)
-                        else:
-                            result_list.append(val)
-                    else:
-                        result_list.append(None)
-                return result_list
-
-            # Standard dict parameter handling
-            param_values_by_ordinal: dict[int, Any] = {}
-
-            for p in param_info:
-                if p.name and p.name in params:
-                    param_values_by_ordinal[p.ordinal] = params[p.name]
-
-            for p in param_info:
-                if p.name is None and p.ordinal not in param_values_by_ordinal:
-                    arg_key = f"arg_{p.ordinal}"
-                    param_key = f"param_{p.ordinal}"
-                    if arg_key in params:
-                        param_values_by_ordinal[p.ordinal] = params[arg_key]
-                    elif param_key in params:
-                        param_values_by_ordinal[p.ordinal] = params[param_key]
-
-            remaining_params = {
-                k: v
-                for k, v in params.items()
-                if k not in {p.name for p in param_info if p.name} and not k.startswith(("arg_", "param_"))
-            }
-
-            unmatched_ordinals = [p.ordinal for p in param_info if p.ordinal not in param_values_by_ordinal]
-
-            for ordinal, (_, value) in zip(unmatched_ordinals, remaining_params.items()):
-                param_values_by_ordinal[ordinal] = value
-
-            for p in param_info:
-                val = param_values_by_ordinal.get(p.ordinal)
-                if val is not None:
-                    if has_parameter_value(val):
-                        result_list.append(val.value)
-                    else:
-                        result_list.append(val)
-                else:
-                    result_list.append(None)
-
-            return result_list
+            return SQL._convert_dict_to_positional(params, param_info)
         if isinstance(params, (list, tuple)):
-            # Special case: if params is empty, preserve it (don't create None values)
-            # This is important for execute_many with empty parameter lists
-            if not params:
-                return params
-
-            # Handle mixed parameter styles correctly
-            # For mixed styles, assign parameters in order of appearance, not by numeric reference
-            if param_info and any(p.style == ParameterStyle.NUMERIC for p in param_info):
-                # Sort parameter info by position to get order of appearance in SQL
-                sorted_params = sorted(param_info, key=lambda p: p.position)
-
-                # Create mapping of parameter values to their final positions
-                param_values_by_final_position = {}
-
-                # Assign parameters in order of appearance in SQL to sequential final positions
-                for final_pos, _param_info_item in enumerate(sorted_params):
-                    if final_pos < len(params):
-                        val = params[final_pos]
-                        if has_parameter_value(val):
-                            param_values_by_final_position[final_pos] = val.value
-                        else:
-                            param_values_by_final_position[final_pos] = val
-
-                # Build result list in final positional order
-                for i in range(len(sorted_params)):
-                    if i in param_values_by_final_position:
-                        result_list.append(param_values_by_final_position[i])
-                    else:
-                        result_list.append(None)
-
-                return result_list
-
-            # Standard conversion for non-mixed styles
-            for param in params:
-                if has_parameter_value(param):
-                    result_list.append(param.value)
-                else:
-                    result_list.append(param)
-            return result_list
+            return SQL._convert_sequence_to_positional(params, param_info)
         return params
+
+    @staticmethod
+    def _convert_dict_to_positional(params: dict[str, Any], param_info: list[Any]) -> list[Any]:
+        """Convert dictionary parameters to positional format."""
+        if all(k.isdigit() for k in params):
+            return SQL._convert_numeric_dict_to_positional(params, param_info)
+
+        return SQL._convert_named_dict_to_positional(params, param_info)
+
+    @staticmethod
+    def _convert_numeric_dict_to_positional(params: dict[str, Any], param_info: list[Any]) -> list[Any]:
+        """Convert numeric dictionary keys to positional format."""
+        result_list: list[Any] = []
+        sorted_params = sorted(param_info, key=lambda p: p.position)
+
+        for i, _ in enumerate(sorted_params):
+            key = str(i + 1)
+            if key in params:
+                val = params[key]
+                result_list.append(val.value if has_parameter_value(val) else val)
+            else:
+                result_list.append(None)
+        return result_list
+
+    @staticmethod
+    def _convert_named_dict_to_positional(params: dict[str, Any], param_info: list[Any]) -> list[Any]:
+        """Convert named dictionary parameters to positional format."""
+        result_list: list[Any] = []
+        param_values_by_ordinal: dict[int, Any] = {}
+
+        # Map named parameters
+        for p in param_info:
+            if p.name and p.name in params:
+                param_values_by_ordinal[p.ordinal] = params[p.name]
+
+        # Map unnamed parameters with arg_/param_ prefixes
+        for p in param_info:
+            if p.name is None and p.ordinal not in param_values_by_ordinal:
+                arg_key = f"arg_{p.ordinal}"
+                param_key = f"param_{p.ordinal}"
+                if arg_key in params:
+                    param_values_by_ordinal[p.ordinal] = params[arg_key]
+                elif param_key in params:
+                    param_values_by_ordinal[p.ordinal] = params[param_key]
+
+        # Handle remaining parameters
+        remaining_params = {
+            k: v
+            for k, v in params.items()
+            if k not in {p.name for p in param_info if p.name} and not k.startswith(("arg_", "param_"))
+        }
+
+        unmatched_ordinals = [p.ordinal for p in param_info if p.ordinal not in param_values_by_ordinal]
+        for ordinal, (_, value) in zip(unmatched_ordinals, remaining_params.items()):
+            param_values_by_ordinal[ordinal] = value
+
+        # Build result list
+        for p in param_info:
+            val = param_values_by_ordinal.get(p.ordinal)
+            if val is not None:
+                result_list.append(val.value if has_parameter_value(val) else val)
+            else:
+                result_list.append(None)
+
+        return result_list
+
+    @staticmethod
+    def _convert_sequence_to_positional(params: "list[Any] | tuple[Any, ...]", param_info: list[Any]) -> Any:
+        """Convert sequence parameters to positional format."""
+        # Special case: if params is empty, preserve it (don't create None values)
+        if not params:
+            return params
+
+        # Handle mixed parameter styles correctly
+        if param_info and any(p.style == ParameterStyle.NUMERIC for p in param_info):
+            return SQL._handle_mixed_style_conversion(params, param_info)
+
+        # Standard conversion for non-mixed styles
+        result_list: list[Any] = [param.value if has_parameter_value(param) else param for param in params]
+        return result_list
+
+    @staticmethod
+    def _handle_mixed_style_conversion(params: "list[Any] | tuple[Any, ...]", param_info: list[Any]) -> list[Any]:
+        """Handle mixed parameter style conversion."""
+        sorted_params = sorted(param_info, key=lambda p: p.position)
+        param_values_by_final_position = {}
+
+        # Assign parameters in order of appearance in SQL to sequential final positions
+        for final_pos, _ in enumerate(sorted_params):
+            if final_pos < len(params):
+                val = params[final_pos]
+                param_values_by_final_position[final_pos] = val.value if has_parameter_value(val) else val
+
+        # Build result list in final positional order
+        result_list: list[Any] = [param_values_by_final_position.get(i) for i in range(len(sorted_params))]
+
+        return result_list
 
     @staticmethod
     def _convert_to_named_colon_format(params: Any, param_info: list[Any]) -> Any:
@@ -2035,7 +2030,7 @@ class SQL:
         self._ensure_processed()
 
         if self._processing_context:
-            return self._processing_context.metadata.get("parameter_info", [])
+            return self._processing_context.metadata.get("parameter_info", [])  # type: ignore[no-any-return]
 
         return []
 

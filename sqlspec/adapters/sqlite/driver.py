@@ -134,18 +134,25 @@ class SqliteDriver(
                 target_style = self.default_parameter_style
 
         # When literals have been parameterized (creating :param_N placeholders),
-        # force QMARK style to ensure correct parameter ordering
-        # BUT only if there are no other named parameters in the SQL
-        # TODO: fix this
-        if hasattr(statement, "_processing_context") and statement._processing_context:
-            if statement._processing_context.metadata.get("literals_parameterized"):
-                # Check if there are other named parameters
-                if detected_styles and ParameterStyle.NAMED_COLON in detected_styles:
-                    # Keep named style to preserve user parameters
-                    pass
-                else:
-                    # No user parameters, safe to use QMARK for literals
-                    target_style = self.default_parameter_style
+        # we may need to convert to QMARK style for SQLite compatibility.
+        # This is needed because:
+        # 1. parameterize_literals_step creates named parameters (:param_0, :param_1, etc.)
+        # 2. SQLite performs better with positional (?) parameters
+        # 3. We must preserve any existing user-provided named parameters
+        # NOTE: Accessing _processing_context is not ideal but necessary until
+        # the parameter style decision is moved earlier in the pipeline
+        if (
+            hasattr(statement, "_processing_context")
+            and statement._processing_context
+            and statement._processing_context.metadata.get("literals_parameterized")
+        ):
+            # Check if there are other named parameters
+            if detected_styles and ParameterStyle.NAMED_COLON in detected_styles:
+                # Keep named style to preserve user parameters
+                pass
+            else:
+                # No user parameters, convert to QMARK for better SQLite performance
+                target_style = self.default_parameter_style
 
         if statement.is_many:
             sql, params = self._get_compiled_sql(statement, target_style)
@@ -187,13 +194,12 @@ class SqliteDriver(
                     rows_affected=len(fetched_data),
                     operation_type="SELECT",
                 )
-            operation_type = self._determine_operation_type(statement)
 
             return SQLResult(
                 statement=statement,
                 data=[],
                 rows_affected=cursor.rowcount,
-                operation_type=operation_type,
+                operation_type=self._determine_operation_type(statement),
                 metadata={"status_message": "OK"},
             )
 

@@ -1,6 +1,7 @@
 """Tests for enhanced caching functionality."""
 
 import threading
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -14,19 +15,19 @@ from sqlspec.statement.cache import BaseStatementCache, FilterCache
 class TestBaseStatementCache:
     """Test the BaseStatementCache class."""
 
-    def test_cache_initialization(self):
+    def test_cache_initialization(self) -> None:
         """Test cache initialization with default settings."""
         cache = BaseStatementCache()
         assert cache.size == 0
         assert cache.hit_rate == 0.0
         assert cache._max_size == 2000  # Default size
 
-    def test_cache_initialization_custom_size(self):
+    def test_cache_initialization_custom_size(self) -> None:
         """Test cache initialization with custom size."""
         cache = BaseStatementCache(max_size=100)
         assert cache._max_size == 100
 
-    def test_get_or_parse_cache_miss(self):
+    def test_get_or_parse_cache_miss(self) -> None:
         """Test get_or_parse with cache miss."""
         cache = BaseStatementCache(max_size=10)
         sql = "SELECT * FROM users"
@@ -40,7 +41,7 @@ class TestBaseStatementCache:
         assert cache._miss_count == 1
         assert cache.hit_rate == 0.0
 
-    def test_get_or_parse_cache_hit(self):
+    def test_get_or_parse_cache_hit(self) -> None:
         """Test get_or_parse with cache hit."""
         cache = BaseStatementCache(max_size=10)
         sql = "SELECT * FROM users"
@@ -60,7 +61,7 @@ class TestBaseStatementCache:
         assert cache._miss_count == 1
         assert cache.hit_rate == 0.5
 
-    def test_get_or_parse_with_dialect(self):
+    def test_get_or_parse_with_dialect(self) -> None:
         """Test get_or_parse with specific dialect."""
         cache = BaseStatementCache(max_size=10)
         sql = "SELECT * FROM users LIMIT 10"
@@ -76,7 +77,7 @@ class TestBaseStatementCache:
         assert cache._hit_count == 0
         assert cache._miss_count == 2
 
-    def test_cache_eviction(self):
+    def test_cache_eviction(self) -> None:
         """Test LRU eviction when cache is full."""
         cache = BaseStatementCache(max_size=3)
 
@@ -115,7 +116,7 @@ class TestBaseStatementCache:
         # All three queries after SELECT 1 were misses
         assert stats_final["miss_count"] == stats_after["miss_count"] + 3
 
-    def test_lru_ordering(self):
+    def test_lru_ordering(self) -> None:
         """Test that LRU ordering is maintained correctly."""
         cache = BaseStatementCache(max_size=3)
 
@@ -140,7 +141,7 @@ class TestBaseStatementCache:
         _ = cache.get_or_parse("SELECT 2")  # Should miss
         assert cache._hit_count == initial_hits + 3  # No change
 
-    def test_sql_normalization(self):
+    def test_sql_normalization(self) -> None:
         """Test that SQL is normalized for cache key."""
         cache = BaseStatementCache(max_size=10)
 
@@ -154,7 +155,7 @@ class TestBaseStatementCache:
         assert cache._hit_count == 3  # 3 hits after the first miss
         assert cache._miss_count == 1
 
-    def test_parse_error_handling(self):
+    def test_parse_error_handling(self) -> None:
         """Test handling of parse errors."""
         cache = BaseStatementCache(max_size=10)
 
@@ -165,13 +166,13 @@ class TestBaseStatementCache:
         # Cache should not store failed parses
         assert cache.size == 0
 
-    def test_thread_safety(self):
+    def test_thread_safety(self) -> None:
         """Test thread-safe operations."""
         cache = BaseStatementCache(max_size=100)
         results = []
         errors = []
 
-        def worker(worker_id: int):
+        def worker(worker_id: int) -> None:
             try:
                 for i in range(10):
                     sql = f"SELECT {worker_id * 10 + i}"
@@ -196,7 +197,7 @@ class TestBaseStatementCache:
         assert len(results) == 50
         assert cache.size <= 50  # May be less due to race conditions
 
-    def test_double_check_locking(self):
+    def test_double_check_locking(self) -> None:
         """Test double-check locking pattern helps reduce cache stampede."""
         cache = BaseStatementCache(max_size=10)
 
@@ -208,16 +209,16 @@ class TestBaseStatementCache:
         parse_count = 0
         original_parse = sqlglot.parse_one
 
-        def counting_parse(*args, **kwargs):
+        def counting_parse(*args: Any, **kwargs: Any) -> exp.Expression:
             nonlocal parse_count
             parse_count += 1
-            return original_parse(*args, **kwargs)
+            return original_parse(*args, **kwargs)  # type: ignore[no-any-return]
 
         with patch("sqlspec.statement.cache.sqlglot.parse_one", side_effect=counting_parse):
             # Launch multiple threads trying to get the same (cached) SQL
             threads = []
 
-            def worker():
+            def worker() -> None:
                 result = cache.get_or_parse(sql)
                 assert result is not None
 
@@ -236,7 +237,7 @@ class TestBaseStatementCache:
         stats = cache.get_stats()
         assert stats["hit_count"] >= 10  # All threads should hit
 
-    def test_clear_cache(self):
+    def test_clear_cache(self) -> None:
         """Test clearing the cache."""
         cache = BaseStatementCache(max_size=10)
 
@@ -256,7 +257,7 @@ class TestBaseStatementCache:
         assert cache._hit_count == 0
         assert cache._miss_count == 0
 
-    def test_get_stats(self):
+    def test_get_stats(self) -> None:
         """Test getting cache statistics."""
         cache = BaseStatementCache(max_size=10)
 
@@ -283,14 +284,14 @@ class TestBaseStatementCache:
 class TestFilterCache:
     """Test the FilterCache class."""
 
-    def test_cache_initialization(self):
+    def test_cache_initialization(self) -> None:
         """Test cache initialization."""
         cache = FilterCache()
         assert cache.size == 0
         assert cache.hit_rate == 0.0
         assert cache._max_size == 1000  # Default size
 
-    def test_get_and_set(self):
+    def test_get_and_set(self) -> None:
         """Test basic get and set operations."""
         cache = FilterCache(max_size=10)
 
@@ -314,7 +315,7 @@ class TestFilterCache:
         assert result.sql() == expr.sql()
         assert cache._hit_count == 1
 
-    def test_cache_key_format(self):
+    def test_cache_key_format(self) -> None:
         """Test that cache keys work correctly."""
         cache = FilterCache(max_size=10)
         expr = exp.Select().select("*").from_("users")
@@ -338,7 +339,7 @@ class TestFilterCache:
             result = cache.get(key)
             assert result is not None
 
-    def test_lru_eviction(self):
+    def test_lru_eviction(self) -> None:
         """Test LRU eviction."""
         cache = FilterCache(max_size=3)
         expr = exp.Select()
@@ -360,7 +361,7 @@ class TestFilterCache:
         assert cache.get((3, ())) is not None
         assert cache.get((4, ())) is not None
 
-    def test_update_existing_key(self):
+    def test_update_existing_key(self) -> None:
         """Test that setting existing key doesn't increase size."""
         cache = FilterCache(max_size=10)
         expr1 = exp.Select().select("1")
@@ -377,9 +378,10 @@ class TestFilterCache:
 
         # Should get the original value (not updated)
         result = cache.get(key)
+        assert result is not None
         assert result.sql() == expr1.sql()
 
-    def test_clear_cache(self):
+    def test_clear_cache(self) -> None:
         """Test clearing the cache."""
         cache = FilterCache(max_size=10)
         expr = exp.Select()
@@ -399,7 +401,7 @@ class TestFilterCache:
         # Verify entries are gone
         assert cache.get((1, ())) is None
 
-    def test_get_stats(self):
+    def test_get_stats(self) -> None:
         """Test cache statistics."""
         cache = FilterCache(max_size=10)
         expr = exp.Select()
@@ -423,12 +425,12 @@ class TestFilterCache:
         assert stats["miss_count"] == 1
         assert stats["hit_rate"] == 0.5
 
-    def test_thread_safety(self):
+    def test_thread_safety(self) -> None:
         """Test thread-safe operations."""
         cache = FilterCache(max_size=100)
         errors = []
 
-        def worker(worker_id: int):
+        def worker(worker_id: int) -> None:
             try:
                 expr = exp.Select().select(str(worker_id))
                 for i in range(10):

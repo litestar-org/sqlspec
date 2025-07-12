@@ -16,6 +16,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.loader import SQLFile, SQLFileLoader
 from sqlspec.statement.builder import Column, ColumnExpression, Delete, FunctionColumn, Insert, Merge, Select, Update
+from sqlspec.statement.cache import CacheConfig, CacheStats
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.typing import ConnectionT, DictRow, ModelDTOT, ModelT, RowT, StatementParameters
@@ -26,6 +27,8 @@ __all__ = (
     "SQL",
     "ArrowResult",
     "AsyncDatabaseConfig",
+    "CacheConfig",
+    "CacheStats",
     "Column",
     "ColumnExpression",
     "ConnectionT",

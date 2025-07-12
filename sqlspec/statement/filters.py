@@ -45,6 +45,8 @@ FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
 class StatementFilter(ABC):
     """Abstract base class for filters that can be appended to a statement."""
 
+    __slots__ = ()
+
     @abstractmethod
     def append_to_statement(self, statement: "SQL") -> "SQL":
         """Append the filter to the statement.
@@ -213,6 +215,8 @@ class OnBeforeAfterFilter(StatementFilter):
 
 class InAnyFilter(StatementFilter, ABC, Generic[T]):
     """Subclass for methods that have a `prefer_any` attribute."""
+
+    __slots__ = ()
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         raise NotImplementedError
@@ -445,6 +449,8 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
 
 class PaginationFilter(StatementFilter, ABC):
     """Subclass for methods that function as a pagination type."""
+
+    __slots__ = ()
 
     @abstractmethod
     def append_to_statement(self, statement: "SQL") -> "SQL":

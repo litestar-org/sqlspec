@@ -88,9 +88,11 @@ class PsycopgSyncDriver(
         if param_infos:
             detected_styles = {p.style for p in param_infos}
 
-        # Only set target_style if there are actual parameters
+        # Set default target_style
+        target_style = self.default_parameter_style
+
+        # Only adjust target_style if there are actual parameters
         if param_infos:
-            target_style = self.default_parameter_style
             unsupported_styles = detected_styles - set(self.supported_parameter_styles)
             if unsupported_styles:
                 target_style = self.default_parameter_style
@@ -99,8 +101,6 @@ class PsycopgSyncDriver(
                     if style in self.supported_parameter_styles:
                         target_style = style
                         break
-        else:
-            target_style = None
 
         if statement.is_many:
             # Check if parameters were provided in kwargs first

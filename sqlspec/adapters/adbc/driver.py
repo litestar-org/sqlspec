@@ -224,11 +224,9 @@ class AdbcDriver(
                     # can still cause "Can't map Arrow type 'na' to Postgres type" errors
                     cursor.execute(sql, cursor_params or [])
                 except Exception as e:
-                    # Rollback transaction on error for PostgreSQL to avoid
-                    # "current transaction is aborted" errors
-                    if (
-                        self.dialect == "postgres"
-                    ):  # TODO: determine why we need this; if it's to satisfy a test, we should remove
+                    # PostgreSQL requires explicit ROLLBACK after a failed transaction
+                    # to clear the "current transaction is aborted" state before new commands
+                    if self.dialect == "postgres":
                         with contextlib.suppress(Exception):
                             cursor.execute("ROLLBACK")
                     raise e from e
@@ -284,9 +282,9 @@ class AdbcDriver(
                 try:
                     cursor.executemany(sql, converted_param_list or [])
                 except Exception as e:
-                    if (
-                        self.dialect == "postgres"
-                    ):  # TODO: determine why we need this; if it's to satisfy a test, we should remove
+                    # PostgreSQL requires explicit ROLLBACK after a failed transaction
+                    # to clear the "current transaction is aborted" state before new commands
+                    if self.dialect == "postgres":
                         with contextlib.suppress(Exception):
                             cursor.execute("ROLLBACK")
                     # Always re-raise the original exception
@@ -345,11 +343,9 @@ class AdbcDriver(
         try:
             cursor.execute(statement)
         except Exception as e:
-            # Rollback transaction on error for PostgreSQL to avoid
-            # "current transaction is aborted" errors
-            if (
-                self.dialect == "postgres"
-            ):  # TODO: determine why we need this; if it's to satisfy a test, we should remove
+            # PostgreSQL requires explicit ROLLBACK after a failed transaction
+            # to clear the "current transaction is aborted" state before new commands
+            if self.dialect == "postgres":
                 with contextlib.suppress(Exception):
                     cursor.execute("ROLLBACK")
             raise e from e

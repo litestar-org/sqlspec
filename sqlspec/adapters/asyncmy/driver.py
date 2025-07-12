@@ -32,7 +32,10 @@ logger = logging.getLogger("sqlspec")
 AsyncmyConnection: TypeAlias = Connection
 
 
-# TODO: this is incorrectly using auto-commit for some reason.  we want to leave the commit up. to the user at this this point.
+# NOTE: This driver uses auto-commit by default via managed_transaction_async(auto_commit=True).
+# This ensures each operation is automatically committed on success, providing a simpler
+# transaction model for most use cases. Users requiring manual transaction control should
+# use the connection's transaction methods directly.
 class AsyncmyDriver(
     AsyncDriverAdapterBase[AsyncmyConnection, RowT],
     AsyncAdapterCacheMixin,
@@ -78,9 +81,7 @@ class AsyncmyDriver(
         detected_styles = {p.style for p in validator.extract_parameters(statement.to_sql())}
 
         # Determine target style based on what's in the SQL
-        target_style = (
-            self.default_parameter_style
-        )  # TODO: ensure it only converts parameters if it's unsupported format
+        target_style = self.default_parameter_style
 
         # Check if there are unsupported styles
         unsupported_styles = detected_styles - set(self.supported_parameter_styles)

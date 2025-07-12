@@ -10,20 +10,29 @@ import sqlglot
 import sqlglot.expressions as exp
 from sqlglot.errors import ParseError
 
+from sqlspec.utils.logging import get_logger
+
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
 __all__ = (
     "ASTFragmentCache",
     "BaseStatementCache",
+    "CacheConfig",
+    "CacheStats",
     "CachedFragment",
     "FilterCache",
     "SQLCache",
     "ast_fragment_cache",
     "base_statement_cache",
     "filtered_ast_cache",
+    "get_cache_config",
+    "get_cache_stats",
+    "log_cache_stats",
     "optimized_expression_cache",
+    "reset_cache_stats",
     "sql_cache",
+    "update_cache_config",
 )
 
 
@@ -33,23 +42,169 @@ DEFAULT_BASE_STATEMENT_CACHE_SIZE = 2000
 DEFAULT_FILTER_CACHE_SIZE = 1000
 
 
+@dataclass
+class CacheConfig:
+    """Configuration for SQLSpec caching layers."""
+
+    sql_cache_size: int = DEFAULT_CACHE_MAX_SIZE
+    sql_cache_enabled: bool = True
+    fragment_cache_size: int = DEFAULT_FRAGMENT_CACHE_SIZE
+    fragment_cache_enabled: bool = True
+    optimized_cache_size: int = DEFAULT_CACHE_MAX_SIZE
+    optimized_cache_enabled: bool = True
+
+    def __post_init__(self) -> None:
+        """Validate configuration values."""
+        if self.sql_cache_size < 0:
+            msg = "sql_cache_size must be non-negative"
+            raise ValueError(msg)
+        if self.fragment_cache_size < 0:
+            msg = "fragment_cache_size must be non-negative"
+            raise ValueError(msg)
+        if self.optimized_cache_size < 0:
+            msg = "optimized_cache_size must be non-negative"
+            raise ValueError(msg)
+
+
+@dataclass
+class CacheStats:
+    """Statistics for cache performance monitoring."""
+
+    # SQL cache stats
+    sql_hits: int = 0
+    sql_misses: int = 0
+    sql_evictions: int = 0
+    sql_size: int = 0
+
+    # Fragment cache stats
+    fragment_hits: int = 0
+    fragment_misses: int = 0
+    fragment_evictions: int = 0
+    fragment_size: int = 0
+
+    # Optimized cache stats
+    optimized_hits: int = 0
+    optimized_misses: int = 0
+    optimized_evictions: int = 0
+    optimized_size: int = 0
+
+    # Timing stats (in seconds)
+    avg_cache_lookup_time: float = 0.0
+    avg_parse_time: float = 0.0
+    avg_optimize_time: float = 0.0
+
+    @property
+    def sql_hit_rate(self) -> float:
+        """Calculate SQL cache hit rate."""
+        total = self.sql_hits + self.sql_misses
+        return self.sql_hits / total if total > 0 else 0.0
+
+    @property
+    def fragment_hit_rate(self) -> float:
+        """Calculate fragment cache hit rate."""
+        total = self.fragment_hits + self.fragment_misses
+        return self.fragment_hits / total if total > 0 else 0.0
+
+    @property
+    def optimized_hit_rate(self) -> float:
+        """Calculate optimized expression cache hit rate."""
+        total = self.optimized_hits + self.optimized_misses
+        return self.optimized_hits / total if total > 0 else 0.0
+
+    @property
+    def overall_hit_rate(self) -> float:
+        """Calculate overall cache hit rate across all caches."""
+        total_hits = self.sql_hits + self.fragment_hits + self.optimized_hits
+        total_accesses = (
+            self.sql_hits
+            + self.sql_misses
+            + self.fragment_hits
+            + self.fragment_misses
+            + self.optimized_hits
+            + self.optimized_misses
+        )
+        return total_hits / total_accesses if total_accesses > 0 else 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert stats to dictionary for logging/monitoring."""
+        return {
+            "sql_cache": {
+                "hits": self.sql_hits,
+                "misses": self.sql_misses,
+                "hit_rate": self.sql_hit_rate,
+                "evictions": self.sql_evictions,
+                "size": self.sql_size,
+            },
+            "fragment_cache": {
+                "hits": self.fragment_hits,
+                "misses": self.fragment_misses,
+                "hit_rate": self.fragment_hit_rate,
+                "evictions": self.fragment_evictions,
+                "size": self.fragment_size,
+            },
+            "optimized_cache": {
+                "hits": self.optimized_hits,
+                "misses": self.optimized_misses,
+                "hit_rate": self.optimized_hit_rate,
+                "evictions": self.optimized_evictions,
+                "size": self.optimized_size,
+            },
+            "performance": {
+                "avg_cache_lookup_time_ms": self.avg_cache_lookup_time * 1000,
+                "avg_parse_time_ms": self.avg_parse_time * 1000,
+                "avg_optimize_time_ms": self.avg_optimize_time * 1000,
+            },
+            "overall": {
+                "hit_rate": self.overall_hit_rate,
+                "total_size": self.sql_size + self.fragment_size + self.optimized_size,
+            },
+        }
+
+
+_cache_config = CacheConfig()
+_cache_stats = CacheStats()
+
+
 class SQLCache:
     """A thread-safe LRU cache for processed SQL states."""
 
     def __init__(self, max_size: int = DEFAULT_CACHE_MAX_SIZE, cache_name: str = "sql") -> None:
         self.cache: OrderedDict[str, Any] = OrderedDict()
-        self.max_size = max_size
+        self._max_size = max_size
         self.lock = threading.Lock()
         self.cache_name = cache_name
         self._eviction_count = 0
+
+    @property
+    def max_size(self) -> int:
+        """Get maximum cache size."""
+        return self._max_size
+
+    @max_size.setter
+    def max_size(self, value: int) -> None:
+        """Set maximum cache size."""
+        with self.lock:
+            self._max_size = value
+            # If cache is over new size limit, evict oldest entries
+            while len(self.cache) > self._max_size:
+                self.cache.popitem(last=False)
+                self._eviction_count += 1
+                self._record_eviction()
 
     @property
     def size(self) -> int:
         """Get current cache size."""
         return len(self.cache)
 
+    @property
+    def enabled(self) -> bool:
+        """Check if cache is enabled (has non-zero max size)."""
+        return self._max_size > 0
+
     def get(self, key: str) -> Optional[Any]:
         """Get an item from the cache, marking it as recently used."""
+        if not self.enabled:
+            return None
         with self.lock:
             if key in self.cache:
                 self.cache.move_to_end(key)
@@ -60,11 +215,13 @@ class SQLCache:
 
     def set(self, key: str, value: Any) -> None:
         """Set an item in the cache with LRU eviction."""
+        if not self.enabled:
+            return
         with self.lock:
             if key in self.cache:
                 self.cache.move_to_end(key)
             # Add new entry
-            elif len(self.cache) >= self.max_size:
+            elif len(self.cache) >= self._max_size:
                 self.cache.popitem(last=False)
                 self._eviction_count += 1
                 self._record_eviction()
@@ -85,7 +242,8 @@ class SQLCache:
             return None
 
         # Handle tuple of (sql_string, parameters) - common for compiled SQL cache
-        if isinstance(value, tuple) and len(value) == 2:
+        sql_params_tuple_size = 2
+        if isinstance(value, tuple) and len(value) == sql_params_tuple_size:
             sql_string, parameters = value
             # SQL string is immutable, but parameters might be mutable
             return (sql_string, self._safe_copy(parameters))
@@ -106,39 +264,24 @@ class SQLCache:
 
     def _record_hit(self) -> None:
         """Record a cache hit in statistics."""
-        try:
-            from sqlspec.statement.cache_config import _cache_stats
-
-            if self.cache_name == "sql":
-                _cache_stats.sql_hits += 1
-            elif self.cache_name == "optimized":
-                _cache_stats.optimized_hits += 1
-        except ImportError:
-            pass
+        if self.cache_name == "sql":
+            _cache_stats.sql_hits += 1
+        elif self.cache_name == "optimized":
+            _cache_stats.optimized_hits += 1
 
     def _record_miss(self) -> None:
         """Record a cache miss in statistics."""
-        try:
-            from sqlspec.statement.cache_config import _cache_stats
-
-            if self.cache_name == "sql":
-                _cache_stats.sql_misses += 1
-            elif self.cache_name == "optimized":
-                _cache_stats.optimized_misses += 1
-        except ImportError:
-            pass
+        if self.cache_name == "sql":
+            _cache_stats.sql_misses += 1
+        elif self.cache_name == "optimized":
+            _cache_stats.optimized_misses += 1
 
     def _record_eviction(self) -> None:
         """Record a cache eviction in statistics."""
-        try:
-            from sqlspec.statement.cache_config import _cache_stats
-
-            if self.cache_name == "sql":
-                _cache_stats.sql_evictions += 1
-            elif self.cache_name == "optimized":
-                _cache_stats.optimized_evictions += 1
-        except ImportError:
-            pass
+        if self.cache_name == "sql":
+            _cache_stats.sql_evictions += 1
+        elif self.cache_name == "optimized":
+            _cache_stats.optimized_evictions += 1
 
 
 @dataclass
@@ -164,15 +307,39 @@ class ASTFragmentCache:
     def __init__(self, max_size: int = DEFAULT_FRAGMENT_CACHE_SIZE) -> None:
         self.fragment_cache: OrderedDict[str, CachedFragment] = OrderedDict()
         self.template_cache: OrderedDict[str, CachedFragment] = OrderedDict()
-        self.max_size = max_size
+        self._max_size = max_size
         self.lock = threading.Lock()
         self._hit_count = 0
         self._miss_count = 0
 
     @property
+    def max_size(self) -> int:
+        """Get maximum cache size."""
+        return self._max_size
+
+    @max_size.setter
+    def max_size(self, value: int) -> None:
+        """Set maximum cache size."""
+        with self.lock:
+            self._max_size = value
+            # Evict from fragment cache if needed
+            while len(self.fragment_cache) > self._max_size // 2:
+                self.fragment_cache.popitem(last=False)
+                _cache_stats.fragment_evictions += 1
+            # Evict from template cache if needed
+            while len(self.template_cache) > self._max_size // 2:
+                self.template_cache.popitem(last=False)
+                _cache_stats.fragment_evictions += 1
+
+    @property
     def size(self) -> int:
         """Get total cache size (fragments + templates)."""
         return len(self.fragment_cache) + len(self.template_cache)
+
+    @property
+    def enabled(self) -> bool:
+        """Check if cache is enabled (has non-zero max size)."""
+        return self._max_size > 0
 
     @property
     def hit_rate(self) -> float:
@@ -198,10 +365,12 @@ class ASTFragmentCache:
         with self.lock:
             if cache_key in self.fragment_cache:
                 self._hit_count += 1
+                _cache_stats.fragment_hits += 1
                 self.fragment_cache.move_to_end(cache_key)
                 return self.fragment_cache[cache_key]
 
             self._miss_count += 1
+            _cache_stats.fragment_misses += 1
             return None
 
     def set_fragment(
@@ -229,8 +398,9 @@ class ASTFragmentCache:
                 return
 
             # Evict if needed
-            if len(self.fragment_cache) >= self.max_size // 2:
+            if len(self.fragment_cache) >= self._max_size // 2:
                 self.fragment_cache.popitem(last=False)
+                _cache_stats.fragment_evictions += 1
 
             cached = CachedFragment(
                 expression=expression.copy(),  # Store a copy to avoid mutations
@@ -301,7 +471,7 @@ class ASTFragmentCache:
                 "fragment_count": len(self.fragment_cache),
                 "template_count": len(self.template_cache),
                 "total_size": self.size,
-                "max_size": self.max_size,
+                "max_size": self._max_size,
                 "hit_count": self._hit_count,
                 "miss_count": self._miss_count,
                 "hit_rate": self.hit_rate,
@@ -489,9 +659,73 @@ class FilterCache:
             }
 
 
-# Global cache instances
-sql_cache = SQLCache(cache_name="sql")
-ast_fragment_cache = ASTFragmentCache()
-optimized_expression_cache = SQLCache(max_size=1500, cache_name="optimized")
+def get_cache_config() -> CacheConfig:
+    """Get the current cache configuration."""
+    return _cache_config
+
+
+def update_cache_config(config: CacheConfig) -> None:
+    """Update the cache configuration.
+
+    Note: This will clear all existing caches.
+    """
+    global _cache_config  # noqa: PLW0603
+    _cache_config = config
+
+    # Apply new configuration to caches
+    if config.sql_cache_enabled:
+        sql_cache.max_size = config.sql_cache_size
+    else:
+        sql_cache.clear()
+
+    if config.fragment_cache_enabled:
+        ast_fragment_cache.max_size = config.fragment_cache_size
+    else:
+        ast_fragment_cache.clear()
+
+    if config.optimized_cache_enabled:
+        optimized_expression_cache.max_size = config.optimized_cache_size
+    else:
+        optimized_expression_cache.clear()
+
+
+def get_cache_stats() -> CacheStats:
+    """Get current cache statistics."""
+    # Update sizes
+    _cache_stats.sql_size = sql_cache.size
+    _cache_stats.fragment_size = ast_fragment_cache.size
+    _cache_stats.optimized_size = optimized_expression_cache.size
+
+    # Update fragment cache stats from internal counters
+    _cache_stats.fragment_hits = ast_fragment_cache._hit_count
+    _cache_stats.fragment_misses = ast_fragment_cache._miss_count
+
+    return _cache_stats
+
+
+def reset_cache_stats() -> None:
+    """Reset all cache statistics."""
+    global _cache_stats  # noqa: PLW0603
+    _cache_stats = CacheStats()
+
+    # Reset fragment cache internal counters
+    ast_fragment_cache._hit_count = 0
+    ast_fragment_cache._miss_count = 0
+
+
+def log_cache_stats() -> None:
+    """Log current cache statistics."""
+    logger = get_logger("sqlspec.cache")
+    stats = get_cache_stats()
+    logger.info("Cache Statistics", extra=stats.to_dict())
+
+
+# Global cache instances - initialized with configuration values
+sql_cache = SQLCache(max_size=_cache_config.sql_cache_size, cache_name="sql")
+ast_fragment_cache = ASTFragmentCache(max_size=_cache_config.fragment_cache_size)
+optimized_expression_cache = SQLCache(max_size=_cache_config.optimized_cache_size, cache_name="optimized")
 base_statement_cache = BaseStatementCache()
 filtered_ast_cache = FilterCache()
+
+# Note: Caches are enabled by default and will be used unless explicitly disabled
+# via update_cache_config() or by setting cache sizes to 0

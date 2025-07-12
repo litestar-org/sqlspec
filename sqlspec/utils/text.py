@@ -15,6 +15,8 @@ _SNAKE_CASE_LOWER_OR_DIGIT_TO_UPPER = re.compile(r"(?<=[a-z0-9])(?=[A-Z])", re.U
 # Insert underscore between uppercase letter and uppercase followed by lowercase
 _SNAKE_CASE_UPPER_TO_UPPER_LOWER = re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])", re.UNICODE)
 _SNAKE_CASE_HYPHEN_SPACE = re.compile(r"[.\s@-]+", re.UNICODE)
+# Remove all non-alphanumeric characters except underscores
+_SNAKE_CASE_REMOVE_NON_WORD = re.compile(r"[^\w]+", re.UNICODE)
 # Collapse multiple underscores
 _SNAKE_CASE_MULTIPLE_UNDERSCORES = re.compile(r"__+", re.UNICODE)
 
@@ -110,8 +112,7 @@ def snake_case(string: str) -> str:
     s = _SNAKE_CASE_HYPHEN_SPACE.sub("_", string)
 
     # 2. Remove all non-alphanumeric characters except underscores
-    # TODO: move to a compiled regex at the top of the file
-    s = re.sub(r"[^\w]+", "", s, flags=re.UNICODE)
+    s = _SNAKE_CASE_REMOVE_NON_WORD.sub("", s)
 
     # 3. Insert an underscore between a lowercase/digit and an uppercase letter.
     #    e.g., "helloWorld" -> "hello_World"

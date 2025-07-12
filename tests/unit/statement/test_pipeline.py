@@ -15,7 +15,7 @@ from sqlspec.statement.pipeline import (
 class TestSQLTransformContext:
     """Test the SQLTransformContext dataclass."""
 
-    def test_context_initialization(self):
+    def test_context_initialization(self) -> None:
         """Test basic context initialization."""
         expr = exp.Select().select("*").from_("users")
         context = SQLTransformContext(current_expression=expr, original_expression=expr, dialect="postgres")
@@ -26,7 +26,7 @@ class TestSQLTransformContext:
         assert context.parameters == {}
         assert context.metadata == {}
 
-    def test_merged_parameters_mysql_sqlite(self):
+    def test_merged_parameters_mysql_sqlite(self) -> None:
         """Test parameter merging for MySQL/SQLite (positional)."""
         expr = exp.Select()
         context = SQLTransformContext(
@@ -40,7 +40,7 @@ class TestSQLTransformContext:
         merged = context.merged_parameters
         assert merged == ["value1", "value2", "value3"]
 
-    def test_merged_parameters_postgres(self):
+    def test_merged_parameters_postgres(self) -> None:
         """Test parameter merging for other dialects (named)."""
         expr = exp.Select()
         context = SQLTransformContext(
@@ -57,7 +57,7 @@ class TestSQLTransformContext:
 class TestPipelineComposition:
     """Test pipeline composition functionality."""
 
-    def test_compose_pipeline_empty(self):
+    def test_compose_pipeline_empty(self) -> None:
         """Test composing empty pipeline."""
         pipeline = compose_pipeline([])
 
@@ -67,7 +67,7 @@ class TestPipelineComposition:
         result = pipeline(context)
         assert result == context
 
-    def test_compose_pipeline_single_step(self):
+    def test_compose_pipeline_single_step(self) -> None:
         """Test composing single-step pipeline."""
 
         def test_step(context: SQLTransformContext) -> SQLTransformContext:
@@ -82,7 +82,7 @@ class TestPipelineComposition:
         result = pipeline(context)
         assert result.metadata["test"] is True
 
-    def test_compose_pipeline_multiple_steps(self):
+    def test_compose_pipeline_multiple_steps(self) -> None:
         """Test composing multi-step pipeline."""
 
         def step1(context: SQLTransformContext) -> SQLTransformContext:
@@ -111,7 +111,7 @@ class TestPipelineComposition:
 class TestNormalizeStep:
     """Test the normalize step."""
 
-    def test_normalize_step_passthrough(self):
+    def test_normalize_step_passthrough(self) -> None:
         """Test that normalize step passes through context unchanged (for now)."""
         expr = exp.Select()
         context = SQLTransformContext(current_expression=expr, original_expression=expr)
@@ -123,7 +123,7 @@ class TestNormalizeStep:
 class TestParameterizeLiteralsStep:
     """Test the parameterize literals step."""
 
-    def test_parameterize_simple_literal(self):
+    def test_parameterize_simple_literal(self) -> None:
         """Test parameterizing a simple string literal."""
         # Create SQL with literal: SELECT * FROM users WHERE name = 'John'
         expr = exp.Select().select("*").from_("users").where("name = 'John'")
@@ -134,7 +134,7 @@ class TestParameterizeLiteralsStep:
 
         # Check that literal was replaced with placeholder
         assert "param_0" in result.parameters
-        assert result.parameters["param_0"] == "John"
+        assert result.parameters["param_0"] == "John"  # type: ignore[call-overload]
         assert result.metadata["literals_parameterized"] is True
         assert result.metadata["parameter_count"] == 1
 
@@ -143,7 +143,7 @@ class TestParameterizeLiteralsStep:
         assert "param_0" in sql
         assert "'John'" not in sql
 
-    def test_parameterize_multiple_literals(self):
+    def test_parameterize_multiple_literals(self) -> None:
         """Test parameterizing multiple literals."""
         # SELECT * FROM users WHERE name = 'John' AND age = 30
         expr = exp.Select().select("*").from_("users").where("name = 'John' AND age = 30")
@@ -154,11 +154,11 @@ class TestParameterizeLiteralsStep:
 
         # Check parameters
         assert len(result.parameters) == 2
-        assert result.parameters["param_0"] == "John"
-        assert result.parameters["param_1"] == "30"  # Numbers are stored as strings in literals
+        assert result.parameters["param_0"] == "John"  # type: ignore[call-overload]
+        assert result.parameters["param_1"] == "30"  # type: ignore[call-overload]  # Numbers are stored as strings in literals
         assert result.metadata["parameter_count"] == 2
 
-    def test_parameterize_no_literals(self):
+    def test_parameterize_no_literals(self) -> None:
         """Test parameterizing SQL with no literals."""
         # SELECT * FROM users
         expr = exp.Select().select("*").from_("users")
@@ -175,7 +175,7 @@ class TestParameterizeLiteralsStep:
 class TestOptimizeStep:
     """Test the optimize step."""
 
-    def test_optimize_simple_expression(self):
+    def test_optimize_simple_expression(self) -> None:
         """Test optimizing a simple expression."""
         # Create expression with redundant condition: WHERE 1 = 1 AND name = 'John'
         expr = exp.Select().select("*").from_("users").where("1 = 1 AND name = 'John'")
@@ -195,7 +195,7 @@ class TestOptimizeStep:
 class TestValidateStep:
     """Test the validate step."""
 
-    def test_validate_clean_sql(self):
+    def test_validate_clean_sql(self) -> None:
         """Test validating clean SQL."""
         expr = exp.Select().select("*").from_("users")
 
@@ -207,7 +207,7 @@ class TestValidateStep:
         assert result.metadata["validation_issues"] == []
         assert result.metadata["validation_warnings"] == []
 
-    def test_validate_suspicious_function(self):
+    def test_validate_suspicious_function(self) -> None:
         """Test detecting suspicious functions."""
         # SELECT SLEEP(5) FROM users
         expr = exp.Select().select(exp.func("SLEEP", 5)).from_("users")
@@ -220,7 +220,7 @@ class TestValidateStep:
         assert len(result.metadata["validation_issues"]) > 0
         assert "sleep" in result.metadata["validation_issues"][0].lower()
 
-    def test_validate_tautology(self):
+    def test_validate_tautology(self) -> None:
         """Test detecting tautologies."""
         # WHERE 'a' = 'a'
         expr = exp.Select().select("*").from_("users").where("'a' = 'a'")
@@ -233,7 +233,7 @@ class TestValidateStep:
         assert len(result.metadata["validation_warnings"]) > 0
         assert "tautology" in result.metadata["validation_warnings"][0].lower()
 
-    def test_validate_union_injection_pattern(self):
+    def test_validate_union_injection_pattern(self) -> None:
         """Test detecting potential UNION injection patterns."""
         # Create a UNION with many NULLs (suspicious pattern)
         union_select = exp.Select().select(exp.Null(), exp.Null(), exp.Null(), exp.Null(), exp.Null())
@@ -252,7 +252,7 @@ class TestValidateStep:
 class TestFullPipeline:
     """Test full pipeline execution."""
 
-    def test_full_pipeline_execution(self):
+    def test_full_pipeline_execution(self) -> None:
         """Test running a full pipeline with all steps."""
         # Create SQL with literals and potential issues
         expr = exp.Select().select("*").from_("users").where("name = 'John' AND 1 = 1")
@@ -271,7 +271,7 @@ class TestFullPipeline:
 
         # Check parameters were extracted
         assert "param_0" in result.parameters
-        assert result.parameters["param_0"] == "John"
+        assert result.parameters["param_0"] == "John"  # type: ignore[call-overload]
 
         # Check that parameters were properly handled
         # The tautology (1=1) might have been optimized away by the optimize step

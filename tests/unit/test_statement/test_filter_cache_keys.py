@@ -59,7 +59,7 @@ class TestFilterCacheKeys:
         filter2 = InCollectionFilter("id", values2)
         filter3 = InCollectionFilter("id", values3)
         filter4 = InCollectionFilter("id", values4)
-        filter5 = InCollectionFilter("id", None)
+        filter5: InCollectionFilter = InCollectionFilter("id", None)
 
         # Same values should have same cache key
         assert filter1.get_cache_key() == filter2.get_cache_key()
@@ -92,7 +92,7 @@ class TestFilterCacheKeys:
         """Test NotAnyCollectionFilter cache key generation."""
         filter1 = NotAnyCollectionFilter("tags", ["deprecated", "legacy"])
         filter2 = NotAnyCollectionFilter("tags", ["deprecated", "legacy"])
-        filter3 = NotAnyCollectionFilter("tags", None)
+        filter3: NotAnyCollectionFilter = NotAnyCollectionFilter("tags", None)
 
         assert filter1.get_cache_key() == filter2.get_cache_key()
         assert filter1.get_cache_key() != filter3.get_cache_key()

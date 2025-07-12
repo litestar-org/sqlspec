@@ -103,27 +103,27 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # Database configurations
         databases = []
 
-        databases.append(
-            {
-                "name": "SQLite",
-                "type": "sync",
-                "sqlspec_config": self._get_sqlite_configs(),
-                "sqlalchemy_url": "sqlite:///.benchmark/test_sync.db",
-                "sqlalchemy_async_url": None,
-                "setup_func": self._setup_sqlite,
-                "requires_container": False,
-            }
-        )
-        databases.append(
-            {
-                "name": "AioSQLite",
-                "type": "async",
-                "sqlspec_config": self._get_aiosqlite_configs(),
-                "sqlalchemy_url": None,
-                "sqlalchemy_async_url": "sqlite+aiosqlite:///.benchmark/test_async.db",
-                "setup_func": self._setup_sqlite_async,  # type: ignore[dict-item]
-                "requires_container": False,
-            }
+        databases.extend(
+            [
+                {
+                    "name": "SQLite",
+                    "type": "sync",
+                    "sqlspec_config": self._get_sqlite_configs(),
+                    "sqlalchemy_url": "sqlite:///.benchmark/test_sync.db",
+                    "sqlalchemy_async_url": None,
+                    "setup_func": self._setup_sqlite,
+                    "requires_container": False,
+                },
+                {
+                    "name": "AioSQLite",
+                    "type": "async",
+                    "sqlspec_config": self._get_aiosqlite_configs(),
+                    "sqlalchemy_url": None,
+                    "sqlalchemy_async_url": "sqlite+aiosqlite:///.benchmark/test_async.db",
+                    "setup_func": self._setup_sqlite_async,  # type: ignore[dict-item]
+                    "requires_container": False,
+                },
+            ]
         )
 
         # PostgreSQL (sync + async)
@@ -131,44 +131,42 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             try:
                 host, port = self.container_manager.start_postgres(self.config.keep_containers)
 
-                databases.append(
-                    {
-                        "name": "Psycopg",
-                        "type": "sync",
-                        "sqlspec_config": self._get_psycopg_configs(host, port),
-                        "sqlalchemy_url": f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
-                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
-                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
-                        "sqlalchemy_async_url": None,
-                        "setup_func": self._setup_postgres,
-                        "requires_container": True,
-                    }
-                )
-                databases.append(
-                    {
-                        "name": "Psycopg-Async",
-                        "type": "async",
-                        "sqlspec_config": self._get_psycopg_async_configs(host, port),
-                        "sqlalchemy_url": None,
-                        "sqlalchemy_async_url": f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
-                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
-                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
-                        "setup_func": self._setup_postgres_async,  # type: ignore[dict-item]
-                        "requires_container": True,
-                    }
-                )
-                databases.append(
-                    {
-                        "name": "Asyncpg",
-                        "type": "async",
-                        "sqlspec_config": self._get_asyncpg_configs(host, port),
-                        "sqlalchemy_url": None,
-                        "sqlalchemy_async_url": f"postgresql+asyncpg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
-                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
-                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
-                        "setup_func": self._setup_postgres_async,  # type: ignore[dict-item]
-                        "requires_container": True,
-                    }
+                databases.extend(
+                    [
+                        {
+                            "name": "Psycopg",
+                            "type": "sync",
+                            "sqlspec_config": self._get_psycopg_configs(host, port),
+                            "sqlalchemy_url": f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
+                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
+                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
+                            "sqlalchemy_async_url": None,
+                            "setup_func": self._setup_postgres,
+                            "requires_container": True,
+                        },
+                        {
+                            "name": "Psycopg-Async",
+                            "type": "async",
+                            "sqlspec_config": self._get_psycopg_async_configs(host, port),
+                            "sqlalchemy_url": None,
+                            "sqlalchemy_async_url": f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
+                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
+                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
+                            "setup_func": self._setup_postgres_async,  # type: ignore[dict-item]
+                            "requires_container": True,
+                        },
+                        {
+                            "name": "Asyncpg",
+                            "type": "async",
+                            "sqlspec_config": self._get_asyncpg_configs(host, port),
+                            "sqlalchemy_url": None,
+                            "sqlalchemy_async_url": f"postgresql+asyncpg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
+                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
+                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
+                            "setup_func": self._setup_postgres_async,  # type: ignore[dict-item]
+                            "requires_container": True,
+                        },
+                    ]
                 )
             except Exception as e:
                 self.console.print(f"[yellow]Skipping PostgreSQL tests: {e}[/yellow]")
@@ -178,27 +176,27 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             try:
                 host, port = self.container_manager.start_oracle(self.config.keep_containers)
 
-                databases.append(
-                    {
-                        "name": "OracleDB",
-                        "type": "sync",
-                        "sqlspec_config": self._get_oracledb_configs(host, port, mode="sync"),
-                        "sqlalchemy_url": f"oracle+oracledb://system:{self.container_manager.docker_config.ORACLE_DEFAULT_PASSWORD}@{host}:{port}?service_name=FREEPDB1",
-                        "sqlalchemy_async_url": None,
-                        "setup_func": self._setup_oracle,
-                        "requires_container": True,
-                    }
-                )
-                databases.append(
-                    {
-                        "name": "OracleDB-Async",
-                        "type": "async",
-                        "sqlspec_config": self._get_oracledb_configs(host, port, mode="async"),
-                        "sqlalchemy_url": None,
-                        "sqlalchemy_async_url": f"oracle+oracledb://system:{self.container_manager.docker_config.ORACLE_DEFAULT_PASSWORD}@{host}:{port}?service_name=FREEPDB1",
-                        "setup_func": self._setup_oracle_async,  # type: ignore[dict-item]
-                        "requires_container": True,
-                    }
+                databases.extend(
+                    [
+                        {
+                            "name": "OracleDB",
+                            "type": "sync",
+                            "sqlspec_config": self._get_oracledb_configs(host, port, mode="sync"),
+                            "sqlalchemy_url": f"oracle+oracledb://system:{self.container_manager.docker_config.ORACLE_DEFAULT_PASSWORD}@{host}:{port}?service_name=FREEPDB1",
+                            "sqlalchemy_async_url": None,
+                            "setup_func": self._setup_oracle,
+                            "requires_container": True,
+                        },
+                        {
+                            "name": "OracleDB-Async",
+                            "type": "async",
+                            "sqlspec_config": self._get_oracledb_configs(host, port, mode="async"),
+                            "sqlalchemy_url": None,
+                            "sqlalchemy_async_url": f"oracle+oracledb://system:{self.container_manager.docker_config.ORACLE_DEFAULT_PASSWORD}@{host}:{port}?service_name=FREEPDB1",
+                            "setup_func": self._setup_oracle_async,  # type: ignore[dict-item]
+                            "requires_container": True,
+                        },
+                    ]
                 )
             except Exception as e:
                 self.console.print(f"[yellow]Skipping Oracle tests: {e}[/yellow]")
@@ -1273,7 +1271,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
                 await session.execute_many(insert_sql, tuple_data)
 
                 # Clean up after each iteration
-                await session.execute(SQL("DELETE FROM users WHERE name LIKE 'bulk_user_%'"))
+                await session.execute("DELETE FROM users WHERE name LIKE 'bulk_user_%'")
             iteration_counter += 1
 
         times = await BenchmarkMetrics.time_operation_async(
@@ -1301,7 +1299,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
                 await session.execute_many(insert_sql, tuple_data)
 
                 # Clean up after each iteration
-                await session.execute(SQL("DELETE FROM users WHERE name LIKE 'bulk_user_%'"))
+                await session.execute("DELETE FROM users WHERE name LIKE 'bulk_user_%'")
             iteration_counter += 1
 
         times = await BenchmarkMetrics.time_operation_async(

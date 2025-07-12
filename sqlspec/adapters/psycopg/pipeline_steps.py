@@ -35,7 +35,7 @@ def psycopg_copy_transform_step(context: SQLTransformContext) -> SQLTransformCon
         # If this is a COPY FROM STDIN or TO STDOUT, handle the data
         if is_copy_from_stdin or is_copy_to_stdout:
             copy_data = None
-            if context.parameters:
+            if context.parameters and isinstance(context.parameters, dict):
                 param_keys = sorted(context.parameters.keys())
                 if param_keys:
                     for key in param_keys:

@@ -123,12 +123,12 @@ def test_adbc_postgres_transformer_complex_mixed_nulls() -> None:
     result_sql = result.current_expression.sql(dialect="postgres")
 
     # Check the SQL contains correct parameter placeholders and NULLs
-    # The transformer replaces NULL parameters with NULL but doesn't renumber
+    # The transformer replaces NULL parameters with NULL and renumbers remaining parameters
     assert "$1" in result_sql  # value1 stays as $1
-    assert "$2" not in result_sql  # $2 becomes NULL
-    assert "$3" in result_sql  # value3 stays as $3
-    assert "$4" not in result_sql  # $4 becomes NULL
-    assert "$5" in result_sql  # value5 stays as $5
+    assert "$2" in result_sql  # value3 renumbered to $2
+    assert "$3" in result_sql  # value5 renumbered to $3
+    assert "$4" not in result_sql  # No $4 after renumbering
+    assert "$5" not in result_sql  # No $5 after renumbering
     assert result_sql.count("NULL") == 2  # Two NULLs in the SQL
 
     # Parameters should be modified to remove NULLs

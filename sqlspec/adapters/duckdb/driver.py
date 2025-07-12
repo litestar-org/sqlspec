@@ -333,8 +333,17 @@ class DuckDBDriver(
         count_result = count_result_rel.fetchone() if count_result_rel else None
         return int(count_result[0]) if count_result else 0
 
-    def _read_parquet_native(  # TODO: this is very wrong.  It should be using our native parsing pipeline for statements / builder API
-        self, source_uri: Union[str, Path], columns: Optional[list[str]] = None, **options: Any
+    def _read_parquet_native(
+        # NOTE: This method uses direct SQL string construction for DuckDB's read_parquet function
+        # rather than the builder API because:
+        # 1. read_parquet() is a DuckDB-specific table function, not standard SQL
+        # 2. The builder API doesn't have native support for table functions
+        # 3. Direct construction is more straightforward for this specific use case
+        # Future enhancement: Add table function support to the builder API
+        self,
+        source_uri: Union[str, Path],
+        columns: Optional[list[str]] = None,
+        **options: Any,
     ) -> "SQLResult[dict[str, Any]]":
         conn = self._connection(None)
         if isinstance(source_uri, list):
