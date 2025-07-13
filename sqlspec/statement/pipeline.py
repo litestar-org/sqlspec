@@ -36,7 +36,7 @@ class SQLTransformContext:
     transformations and parameters in a single pass.
     """
 
-    __slots__ = ("current_expression", "original_expression", "parameters", "dialect", "metadata")
+    __slots__ = ("current_expression", "dialect", "metadata", "original_expression", "parameters")
 
     def __init__(
         self,

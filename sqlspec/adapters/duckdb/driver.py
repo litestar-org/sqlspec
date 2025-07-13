@@ -119,7 +119,7 @@ class DuckDBDriver(
 
                 return SQLResult(
                     statement=statement,
-                    data=dict_data,  # type: ignore[arg-type]
+                    data=dict_data,
                     column_names=column_names,
                     rows_affected=len(dict_data),
                     operation_type="SELECT",
@@ -342,7 +342,7 @@ class DuckDBDriver(
         source_uri: Union[str, Path],
         columns: Optional[list[str]] = None,
         **options: Any,
-    ) -> "SQLResult[dict[str, Any]]":
+    ) -> "SQLResult":
         conn = self._connection(None)
         if isinstance(source_uri, list):
             file_list = "[" + ", ".join(f"'{f}'" for f in source_uri) + "]"
@@ -370,7 +370,7 @@ class DuckDBDriver(
 
         rows = [{col: arrow_dict[col][i] for col in column_names} for i in range(num_rows)]
 
-        return SQLResult[dict[str, Any]](
+        return SQLResult(
             statement=SQL(query, _dialect=self.dialect),
             data=rows,
             column_names=column_names,

@@ -183,7 +183,7 @@ class SqliteDriver(
                 fetched_data: list[sqlite3.Row] = cursor.fetchall()
                 return SQLResult(
                     statement=statement,
-                    data=cast("list[RowT]", fetched_data),
+                    data=cast("list[dict[str, Any]]", fetched_data),
                     column_names=[col[0] for col in cursor.description or []],
                     rows_affected=len(fetched_data),
                     operation_type="SELECT",

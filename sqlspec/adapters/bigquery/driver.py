@@ -275,7 +275,7 @@ class BigQueryDriver(
         return query_job
 
     @staticmethod
-    def _rows_to_results(rows_iterator: Iterator[BigQueryRow]) -> list[RowT]:
+    def _rows_to_results(rows_iterator: Iterator[BigQueryRow]) -> list[dict[str, Any]]:
         """Convert BigQuery rows to dictionary format.
 
         Args:
@@ -284,7 +284,7 @@ class BigQueryDriver(
         Returns:
             List of dictionaries representing the rows.
         """
-        return [dict(row) for row in rows_iterator]  # type: ignore[misc]
+        return [dict(row) for row in rows_iterator]
 
     def _handle_select_job(self, query_job: QueryJob, statement: SQL) -> SQLResult:
         """Handle a query job that is expected to return rows."""
@@ -329,7 +329,7 @@ class BigQueryDriver(
         operation_type = self._determine_operation_type(statement)
         return SQLResult(
             statement=statement,
-            data=cast("list[RowT]", []),
+            data=cast("list[dict[str, Any]]", []),
             rows_affected=num_affected or 0,
             operation_type=operation_type,
             metadata={"status_message": f"OK - job_id: {query_job.job_id}"},

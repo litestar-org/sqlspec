@@ -174,7 +174,7 @@ class PsycopgSyncDriver(
                     column_names = [col.name for col in cursor.description]
                     return SQLResult(
                         statement=statement,
-                        data=cast("list[RowT]", fetched_data),
+                        data=cast("list[dict[str, Any]]", fetched_data),  # type: ignore[redundant-cast]
                         column_names=column_names,
                         rows_affected=len(fetched_data),
                         operation_type="SELECT",
@@ -204,7 +204,7 @@ class PsycopgSyncDriver(
 
                 return SQLResult(
                     statement=SQL(sql, _dialect=self.dialect),
-                    data=cast("list[RowT]", output_data),
+                    data=cast("list[dict[str, Any]]", output_data),
                     column_names=["copy_data"],
                     rows_affected=len(output_data),
                     operation_type="SELECT",
@@ -371,7 +371,7 @@ class PsycopgSyncDriver(
             if options.get("continue_on_error"):
                 return SQLResult(
                     statement=operation.sql,
-                    data=cast("list[RowT]", []),
+                    data=cast("list[dict[str, Any]]", []),
                     error=e,
                     operation_index=index,
                     parameters=operation.original_params,
@@ -402,7 +402,7 @@ class PsycopgSyncDriver(
             cursor.executemany(sql_str, params)
             return SQLResult(
                 statement=sql,
-                data=cast("list[RowT]", []),
+                data=cast("list[dict[str, Any]]", []),
                 rows_affected=cursor.rowcount,
                 operation_type="EXECUTE",
                 metadata={"status_message": "OK"},
@@ -417,7 +417,7 @@ class PsycopgSyncDriver(
             data = [dict(record) for record in fetched_data] if fetched_data else []
             return SQLResult(
                 statement=sql,
-                data=cast("list[RowT]", data),
+                data=cast("list[dict[str, Any]]", data),
                 rows_affected=len(data),
                 operation_type="SELECT",
                 metadata={"column_names": column_names},
@@ -436,7 +436,7 @@ class PsycopgSyncDriver(
 
         return SQLResult(
             statement=sql,
-            data=cast("list[RowT]", []),
+            data=cast("list[dict[str, Any]]", []),
             rows_affected=total_affected,
             operation_type="SCRIPT",
             metadata={"status_message": "SCRIPT EXECUTED", "statements_executed": len(script_statements)},
@@ -448,7 +448,7 @@ class PsycopgSyncDriver(
             cursor.execute(sql_str, params)
             return SQLResult(
                 statement=sql,
-                data=cast("list[RowT]", []),
+                data=cast("list[dict[str, Any]]", []),
                 rows_affected=cursor.rowcount or 0,
                 operation_type="EXECUTE",
                 metadata={"status_message": "OK"},
@@ -647,7 +647,7 @@ class PsycopgAsyncDriver(
                     column_names = [col.name for col in cursor.description or []]
                     return SQLResult(
                         statement=statement,
-                        data=cast("list[RowT]", fetched_data),
+                        data=cast("list[dict[str, Any]]", fetched_data),  # type: ignore[redundant-cast]
                         column_names=column_names,
                         rows_affected=len(fetched_data),
                         operation_type="SELECT",
@@ -658,7 +658,7 @@ class PsycopgAsyncDriver(
                     column_names = [col.name for col in cursor.description or []]
                     return SQLResult(
                         statement=statement,
-                        data=cast("list[RowT]", fetched_data),
+                        data=cast("list[dict[str, Any]]", fetched_data),  # type: ignore[redundant-cast]
                         column_names=column_names,
                         rows_affected=len(fetched_data),
                         operation_type="SELECT",
@@ -689,7 +689,7 @@ class PsycopgAsyncDriver(
 
                 return SQLResult(
                     statement=SQL(sql, _dialect=self.dialect),
-                    data=cast("list[RowT]", output_data),
+                    data=cast("list[dict[str, Any]]", output_data),
                     column_names=["copy_data"],
                     rows_affected=len(output_data),
                     operation_type="SELECT",
@@ -855,7 +855,7 @@ class PsycopgAsyncDriver(
             if options.get("continue_on_error"):
                 return SQLResult(
                     statement=operation.sql,
-                    data=cast("list[RowT]", []),
+                    data=cast("list[dict[str, Any]]", []),
                     error=e,
                     operation_index=index,
                     parameters=operation.original_params,
@@ -890,7 +890,7 @@ class PsycopgAsyncDriver(
             await cursor.executemany(sql_str, params)
             return SQLResult(
                 statement=sql,
-                data=cast("list[RowT]", []),
+                data=cast("list[dict[str, Any]]", []),
                 rows_affected=cursor.rowcount,
                 operation_type="EXECUTE",
                 metadata={"status_message": "OK"},
@@ -907,7 +907,7 @@ class PsycopgAsyncDriver(
             data = [dict(record) for record in fetched_data] if fetched_data else []
             return SQLResult(
                 statement=sql,
-                data=cast("list[RowT]", data),
+                data=cast("list[dict[str, Any]]", data),
                 rows_affected=len(data),
                 operation_type="SELECT",
                 metadata={"column_names": column_names},
@@ -928,7 +928,7 @@ class PsycopgAsyncDriver(
 
         return SQLResult(
             statement=sql,
-            data=cast("list[RowT]", []),
+            data=cast("list[dict[str, Any]]", []),
             rows_affected=total_affected,
             operation_type="SCRIPT",
             metadata={"status_message": "SCRIPT EXECUTED", "statements_executed": len(script_statements)},
@@ -942,7 +942,7 @@ class PsycopgAsyncDriver(
             await cursor.execute(sql_str, params)
             return SQLResult(
                 statement=sql,
-                data=cast("list[RowT]", []),
+                data=cast("list[dict[str, Any]]", []),
                 rows_affected=cursor.rowcount or 0,
                 operation_type="EXECUTE",
                 metadata={"status_message": "OK"},

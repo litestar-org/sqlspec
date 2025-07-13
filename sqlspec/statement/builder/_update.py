@@ -103,7 +103,7 @@ class Update(
 
     def join(
         self,
-        table: "Union[str, exp.Expression, Select[RowT]]",
+        table: "Union[str, exp.Expression, Select]",
         on: "Union[str, exp.Expression]",
         alias: "Optional[str]" = None,
         join_type: str = "INNER",

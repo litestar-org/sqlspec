@@ -248,10 +248,7 @@ class SQLCache:
             # SQL string is immutable, but parameters might be mutable
             return (sql_string, self._safe_copy(parameters))
 
-        # Handle mutable parameter containers
-        if isinstance(value, list):
-            return value.copy()
-        if isinstance(value, dict):
+        if isinstance(value, (list, dict)):
             return value.copy()
 
         # For complex objects or when in doubt, use deep copy
@@ -287,7 +284,7 @@ class SQLCache:
 class CachedFragment:
     """Cached AST fragment with metadata."""
 
-    __slots__ = ("expression", "sql", "fragment_type", "dialect", "parameter_count")
+    __slots__ = ("dialect", "expression", "fragment_type", "parameter_count", "sql")
 
     def __init__(
         self,

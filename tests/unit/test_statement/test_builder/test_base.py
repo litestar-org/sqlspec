@@ -42,7 +42,7 @@ from sqlspec.statement.sql import SQL, SQLConfig
 
 
 # Test implementation of abstract QueryBuilder for testing
-class MockQueryBuilder(QueryBuilder[SQLResult[dict[str, Any]]]):
+class MockQueryBuilder(QueryBuilder):
     """Concrete implementation of QueryBuilder for testing purposes."""
 
     def _create_base_expression(self) -> exp.Select:
@@ -50,9 +50,9 @@ class MockQueryBuilder(QueryBuilder[SQLResult[dict[str, Any]]]):
         return exp.Select()
 
     @property
-    def _expected_result_type(self) -> "type[SQLResult[SQLResult[dict[str, Any]]]]":
+    def _expected_result_type(self) -> "type[SQLResult]":
         """Return the expected result type."""
-        return SQLResult[SQLResult[dict[str, Any]]]  # type: ignore[arg-type]
+        return SQLResult
 
 
 # Helper implementation of WhereClauseMixin for testing

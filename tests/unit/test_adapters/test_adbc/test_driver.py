@@ -427,13 +427,13 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
     """Test AdbcDriver._build_statement method."""
 
     # Create a simple test QueryBuilder subclass
-    class MockQueryBuilder(QueryBuilder[SQLResult[DictRow]]):
+    class MockQueryBuilder(QueryBuilder):
         def _create_base_expression(self) -> exp.Expression:
             return exp.Select()
 
         @property
-        def _expected_result_type(self) -> type[SQLResult[SQLResult[dict[str, Any]]]]:
-            return SQLResult[SQLResult[dict[str, Any]]]  # type: ignore[misc]
+        def _expected_result_type(self) -> type[SQLResult]:
+            return SQLResult
 
     sql_config = SQLConfig()
     # Test with SQL statement

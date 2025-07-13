@@ -323,14 +323,11 @@ class SyncStorageMixin(StorageMixinBase):
 
         # Use storage backend - resolve AFTER modifying destination_uri
         backend, path = self._resolve_backend_and_path(destination_uri)
-
-        # Try native database export first
         if file_format == "parquet" and self.supports_native_parquet_export:
             try:
                 compiled_sql, _ = sql.compile(placeholder_style="static")
                 return self._export_native(compiled_sql, destination_uri, file_format, **kwargs)
             except NotImplementedError:
-                # Fall through to use storage backend
                 pass
 
         if file_format == "parquet":
@@ -339,7 +336,7 @@ class SyncStorageMixin(StorageMixinBase):
             arrow_table = arrow_result.data
             num_rows = arrow_table.num_rows
             backend.write_arrow(path, arrow_table, **kwargs)
-            return num_rows
+            return cast("int", num_rows)
 
         return self._export_via_backend(sql, backend, path, file_format, **kwargs)
 

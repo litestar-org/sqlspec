@@ -1,7 +1,6 @@
 """SQL statement result classes for handling different types of SQL operations."""
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
 from typing_extensions import TypeVar
@@ -105,6 +104,8 @@ class SQLResult(StatementResult):
     For script execution, this class also tracks multiple statement results and errors.
     """
 
+    data: list[dict[str, Any]]
+
     __slots__ = (
         "column_names",
         "error",
@@ -143,7 +144,6 @@ class SQLResult(StatementResult):
         total_statements: int = 0,
         successful_statements: int = 0,
     ) -> None:
-        # Initialize parent
         super().__init__(
             statement=statement,
             data=data if data is not None else [],
@@ -152,8 +152,6 @@ class SQLResult(StatementResult):
             execution_time=execution_time,
             metadata=metadata,
         )
-
-        # Initialize SQLResult-specific attributes
         self.error = error
         self.operation_type = operation_type
         self.operation_index = operation_index
@@ -171,12 +169,10 @@ class SQLResult(StatementResult):
         """Total number of statements in the script."""
         self.successful_statements = successful_statements
         """Number of statements that executed successfully."""
-
-        # Post-init logic
-        if not self.column_names and self.data and isinstance(self.data[0], Mapping):
+        if not self.column_names and self.data:
             self.column_names = list(self.data[0].keys())
         if self.total_count is None:
-            self.total_count = len(self.data) if self.data is not None else 0
+            self.total_count = len(self.data) if self.data else 0
 
     def is_success(self) -> bool:
         """Check if the operation was successful.
@@ -191,7 +187,7 @@ class SQLResult(StatementResult):
             return not self.errors and self.total_statements == self.successful_statements
 
         if op_type == "SELECT":
-            return self.data is not None and self.rows_affected >= 0
+            return self.rows_affected >= 0
 
         if op_type in {"INSERT", "UPDATE", "DELETE", "EXECUTE"}:
             return self.rows_affected >= 0
@@ -263,7 +259,7 @@ class SQLResult(StatementResult):
 
     def get_count(self) -> int:
         """Get the number of rows in the current result set (e.g., a page of data)."""
-        return len(self.data) if self.data is not None else 0
+        return len(self.data) if self.data else 0
 
     def is_empty(self) -> bool:
         """Check if the result set (self.data) is empty."""
@@ -338,7 +334,7 @@ class SQLResult(StatementResult):
         Raises:
             ValueError: If more than one result
         """
-        if self.data is None or len(self.data) == 0:
+        if not self.data or len(self.data) == 0:
             return None
         if len(self.data) > 1:
             msg = f"Multiple results found ({len(self.data)}), at most one row expected"
@@ -442,7 +438,7 @@ class ArrowResult(StatementResult):
             msg = "No Arrow table available"
             raise ValueError(msg)
 
-        return self.data.column_names
+        return self.data.column_names  # type: ignore[no-any-return]
 
     @property
     def num_rows(self) -> int:
@@ -458,7 +454,7 @@ class ArrowResult(StatementResult):
             msg = "No Arrow table available"
             raise ValueError(msg)
 
-        return self.data.num_rows
+        return self.data.num_rows  # type: ignore[no-any-return]
 
     @property
     def num_columns(self) -> int:
@@ -474,4 +470,4 @@ class ArrowResult(StatementResult):
             msg = "No Arrow table available"
             raise ValueError(msg)
 
-        return self.data.num_columns
+        return self.data.num_columns  # type: ignore[no-any-return]

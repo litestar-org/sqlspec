@@ -11,10 +11,6 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
-    from sqlspec.statement.result import StatementResult
-
-
-StatementResultType = Union["StatementResult[dict[str, Any]]", "StatementResult[Any]"]
 
 
 __all__ = (
@@ -25,7 +21,6 @@ __all__ = (
     "DriverT",
     "NoPoolAsyncConfig",
     "NoPoolSyncConfig",
-    "StatementResultType",
     "SyncConfigT",
     "SyncDatabaseConfig",
 )

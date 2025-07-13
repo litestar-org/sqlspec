@@ -142,7 +142,7 @@ class AsyncpgDriver(
                 column_names = list(records[0].keys()) if records else []
                 return SQLResult(
                     statement=statement,
-                    data=cast("list[RowT]", data),
+                    data=cast("list[dict[str, Any]]", data),  # type: ignore[redundant-cast]
                     column_names=column_names,
                     rows_affected=len(records),
                     operation_type="SELECT",
@@ -159,7 +159,7 @@ class AsyncpgDriver(
             operation_type = self._determine_operation_type(statement)
             return SQLResult(
                 statement=statement,
-                data=cast("list[RowT]", []),
+                data=cast("list[dict[str, Any]]", []),
                 rows_affected=rows_affected,
                 operation_type=operation_type,
                 metadata={"status_message": status or "OK"},
@@ -278,7 +278,7 @@ class AsyncpgDriver(
                 rows_affected = self._parse_asyncpg_status(status)
                 result = SQLResult(
                     statement=op.sql,
-                    data=cast("list[RowT]", []),
+                    data=cast("list[dict[str, Any]]", []),
                     rows_affected=rows_affected,
                     operation_type="EXECUTE",
                     metadata={"status_message": status},
@@ -289,7 +289,7 @@ class AsyncpgDriver(
                 data = [dict(record) for record in rows] if rows else []
                 result = SQLResult(
                     statement=op.sql,
-                    data=cast("list[RowT]", data),
+                    data=cast("list[dict[str, Any]]", data),
                     rows_affected=len(data),
                     operation_type="SELECT",
                     metadata={"column_names": list(rows[0].keys()) if rows else []},
@@ -308,7 +308,7 @@ class AsyncpgDriver(
 
                 result = SQLResult(
                     statement=op.sql,
-                    data=cast("list[RowT]", []),
+                    data=cast("list[dict[str, Any]]", []),
                     rows_affected=total_affected,
                     operation_type="SCRIPT",
                     metadata={"status_message": last_status, "statements_executed": len(script_statements)},
@@ -318,7 +318,7 @@ class AsyncpgDriver(
                 rows_affected = self._parse_asyncpg_status(status)
                 result = SQLResult(
                     statement=op.sql,
-                    data=cast("list[RowT]", []),
+                    data=cast("list[dict[str, Any]]", []),
                     rows_affected=rows_affected,
                     operation_type="EXECUTE",
                     metadata={"status_message": status},

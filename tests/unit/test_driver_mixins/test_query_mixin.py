@@ -147,7 +147,7 @@ class TestSyncQueryMixin:
         driver = MockSyncDriver()
         mock_result = SQLResult(
             statement=SQL("SELECT COUNT(*) FROM users"),
-            data=[(42,)],
+            data=[{"count": 42}],
             column_names=["count"],
             rows_affected=0,
             operation_type="SELECT",

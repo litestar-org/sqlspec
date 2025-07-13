@@ -76,9 +76,7 @@ class MockSyncDriver(SyncDriverAdapterBase[MockConnection, DictRow]):
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.NAMED_COLON
 
-    def _execute_statement(
-        self, statement: SQL, connection: MockConnection | None = None, **kwargs: Any
-    ) -> SQLResult[DictRow]:
+    def _execute_statement(self, statement: SQL, connection: MockConnection | None = None, **kwargs: Any) -> SQLResult:
         conn = connection or self.connection
         if statement.is_script:
             return SQLResult(
@@ -143,7 +141,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase[MockAsyncConnection, DictRow]):
 
     async def _execute_statement(
         self, statement: SQL, connection: MockAsyncConnection | None = None, **kwargs: Any
-    ) -> SQLResult[DictRow]:
+    ) -> SQLResult:
         conn = connection or self.connection
         if statement.is_script:
             return SQLResult(

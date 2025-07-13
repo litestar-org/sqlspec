@@ -13,7 +13,6 @@ This module tests the Select including:
 - PIVOT/UNPIVOT operations
 - Query hints
 - Parameter handling and SQL injection prevention
-- Schema type setting with as_schema
 """
 
 from typing import TYPE_CHECKING, Any, Optional
@@ -34,58 +33,6 @@ try:
     import pydantic
 except ImportError:
     pydantic = None
-
-
-# Test schema type setting with as_schema
-@pytest.mark.skipif(pydantic is None, reason="pydantic not installed")
-def test_as_schema_with_pydantic_model() -> None:
-    """Test as_schema with Pydantic model."""
-    BaseModel = getattr(pydantic, "BaseModel", object)
-
-    class UserModel(BaseModel):  # type: ignore[misc,valid-type]
-        id: int
-        name: str
-
-    builder = Select().select("id", "name").from_("users")
-    new_builder = builder.as_schema(UserModel)
-
-    assert getattr(new_builder, "_schema", None) is UserModel
-    assert new_builder is not builder
-    assert new_builder.build().sql == builder.build().sql
-
-
-def test_as_schema_with_dataclass() -> None:
-    """Test as_schema with dataclass."""
-    from dataclasses import dataclass
-
-    @dataclass
-    class User:
-        id: int
-        name: str
-
-    builder = Select().select("id", "name").from_("users")
-    new_builder = builder.as_schema(User)  # type: ignore[arg-type]
-
-    assert getattr(new_builder, "_schema", None) is User
-    assert new_builder is not builder
-    assert new_builder.build().sql == builder.build().sql
-
-
-def test_as_schema_with_dict_type() -> None:
-    """Test as_schema with dict type."""
-    builder = Select().select("id", "name").from_("users")
-    new_builder = builder.as_schema(dict)
-
-    assert getattr(new_builder, "_schema", None) is dict
-    assert new_builder is not builder
-
-
-def test_as_schema_preserves_parameters() -> None:
-    """Test that as_schema preserves query parameters."""
-    builder = Select().select("id").from_("users").where(("name", "John"))
-    new_builder = builder.as_schema(dict)
-
-    assert new_builder.build().parameters == builder.build().parameters
 
 
 # Test basic SELECT operations

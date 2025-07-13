@@ -174,7 +174,7 @@ include = [
   "sqlspec/statement/builder/_column.py",
   "sqlspec/statement/builder/_ddl_utils.py",
   "sqlspec/statement/builder/_parsing_utils.py",
-  
+
   # === BUILDER MIXINS ===
   "sqlspec/statement/builder/mixins/_where_clause.py",
   "sqlspec/statement/builder/mixins/_join_operations.py",
@@ -387,7 +387,8 @@ reportPrivateImportUsage = false
 reportPrivateUsage = false
 reportTypedDictNotRequiredAccess = false
 reportUnknownArgumentType = false
-reportUnnecessaryTypeIgnoreComments = "information"
+reportUnnecessaryCast = false
+reportUnnecessaryTypeIgnoreComments = false
 root = "."
 venv = ".venv"
 

@@ -205,7 +205,7 @@ async def test_asyncmy_driver_to_parquet(
         statement=statement, data=[{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}], column_names=["id", "name"]
     )
 
-    async def mock_execute(sql_obj: SQL) -> SQLResult[dict[str, Any]]:
+    async def mock_execute(sql_obj: SQL) -> SQLResult:
         return mock_result
 
     # Mock at the class level since instance has __slots__

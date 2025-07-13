@@ -247,7 +247,7 @@ class AdbcDriver(
 
                     return SQLResult(
                         statement=statement,
-                        data=cast("list[RowT]", dict_data),
+                        data=cast("list[dict[str, Any]]", dict_data),
                         column_names=column_names,
                         rows_affected=len(dict_data),
                         operation_type="SELECT",
@@ -256,7 +256,7 @@ class AdbcDriver(
                 operation_type = self._determine_operation_type(statement)
                 return SQLResult(
                     statement=statement,
-                    data=cast("list[RowT]", []),
+                    data=cast("list[dict[str, Any]]", []),
                     rows_affected=cursor.rowcount,
                     operation_type=operation_type,
                     metadata={"status_message": "OK"},

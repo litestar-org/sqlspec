@@ -23,7 +23,7 @@ def test_statement_result_metadata_operations() -> None:
     """Test metadata getter and setter methods on concrete implementation."""
 
     # Create a concrete implementation for testing
-    class ConcreteResult(StatementResult[dict[str, Any]]):
+    class ConcreteResult(StatementResult):
         def is_success(self) -> bool:
             return True
 
@@ -73,7 +73,7 @@ def test_sql_result_select_is_success(
 
     if data is None:
         # Need to explicitly pass None for data to override default_factory
-        result = SQLResult[dict[str, Any]](
+        result = SQLResult(
             statement=statement,
             data=None,  # type: ignore  # We're testing the None case
             rows_affected=rows_affected if rows_affected is not None else 0,
@@ -81,7 +81,7 @@ def test_sql_result_select_is_success(
             operation_type="SELECT",
         )
     else:
-        result = SQLResult[dict[str, Any]](
+        result = SQLResult(
             statement=statement,
             data=data,
             rows_affected=rows_affected if rows_affected is not None else 0,
@@ -93,12 +93,12 @@ def test_sql_result_select_is_success(
 
 def test_sql_result_select_initialization() -> None:
     """Test SQLResult initialization for SELECT operations."""
-    data = [
+    data: list[dict[str, Any]] = [
         {"id": 1, "name": "Alice", "email": "alice@example.com"},
         {"id": 2, "name": "Bob", "email": "bob@example.com"},
     ]
 
-    result = SQLResult[dict[str, Any]](
+    result = SQLResult(
         statement=SQL("SELECT * FROM users"),
         data=data,
         column_names=["id", "name", "email"],
@@ -125,7 +125,7 @@ def test_sql_result_select_auto_column_names() -> None:
     """Test automatic column name inference from dict data."""
     data = [{"id": 1, "name": "Test", "active": True}]
 
-    result = SQLResult[dict[str, Any]](statement=SQL("SELECT * FROM users"), data=data, operation_type="SELECT")
+    result = SQLResult(statement=SQL("SELECT * FROM users"), data=data, operation_type="SELECT")
 
     # Column names should be inferred from first row
     assert result.column_names == ["id", "name", "active"]
@@ -135,7 +135,7 @@ def test_sql_result_select_methods() -> None:
     """Test SELECT-specific methods."""
     data = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}, {"id": 3, "name": "Charlie"}]
 
-    result = SQLResult[dict[str, Any]](
+    result = SQLResult(
         statement=SQL("SELECT * FROM users"), data=data, column_names=["id", "name"], operation_type="SELECT"
     )
 
@@ -164,7 +164,7 @@ def test_sql_result_select_row_operations(
     data: list[dict[str, Any]], expected_first: Optional[dict[str, Any]], expected_count: int, expected_empty: bool
 ) -> None:
     """Test row operations with different data sets."""
-    result = SQLResult[dict[str, Any]](statement=SQL("SELECT * FROM test"), data=data, operation_type="SELECT")
+    result = SQLResult(statement=SQL("SELECT * FROM test"), data=data, operation_type="SELECT")
 
     assert result.get_first() == expected_first
     assert result.get_count() == expected_count
@@ -194,7 +194,7 @@ def test_sql_result_dml_is_success(operation_type: OperationType, rows_affected:
     else:
         sql = f"{operation_type} test_table"  # Fallback
 
-    result = SQLResult[dict[str, Any]](
+    result = SQLResult(
         statement=SQL(sql),
         data=[],  # DML typically has empty data unless RETURNING
         rows_affected=rows_affected,
@@ -205,7 +205,7 @@ def test_sql_result_dml_is_success(operation_type: OperationType, rows_affected:
 
 def test_sql_result_dml_operations() -> None:
     """Test DML-specific methods and attributes."""
-    result = SQLResult[dict[str, Any]](
+    result = SQLResult(
         statement=SQL("INSERT INTO users VALUES (?, ?)"),
         data=[],
         rows_affected=1,
@@ -240,7 +240,7 @@ def test_sql_result_operation_type_checks(
     operation_type: str, expected_insert: bool, expected_update: bool, expected_delete: bool
 ) -> None:
     """Test operation type checking methods."""
-    result = SQLResult[dict[str, Any]](
+    result = SQLResult(
         statement=SQL("SELECT * FROM test"),
         data=[],
         operation_type=operation_type,  # type: ignore[arg-type]
@@ -258,7 +258,7 @@ def test_sql_result_dml_with_returning() -> None:
         {"id": 2, "name": "Bob", "created_at": "2023-01-01"},
     ]
 
-    result = SQLResult[dict[str, Any]](
+    result = SQLResult(
         statement=SQL("INSERT INTO users (name) VALUES ('Alice'), ('Bob') RETURNING *"),
         data=returned_data,
         column_names=["id", "name", "created_at"],
@@ -277,7 +277,7 @@ def test_sql_result_dml_with_returning() -> None:
 # Test SQLResult for script execution
 def test_sql_result_script_initialization() -> None:
     """Test SQLResult initialization for script execution."""
-    result = SQLResult[Any](
+    result = SQLResult(
         statement=SQL("-- Script\nINSERT INTO test VALUES (1); UPDATE test SET id = 2;"),
         data=[],
         operation_type="SCRIPT",
@@ -294,19 +294,17 @@ def test_sql_result_script_initialization() -> None:
 
 def test_sql_result_script_execution() -> None:
     """Test script execution tracking."""
-    script_result = SQLResult[Any](statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
+    script_result = SQLResult(statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
 
     # Add successful statements
-    stmt1 = SQLResult[Any](
-        statement=SQL("INSERT INTO test VALUES (1)"), data=[], rows_affected=2, operation_type="INSERT"
-    )
+    stmt1 = SQLResult(statement=SQL("INSERT INTO test VALUES (1)"), data=[], rows_affected=2, operation_type="INSERT")
     script_result.add_statement_result(stmt1)
 
-    stmt2 = SQLResult[Any](statement=SQL("UPDATE test SET id=1"), data=[], rows_affected=3, operation_type="UPDATE")
+    stmt2 = SQLResult(statement=SQL("UPDATE test SET id=1"), data=[], rows_affected=3, operation_type="UPDATE")
     script_result.add_statement_result(stmt2)
 
     # Add failed statement
-    stmt3 = SQLResult[Any](
+    stmt3 = SQLResult(
         statement=SQL("DELETE FROM test WHERE id=1"),
         data=[],
         rows_affected=-1,  # Indicates failure
@@ -321,7 +319,7 @@ def test_sql_result_script_execution() -> None:
 
 def test_sql_result_script_errors() -> None:
     """Test script error tracking."""
-    script_result = SQLResult[Any](statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
+    script_result = SQLResult(statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
 
     # Add errors
     script_result.add_error("Syntax error in statement 1")
@@ -334,11 +332,11 @@ def test_sql_result_script_errors() -> None:
 
 def test_sql_result_script_get_data() -> None:
     """Test get_data returns summary for script execution."""
-    script_result = SQLResult[Any](statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
+    script_result = SQLResult(statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
 
     # Add some statement results
     for i in range(3):
-        stmt = SQLResult[Any](
+        stmt = SQLResult(
             statement=SQL(f"INSERT INTO table{i} VALUES (1)"), data=[], rows_affected=i + 1, operation_type="INSERT"
         )
         script_result.add_statement_result(stmt)
@@ -355,12 +353,12 @@ def test_sql_result_script_get_data() -> None:
 
 def test_sql_result_script_statement_access() -> None:
     """Test accessing individual statement results."""
-    script_result = SQLResult[Any](statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
+    script_result = SQLResult(statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
 
     # Add statements
     stmts = []
     for i in range(3):
-        stmt = SQLResult[Any](
+        stmt = SQLResult(
             statement=SQL(f"INSERT INTO stmt{i} VALUES (1)"), data=[], rows_affected=1, operation_type="INSERT"
         )
         stmts.append(stmt)
@@ -378,17 +376,17 @@ def test_sql_result_script_statement_access() -> None:
 
 def test_sql_result_script_total_rows_affected() -> None:
     """Test calculating total rows affected across all statements."""
-    script_result = SQLResult[Any](statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
+    script_result = SQLResult(statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
 
     # Add statements with various rows_affected values
     script_result.add_statement_result(
-        SQLResult[Any](statement=SQL("INSERT INTO users VALUES (1)"), data=[], rows_affected=5, operation_type="INSERT")
+        SQLResult(statement=SQL("INSERT INTO users VALUES (1)"), data=[], rows_affected=5, operation_type="INSERT")
     )
     script_result.add_statement_result(
-        SQLResult[Any](statement=SQL("UPDATE users SET active = 1"), data=[], rows_affected=3, operation_type="UPDATE")
+        SQLResult(statement=SQL("UPDATE users SET active = 1"), data=[], rows_affected=3, operation_type="UPDATE")
     )
     script_result.add_statement_result(
-        SQLResult[Any](
+        SQLResult(
             statement=SQL("DELETE FROM users WHERE id = 999"), data=[], rows_affected=-1, operation_type="DELETE"
         )  # Failed
     )
@@ -519,7 +517,7 @@ def test_common_metadata_operations(result_factory: Any) -> None:
 def test_sql_result_edge_cases() -> None:
     """Test edge cases and special scenarios."""
     # Test with None data but operation type SELECT
-    result = SQLResult[dict[str, Any]](
+    result = SQLResult(
         statement=SQL("SELECT * FROM empty"),
         data=None,  # type: ignore[arg-type]
         operation_type="SELECT",
@@ -529,7 +527,7 @@ def test_sql_result_edge_cases() -> None:
     assert result.is_empty() is True
 
     # Test total_count inference
-    result_with_data = SQLResult[dict[str, Any]](
+    result_with_data = SQLResult(
         statement=SQL("SELECT * FROM users"), data=[{"id": 1}, {"id": 2}], operation_type="SELECT"
     )
     assert result_with_data.total_count == 2  # Should be inferred from data length
@@ -538,7 +536,7 @@ def test_sql_result_edge_cases() -> None:
 def test_sql_result_returning_data_access() -> None:
     """Test accessing data from INSERT RETURNING statement."""
     data = [{"id": 1, "name": "Test"}]
-    result = SQLResult[dict[str, Any]](
+    result = SQLResult(
         statement=SQL("INSERT INTO users (name) VALUES ('Test') RETURNING *"), data=data, operation_type="INSERT"
     )
 

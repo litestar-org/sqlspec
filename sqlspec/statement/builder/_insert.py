@@ -52,10 +52,9 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
         )
 
         # Even more concise with constructor
-        insert_query = Insert("users").values({
-            "name": "John",
-            "age": 30,
-        })
+        insert_query = Insert("users").values(
+            {"name": "John", "age": 30}
+        )
 
         # Multi-row INSERT
         insert_query = (
@@ -70,10 +69,9 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
         insert_query = (
             Insert()
             .into("users")
-            .values_from_dict({
-                "name": "John",
-                "email": "john@example.com",
-            })
+            .values_from_dict(
+                {"name": "John", "email": "john@example.com"}
+            )
         )
 
         # INSERT from SELECT

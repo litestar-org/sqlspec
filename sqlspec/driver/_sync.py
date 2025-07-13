@@ -1,7 +1,7 @@
 """Synchronous driver protocol implementation."""
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Optional, Union, overload
+from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.driver.parameters import process_execute_many_parameters
@@ -14,6 +14,7 @@ from sqlspec.utils.type_guards import can_convert_to_schema
 
 if TYPE_CHECKING:
     from sqlspec.statement.filters import StatementFilter
+    from sqlspec.statement.result import OperationType
 
 logger = get_logger("sqlspec")
 
@@ -43,7 +44,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin[ConnectionT, RowT], ABC)
 
     def _build_statement(
         self,
-        statement: "Union[Statement, QueryBuilder[Any]]",
+        statement: "Union[Statement, QueryBuilder]",
         *parameters: "Union[StatementParameters, StatementFilter]",
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
@@ -115,7 +116,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin[ConnectionT, RowT], ABC)
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "SQLResult[ModelDTOT]": ...
+    ) -> "SQLResult": ...
 
     @overload
     def execute(
@@ -150,7 +151,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin[ConnectionT, RowT], ABC)
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "SQLResult[ModelDTOT]": ...
+    ) -> "SQLResult": ...
 
     @overload
     def execute(
@@ -166,26 +167,26 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin[ConnectionT, RowT], ABC)
 
     def execute(
         self,
-        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
+        statement: "Union[SQL, Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Union[SQLResult[ModelDTOT], SQLResult]":
+    ) -> "SQLResult":
         sql_statement = self._build_statement(statement, *parameters, _config=_config or self.config, **kwargs)
         result = self._execute_statement(statement=sql_statement, connection=self._connection(_connection), **kwargs)
 
         # If schema_type is provided and we have data, convert it
         if schema_type and result.data and can_convert_to_schema(self):
             converted_data = list(self.to_schema(data=result.data, schema_type=schema_type))
-            return SQLResult[ModelDTOT](
+            return SQLResult(
                 statement=result.statement,
                 data=converted_data,
                 column_names=result.column_names,
                 rows_affected=result.rows_affected,
-                operation_type=result.operation_type,
+                operation_type=cast("OperationType", result.operation_type),  # type: ignore[redundant-cast]
                 last_inserted_id=result.last_inserted_id,
                 execution_time=result.execution_time,
                 metadata=result.metadata,
@@ -195,7 +196,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin[ConnectionT, RowT], ABC)
 
     def execute_many(
         self,
-        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
+        statement: "Union[SQL, Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         _connection: "Optional[ConnectionT]" = None,

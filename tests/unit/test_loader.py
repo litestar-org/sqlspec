@@ -8,9 +8,8 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from sqlspec import SQL, SQLConfig, SQLFile, SQLFileLoader
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
-from sqlspec.loader import SQLFile, SQLFileLoader
-from sqlspec.statement.sql import SQL
 
 if TYPE_CHECKING:
     pass
@@ -471,10 +470,6 @@ class TestSQLFileLoaderWithFixtures:
         content = loader._read_file_content(fixture_path)
         assert "CREATE TABLE" in content
         assert "VECTOR(768, FLOAT32)" in content
-
-        # Create a SQL object from the entire content as a script
-        # Disable parsing to avoid errors with Oracle-specific syntax
-        from sqlspec.statement.sql import SQLConfig
 
         stmt = SQL(
             content, config=SQLConfig(enable_parsing=False, enable_validation=False, dialect="oracle")

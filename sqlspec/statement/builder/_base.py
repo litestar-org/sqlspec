@@ -196,7 +196,7 @@ class QueryBuilder(ABC):
                 return name
             i += 1
 
-    def with_cte(self: Self, alias: str, query: "Union[QueryBuilder[Any], exp.Select, str]") -> Self:
+    def with_cte(self: Self, alias: str, query: "Union[QueryBuilder, exp.Select, str]") -> Self:
         """Adds a Common Table Expression (CTE) to the query.
 
         Args:

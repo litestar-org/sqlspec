@@ -543,7 +543,7 @@ class SelectClauseMixin:
         Returns:
             CaseBuilder: A CaseBuilder instance for building the CASE expression.
         """
-        builder = cast("QueryBuilder[Any]", self)  # pyright: ignore
+        builder = cast("QueryBuilder", self)  # pyright: ignore
         return CaseBuilder(builder, alias)
 
 
@@ -551,11 +551,11 @@ class SelectClauseMixin:
 class CaseBuilder:
     """Builder for CASE expressions."""
 
-    _parent: "QueryBuilder[Any]"  # pyright: ignore
+    _parent: "QueryBuilder"  # pyright: ignore
     _alias: Optional[str]
     _case_expr: exp.Case
 
-    def __init__(self, parent: "QueryBuilder[Any]", alias: "Optional[str]" = None) -> None:
+    def __init__(self, parent: "QueryBuilder", alias: "Optional[str]" = None) -> None:
         """Initialize CaseBuilder.
 
         Args:
@@ -608,4 +608,4 @@ class CaseBuilder:
             The parent builder instance.
         """
         select_expr = exp.alias_(self._case_expr, self._alias) if self._alias else self._case_expr
-        return cast("QueryBuilder[Any]", self._parent.select(select_expr))  # type: ignore[attr-defined]
+        return cast("QueryBuilder", self._parent.select(select_expr))  # type: ignore[attr-defined]

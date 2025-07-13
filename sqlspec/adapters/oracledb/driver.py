@@ -163,9 +163,9 @@ class OracleSyncDriver(
 
                     # Convert to dict if default_row_type is dict
                     if self.default_row_type == DictRow or issubclass(self.default_row_type, dict):
-                        data = cast("list[RowT]", [dict(zip(column_names, row)) for row in fetched_data])
+                        data = cast("list[dict[str, Any]]", [dict(zip(column_names, row)) for row in fetched_data])
                     else:
-                        data = cast("list[RowT]", fetched_data)
+                        data = cast("list[dict[str, Any]]", fetched_data)
 
                     return SQLResult(
                         statement=statement,
@@ -436,9 +436,9 @@ class OracleAsyncDriver(
 
                     # Convert to dict if default_row_type is dict
                     if self.default_row_type == DictRow or issubclass(self.default_row_type, dict):
-                        data = cast("list[RowT]", [dict(zip(column_names, row)) for row in fetched_data])
+                        data = cast("list[dict[str, Any]]", [dict(zip(column_names, row)) for row in fetched_data])
                     else:
-                        data = cast("list[RowT]", fetched_data)
+                        data = cast("list[dict[str, Any]]", fetched_data)
 
                     return SQLResult(
                         statement=statement,

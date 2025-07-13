@@ -150,7 +150,7 @@ class PsqlpyDriver(
                 column_names = list(dict_rows[0].keys()) if dict_rows else []
                 return SQLResult(
                     statement=statement,
-                    data=cast("list[RowT]", dict_rows),
+                    data=cast("list[dict[str, Any]]", dict_rows),  # type: ignore[redundant-cast]
                     column_names=column_names,
                     rows_affected=len(dict_rows),
                     operation_type="SELECT",

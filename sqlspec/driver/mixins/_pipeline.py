@@ -120,7 +120,7 @@ class Pipeline:
         self.max_operations = max_operations
         self.options = options or {}
         self._operations: list[PipelineOperation] = []
-        self._results: Optional[list[SQLResult[Any]]] = None
+        self._results: Optional[list[SQLResult]] = None
         self._simulation_logged = False
 
     def add_execute(
@@ -223,7 +223,7 @@ class Pipeline:
 
     def _execute_pipeline_simulated(self) -> "list[SQLResult]":
         """Enhanced simulation with transaction support and error handling."""
-        results: list[SQLResult[Any]] = []
+        results: list[SQLResult] = []
         connection = None
         auto_transaction = False
 
@@ -260,18 +260,18 @@ class Pipeline:
         return results
 
     def _execute_single_operation(
-        self, i: int, op: PipelineOperation, results: "list[SQLResult[Any]]", connection: Any, auto_transaction: bool
+        self, i: int, op: PipelineOperation, results: "list[SQLResult]", connection: Any, auto_transaction: bool
     ) -> None:
         """Execute a single pipeline operation with error handling."""
         try:
             # Execute based on operation type
-            result: SQLResult[Any]
+            result: SQLResult
             if op.operation_type == "execute_script":
-                result = cast("SQLResult[Any]", self.driver.execute_script(op.sql, _connection=connection))
+                result = cast("SQLResult", self.driver.execute_script(op.sql, _connection=connection))
             elif op.operation_type == "execute_many":
-                result = cast("SQLResult[Any]", self.driver.execute_many(op.sql, _connection=connection))
+                result = cast("SQLResult", self.driver.execute_many(op.sql, _connection=connection))
             else:
-                result = cast("SQLResult[Any]", self.driver.execute(op.sql, _connection=connection))
+                result = cast("SQLResult", self.driver.execute(op.sql, _connection=connection))
 
             result.operation_index = i
             result.pipeline_sql = op.sql
@@ -353,7 +353,7 @@ class AsyncPipeline:
         self.max_operations = max_operations
         self.options = options or {}
         self._operations: list[PipelineOperation] = []
-        self._results: Optional[list[SQLResult[Any]]] = None
+        self._results: Optional[list[SQLResult]] = None
         self._simulation_logged = False
 
     async def add_execute(
@@ -432,7 +432,7 @@ class AsyncPipeline:
 
     async def _execute_pipeline_simulated(self) -> "list[SQLResult]":
         """Async version of simulated pipeline execution."""
-        results: list[SQLResult[Any]] = []
+        results: list[SQLResult] = []
         connection = None
         auto_transaction = False
 
@@ -468,11 +468,11 @@ class AsyncPipeline:
         return results
 
     async def _execute_single_operation_async(
-        self, i: int, op: PipelineOperation, results: "list[SQLResult[Any]]", connection: Any, auto_transaction: bool
+        self, i: int, op: PipelineOperation, results: "list[SQLResult]", connection: Any, auto_transaction: bool
     ) -> None:
         """Execute a single async pipeline operation with error handling."""
         try:
-            result: SQLResult[Any]
+            result: SQLResult
             if op.operation_type == "execute_script":
                 result = await self.driver.execute_script(op.sql, _connection=connection)
             elif op.operation_type == "execute_many":
