@@ -18,14 +18,13 @@ from sqlspec.statement.builder.mixins import (
     MergeUsingClauseMixin,
 )
 from sqlspec.statement.result import SQLResult
-from sqlspec.typing import RowT
 
 __all__ = ("Merge",)
 
 
 @dataclass(unsafe_hash=True)
 class Merge(
-    QueryBuilder[RowT],
+    QueryBuilder,
     MergeUsingClauseMixin,
     MergeOnClauseMixin,
     MergeMatchedClauseMixin,
@@ -46,9 +45,10 @@ class Merge(
             .into("target_table")
             .using("source_table", "src")
             .on("target_table.id = src.id")
-            .when_matched_then_update(
-                {"name": "src.name", "updated_at": "NOW()"}
-            )
+            .when_matched_then_update({
+                "name": "src.name",
+                "updated_at": "NOW()",
+            })
             .when_not_matched_then_insert(
                 columns=["id", "name", "created_at"],
                 values=["src.id", "src.name", "NOW()"],
@@ -78,13 +78,13 @@ class Merge(
     """
 
     @property
-    def _expected_result_type(self) -> "type[SQLResult[RowT]]":
+    def _expected_result_type(self) -> "type[SQLResult]":
         """Return the expected result type for this builder.
 
         Returns:
             The SQLResult type for MERGE statements.
         """
-        return SQLResult[RowT]
+        return SQLResult
 
     def _create_base_expression(self) -> "exp.Merge":
         """Create a base MERGE expression.

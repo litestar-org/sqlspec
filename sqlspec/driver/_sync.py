@@ -98,7 +98,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin[ConnectionT, RowT], ABC)
     @abstractmethod
     def _execute_statement(
         self, statement: "SQL", connection: "Optional[ConnectionT]" = None, **kwargs: Any
-    ) -> "SQLResult[RowT]":
+    ) -> "SQLResult":
         """Actual execution implementation by concrete drivers, using the raw connection.
 
         Returns SQLResult directly based on the statement type.
@@ -127,7 +127,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin[ConnectionT, RowT], ABC)
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "SQLResult[RowT]": ...
+    ) -> "SQLResult": ...
 
     @overload
     def execute(
@@ -138,7 +138,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin[ConnectionT, RowT], ABC)
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "SQLResult[RowT]": ...
+    ) -> "SQLResult": ...
 
     @overload
     def execute(
@@ -162,7 +162,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin[ConnectionT, RowT], ABC)
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "SQLResult[RowT]": ...
+    ) -> "SQLResult": ...
 
     def execute(
         self,
@@ -173,7 +173,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin[ConnectionT, RowT], ABC)
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Union[SQLResult[ModelDTOT], SQLResult[RowT]]":
+    ) -> "Union[SQLResult[ModelDTOT], SQLResult]":
         sql_statement = self._build_statement(statement, *parameters, _config=_config or self.config, **kwargs)
         result = self._execute_statement(statement=sql_statement, connection=self._connection(_connection), **kwargs)
 
@@ -201,7 +201,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin[ConnectionT, RowT], ABC)
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "SQLResult[RowT]":
+    ) -> "SQLResult":
         """Execute statement multiple times with different parameters.
 
         Now passes first parameter set through pipeline to enable
@@ -231,7 +231,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin[ConnectionT, RowT], ABC)
         _config: "Optional[SQLConfig]" = None,
         _suppress_warnings: bool = False,  # New parameter for migrations
         **kwargs: Any,
-    ) -> "SQLResult[RowT]":
+    ) -> "SQLResult":
         """Execute a multi-statement script.
 
         By default, validates each statement and logs warnings for dangerous

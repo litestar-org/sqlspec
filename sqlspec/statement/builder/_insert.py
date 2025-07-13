@@ -19,7 +19,6 @@ from sqlspec.statement.builder.mixins import (
     ReturningClauseMixin,
 )
 from sqlspec.statement.result import SQLResult
-from sqlspec.typing import RowT
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -36,7 +35,7 @@ ERR_MSG_EXPRESSION_NOT_INITIALIZED = "Internal error: base expression not initia
 
 
 @dataclass(unsafe_hash=True)
-class Insert(QueryBuilder[RowT], ReturningClauseMixin, InsertValuesMixin, InsertFromSelectMixin, InsertIntoClauseMixin):
+class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSelectMixin, InsertIntoClauseMixin):
     """Builder for INSERT statements.
 
     This builder facilitates the construction of SQL INSERT queries
@@ -53,9 +52,10 @@ class Insert(QueryBuilder[RowT], ReturningClauseMixin, InsertValuesMixin, Insert
         )
 
         # Even more concise with constructor
-        insert_query = Insert("users").values(
-            {"name": "John", "age": 30}
-        )
+        insert_query = Insert("users").values({
+            "name": "John",
+            "age": 30,
+        })
 
         # Multi-row INSERT
         insert_query = (
@@ -70,9 +70,10 @@ class Insert(QueryBuilder[RowT], ReturningClauseMixin, InsertValuesMixin, Insert
         insert_query = (
             Insert()
             .into("users")
-            .values_from_dict(
-                {"name": "John", "email": "john@example.com"}
-            )
+            .values_from_dict({
+                "name": "John",
+                "email": "john@example.com",
+            })
         )
 
         # INSERT from SELECT
@@ -121,13 +122,13 @@ class Insert(QueryBuilder[RowT], ReturningClauseMixin, InsertValuesMixin, Insert
         return exp.Insert()
 
     @property
-    def _expected_result_type(self) -> "type[SQLResult[RowT]]":
+    def _expected_result_type(self) -> "type[SQLResult]":
         """Specifies the expected result type for an INSERT query.
 
         Returns:
             The type of result expected for INSERT operations.
         """
-        return SQLResult[RowT]
+        return SQLResult
 
     def _get_insert_expression(self) -> exp.Insert:
         """Safely gets and casts the internal expression to exp.Insert.

@@ -7,7 +7,7 @@ SQLSpec provides a three-tier caching system that delivers up to 90% performance
 The SQLSpec architecture includes three complementary caching layers:
 
 1. **Base Statement Cache**: Processed SQL objects and pipeline results
-2. **Filter Result Cache**: Applied filter transformations and compositions  
+2. **Filter Result Cache**: Applied filter transformations and compositions
 3. **Optimized Expression Cache**: SQLGlot optimization results with AST sub-expression caching
 
 ## Cache Layers

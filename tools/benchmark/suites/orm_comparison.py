@@ -415,7 +415,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
                         "status": "active" if i % 2 == 0 else "inactive",
                     }
                     for i in range(1000)
-                ]
+                ],
             )
 
     def _run_sync_benchmarks(self, db_config: dict[str, Any]) -> dict[str, TimingResult]:
@@ -518,11 +518,11 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLSpec warmup
         with config_no_cache.provide_session() as session:
             for _ in range(10):
-                list(session.execute(SQL("SELECT 1 as warmup")))
+                session.execute(SQL("SELECT 1 as warmup")).all()
 
         with config_with_cache.provide_session() as session:
             for _ in range(10):
-                list(session.execute(SQL("SELECT 1 as warmup")))
+                session.execute(SQL("SELECT 1 as warmup")).all()
 
     async def _warmup_async_connections(self, engine: Any, config_no_cache: Any, config_with_cache: Any) -> None:
         """Warm up asynchronous connections."""
@@ -534,11 +534,13 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLSpec warmup
         async with config_no_cache.provide_session() as session:
             for _ in range(10):
-                await session.execute(SQL("SELECT 1 as warmup"))
+                result = await session.execute(SQL("SELECT 1 as warmup"))
+                result.all()
 
         async with config_with_cache.provide_session() as session:
             for _ in range(10):
-                await session.execute(SQL("SELECT 1 as warmup"))
+                result = await session.execute(SQL("SELECT 1 as warmup"))
+                result.all()
 
     def _benchmark_sync_simple_select(
         self, engine: Any, config_no_cache: Any, config_with_cache: Any, db_name: str
@@ -553,7 +555,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLSpec without cache
         def sqlspec_no_cache() -> None:
             with config_no_cache.provide_session() as session:
-                list(session.execute(sql_simple))
+                session.execute(sql_simple).all()
 
         times = BenchmarkMetrics.time_operation(sqlspec_no_cache, iterations=self.config.iterations, warmup=10)
         results["simple_select_sqlspec_no_cache"] = TimingResult(
@@ -563,7 +565,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLSpec with cache
         def sqlspec_with_cache() -> None:
             with config_with_cache.provide_session() as session:
-                list(session.execute(sql_simple))
+                session.execute(sql_simple).all()
 
         times = BenchmarkMetrics.time_operation(sqlspec_with_cache, iterations=self.config.iterations, warmup=10)
         results["simple_select_sqlspec_cache"] = TimingResult(
@@ -609,7 +611,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLSpec without cache
         def sqlspec_no_cache() -> None:
             with config_no_cache.provide_session() as session:
-                list(session.execute(sql_filtered))
+                session.execute(sql_filtered).all()
 
         times = BenchmarkMetrics.time_operation(sqlspec_no_cache, iterations=self.config.iterations, warmup=10)
         results["filtered_select_sqlspec_no_cache"] = TimingResult(
@@ -619,7 +621,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLSpec with cache
         def sqlspec_with_cache() -> None:
             with config_with_cache.provide_session() as session:
-                list(session.execute(sql_filtered))
+                session.execute(sql_filtered).all()
 
         times = BenchmarkMetrics.time_operation(sqlspec_with_cache, iterations=self.config.iterations, warmup=10)
         results["filtered_select_sqlspec_cache"] = TimingResult(
@@ -671,7 +673,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLSpec without cache
         def sqlspec_no_cache() -> None:
             with config_no_cache.provide_session() as session:
-                list(session.execute(sql_join))
+                session.execute(sql_join).all()
 
         times = BenchmarkMetrics.time_operation(sqlspec_no_cache, iterations=min(self.config.iterations, 100), warmup=5)
         results["join_query_sqlspec_no_cache"] = TimingResult(
@@ -681,7 +683,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLSpec with cache
         def sqlspec_with_cache() -> None:
             with config_with_cache.provide_session() as session:
-                list(session.execute(sql_join))
+                session.execute(sql_join).all()
 
         times = BenchmarkMetrics.time_operation(
             sqlspec_with_cache, iterations=min(self.config.iterations, 100), warmup=5
@@ -741,7 +743,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLSpec without cache
         def sqlspec_no_cache() -> None:
             with config_no_cache.provide_session() as session:
-                list(session.execute(sql_agg))
+                session.execute(sql_agg).all()
 
         times = BenchmarkMetrics.time_operation(sqlspec_no_cache, iterations=self.config.iterations, warmup=10)
         results["aggregation_sqlspec_no_cache"] = TimingResult(
@@ -751,7 +753,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLSpec with cache
         def sqlspec_with_cache() -> None:
             with config_with_cache.provide_session() as session:
-                list(session.execute(sql_agg))
+                session.execute(sql_agg).all()
 
         times = BenchmarkMetrics.time_operation(sqlspec_with_cache, iterations=self.config.iterations, warmup=10)
         results["aggregation_sqlspec_cache"] = TimingResult(
@@ -990,7 +992,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         async def sqlspec_no_cache() -> None:
             async with config_no_cache.provide_session() as session:
                 result = await session.execute(sql_simple)
-                list(result)
+                result.all()
 
         times = await BenchmarkMetrics.time_operation_async(
             sqlspec_no_cache, iterations=self.config.iterations, warmup=10
@@ -1003,7 +1005,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         async def sqlspec_with_cache() -> None:
             async with config_with_cache.provide_session() as session:
                 result = await session.execute(sql_simple)
-                list(result)
+                result.all()
 
         times = await BenchmarkMetrics.time_operation_async(
             sqlspec_with_cache, iterations=self.config.iterations, warmup=10
@@ -1061,7 +1063,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         async def sqlspec_no_cache() -> None:
             async with config_no_cache.provide_session() as session:
                 result = await session.execute(sql_filtered)
-                list(result)
+                result.all()
 
         times = await BenchmarkMetrics.time_operation_async(
             sqlspec_no_cache, iterations=self.config.iterations, warmup=10
@@ -1074,7 +1076,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         async def sqlspec_with_cache() -> None:
             async with config_with_cache.provide_session() as session:
                 result = await session.execute(sql_filtered)
-                list(result)
+                result.all()
 
         times = await BenchmarkMetrics.time_operation_async(
             sqlspec_with_cache, iterations=self.config.iterations, warmup=10
@@ -1138,7 +1140,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         async def sqlspec_no_cache() -> None:
             async with config_no_cache.provide_session() as session:
                 result = await session.execute(sql_join)
-                list(result)
+                result.all()
 
         times = await BenchmarkMetrics.time_operation_async(
             sqlspec_no_cache, iterations=min(self.config.iterations, 100), warmup=5
@@ -1151,7 +1153,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         async def sqlspec_with_cache() -> None:
             async with config_with_cache.provide_session() as session:
                 result = await session.execute(sql_join)
-                list(result)
+                result.all()
 
         times = await BenchmarkMetrics.time_operation_async(
             sqlspec_with_cache, iterations=min(self.config.iterations, 100), warmup=5
@@ -1205,7 +1207,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         async def sqlspec_no_cache() -> None:
             async with config_no_cache.provide_session() as session:
                 result = await session.execute(sql_agg)
-                list(result)
+                result.all()
 
         times = await BenchmarkMetrics.time_operation_async(
             sqlspec_no_cache, iterations=self.config.iterations, warmup=10
@@ -1218,7 +1220,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         async def sqlspec_with_cache() -> None:
             async with config_with_cache.provide_session() as session:
                 result = await session.execute(sql_agg)
-                list(result)
+                result.all()
 
         times = await BenchmarkMetrics.time_operation_async(
             sqlspec_with_cache, iterations=self.config.iterations, warmup=10

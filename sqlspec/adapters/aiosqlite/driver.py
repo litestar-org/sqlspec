@@ -101,7 +101,7 @@ class AiosqliteDriver(
 
     async def _execute_statement(
         self, statement: SQL, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         if statement.is_script:
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
@@ -140,7 +140,7 @@ class AiosqliteDriver(
 
     async def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         conn = self._connection(connection)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
@@ -186,7 +186,7 @@ class AiosqliteDriver(
 
     async def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -214,7 +214,7 @@ class AiosqliteDriver(
 
     async def _execute_script(
         self, script: str, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         conn = self._connection(connection)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:

@@ -33,7 +33,7 @@ def execute(
     _connection: Optional[ConnectionT] = None,
     _config: Optional[SQLConfig] = None,
     **kwargs: Any,
-) -> SQLResult[RowT]: ...
+) -> SQLResult: ...
 ```
 
 ### Execute Many
@@ -47,7 +47,7 @@ def execute_many(
     _connection: Optional[ConnectionT] = None,
     _config: Optional[SQLConfig] = None,
     **kwargs: Any,
-) -> SQLResult[RowT]:
+) -> SQLResult:
     """Execute statement multiple times with different parameters."""
 ```
 
@@ -63,7 +63,7 @@ def execute_script(
     _config: Optional[SQLConfig] = None,
     _suppress_warnings: bool = False,
     **kwargs: Any,
-) -> SQLResult[RowT]:
+) -> SQLResult:
     """Execute multi-statement script."""
 ```
 
@@ -167,7 +167,7 @@ class MyDriver(
         statement: SQL,
         connection: Optional[ConnectionT] = None,
         **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         # 1. Handle scripts first
         if statement.is_script:
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
@@ -195,7 +195,7 @@ class MyDriver(
         statement: SQL,
         connection: Optional[ConnectionT] = None,
         **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         """Execute single statement"""
         raise NotImplementedError
 
@@ -205,7 +205,7 @@ class MyDriver(
         param_list: Any,
         connection: Optional[ConnectionT] = None,
         **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         """Execute with multiple parameter sets"""
         raise NotImplementedError
 
@@ -214,7 +214,7 @@ class MyDriver(
         script: str,
         connection: Optional[ConnectionT] = None,
         **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         """Execute multi-statement script"""
         raise NotImplementedError
 ```
@@ -316,7 +316,7 @@ def _execute(
     statement: SQL,
     connection: Optional[ConnectionT] = None,
     **kwargs: Any  # Driver-specific options
-) -> SQLResult[RowT]:
+) -> SQLResult:
     # Extract known kwargs
     timeout = kwargs.get('timeout', None)
     fetch_size = kwargs.get('fetch_size', 1000)

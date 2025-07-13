@@ -105,7 +105,7 @@ class SqliteDriver(
 
     def _execute_statement(
         self, statement: SQL, connection: Optional[SqliteConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         if statement.is_script:
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, statement=statement, **kwargs)
@@ -170,7 +170,7 @@ class SqliteDriver(
 
     def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[SqliteConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         """Execute a single statement with parameters."""
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
@@ -204,7 +204,7 @@ class SqliteDriver(
         connection: Optional[SqliteConnection] = None,
         statement: Optional[SQL] = None,
         **kwargs: Any,
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         """Execute a statement many times with a list of parameter tuples."""
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
@@ -228,7 +228,7 @@ class SqliteDriver(
 
     def _execute_script(
         self, script: str, connection: Optional[SqliteConnection] = None, statement: Optional[SQL] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         """Execute script using splitter for per-statement validation."""
         from sqlspec.statement.splitter import split_sql_script
 

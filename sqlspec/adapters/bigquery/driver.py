@@ -286,7 +286,7 @@ class BigQueryDriver(
         """
         return [dict(row) for row in rows_iterator]  # type: ignore[misc]
 
-    def _handle_select_job(self, query_job: QueryJob, statement: SQL) -> SQLResult[RowT]:
+    def _handle_select_job(self, query_job: QueryJob, statement: SQL) -> SQLResult:
         """Handle a query job that is expected to return rows."""
         job_result = query_job.result()
         rows_list = self._rows_to_results(iter(job_result))
@@ -300,7 +300,7 @@ class BigQueryDriver(
             operation_type="SELECT",
         )
 
-    def _handle_dml_job(self, query_job: QueryJob, statement: SQL) -> SQLResult[RowT]:
+    def _handle_dml_job(self, query_job: QueryJob, statement: SQL) -> SQLResult:
         """Handle a DML job.
 
         Note: BigQuery emulators (e.g., goccy/bigquery-emulator) may report 0 rows affected
@@ -345,7 +345,7 @@ class BigQueryDriver(
 
     def _execute_statement(
         self, statement: SQL, connection: Optional[BigQueryConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         if statement.is_script:
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
@@ -379,7 +379,7 @@ class BigQueryDriver(
 
     def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[BigQueryConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -407,7 +407,7 @@ class BigQueryDriver(
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[BigQueryConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -461,9 +461,7 @@ class BigQueryDriver(
                 metadata={"status_message": f"OK - executed batch job {query_job.job_id}"},
             )
 
-    def _execute_script(
-        self, script: str, connection: Optional[BigQueryConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    def _execute_script(self, script: str, connection: Optional[BigQueryConnection] = None, **kwargs: Any) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 

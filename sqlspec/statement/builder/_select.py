@@ -25,7 +25,6 @@ from sqlspec.statement.builder.mixins import (
     WhereClauseMixin,
 )
 from sqlspec.statement.result import SQLResult
-from sqlspec.typing import RowT
 
 __all__ = ("Select",)
 
@@ -36,7 +35,7 @@ TABLE_HINT_PATTERN = r"\b{}\b(\s+AS\s+\w+)?"
 
 @dataclass
 class Select(
-    QueryBuilder[RowT],
+    QueryBuilder,
     WhereClauseMixin,
     OrderByClauseMixin,
     LimitOffsetClauseMixin,
@@ -73,7 +72,7 @@ class Select(
 
     _with_parts: "dict[str, Union[exp.CTE, Select]]" = field(default_factory=dict, init=False)
     _expression: Optional[exp.Expression] = field(default=None, init=False, repr=False, compare=False, hash=False)
-    _schema: Optional[type[RowT]] = None
+    _schema: Optional[type[Any]] = None
     _hints: "list[dict[str, object]]" = field(default_factory=list, init=False, repr=False)
 
     def __init__(self, *columns: str, **kwargs: Any) -> None:
@@ -103,13 +102,13 @@ class Select(
             self.select(*columns)
 
     @property
-    def _expected_result_type(self) -> "type[SQLResult[RowT]]":
+    def _expected_result_type(self) -> "type[SQLResult]":
         """Get the expected result type for SELECT operations.
 
         Returns:
             type: The SelectResult type.
         """
-        return SQLResult[RowT]
+        return SQLResult
 
     def _create_base_expression(self) -> "exp.Select":
         if self._expression is None or not isinstance(self._expression, exp.Select):
@@ -117,7 +116,7 @@ class Select(
         # At this point, self._expression is exp.Select
         return self._expression
 
-    def as_schema(self, schema: "type[RowT]") -> "Select[RowT]":
+    def as_schema(self, schema: "type[Any]") -> "Select":
         """Return a new Select instance parameterized with the given schema/model type.
 
         This enables type-safe result mapping: the returned builder will carry the schema type
@@ -128,15 +127,15 @@ class Select(
             schema: The schema/model class to use for row typing (e.g., a Pydantic model, dataclass, or msgspec.Struct).
 
         Returns:
-            Select[RowT]: A new Select instance with RowT set to the provided schema/model type.
+            Select: A new Select instance with schema set.
         """
         new_builder = Select()
         new_builder._expression = self._expression.copy() if self._expression is not None else None
         new_builder._parameters = self._parameters.copy()
         new_builder._parameter_counter = self._parameter_counter
         new_builder.dialect = self.dialect
-        new_builder._schema = schema  # type: ignore[assignment]
-        return cast("Select[RowT]", new_builder)
+        new_builder._schema = schema
+        return new_builder
 
     def with_hint(
         self,

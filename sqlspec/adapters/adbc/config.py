@@ -229,14 +229,9 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
                 # Only default to SQLite for paths that look like file paths with clear directory separators
                 # and don't conflict with data file extensions
-                if ("/" in uri or "\\" in uri or uri.startswith(("./", "../"))) and not uri_lower.endswith((
-                    ".parquet",
-                    ".csv",
-                    ".json",
-                    ".txt",
-                    ".log",
-                    ".xml",
-                )):
+                if ("/" in uri or "\\" in uri or uri.startswith(("./", "../"))) and not uri_lower.endswith(
+                    (".parquet", ".csv", ".json", ".txt", ".log", ".xml")
+                ):
                     return "adbc_driver_sqlite.dbapi.connect"
 
         # Could not determine driver

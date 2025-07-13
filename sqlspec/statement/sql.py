@@ -108,11 +108,13 @@ class _ProcessedState:
 
     def __hash__(self) -> int:
         """Hash based on processed SQL and expression."""
-        return hash((
-            self.processed_sql,
-            str(self.processed_expression),  # Convert expression to string for hashing
-            len(self.validation_errors) if self.validation_errors else 0,
-        ))
+        return hash(
+            (
+                self.processed_sql,
+                str(self.processed_expression),  # Convert expression to string for hashing
+                len(self.validation_errors) if self.validation_errors else 0,
+            )
+        )
 
     def __init__(
         self,
@@ -205,18 +207,20 @@ class SQLConfig:
 
     def __hash__(self) -> int:
         """Hash based on key configuration settings."""
-        return hash((
-            self.enable_parsing,
-            self.enable_validation,
-            self.enable_transformations,
-            self.enable_analysis,
-            self.enable_expression_simplification,
-            self.enable_parameter_type_wrapping,
-            self.enable_caching,
-            self.dialect,
-            self.default_parameter_style,
-            tuple(self.allowed_parameter_styles) if self.allowed_parameter_styles else None,
-        ))
+        return hash(
+            (
+                self.enable_parsing,
+                self.enable_validation,
+                self.enable_transformations,
+                self.enable_analysis,
+                self.enable_expression_simplification,
+                self.enable_parameter_type_wrapping,
+                self.enable_caching,
+                self.dialect,
+                self.default_parameter_style,
+                tuple(self.allowed_parameter_styles) if self.allowed_parameter_styles else None,
+            )
+        )
 
     def __init__(
         self,
@@ -725,7 +729,9 @@ class SQL:
                 processed_sql, param_info, ParameterStyle.NAMED_PYFORMAT
             )
             if self._placeholder_mapping and context.parameters and is_dict(context.parameters):
-                context.parameters = self._denormalize_pyformat_params(context.parameters)
+                # For mypyc: create new variable after type narrowing
+                dict_params = context.parameters  # Type narrowed to dict[str, Any]
+                context.parameters = self._denormalize_pyformat_params(dict_params)
         elif ParameterStyle.POSITIONAL_COLON in target_styles:
             processed_param_info = self._config.parameter_validator.extract_parameters(processed_sql)
             has_param_placeholders = any(p.name and p.name.startswith(PARAM_PREFIX) for p in processed_param_info)
@@ -735,7 +741,9 @@ class SQL:
                     processed_sql, param_info, ParameterStyle.POSITIONAL_COLON
                 )
             if self._placeholder_mapping and context.parameters and is_dict(context.parameters):
-                context.parameters = self._denormalize_colon_params(context.parameters)
+                # For mypyc: create new variable after type narrowing
+                dict_params = context.parameters  # Type narrowed to dict[str, Any]
+                context.parameters = self._denormalize_colon_params(dict_params)
 
         return processed_sql, context
 

@@ -265,7 +265,7 @@ The system uses a unified pipeline with composable steps:
 ### Three-Tier Caching System
 
 1. **Base Statement Cache**: Processed SQL objects
-2. **Filter Result Cache**: Applied filter transformations  
+2. **Filter Result Cache**: Applied filter transformations
 3. **Optimized Expression Cache**: SQLGlot optimization results
 
 ### Key Components
@@ -430,7 +430,7 @@ class MyDriver(
         statement: SQL,
         connection: Optional[ConnectionT] = None,
         **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         """Main dispatcher - routes to appropriate method"""
 
     def _execute(
@@ -440,7 +440,7 @@ class MyDriver(
         statement: SQL,
         connection: Optional[ConnectionT] = None,
         **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         """Execute single statement"""
 
     def _execute_many(
@@ -449,7 +449,7 @@ class MyDriver(
         param_list: Any,
         connection: Optional[ConnectionT] = None,
         **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         """Execute with multiple parameter sets"""
 
     def _execute_script(
@@ -457,14 +457,14 @@ class MyDriver(
         script: str,
         connection: Optional[ConnectionT] = None,
         **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         """Execute multi-statement script"""
 ```
 
 ### Implementation Pattern
 
 ```python
-def _execute_statement(self, statement: SQL, connection: Optional[ConnectionT] = None, **kwargs: Any) -> SQLResult[RowT]:
+def _execute_statement(self, statement: SQL, connection: Optional[ConnectionT] = None, **kwargs: Any) -> SQLResult:
     # 1. Handle script execution first (no parameters)
     if statement.is_script:
         sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
@@ -805,18 +805,18 @@ def custom_pipeline_step(context: SQLTransformContext) -> SQLTransformContext:
     # 1. Check if this step should run
     if not should_apply(context.dialect, context.parameters):
         return context
-    
+
     # 2. Process parameters if needed
     if context.parameters:
         context.parameters = transform_parameters(context.parameters)
-    
+
     # 3. Transform AST if needed
     if needs_ast_transformation(context.current_expression):
         context.current_expression = transform_ast(context.current_expression)
-    
+
     # 4. Add metadata for downstream steps
     context.metadata["custom_step_applied"] = True
-    
+
     return context
 ```
 
@@ -835,7 +835,7 @@ def robust_pipeline_step(context: SQLTransformContext) -> SQLTransformContext:
         logger.warning("Transformation failed: %s", e)
         context.metadata["transformation_error"] = str(e)
         # Continue with original expression
-    
+
     return context
 ```
 
@@ -845,23 +845,23 @@ def robust_pipeline_step(context: SQLTransformContext) -> SQLTransformContext:
 def build_pipeline_for_adapter(dialect: str, config: SQLConfig) -> PipelineStep:
     """Build adapter-specific pipeline."""
     steps = []
-    
+
     # Always include parameter processing
     steps.append(parameterize_literals_step)
-    
+
     # Dialect-specific steps
     if dialect == "postgres":
         steps.append(postgres_null_handling_step)
     elif dialect == "sqlite":
         steps.append(sqlite_type_conversion_step)
-    
+
     # Optional optimization
     if config.enable_optimization:
         steps.append(optimize_step)
-    
+
     # Always validate
     steps.append(validate_step)
-    
+
     return compose_pipeline(steps)
 ```
 

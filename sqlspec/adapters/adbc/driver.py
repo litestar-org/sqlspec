@@ -178,7 +178,7 @@ class AdbcDriver(
 
     def _execute_statement(
         self, statement: SQL, connection: Optional["AdbcConnection"] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         if statement.is_script:
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
@@ -211,7 +211,7 @@ class AdbcDriver(
 
     def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional["AdbcConnection"] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -264,7 +264,7 @@ class AdbcDriver(
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional["AdbcConnection"] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -303,9 +303,7 @@ class AdbcDriver(
                     metadata={"status_message": "OK"},
                 )
 
-    def _execute_script(
-        self, script: str, connection: Optional["AdbcConnection"] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    def _execute_script(self, script: str, connection: Optional["AdbcConnection"] = None, **kwargs: Any) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -468,6 +466,7 @@ class AdbcDriver(
         # Auto-detect format if not provided
         if format is None:
             from pathlib import Path
+
             path_obj = Path(source_uri)
             format = path_obj.suffix.lstrip(".").lower()  # noqa: A001
 
@@ -479,7 +478,6 @@ class AdbcDriver(
 
         # For ADBC, we leverage native Arrow capabilities
         if format == "parquet" and self.supports_native_parquet_import:
-
             import pyarrow.parquet as pq
 
             # Read Parquet file into Arrow table

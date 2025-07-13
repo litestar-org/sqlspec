@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from sqlspec.protocols import SelectBuilderProtocol, SQLBuilderProtocol
     from sqlspec.statement.builder._base import QueryBuilder
     from sqlspec.statement.builder._column import Column, FunctionColumn
-    from sqlspec.typing import RowT
 
 __all__ = ("CaseBuilder", "SelectClauseMixin")
 
@@ -602,7 +601,7 @@ class CaseBuilder:
         self._case_expr.set("default", value_expr)
         return self
 
-    def end(self) -> "QueryBuilder[RowT]":
+    def end(self) -> "QueryBuilder":
         """Finalize the CASE expression and add it to the SELECT clause.
 
         Returns:

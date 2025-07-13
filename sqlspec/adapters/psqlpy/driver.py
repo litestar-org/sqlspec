@@ -78,7 +78,7 @@ class PsqlpyDriver(
 
     async def _execute_statement(
         self, statement: SQL, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         if statement.is_script:
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
@@ -117,7 +117,7 @@ class PsqlpyDriver(
 
     async def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         _ = kwargs  # Unused but required for protocol compatibility
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
@@ -174,7 +174,7 @@ class PsqlpyDriver(
 
     async def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         _ = kwargs  # Unused but required for protocol compatibility
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
@@ -205,7 +205,7 @@ class PsqlpyDriver(
 
     async def _execute_script(
         self, script: str, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 

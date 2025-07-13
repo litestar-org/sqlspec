@@ -7,7 +7,7 @@ advanced builder patterns and optimization capabilities.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Generic, NoReturn, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, NoReturn, Optional, Union, cast
 
 import sqlglot
 from sqlglot import Dialect, exp
@@ -19,7 +19,6 @@ from typing_extensions import Self
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.cache import optimized_expression_cache
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import RowT
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.statement_hashing import hash_optimized_expression
 from sqlspec.utils.type_guards import has_sql_method, has_with_method
@@ -42,7 +41,7 @@ class SafeQuery:
 
 
 @dataclass
-class QueryBuilder(ABC, Generic[RowT]):
+class QueryBuilder(ABC):
     """Abstract base class for SQL query builders with SQLGlot optimization.
 
     Provides common functionality for dialect handling, parameter management,
@@ -89,7 +88,7 @@ class QueryBuilder(ABC, Generic[RowT]):
 
     @property
     @abstractmethod
-    def _expected_result_type(self) -> "type[SQLResult[RowT]]":
+    def _expected_result_type(self) -> "type[SQLResult]":
         """The expected result type for the query being built.
 
         Returns:
@@ -144,7 +143,7 @@ class QueryBuilder(ABC, Generic[RowT]):
         def replacer(node: exp.Expression) -> exp.Expression:
             if isinstance(node, exp.Literal):
                 # Skip boolean literals (TRUE/FALSE) and NULL
-                if node.this in (True, False, None):
+                if node.this in {True, False, None}:
                     return node
                 # Convert other literals to parameters
                 param_name = self._add_parameter(node.this, context="where")

@@ -12,13 +12,12 @@ from sqlglot import exp
 from sqlspec.statement.builder._base import QueryBuilder, SafeQuery
 from sqlspec.statement.builder.mixins import DeleteFromClauseMixin, ReturningClauseMixin, WhereClauseMixin
 from sqlspec.statement.result import SQLResult
-from sqlspec.typing import RowT
 
 __all__ = ("Delete",)
 
 
 @dataclass(unsafe_hash=True)
-class Delete(QueryBuilder[RowT], WhereClauseMixin, ReturningClauseMixin, DeleteFromClauseMixin):
+class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromClauseMixin):
     """Builder for DELETE statements.
 
     This builder provides a fluent interface for constructing SQL DELETE statements
@@ -61,13 +60,13 @@ class Delete(QueryBuilder[RowT], WhereClauseMixin, ReturningClauseMixin, DeleteF
             self.from_(table)
 
     @property
-    def _expected_result_type(self) -> "type[SQLResult[RowT]]":
+    def _expected_result_type(self) -> "type[SQLResult]":
         """Get the expected result type for DELETE operations.
 
         Returns:
             The ExecuteResult type for DELETE statements.
         """
-        return SQLResult[RowT]
+        return SQLResult
 
     def _create_base_expression(self) -> "exp.Delete":
         """Create a new sqlglot Delete expression.

@@ -76,7 +76,7 @@ class PsycopgSyncDriver(
 
     def _execute_statement(
         self, statement: SQL, connection: Optional[PsycopgSyncConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         if statement.is_script:
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
@@ -150,7 +150,7 @@ class PsycopgSyncDriver(
         statement: SQL,
         connection: Optional[PsycopgSyncConnection] = None,
         **kwargs: Any,
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -188,7 +188,7 @@ class PsycopgSyncDriver(
                     metadata={"status_message": cursor.statusmessage or "OK"},
                 )
 
-    def _handle_copy_command(self, sql: str, data: Any, connection: PsycopgSyncConnection) -> SQLResult[RowT]:
+    def _handle_copy_command(self, sql: str, data: Any, connection: PsycopgSyncConnection) -> SQLResult:
         """Handle PostgreSQL COPY commands using cursor.copy() method."""
         # Handle case where data is wrapped in a single-element tuple (from positional args)
         if isinstance(data, tuple) and len(data) == 1:
@@ -236,7 +236,7 @@ class PsycopgSyncDriver(
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[PsycopgSyncConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -261,7 +261,7 @@ class PsycopgSyncDriver(
 
     def _execute_script(
         self, script: str, connection: Optional[PsycopgSyncConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -324,7 +324,7 @@ class PsycopgSyncDriver(
         """Get the connection to use for the operation."""
         return connection or self.connection
 
-    def _execute_pipeline_native(self, operations: "list[Any]", **options: Any) -> "list[SQLResult[RowT]]":
+    def _execute_pipeline_native(self, operations: "list[Any]", **options: Any) -> "list[SQLResult]":
         """Native pipeline execution using Psycopg's pipeline support.
 
         Psycopg has built-in pipeline support through the connection.pipeline() context manager.
@@ -355,9 +355,7 @@ class PsycopgSyncDriver(
 
         return results
 
-    def _execute_pipeline_operation(
-        self, index: int, operation: Any, connection: Any, options: dict
-    ) -> "SQLResult[RowT]":
+    def _execute_pipeline_operation(self, index: int, operation: Any, connection: Any, options: dict) -> "SQLResult":
         """Execute a single pipeline operation with error handling."""
         from sqlspec.exceptions import PipelineExecutionError
 
@@ -371,7 +369,7 @@ class PsycopgSyncDriver(
 
         except Exception as e:
             if options.get("continue_on_error"):
-                return SQLResult[RowT](
+                return SQLResult(
                     statement=operation.sql,
                     data=cast("list[RowT]", []),
                     error=e,
@@ -387,9 +385,7 @@ class PsycopgSyncDriver(
             result.pipeline_sql = operation.sql
             return result
 
-    def _dispatch_pipeline_operation(
-        self, operation: Any, sql_str: str, params: Any, connection: Any
-    ) -> "SQLResult[RowT]":
+    def _dispatch_pipeline_operation(self, operation: Any, sql_str: str, params: Any, connection: Any) -> "SQLResult":
         """Dispatch to appropriate handler based on operation type."""
         handlers = {
             "execute_many": self._handle_pipeline_execute_many,
@@ -400,13 +396,11 @@ class PsycopgSyncDriver(
         handler = handlers.get(operation.operation_type, self._handle_pipeline_execute)
         return handler(operation.sql, sql_str, params, connection)
 
-    def _handle_pipeline_execute_many(
-        self, sql: "SQL", sql_str: str, params: Any, connection: Any
-    ) -> "SQLResult[RowT]":
+    def _handle_pipeline_execute_many(self, sql: "SQL", sql_str: str, params: Any, connection: Any) -> "SQLResult":
         """Handle execute_many operation in pipeline."""
         with connection.cursor() as cursor:
             cursor.executemany(sql_str, params)
-            return SQLResult[RowT](
+            return SQLResult(
                 statement=sql,
                 data=cast("list[RowT]", []),
                 rows_affected=cursor.rowcount,
@@ -414,14 +408,14 @@ class PsycopgSyncDriver(
                 metadata={"status_message": "OK"},
             )
 
-    def _handle_pipeline_select(self, sql: "SQL", sql_str: str, params: Any, connection: Any) -> "SQLResult[RowT]":
+    def _handle_pipeline_select(self, sql: "SQL", sql_str: str, params: Any, connection: Any) -> "SQLResult":
         """Handle select operation in pipeline."""
         with connection.cursor() as cursor:
             cursor.execute(sql_str, params)
             fetched_data = cursor.fetchall()
             column_names = [col.name for col in cursor.description or []]
             data = [dict(record) for record in fetched_data] if fetched_data else []
-            return SQLResult[RowT](
+            return SQLResult(
                 statement=sql,
                 data=cast("list[RowT]", data),
                 rows_affected=len(data),
@@ -429,9 +423,7 @@ class PsycopgSyncDriver(
                 metadata={"column_names": column_names},
             )
 
-    def _handle_pipeline_execute_script(
-        self, sql: "SQL", sql_str: str, params: Any, connection: Any
-    ) -> "SQLResult[RowT]":
+    def _handle_pipeline_execute_script(self, sql: "SQL", sql_str: str, params: Any, connection: Any) -> "SQLResult":
         """Handle execute_script operation in pipeline."""
         script_statements = self._split_script_statements(sql_str)
         total_affected = 0
@@ -442,7 +434,7 @@ class PsycopgSyncDriver(
                     cursor.execute(stmt)
                     total_affected += cursor.rowcount or 0
 
-        return SQLResult[RowT](
+        return SQLResult(
             statement=sql,
             data=cast("list[RowT]", []),
             rows_affected=total_affected,
@@ -450,11 +442,11 @@ class PsycopgSyncDriver(
             metadata={"status_message": "SCRIPT EXECUTED", "statements_executed": len(script_statements)},
         )
 
-    def _handle_pipeline_execute(self, sql: "SQL", sql_str: str, params: Any, connection: Any) -> "SQLResult[RowT]":
+    def _handle_pipeline_execute(self, sql: "SQL", sql_str: str, params: Any, connection: Any) -> "SQLResult":
         """Handle regular execute operation in pipeline."""
         with connection.cursor() as cursor:
             cursor.execute(sql_str, params)
-            return SQLResult[RowT](
+            return SQLResult(
                 statement=sql,
                 data=cast("list[RowT]", []),
                 rows_affected=cursor.rowcount or 0,
@@ -535,7 +527,7 @@ class PsycopgAsyncDriver(
 
     async def _execute_statement(
         self, statement: SQL, connection: Optional[PsycopgAsyncConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         if statement.is_script:
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
@@ -627,7 +619,7 @@ class PsycopgAsyncDriver(
         statement: SQL,
         connection: Optional[PsycopgAsyncConnection] = None,
         **kwargs: Any,
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -681,7 +673,7 @@ class PsycopgAsyncDriver(
                     metadata={"status_message": cursor.statusmessage or "OK"},
                 )
 
-    async def _handle_copy_command(self, sql: str, data: Any, connection: PsycopgAsyncConnection) -> SQLResult[RowT]:
+    async def _handle_copy_command(self, sql: str, data: Any, connection: PsycopgAsyncConnection) -> SQLResult:
         """Handle PostgreSQL COPY commands using cursor.copy() method."""
         # Handle case where data is wrapped in a single-element tuple (from positional args)
         if isinstance(data, tuple) and len(data) == 1:
@@ -729,7 +721,7 @@ class PsycopgAsyncDriver(
 
     async def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[PsycopgAsyncConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -749,7 +741,7 @@ class PsycopgAsyncDriver(
 
     async def _execute_script(
         self, script: str, connection: Optional[PsycopgAsyncConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -824,7 +816,7 @@ class PsycopgAsyncDriver(
         """Get the connection to use for the operation."""
         return connection or self.connection
 
-    async def _execute_pipeline_native(self, operations: "list[Any]", **options: Any) -> "list[SQLResult[RowT]]":
+    async def _execute_pipeline_native(self, operations: "list[Any]", **options: Any) -> "list[SQLResult]":
         """Native async pipeline execution using Psycopg's pipeline support."""
         from sqlspec.exceptions import PipelineExecutionError
 
@@ -847,7 +839,7 @@ class PsycopgAsyncDriver(
 
     async def _execute_pipeline_operation_async(
         self, index: int, operation: Any, connection: Any, options: dict
-    ) -> "SQLResult[RowT]":
+    ) -> "SQLResult":
         """Execute a single async pipeline operation with error handling."""
         from sqlspec.exceptions import PipelineExecutionError
 
@@ -861,7 +853,7 @@ class PsycopgAsyncDriver(
 
         except Exception as e:
             if options.get("continue_on_error"):
-                return SQLResult[RowT](
+                return SQLResult(
                     statement=operation.sql,
                     data=cast("list[RowT]", []),
                     error=e,
@@ -879,7 +871,7 @@ class PsycopgAsyncDriver(
 
     async def _dispatch_pipeline_operation_async(
         self, operation: Any, sql_str: str, params: Any, connection: Any
-    ) -> "SQLResult[RowT]":
+    ) -> "SQLResult":
         """Dispatch to appropriate async handler based on operation type."""
         handlers = {
             "execute_many": self._handle_pipeline_execute_many_async,
@@ -892,11 +884,11 @@ class PsycopgAsyncDriver(
 
     async def _handle_pipeline_execute_many_async(
         self, sql: "SQL", sql_str: str, params: Any, connection: Any
-    ) -> "SQLResult[RowT]":
+    ) -> "SQLResult":
         """Handle async execute_many operation in pipeline."""
         async with connection.cursor() as cursor:
             await cursor.executemany(sql_str, params)
-            return SQLResult[RowT](
+            return SQLResult(
                 statement=sql,
                 data=cast("list[RowT]", []),
                 rows_affected=cursor.rowcount,
@@ -906,14 +898,14 @@ class PsycopgAsyncDriver(
 
     async def _handle_pipeline_select_async(
         self, sql: "SQL", sql_str: str, params: Any, connection: Any
-    ) -> "SQLResult[RowT]":
+    ) -> "SQLResult":
         """Handle async select operation in pipeline."""
         async with connection.cursor() as cursor:
             await cursor.execute(sql_str, params)
             fetched_data = await cursor.fetchall()
             column_names = [col.name for col in cursor.description or []]
             data = [dict(record) for record in fetched_data] if fetched_data else []
-            return SQLResult[RowT](
+            return SQLResult(
                 statement=sql,
                 data=cast("list[RowT]", data),
                 rows_affected=len(data),
@@ -923,7 +915,7 @@ class PsycopgAsyncDriver(
 
     async def _handle_pipeline_execute_script_async(
         self, sql: "SQL", sql_str: str, params: Any, connection: Any
-    ) -> "SQLResult[RowT]":
+    ) -> "SQLResult":
         """Handle async execute_script operation in pipeline."""
         script_statements = self._split_script_statements(sql_str)
         total_affected = 0
@@ -934,7 +926,7 @@ class PsycopgAsyncDriver(
                     await cursor.execute(stmt)
                     total_affected += cursor.rowcount or 0
 
-        return SQLResult[RowT](
+        return SQLResult(
             statement=sql,
             data=cast("list[RowT]", []),
             rows_affected=total_affected,
@@ -944,11 +936,11 @@ class PsycopgAsyncDriver(
 
     async def _handle_pipeline_execute_async(
         self, sql: "SQL", sql_str: str, params: Any, connection: Any
-    ) -> "SQLResult[RowT]":
+    ) -> "SQLResult":
         """Handle async regular execute operation in pipeline."""
         async with connection.cursor() as cursor:
             await cursor.execute(sql_str, params)
-            return SQLResult[RowT](
+            return SQLResult(
                 statement=sql,
                 data=cast("list[RowT]", []),
                 rows_affected=cursor.rowcount or 0,

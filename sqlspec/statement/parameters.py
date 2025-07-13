@@ -224,12 +224,14 @@ class ParameterStyleConversionState:
 
     def __hash__(self) -> int:
         """Hash based on transformation state and style."""
-        return hash((
-            self.was_transformed,
-            self.transformation_style,
-            tuple(self.original_styles) if self.original_styles else None,
-            tuple(sorted(self.placeholder_map.items())) if self.placeholder_map else None,
-        ))
+        return hash(
+            (
+                self.was_transformed,
+                self.transformation_style,
+                tuple(self.original_styles) if self.original_styles else None,
+                tuple(sorted(self.placeholder_map.items())) if self.placeholder_map else None,
+            )
+        )
 
     def __init__(
         self,
@@ -286,11 +288,13 @@ class ConvertedParameters:
 
     def __hash__(self) -> int:
         """Hash based on transformed SQL and conversion state."""
-        return hash((
-            self.transformed_sql,
-            self.conversion_state,
-            tuple(param.placeholder_text for param in self.parameter_info),
-        ))
+        return hash(
+            (
+                self.transformed_sql,
+                self.conversion_state,
+                tuple(param.placeholder_text for param in self.parameter_info),
+            )
+        )
 
     def __init__(
         self,

@@ -20,7 +20,6 @@ from sqlspec.statement.builder.mixins import (
     WhereClauseMixin,
 )
 from sqlspec.statement.result import SQLResult
-from sqlspec.typing import RowT
 
 if TYPE_CHECKING:
     from sqlspec.statement.builder._select import Select
@@ -30,7 +29,7 @@ __all__ = ("Update",)
 
 @dataclass(unsafe_hash=True)
 class Update(
-    QueryBuilder[RowT],
+    QueryBuilder,
     WhereClauseMixin,
     ReturningClauseMixin,
     UpdateSetClauseMixin,
@@ -90,9 +89,9 @@ class Update(
             self.table(table)
 
     @property
-    def _expected_result_type(self) -> "type[SQLResult[RowT]]":
+    def _expected_result_type(self) -> "type[SQLResult]":
         """Return the expected result type for this builder."""
-        return SQLResult[RowT]
+        return SQLResult
 
     def _create_base_expression(self) -> exp.Update:
         """Create a base UPDATE expression.

@@ -6,7 +6,6 @@ the complex multi-stage processing with a clean, efficient approach.
 """
 
 import operator
-from dataclasses import dataclass, field
 from typing import Any, Callable, Union
 
 import sqlglot.expressions as exp
@@ -30,7 +29,6 @@ __all__ = (
 )
 
 
-@dataclass
 class SQLTransformContext:
     """Carries state through pipeline execution.
 
@@ -38,11 +36,21 @@ class SQLTransformContext:
     transformations and parameters in a single pass.
     """
 
-    current_expression: exp.Expression
-    original_expression: exp.Expression
-    parameters: "Union[dict[str, Any], list[Any], tuple[Any, ...]]" = field(default_factory=dict)
-    dialect: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
+    __slots__ = ("current_expression", "original_expression", "parameters", "dialect", "metadata")
+
+    def __init__(
+        self,
+        current_expression: exp.Expression,
+        original_expression: exp.Expression,
+        parameters: "Union[dict[str, Any], list[Any], tuple[Any, ...], None]" = None,
+        dialect: str = "",
+        metadata: "dict[str, Any] | None" = None,
+    ) -> None:
+        self.current_expression = current_expression
+        self.original_expression = original_expression
+        self.parameters = parameters if parameters is not None else {}
+        self.dialect = dialect
+        self.metadata = metadata if metadata is not None else {}
 
     @property
     def merged_parameters(self) -> Any:

@@ -284,15 +284,24 @@ class SQLCache:
             _cache_stats.optimized_evictions += 1
 
 
-@dataclass
 class CachedFragment:
     """Cached AST fragment with metadata."""
 
-    expression: exp.Expression
-    sql: str
-    fragment_type: str
-    dialect: "Optional[DialectType]" = None
-    parameter_count: int = 0
+    __slots__ = ("expression", "sql", "fragment_type", "dialect", "parameter_count")
+
+    def __init__(
+        self,
+        expression: exp.Expression,
+        sql: str,
+        fragment_type: str,
+        dialect: "Optional[DialectType]" = None,
+        parameter_count: int = 0,
+    ) -> None:
+        self.expression = expression
+        self.sql = sql
+        self.fragment_type = fragment_type
+        self.dialect = dialect
+        self.parameter_count = parameter_count
 
 
 class ASTFragmentCache:

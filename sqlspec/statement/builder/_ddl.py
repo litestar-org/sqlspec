@@ -38,7 +38,7 @@ __all__ = (
 
 
 @dataclass
-class DDLBuilder(QueryBuilder[Any]):
+class DDLBuilder(QueryBuilder):
     """Base class for DDL builders (CREATE, DROP, ALTER, etc)."""
 
     dialect: DialectType = None
@@ -53,7 +53,7 @@ class DDLBuilder(QueryBuilder[Any]):
         raise NotImplementedError(msg)
 
     @property
-    def _expected_result_type(self) -> "type[SQLResult[Any]]":
+    def _expected_result_type(self) -> "type[SQLResult]":
         # DDL typically returns no rows; use object for now.
         return SQLResult
 

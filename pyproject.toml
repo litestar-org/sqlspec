@@ -142,28 +142,15 @@ include = [
   # SQL parsing and execution (0.2-1.3ms bottleneck)
   "sqlspec/statement/sql.py",
   "sqlspec/statement/parameters.py",
-
+  "sqlspec/loader.py",
   # === PIPELINE COMPONENTS ===
-  # Pipeline context
-  "sqlspec/statement/pipelines/context.py",
 
   # Transformers (AST transformation hot paths)
-  "sqlspec/statement/pipelines/transformers/_literal_parameterizer.py",
-  "sqlspec/statement/pipelines/transformers/_expression_simplifier.py",
-  "sqlspec/statement/pipelines/transformers/_remove_comments_and_hints.py",
-
-  # Analyzers
-  "sqlspec/statement/pipelines/analyzers/_analyzer.py",
-
-  # Validators
-  "sqlspec/statement/pipelines/validators/_dml_safety.py",
-  "sqlspec/statement/pipelines/validators/_parameter_style.py",
-  "sqlspec/statement/pipelines/validators/_performance.py",
-  "sqlspec/statement/pipelines/validators/_security.py",
+  "sqlspec/statement/pipeline.py",
 
   # === ADAPTER-SPECIFIC TRANSFORMERS ===
-  "sqlspec/adapters/adbc/transformers.py",
-  "sqlspec/adapters/psycopg/transformers.py",
+  "sqlspec/adapters/adbc/pipeline_steps.py",
+  "sqlspec/adapters/psycopg/pipeline_steps.py",
 
   # === CACHING AND UTILITIES ===
   "sqlspec/statement/cache.py",
@@ -174,11 +161,37 @@ include = [
   # === STATEMENT PROCESSING ===
   "sqlspec/statement/splitter.py",
   "sqlspec/statement/filters.py",
+  "sqlspec/statement/result.py",
+
+  # === QUERY BUILDERS ===
+  "sqlspec/statement/builder/_base.py",
+  "sqlspec/statement/builder/_select.py",
+  "sqlspec/statement/builder/_insert.py",
+  "sqlspec/statement/builder/_update.py",
+  "sqlspec/statement/builder/_delete.py",
+  "sqlspec/statement/builder/_merge.py",
+  "sqlspec/statement/builder/_ddl.py",
+  "sqlspec/statement/builder/_column.py",
+  "sqlspec/statement/builder/_ddl_utils.py",
+  "sqlspec/statement/builder/_parsing_utils.py",
+  
+  # === BUILDER MIXINS ===
+  "sqlspec/statement/builder/mixins/_where_clause.py",
+  "sqlspec/statement/builder/mixins/_join_operations.py",
+  "sqlspec/statement/builder/mixins/_select_operations.py",
+  "sqlspec/statement/builder/mixins/_insert_operations.py",
+  "sqlspec/statement/builder/mixins/_update_operations.py",
+  "sqlspec/statement/builder/mixins/_delete_operations.py",
+  "sqlspec/statement/builder/mixins/_merge_operations.py",
+  "sqlspec/statement/builder/mixins/_order_limit_operations.py",
+  "sqlspec/statement/builder/mixins/_pivot_operations.py",
+  "sqlspec/statement/builder/mixins/_cte_and_set_ops.py",
 
   # === UTILITY MODULES (imported by hot paths) ===
   "sqlspec/utils/statement_hashing.py",
   "sqlspec/utils/text.py",
   "sqlspec/utils/sync_tools.py",
+  "sqlspec/utils/type_guards.py",
 ]
 mypy-args = [
   "--ignore-missing-imports",

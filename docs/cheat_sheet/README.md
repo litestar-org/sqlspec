@@ -30,7 +30,6 @@ Essential patterns and commands including:
 - DO's and DON'Ts
 - Testing patterns
 
-
 ## Key Takeaways
 
 ### Method Signatures (CRITICAL)
@@ -43,7 +42,7 @@ def _execute_statement(
     statement: SQL,
     connection: Optional[ConnectionT] = None,
     **kwargs: Any
-) -> SQLResult[RowT]:
+) -> SQLResult:
     """Main dispatcher"""
 
 def _execute(
@@ -53,7 +52,7 @@ def _execute(
     statement: SQL,
     connection: Optional[ConnectionT] = None,
     **kwargs: Any
-) -> SQLResult[RowT]:
+) -> SQLResult:
     """Single execution"""
 
 def _execute_many(
@@ -62,7 +61,7 @@ def _execute_many(
     param_list: Any,
     connection: Optional[ConnectionT] = None,
     **kwargs: Any
-) -> SQLResult[RowT]:
+) -> SQLResult:
     """Batch execution"""
 
 def _execute_script(
@@ -70,7 +69,7 @@ def _execute_script(
     script: str,
     connection: Optional[ConnectionT] = None,
     **kwargs: Any
-) -> SQLResult[RowT]:
+) -> SQLResult:
     """Script execution"""
 ```
 

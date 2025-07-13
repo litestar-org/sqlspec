@@ -89,7 +89,7 @@ class AsyncpgDriver(
 
     async def _execute_statement(
         self, statement: SQL, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         if statement.is_script:
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
@@ -120,7 +120,7 @@ class AsyncpgDriver(
 
     async def _execute(
         self, sql: str, parameters: Any, statement: SQL, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -167,7 +167,7 @@ class AsyncpgDriver(
 
     async def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -201,7 +201,7 @@ class AsyncpgDriver(
 
     async def _execute_script(
         self, script: str, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
+    ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -233,7 +233,7 @@ class AsyncpgDriver(
         """Get the connection to use for the operation."""
         return connection or self.connection
 
-    async def _execute_pipeline_native(self, operations: "list[Any]", **options: Any) -> "list[SQLResult[RowT]]":
+    async def _execute_pipeline_native(self, operations: "list[Any]", **options: Any) -> "list[SQLResult]":
         """Native pipeline execution using AsyncPG's efficient batch handling.
 
         Note: AsyncPG doesn't have explicit pipeline support like Psycopg, but we can
@@ -276,7 +276,7 @@ class AsyncpgDriver(
                 status = await connection.executemany(sql_str, params)
                 # Parse row count from status (e.g., "INSERT 0 5")
                 rows_affected = self._parse_asyncpg_status(status)
-                result = SQLResult[RowT](
+                result = SQLResult(
                     statement=op.sql,
                     data=cast("list[RowT]", []),
                     rows_affected=rows_affected,
@@ -287,7 +287,7 @@ class AsyncpgDriver(
                 # Use fetch for SELECT statements
                 rows = await connection.fetch(sql_str, *params)
                 data = [dict(record) for record in rows] if rows else []
-                result = SQLResult[RowT](
+                result = SQLResult(
                     statement=op.sql,
                     data=cast("list[RowT]", data),
                     rows_affected=len(data),
@@ -306,7 +306,7 @@ class AsyncpgDriver(
                         total_affected += self._parse_asyncpg_status(status)
                         last_status = status
 
-                result = SQLResult[RowT](
+                result = SQLResult(
                     statement=op.sql,
                     data=cast("list[RowT]", []),
                     rows_affected=total_affected,
@@ -316,7 +316,7 @@ class AsyncpgDriver(
             else:
                 status = await connection.execute(sql_str, *params)
                 rows_affected = self._parse_asyncpg_status(status)
-                result = SQLResult[RowT](
+                result = SQLResult(
                     statement=op.sql,
                     data=cast("list[RowT]", []),
                     rows_affected=rows_affected,
@@ -330,7 +330,7 @@ class AsyncpgDriver(
 
         except Exception as e:
             if options.get("continue_on_error"):
-                error_result = SQLResult[RowT](
+                error_result = SQLResult(
                     statement=op.sql, error=e, operation_index=i, parameters=op.original_params, data=[]
                 )
                 results.append(error_result)

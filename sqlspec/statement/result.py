@@ -1,13 +1,10 @@
 """SQL statement result classes for handling different types of SQL operations."""
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Generic, Literal, Optional, Union
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
 from typing_extensions import TypeVar
-
-from sqlspec.typing import ArrowTable, RowT
 
 if TYPE_CHECKING:
     from sqlspec.statement.sql import SQL
@@ -20,8 +17,7 @@ T = TypeVar("T")
 OperationType = Literal["SELECT", "INSERT", "UPDATE", "DELETE", "EXECUTE", "SCRIPT"]
 
 
-@dataclass
-class StatementResult(ABC, Generic[RowT]):
+class StatementResult(ABC):
     """Base class for SQL statement execution results.
 
     This class provides a common interface for handling different types of
@@ -37,18 +33,29 @@ class StatementResult(ABC, Generic[RowT]):
         metadata: Additional metadata about the operation.
     """
 
-    statement: "SQL"
-    """The original SQL statement that was executed."""
-    data: "Any"
-    """The result data from the operation."""
-    rows_affected: int = 0
-    """Number of rows affected by the operation."""
-    last_inserted_id: Optional[Union[int, str]] = None
-    """Last inserted ID from the operation."""
-    execution_time: Optional[float] = None
-    """Time taken to execute the statement in seconds."""
-    metadata: "dict[str, Any]" = field(default_factory=dict)
-    """Additional metadata about the operation."""
+    __slots__ = ("data", "execution_time", "last_inserted_id", "metadata", "rows_affected", "statement")
+
+    def __init__(
+        self,
+        statement: "SQL",
+        data: "Any",
+        rows_affected: int = 0,
+        last_inserted_id: Optional[Union[int, str]] = None,
+        execution_time: Optional[float] = None,
+        metadata: Optional["dict[str, Any]"] = None,
+    ) -> None:
+        self.statement = statement
+        """The original SQL statement that was executed."""
+        self.data = data
+        """The result data from the operation."""
+        self.rows_affected = rows_affected
+        """Number of rows affected by the operation."""
+        self.last_inserted_id = last_inserted_id
+        """Last inserted ID from the operation."""
+        self.execution_time = execution_time
+        """Time taken to execute the statement in seconds."""
+        self.metadata = metadata if metadata is not None else {}
+        """Additional metadata about the operation."""
 
     @abstractmethod
     def is_success(self) -> bool:
@@ -88,8 +95,7 @@ class StatementResult(ABC, Generic[RowT]):
         self.metadata[key] = value
 
 
-@dataclass
-class SQLResult(StatementResult[RowT], Generic[RowT]):
+class SQLResult(StatementResult):
     """Unified result class for SQL operations that return a list of rows
     or affect rows (e.g., SELECT, INSERT, UPDATE, DELETE).
 
@@ -99,27 +105,74 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
     For script execution, this class also tracks multiple statement results and errors.
     """
 
-    data: "list[RowT]" = field(default_factory=list)
-    error: Optional[Exception] = None
-    operation_type: OperationType = "SELECT"
-    operation_index: Optional[int] = None
-    pipeline_sql: Optional["SQL"] = None
-    parameters: Optional[Any] = None
-    column_names: "list[str]" = field(default_factory=list)
-    total_count: Optional[int] = None
-    has_more: bool = False
-    inserted_ids: "list[Union[int, str]]" = field(default_factory=list)
-    statement_results: "list[SQLResult[Any]]" = field(default_factory=list)
-    """Individual statement results when executing scripts."""
-    errors: "list[str]" = field(default_factory=list)
-    """Errors encountered during script execution."""
-    total_statements: int = 0
-    """Total number of statements in the script."""
-    successful_statements: int = 0
-    """Number of statements that executed successfully."""
+    __slots__ = (
+        "column_names",
+        "error",
+        "errors",
+        "has_more",
+        "inserted_ids",
+        "operation_index",
+        "operation_type",
+        "parameters",
+        "pipeline_sql",
+        "statement_results",
+        "successful_statements",
+        "total_count",
+        "total_statements",
+    )
 
-    def __post_init__(self) -> None:
-        """Post-initialization to infer column names and total count if not provided."""
+    def __init__(
+        self,
+        statement: "SQL",
+        data: Optional[list[dict[str, Any]]] = None,
+        rows_affected: int = 0,
+        last_inserted_id: Optional[Union[int, str]] = None,
+        execution_time: Optional[float] = None,
+        metadata: Optional["dict[str, Any]"] = None,
+        error: Optional[Exception] = None,
+        operation_type: OperationType = "SELECT",
+        operation_index: Optional[int] = None,
+        pipeline_sql: Optional["SQL"] = None,
+        parameters: Optional[Any] = None,
+        column_names: Optional["list[str]"] = None,
+        total_count: Optional[int] = None,
+        has_more: bool = False,
+        inserted_ids: Optional["list[Union[int, str]]"] = None,
+        statement_results: Optional["list[SQLResult]"] = None,
+        errors: Optional["list[str]"] = None,
+        total_statements: int = 0,
+        successful_statements: int = 0,
+    ) -> None:
+        # Initialize parent
+        super().__init__(
+            statement=statement,
+            data=data if data is not None else [],
+            rows_affected=rows_affected,
+            last_inserted_id=last_inserted_id,
+            execution_time=execution_time,
+            metadata=metadata,
+        )
+
+        # Initialize SQLResult-specific attributes
+        self.error = error
+        self.operation_type = operation_type
+        self.operation_index = operation_index
+        self.pipeline_sql = pipeline_sql
+        self.parameters = parameters
+        self.column_names = column_names if column_names is not None else []
+        self.total_count = total_count
+        self.has_more = has_more
+        self.inserted_ids = inserted_ids if inserted_ids is not None else []
+        self.statement_results: list[SQLResult] = statement_results if statement_results is not None else []
+        """Individual statement results when executing scripts."""
+        self.errors = errors if errors is not None else []
+        """Errors encountered during script execution."""
+        self.total_statements = total_statements
+        """Total number of statements in the script."""
+        self.successful_statements = successful_statements
+        """Number of statements that executed successfully."""
+
+        # Post-init logic
         if not self.column_names and self.data and isinstance(self.data[0], Mapping):
             self.column_names = list(self.data[0].keys())
         if self.total_count is None:
@@ -138,14 +191,14 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
             return not self.errors and self.total_statements == self.successful_statements
 
         if op_type == "SELECT":
-            return self.data is not None and (self.rows_affected is None or self.rows_affected >= 0)
+            return self.data is not None and self.rows_affected >= 0
 
         if op_type in {"INSERT", "UPDATE", "DELETE", "EXECUTE"}:
-            return self.rows_affected is not None and self.rows_affected >= 0
+            return self.rows_affected >= 0
 
         return False
 
-    def get_data(self) -> "Union[list[RowT], dict[str, Any]]":
+    def get_data(self) -> "Union[list[dict[str,Any]], dict[str, Any]]":
         """Get the data from the result.
 
         For regular operations, returns the list of rows.
@@ -162,7 +215,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
             }
         return self.data
 
-    def add_statement_result(self, result: "SQLResult[Any]") -> None:
+    def add_statement_result(self, result: "SQLResult") -> None:
         """Add a statement result to the script execution results."""
         self.statement_results.append(result)
         self.total_statements += 1
@@ -173,7 +226,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         """Add an error message to the script execution errors."""
         self.errors.append(error)
 
-    def get_statement_result(self, index: int) -> "Optional[SQLResult[Any]]":
+    def get_statement_result(self, index: int) -> "Optional[SQLResult]":
         """Get a statement result by index."""
         if 0 <= index < len(self.statement_results):
             return self.statement_results[index]
@@ -204,7 +257,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         """Check if there are any errors from script execution."""
         return len(self.errors) > 0
 
-    def get_first(self) -> "Optional[RowT]":
+    def get_first(self) -> "Optional[dict[str, Any]]":
         """Get the first row from the result, if any."""
         return self.data[0] if self.data else None
 
@@ -240,7 +293,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         """
         return len(self.data)
 
-    def __getitem__(self, index: int) -> "RowT":
+    def __getitem__(self, index: int) -> "dict[str, Any]":
         """Get a row by index.
 
         Args:
@@ -251,7 +304,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         """
         return self.data[index]
 
-    def all(self) -> "list[RowT]":
+    def all(self) -> list[dict[str, Any]]:
         """Return all rows as a list.
 
         Returns:
@@ -259,7 +312,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         """
         return self.data or []
 
-    def one(self) -> "RowT":
+    def one(self) -> "dict[str, Any]":
         """Return exactly one row.
 
         Returns:
@@ -276,7 +329,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
             raise ValueError(msg)
         return self.data[0]
 
-    def one_or_none(self) -> "Optional[RowT]":
+    def one_or_none(self) -> "Optional[dict[str, Any]]":
         """Return at most one row.
 
         Returns:
@@ -297,23 +350,9 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
 
         Returns:
             The scalar value from first column of first row
-
-        Raises:
-            ValueError: If no results
         """
         row = self.one()
-        if isinstance(row, Mapping):
-            if not row:
-                msg = "Row has no columns"
-                raise ValueError(msg)
-            first_key = next(iter(row.keys()))
-            return row[first_key]
-        if isinstance(row, Sequence) and not isinstance(row, (str, bytes)):
-            if len(row) == 0:
-                msg = "Row has no columns"
-                raise ValueError(msg)
-            return row[0]
-        return row
+        return next(iter(row.values()))
 
     def scalar_or_none(self) -> Any:
         """Return the first column of the first row, or None if no results.
@@ -325,20 +364,10 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
         if row is None:
             return None
 
-        if isinstance(row, Mapping):
-            if not row:
-                return None
-            first_key = next(iter(row.keys()))
-            return row[first_key]
-        if isinstance(row, Sequence) and not isinstance(row, (str, bytes)):
-            if len(row) == 0:
-                return None
-            return row[0]
-        return row
+        return next(iter(row.values()))
 
 
-@dataclass
-class ArrowResult(StatementResult[ArrowTable]):
+class ArrowResult(StatementResult):
     """Result class for SQL operations that return Apache Arrow data.
 
     This class is used when database drivers support returning results as
@@ -351,10 +380,31 @@ class ArrowResult(StatementResult[ArrowTable]):
         schema: Optional Arrow schema information.
     """
 
-    schema: Optional["dict[str, Any]"] = None
-    """Optional Arrow schema information."""
-    data: "ArrowTable"
-    """The result data from the operation."""
+    __slots__ = ("schema",)
+
+    def __init__(
+        self,
+        statement: "SQL",
+        data: Any,
+        rows_affected: int = 0,
+        last_inserted_id: Optional[Union[int, str]] = None,
+        execution_time: Optional[float] = None,
+        metadata: Optional["dict[str, Any]"] = None,
+        schema: Optional["dict[str, Any]"] = None,
+    ) -> None:
+        # Initialize parent
+        super().__init__(
+            statement=statement,
+            data=data,
+            rows_affected=rows_affected,
+            last_inserted_id=last_inserted_id,
+            execution_time=execution_time,
+            metadata=metadata,
+        )
+
+        # Initialize ArrowResult-specific attributes
+        self.schema = schema
+        """Optional Arrow schema information."""
 
     def is_success(self) -> bool:
         """Check if the operation was successful.
@@ -364,7 +414,7 @@ class ArrowResult(StatementResult[ArrowTable]):
         """
         return self.data is not None
 
-    def get_data(self) -> "ArrowTable":
+    def get_data(self) -> Any:
         """Get the Apache Arrow Table from the result.
 
         Returns:
