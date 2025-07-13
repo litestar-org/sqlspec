@@ -208,7 +208,21 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             if str(db_config["type"]) == "sync":
                 db_results = self._run_sync_benchmarks(db_config)
             else:
-                db_results = asyncio.run(self._run_async_benchmarks(db_config))
+                # Run async benchmarks in isolated event loop to avoid pool conflicts
+                # Particularly important for Oracle's AsyncThinPoolImpl
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    db_results = loop.run_until_complete(self._run_async_benchmarks(db_config))
+                finally:
+                    # Give background tasks time to complete
+                    pending = asyncio.all_tasks(loop)
+                    for task in pending:
+                        task.cancel()
+                    # Run the loop briefly to process cancellations
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                    loop.close()
+                    asyncio.set_event_loop(None)
 
             # Add results with database prefix
             for key, result in db_results.items():
@@ -390,17 +404,19 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)
 
-            # Insert test data
-            for i in range(1000):
-                await conn.execute(
-                    text("INSERT INTO users (id, name, email, status) VALUES (:id, :name, :email, :status)"),
+            # Insert test data using executemany for better performance
+            await conn.execute(
+                text("INSERT INTO users (id, name, email, status) VALUES (:id, :name, :email, :status)"),
+                [
                     {
                         "id": i + 1,
                         "name": f"user_{i}",
                         "email": f"user{i}@example.com",
                         "status": "active" if i % 2 == 0 else "inactive",
-                    },
-                )
+                    }
+                    for i in range(1000)
+                ]
+            )
 
     def _run_sync_benchmarks(self, db_config: dict[str, Any]) -> dict[str, TimingResult]:
         """Run synchronous benchmarks for a database."""
@@ -436,6 +452,12 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
 
         # Cleanup
         engine.dispose()
+
+        # Also close SQLSpec config pools for sync
+        if hasattr(config_no_cache, "_close_pool"):
+            config_no_cache._close_pool()
+        if hasattr(config_with_cache, "_close_pool"):
+            config_with_cache._close_pool()
 
         return results
 
@@ -477,6 +499,12 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
 
         # Cleanup
         await engine.dispose()
+
+        # Also close SQLSpec config pools
+        if hasattr(config_no_cache, "_close_pool"):
+            await config_no_cache._close_pool()
+        if hasattr(config_with_cache, "_close_pool"):
+            await config_with_cache._close_pool()
 
         return results
 

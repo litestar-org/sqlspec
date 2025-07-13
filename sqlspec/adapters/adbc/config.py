@@ -197,7 +197,8 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
         # Auto-detect from URI if no explicit driver
         if isinstance(uri, str):
-            if uri.startswith("postgresql://"):
+            # URI scheme detection
+            if uri.startswith(("postgresql://", "postgres://")):
                 return "adbc_driver_postgresql.dbapi.connect"
             if uri.startswith("sqlite://"):
                 return "adbc_driver_sqlite.dbapi.connect"
@@ -209,6 +210,34 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                 return "adbc_driver_snowflake.dbapi.connect"
             if uri.startswith("bigquery://"):
                 return "adbc_driver_bigquery.dbapi.connect"
+
+            # Special SQLite patterns
+            if uri == ":memory:" or uri.startswith("file:"):
+                return "adbc_driver_sqlite.dbapi.connect"
+
+            # File extension-based detection for local paths (not URLs or unknown schemes)
+            if not uri.startswith(("http://", "https://", "ftp://", "sftp://")) and "://" not in uri:
+                uri_lower = uri.lower()
+
+                # SQLite extensions
+                if uri_lower.endswith((".sqlite", ".sqlite3", ".db")):
+                    return "adbc_driver_sqlite.dbapi.connect"
+
+                # DuckDB extensions
+                if uri_lower.endswith((".duckdb", ".ddb")):
+                    return "adbc_driver_duckdb.dbapi.connect"
+
+                # Only default to SQLite for paths that look like file paths with clear directory separators
+                # and don't conflict with data file extensions
+                if ("/" in uri or "\\" in uri or uri.startswith(("./", "../"))) and not uri_lower.endswith((
+                    ".parquet",
+                    ".csv",
+                    ".json",
+                    ".txt",
+                    ".log",
+                    ".xml",
+                )):
+                    return "adbc_driver_sqlite.dbapi.connect"
 
         # Could not determine driver
         msg = (

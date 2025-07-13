@@ -128,7 +128,7 @@ def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformCont
     for node in context.current_expression.walk():
         # Skip literals that shouldn't be parameterized
         if isinstance(node, exp.Literal) and not isinstance(
-            node.parent, (exp.Placeholder, exp.Parameter, exp.Limit, exp.Offset)
+            node.parent, (exp.Placeholder, exp.Parameter, exp.Limit, exp.Offset, exp.Fetch)
         ):
             # Skip literals that are direct aliases (like 'processed' as status)
             if isinstance(node.parent, exp.Alias) and node.parent.this == node:
@@ -168,7 +168,7 @@ def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformCont
     # Second pass: replace literals with placeholders
     def replace_literal(node: exp.Expression) -> exp.Expression:
         if isinstance(node, exp.Literal) and not isinstance(
-            node.parent, (exp.Placeholder, exp.Parameter, exp.Limit, exp.Offset)
+            node.parent, (exp.Placeholder, exp.Parameter, exp.Limit, exp.Offset, exp.Fetch)
         ):
             # Skip literals that are direct aliases (like 'processed' as status)
             if isinstance(node.parent, exp.Alias) and node.parent.this == node:
