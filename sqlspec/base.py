@@ -603,9 +603,9 @@ class SQLSpec:
             sql_cache_size=kwargs.get("sql_cache_size", current_config.sql_cache_size),
             fragment_cache_size=kwargs.get("fragment_cache_size", current_config.fragment_cache_size),
             optimized_cache_size=kwargs.get("optimized_cache_size", current_config.optimized_cache_size),
-            sql_cache_enabled=kwargs.get("sql_cache_enabled", current_config.sql_cache_enabled),
-            fragment_cache_enabled=kwargs.get("fragment_cache_enabled", current_config.fragment_cache_enabled),
-            optimized_cache_enabled=kwargs.get("optimized_cache_enabled", current_config.optimized_cache_enabled),
+            sql_cache_enabled=bool(kwargs.get("sql_cache_enabled", current_config.sql_cache_enabled)),
+            fragment_cache_enabled=bool(kwargs.get("fragment_cache_enabled", current_config.fragment_cache_enabled)),
+            optimized_cache_enabled=bool(kwargs.get("optimized_cache_enabled", current_config.optimized_cache_enabled)),
         )
 
         update_cache_config(new_config)

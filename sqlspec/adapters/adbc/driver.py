@@ -3,7 +3,7 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 
 from adbc_driver_manager.dbapi import Connection, Cursor
 
@@ -25,6 +25,8 @@ from sqlspec.typing import DictRow, RowT
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from sqlglot.dialects.dialect import DialectType
 
 __all__ = ("AdbcConnection", "AdbcDriver")
@@ -214,15 +216,18 @@ class AdbcDriver(
         conn = self._connection(connection)
 
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            cursor_params = (
-                parameters if isinstance(parameters, (list, tuple)) else [parameters] if parameters is not None else []
-            )
+            # Convert parameters to the format expected by ADBC
+            cursor_params = self._prepare_cursor_parameters(parameters)
             with self._get_cursor(txn_conn) as cursor:
                 try:
                     # ADBC PostgreSQL has issues with NULL parameters in some cases
                     # The transformer handles all-NULL cases, but mixed NULL/non-NULL
                     # can still cause "Can't map Arrow type 'na' to Postgres type" errors
-                    cursor.execute(sql, cursor_params or [])
+                    # ADBC DuckDB has issues with empty parameter lists, so only pass parameters if they exist
+                    if cursor_params:
+                        cursor.execute(sql, cursor_params)
+                    else:
+                        cursor.execute(sql)
                 except Exception as e:
                     # PostgreSQL requires explicit ROLLBACK after a failed transaction
                     # to clear the "current transaction is aborted" state before new commands
@@ -369,7 +374,7 @@ class AdbcDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(connection)
 
-        with wrap_exceptions(), self._get_cursor(conn) as cursor:
+        with wrap_exceptions(), managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             # Ensure SQL is processed and get compiled version
             sql._ensure_processed()
             compiled_sql, params = self._get_compiled_sql(sql, self.default_parameter_style)
@@ -379,10 +384,17 @@ class AdbcDriver(
             if self.dialect == "postgres" and isinstance(params, dict) and not params:
                 params = None
 
-            cursor_params = params if isinstance(params, (list, tuple)) else [params] if params is not None else []
-            cursor.execute(compiled_sql, cursor_params)
-            arrow_table = cursor.fetch_arrow_table()
-            return ArrowResult(statement=sql, data=arrow_table)
+            # Convert parameters to the format expected by ADBC
+            cursor_params = self._prepare_cursor_parameters(params)
+
+            with self._get_cursor(txn_conn) as cursor:
+                # Only pass parameters if they exist to avoid DuckDB STRUCT errors
+                if cursor_params:
+                    cursor.execute(compiled_sql, cursor_params)
+                else:
+                    cursor.execute(compiled_sql)
+                arrow_table = cursor.fetch_arrow_table()
+                return ArrowResult(statement=sql, data=arrow_table)
 
     def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
         """ADBC-optimized Arrow table ingestion using native bulk insert.
@@ -402,7 +414,7 @@ class AdbcDriver(
         self._ensure_pyarrow_installed()
 
         conn = self._connection(None)
-        with self._get_cursor(conn) as cursor:
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
             if mode == "replace":
                 cursor.execute(
                     SQL(f"TRUNCATE TABLE {table_name}", _dialect=self.dialect).to_sql(
@@ -413,6 +425,73 @@ class AdbcDriver(
                 msg = "'create' mode is not supported for ADBC ingestion"
                 raise NotImplementedError(msg)
             return cursor.adbc_ingest(table_name, table, mode=mode, **options)  # type: ignore[arg-type]
+
+    def _prepare_cursor_parameters(self, parameters: Any) -> list[Any]:
+        """Convert parameters to the format expected by ADBC cursor.
+
+        Args:
+            parameters: Raw parameters that may be None, list, tuple, dict, or single value
+
+        Returns:
+            List of parameters suitable for ADBC cursor.execute()
+        """
+        if parameters is None:
+            return []
+        if isinstance(parameters, (list, tuple)):
+            return list(parameters)
+        if isinstance(parameters, dict) and not parameters:
+            # Empty dict should be treated as no parameters
+            return []
+        # Single parameter value or non-empty dict
+        return [parameters]
+
+    def _import_from_storage(
+        self,
+        source_uri: "Union[str, Path]",
+        table_name: str,
+        format: "Optional[str]" = None,
+        mode: str = "create",
+        **options: Any,
+    ) -> int:
+        """Import data from storage using ADBC's native capabilities.
+
+        Args:
+            source_uri: URI to import data from (file path or cloud storage)
+            table_name: Target table name
+            format: Optional format override (auto-detected from URI if not provided)
+            mode: Import mode ('create', 'append', 'replace')
+            **options: Additional ADBC-specific import options
+
+        Returns:
+            Number of rows imported
+        """
+        # Auto-detect format if not provided
+        if format is None:
+            from pathlib import Path
+            path_obj = Path(source_uri)
+            format = path_obj.suffix.lstrip(".").lower()  # noqa: A001
+
+        # Handle different import modes
+        if mode == "replace":
+            # Drop and recreate table
+            drop_sql = SQL(f"DROP TABLE IF EXISTS {table_name}", _dialect=self.dialect)
+            self.execute(drop_sql)
+
+        # For ADBC, we leverage native Arrow capabilities
+        if format == "parquet" and self.supports_native_parquet_import:
+
+            import pyarrow.parquet as pq
+
+            # Read Parquet file into Arrow table
+            arrow_table = pq.read_table(source_uri)
+
+            # Use ADBC's native Arrow ingestion
+            return self._ingest_arrow_table(
+                arrow_table, table_name, mode="append" if mode in {"append", "create"} else mode, **options
+            )
+
+        # Fallback to parent implementation for other formats
+        return super()._import_from_storage(source_uri, table_name, format, mode, **options)
 
     def _connection(self, connection: Optional["AdbcConnection"] = None) -> "AdbcConnection":
         """Get the connection to use for the operation."""

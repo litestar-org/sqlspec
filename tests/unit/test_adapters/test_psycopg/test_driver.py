@@ -284,7 +284,7 @@ def test_sync_execute_select_statement(sync_driver: PsycopgSyncDriver, mock_sync
     assert result.column_names == ["id", "name", "email"]
     assert result.rows_affected == 2
 
-    mock_cursor.execute.assert_called_once_with("SELECT * FROM users", None)
+    mock_cursor.execute.assert_called_once_with("SELECT * FROM users", {})
 
 
 def test_sync_execute_dml_statement(sync_driver: PsycopgSyncDriver, mock_sync_connection: MagicMock) -> None:
@@ -365,7 +365,7 @@ async def test_async_execute_select_statement(
     assert result.column_names == ["id", "name", "email"]
     assert result.rows_affected == 2
 
-    mock_cursor.execute.assert_called_once_with("SELECT * FROM users", None)
+    mock_cursor.execute.assert_called_once_with("SELECT * FROM users", {})
 
 
 @pytest.mark.asyncio
@@ -627,7 +627,7 @@ def test_sync_execute_with_no_parameters(sync_driver: PsycopgSyncDriver, mock_sy
     sync_driver._execute_statement(statement)
 
     # SQLGlot normalizes INTEGER to INT
-    mock_cursor.execute.assert_called_once_with("CREATE TABLE test (id INT)", None)
+    mock_cursor.execute.assert_called_once_with("CREATE TABLE test (id INT)", {})
 
 
 @pytest.mark.asyncio
@@ -644,7 +644,7 @@ async def test_async_execute_with_no_parameters(
     await async_driver._execute_statement(statement)
 
     # SQLGlot normalizes INTEGER to INT
-    mock_cursor.execute.assert_called_once_with("CREATE TABLE test (id INT)", None)
+    mock_cursor.execute.assert_called_once_with("CREATE TABLE test (id INT)", {})
 
 
 def test_sync_execute_select_with_empty_result(sync_driver: PsycopgSyncDriver, mock_sync_connection: MagicMock) -> None:

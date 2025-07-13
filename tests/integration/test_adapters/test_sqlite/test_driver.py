@@ -530,6 +530,8 @@ def test_asset_maintenance_alert_complex_query(sqlite_session: SqliteDriver) -> 
     # So we'll split this into two operations for SQLite compatibility
 
     # First, perform the INSERT with ON CONFLICT
+    # Debug what the SELECT would return
+    # Test the INSERT query with correct parameters
     insert_result = sqlite_session.execute(
         """
         INSERT INTO alert_users (user_id, asset_maintenance_id, alert_definition_id)
@@ -542,6 +544,9 @@ def test_asset_maintenance_alert_complex_query(sqlite_session: SqliteDriver) -> 
     """,
         {"date_start": "2024-01-15", "date_end": "2024-01-17"},
     )
+
+    # Explicitly commit the transaction for SQLite
+    sqlite_session._connection(None).commit()
 
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 3  # Should insert 3 records

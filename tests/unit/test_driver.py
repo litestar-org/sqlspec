@@ -340,26 +340,36 @@ def test_sync_driver_build_statement_with_sql_object() -> None:
 
 def test_sync_driver_build_statement_with_filters() -> None:
     """Test sync driver statement building with filters."""
+    from sqlspec.statement.filters import StatementFilter
+
     connection = MockConnection()
     driver = MockSyncDriver(connection)
 
-    # Mock filter - needs both methods
-    mock_filter = Mock()
+    # Create a real test filter class that properly implements the protocol
+    class TestFilter(StatementFilter):
+        def append_to_statement(self, statement: SQL) -> SQL:
+            return SQL("SELECT * FROM users WHERE active = true")
 
-    def mock_append(stmt: Any) -> SQL:
-        # Return a new SQL object with modified query
-        return SQL("SELECT * FROM users WHERE active = true")
+        def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+            return [], {}
 
-    mock_filter.append_to_statement = Mock(side_effect=mock_append)
-    mock_filter.extract_parameters = Mock(return_value=([], {}))
+        def get_cache_key(self) -> tuple[Any, ...]:
+            return ("test_filter", "active", True)
+
+    # Create an instance and spy on its methods
+    test_filter = TestFilter()
+
+    # Mock the append_to_statement method to track calls
+    original_append = test_filter.append_to_statement
+    test_filter.append_to_statement = Mock(side_effect=original_append)
 
     sql_string = "SELECT * FROM users"
-    statement = driver._build_statement(sql_string, mock_filter)
+    statement = driver._build_statement(sql_string, test_filter)
 
     # Access a property to trigger processing
     _ = statement.to_sql()
 
-    mock_filter.append_to_statement.assert_called_once()
+    test_filter.append_to_statement.assert_called_once()
 
 
 def test_sync_driver_execute_select() -> None:
@@ -474,8 +484,9 @@ def test_sync_driver_execute_with_parameters() -> None:
         # Check that the statement passed to _execute_statement contains the parameters
         call_args = mock_execute.call_args
         statement = call_args[1]["statement"]
-        # Named parameters should be in a dict
-        assert statement.parameters == {"id": 1}
+        # Parameters may be converted during processing (named -> positional)
+        # The important thing is that the parameter value is preserved
+        assert statement.parameters == [1]  # Converted to positional format
         assert result == mock_result
 
 

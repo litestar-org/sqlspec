@@ -224,14 +224,12 @@ class ParameterStyleConversionState:
 
     def __hash__(self) -> int:
         """Hash based on transformation state and style."""
-        return hash(
-            (
-                self.was_transformed,
-                self.transformation_style,
-                tuple(self.original_styles) if self.original_styles else None,
-                tuple(sorted(self.placeholder_map.items())) if self.placeholder_map else None,
-            )
-        )
+        return hash((
+            self.was_transformed,
+            self.transformation_style,
+            tuple(self.original_styles) if self.original_styles else None,
+            tuple(sorted(self.placeholder_map.items())) if self.placeholder_map else None,
+        ))
 
     def __init__(
         self,
@@ -288,13 +286,11 @@ class ConvertedParameters:
 
     def __hash__(self) -> int:
         """Hash based on transformed SQL and conversion state."""
-        return hash(
-            (
-                self.transformed_sql,
-                self.conversion_state,
-                tuple(param.placeholder_text for param in self.parameter_info),
-            )
-        )
+        return hash((
+            self.transformed_sql,
+            self.conversion_state,
+            tuple(param.placeholder_text for param in self.parameter_info),
+        ))
 
     def __init__(
         self,
@@ -884,6 +880,7 @@ class ParameterConverter:
     def wrap_parameters_with_types(
         parameters: "SQLParameterType",
         parameters_info: "list[ParameterInfo]",  # noqa: ARG004
+        force_wrap_literals: bool = False,
     ) -> "SQLParameterType":
         """Wrap user-provided parameters with TypedParameter objects when needed.
 
@@ -894,6 +891,7 @@ class ParameterConverter:
         Args:
             parameters: User-provided parameters (dict, list, or scalar)
             parameters_info: Extracted parameter information from SQL
+            force_wrap_literals: Force wrapping all parameters when literals were parameterized
 
         Returns:
             Parameters with TypedParameter wrapping where appropriate
@@ -944,6 +942,12 @@ class ParameterConverter:
                     return value
             except AttributeError:
                 pass
+
+            if force_wrap_literals:
+                type_hint, sqlglot_type = infer_type_from_value(value)
+                return TypedParameter(
+                    value=value, sqlglot_type=sqlglot_type, type_hint=type_hint, semantic_name=semantic_name
+                )
 
             # Don't wrap simple scalar types unless they need special handling
             if isinstance(value, (str, int, float)) and not isinstance(value, bool):

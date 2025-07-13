@@ -247,7 +247,7 @@ def test_execute_select_statement(driver: SqliteDriver, mock_connection: MagicMo
     assert result.column_names == ["id", "name", "email"]
     assert result.rows_affected == 2
 
-    mock_cursor.execute.assert_called_once_with("SELECT * FROM users", ())
+    mock_cursor.execute.assert_called_once_with("SELECT * FROM users", {})
 
 
 def test_execute_dml_statement(driver: SqliteDriver, mock_connection: MagicMock) -> None:
@@ -312,22 +312,22 @@ def test_execute_many(driver: SqliteDriver, mock_connection: MagicMock) -> None:
     assert result.rows_affected == 3
     assert result.metadata["status_message"] == "OK"
 
-    expected_params = [("Alice", "alice@example.com"), ("Bob", "bob@example.com"), ("Charlie", "charlie@example.com")]
+    expected_params = [["Alice", "alice@example.com"], ["Bob", "bob@example.com"], ["Charlie", "charlie@example.com"]]
     mock_cursor.executemany.assert_called_once_with(sql, expected_params)
 
 
 @pytest.mark.parametrize(
     "params,expected_formatted",
     [
-        ([[1, "a"], [2, "b"]], [(1, "a"), (2, "b")]),
+        ([[1, "a"], [2, "b"]], [[1, "a"], [2, "b"]]),
         ([(1, "a"), (2, "b")], [(1, "a"), (2, "b")]),
-        ([1, 2, 3], [(1,), (2,), (3,)]),
-        ([None, None], [(), ()]),
+        ([1, 2, 3], [1, 2, 3]),
+        ([None, None], [None, None]),
     ],
     ids=["list_of_lists", "list_of_tuples", "single_values", "none_values"],
 )
 def test_execute_many_parameter_formatting(
-    driver: SqliteDriver, mock_connection: MagicMock, params: list[Any], expected_formatted: list[tuple[Any, ...]]
+    driver: SqliteDriver, mock_connection: MagicMock, params: list[Any], expected_formatted: list[Any]
 ) -> None:
     """Test parameter formatting for executemany."""
     mock_cursor = mock_connection.cursor.return_value
@@ -438,7 +438,7 @@ def test_execute_with_no_parameters(driver: SqliteDriver, mock_connection: Magic
     driver._execute_statement(statement)
 
     # sqlglot normalizes INTEGER to INT
-    mock_cursor.execute.assert_called_once_with("CREATE TABLE test (id INT)", ())
+    mock_cursor.execute.assert_called_once_with("CREATE TABLE test (id INT)", {})
 
 
 def test_execute_select_with_empty_result(driver: SqliteDriver, mock_connection: MagicMock) -> None:

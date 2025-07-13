@@ -143,7 +143,7 @@ def test_sql_with_typed_parameters() -> None:
     sql = SQL("SELECT * FROM users WHERE created > ? AND active = ?", datetime(2024, 1, 1), True, _config=config)
 
     # Process the SQL (this will wrap parameters internally)
-    compiled_sql, params = sql.compile()
+    _, params = sql.compile()
 
     # The compile method unwraps TypedParameter for final output
     # So check the internal processed state instead
@@ -151,18 +151,18 @@ def test_sql_with_typed_parameters() -> None:
     internal_params = sql._processed_state.merged_parameters
 
     # First param should be wrapped as TypedParameter internally
-    assert isinstance(internal_params[0], TypedParameter)
-    assert internal_params[0].value == datetime(2024, 1, 1)
-    assert internal_params[0].type_hint == "timestamp"
+    assert isinstance(internal_params["param_0"], TypedParameter)
+    assert internal_params["param_0"].value == datetime(2024, 1, 1)
+    assert internal_params["param_0"].type_hint == "timestamp"
 
     # Second param (boolean) should be wrapped since it's a special type
-    assert isinstance(internal_params[1], TypedParameter)
-    assert internal_params[1].value is True
-    assert internal_params[1].type_hint == "boolean"
+    assert isinstance(internal_params["param_1"], TypedParameter)
+    assert internal_params["param_1"].value is True
+    assert internal_params["param_1"].type_hint == "boolean"
 
     # The final output params should be unwrapped
-    assert params[0] == datetime(2024, 1, 1)
-    assert params[1] is True
+    assert params["param_0"] == datetime(2024, 1, 1)
+    assert params["param_1"] is True
 
 
 def test_typed_parameter_type_inference() -> None:

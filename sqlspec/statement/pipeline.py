@@ -48,7 +48,27 @@ class SQLTransformContext:
     def merged_parameters(self) -> Any:
         """Get parameters in appropriate format for the dialect."""
         if isinstance(self.parameters, dict) and self.dialect in {"mysql", "sqlite"}:
-            # Convert to positional list
+            # Convert to positional list ordered by parameter position in SQL
+            # This ensures parameters are ordered as they appear in the SQL query
+            from sqlspec.statement.parameters import ParameterValidator
+
+            # Parse SQL to get parameter order
+            validator = ParameterValidator()
+            param_info = validator.extract_parameters(self.current_expression.sql(dialect=self.dialect))
+
+            if param_info:
+                # Order parameters by their position in the SQL
+                ordered_keys = [
+                    p.name for p in sorted(param_info, key=lambda x: x.position) if p.name and p.name in self.parameters
+                ]
+
+                # Add any remaining parameters not found in param_info
+                for key in self.parameters:
+                    if key not in ordered_keys:
+                        ordered_keys.append(key)
+
+                return [self.parameters[k] for k in ordered_keys]
+            # Fallback to alphabetical if no param info (preserves old behavior for edge cases)
             return [self.parameters[k] for k in sorted(self.parameters.keys())]
         return self.parameters
 

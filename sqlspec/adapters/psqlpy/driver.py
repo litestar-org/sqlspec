@@ -138,7 +138,11 @@ class PsqlpyDriver(
                 final_params = [parameters]
 
             if self.returns_rows(statement.expression):
-                query_result = await txn_conn.fetch(sql, parameters=final_params)
+                # Only pass parameters if there are any
+                if final_params:
+                    query_result = await txn_conn.fetch(sql, parameters=final_params)
+                else:
+                    query_result = await txn_conn.fetch(sql)
                 dict_rows: list[dict[str, Any]] = []
                 if query_result:
                     # psqlpy QueryResult has a result() method that returns list of dicts
@@ -152,7 +156,11 @@ class PsqlpyDriver(
                     operation_type="SELECT",
                 )
 
-            query_result = await txn_conn.execute(sql, parameters=final_params)
+            # Only pass parameters if there are any
+            if final_params:
+                query_result = await txn_conn.execute(sql, parameters=final_params)
+            else:
+                query_result = await txn_conn.execute(sql)
             # Note: psqlpy doesn't provide rows_affected for DML operations
             # The QueryResult object only has result(), as_class(), and row_factory() methods
             affected_count = -1  # Unknown, as psqlpy doesn't provide this info

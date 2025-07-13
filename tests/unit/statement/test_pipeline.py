@@ -155,7 +155,7 @@ class TestParameterizeLiteralsStep:
         # Check parameters
         assert len(result.parameters) == 2
         assert result.parameters["param_0"] == "John"  # type: ignore[call-overload]
-        assert result.parameters["param_1"] == "30"  # type: ignore[call-overload]  # Numbers are stored as strings in literals
+        assert result.parameters["param_1"] == 30  # type: ignore[call-overload]  # Numbers are stored as their proper Python type
         assert result.metadata["parameter_count"] == 2
 
     def test_parameterize_no_literals(self) -> None:

@@ -8,10 +8,10 @@ This directory contains comprehensive reference documentation for SQLSpec develo
 
 A comprehensive 700+ line guide covering:
 
-- Complete architecture overview
-- Data flow from SQL to execution
+- Complete architecture overview with single-pass pipeline
+- Data flow from SQL to execution through three-tier caching
 - All mixin implementations and their methods
-- Pipeline system details
+- Pipeline system with SQLTransformContext and compose_pipeline
 - Driver implementation patterns with correct signatures
 - Parameter handling and type preservation
 - Special cases (ADBC NULL, psycopg COPY, etc.)
@@ -23,11 +23,13 @@ Essential patterns and commands including:
 
 - Public API with full type signatures
 - Driver method signatures (execute, execute_many, execute_script)
+- Pipeline processing order with caching layers
 - Type definitions and filters
 - Parameter styles by database
 - Common overrides and special cases
 - DO's and DON'Ts
 - Testing patterns
+
 
 ## Key Takeaways
 
@@ -80,11 +82,13 @@ def _execute_script(
 
 ### Golden Rules
 
-1. **Trust the mixins** - They handle the complexity
-2. **Parameters flow one way** - User → Pipeline → Driver → Database
+1. **Trust the pipeline** - Single-pass processing handles complexity
+2. **Parameters flow through context** - User → SQLTransformContext → Pipeline → Driver → Database
 3. **Immutability** - Always return new instances
 4. **AST over strings** - Use SQLGlot for SQL manipulation
-5. **Test everything** - Especially parameter preservation
+5. **Leverage caching** - Three-tier system provides massive performance gains
+6. **Use pipeline steps** - compose_pipeline() for custom transformations
+7. **Test everything** - Especially parameter preservation and cache behavior
 
 ## When to Reference
 

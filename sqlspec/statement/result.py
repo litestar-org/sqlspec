@@ -210,7 +210,7 @@ class SQLResult(StatementResult[RowT], Generic[RowT]):
 
     def get_count(self) -> int:
         """Get the number of rows in the current result set (e.g., a page of data)."""
-        return len(self.data)
+        return len(self.data) if self.data is not None else 0
 
     def is_empty(self) -> bool:
         """Check if the result set (self.data) is empty."""

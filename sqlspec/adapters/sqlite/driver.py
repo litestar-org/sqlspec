@@ -159,17 +159,11 @@ class SqliteDriver(
             return self._execute_many(sql, params, connection=connection, statement=statement, **kwargs)
 
         sql, params = self._get_compiled_sql(statement, target_style)
-
-        # SQLite only supports QMARK style, so we need to convert
-        # if the SQL contains other parameter styles
-        if target_style != ParameterStyle.QMARK:
-            # Force conversion to QMARK style
-            sql, params = statement.compile(placeholder_style="qmark")
-
         params = self._process_parameters(params)
 
-        # SQLite expects tuples for positional parameters
-        if isinstance(params, list):
+        # SQLite expects tuples for positional parameters (QMARK style)
+        # but can handle dicts for NAMED_COLON style
+        if target_style == ParameterStyle.QMARK and isinstance(params, list):
             params = tuple(params)
 
         return self._execute(sql, params, statement, connection=connection, **kwargs)

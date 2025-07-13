@@ -74,16 +74,24 @@ graph TD
     A[User SQL + Params] --> B[SQL.__init__]
     B --> C{Lazy Processing}
     C -->|When needed| D[_ensure_processed]
-    D --> E[Pipeline Steps]
-    E --> F[normalize_step]
-    F --> G[parameterize_literals_step]
-    G --> H[optimize_step<br/>if enabled]
-    H --> I[validate_step]
-    I --> J[_ProcessedState]
-    J --> K[compile]
-    K --> L[Driver._process_parameters]
-    L --> M[cursor.execute]
+    D --> E[SQLTransformContext]
+    E --> F[compose_pipeline]
+    F --> G[normalize_step]
+    G --> H[parameterize_literals_step]
+    H --> I[optimize_step + caching]
+    I --> J[validate_step]
+    J --> K[_ProcessedState]
+    K --> L[Three-Tier Cache Check]
+    L --> M[compile]
+    M --> N[Driver._process_parameters]
+    N --> O[cursor.execute]
 ```
+
+### Caching Layers
+
+- **Base Statement Cache**: Processed SQL objects
+- **Filter Result Cache**: Applied filter transformations
+- **Optimized Expression Cache**: SQLGlot optimization results
 
 ## Key Classes & Their Roles
 
