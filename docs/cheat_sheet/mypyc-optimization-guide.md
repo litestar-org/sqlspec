@@ -117,11 +117,11 @@ def bad_sum(x: i64, y: i32) -> i64:
 # ✅ DO: Create simple, concrete classes
 class SQLResult:
     """Non-generic result class optimized for mypyc."""
-    
+
     def __init__(self, data: list[dict[str, Any]]) -> None:
         self.data = data
         self.row_count = len(data)
-    
+
     def first(self) -> Optional[dict[str, Any]]:
         return self.data[0] if self.data else None
 
@@ -137,7 +137,7 @@ class SQLResult(Generic[T]):  # Generic prevents mypyc compilation
 # ✅ DO: Define __slots__ for native classes
 class Connection:
     __slots__ = ("host", "port", "database", "_connected")
-    
+
     def __init__(self, host: str, port: int, database: str) -> None:
         self.host = host
         self.port = port
@@ -219,7 +219,7 @@ class FlexibleBase:
 class NativeBase:
     """Fast compiled base for internal use."""
     __slots__ = ("_data",)
-    
+
     def __init__(self, data: list[int]) -> None:
         self._data = data
 
@@ -318,10 +318,10 @@ def process_records(records: list[dict[str, Any]]) -> int:
 class QueryBuilder:
     def __init__(self) -> None:
         self._parts: list[str] = []
-    
+
     def add_clause(self, clause: str) -> None:
         self._parts.append(clause)  # Modify in place
-    
+
     def build(self) -> str:
         return " ".join(self._parts)
 
@@ -329,7 +329,7 @@ class QueryBuilder:
 class QueryBuilder:
     def __init__(self) -> None:
         self._query = ""
-    
+
     def add_clause(self, clause: str) -> None:
         self._query = self._query + " " + clause  # Creates new strings
 ```
@@ -363,7 +363,7 @@ import gc
 def process_large_dataset(data: list[dict[str, Any]]) -> None:
     # Reduce GC overhead for performance-critical sections
     gc.set_threshold(150000)
-    
+
     try:
         # Process data...
         pass
@@ -444,15 +444,15 @@ include = [
     "sqlspec/statement/sql.py",
     "sqlspec/statement/parameters.py",
     "sqlspec/statement/pipeline.py",
-    
+
     # Query builders
     "sqlspec/statement/builder/_base.py",
     "sqlspec/statement/builder/_select.py",
     "sqlspec/statement/builder/_insert.py",
-    
+
     # Driver core
     "sqlspec/driver/parameters.py",
-    
+
     # Utilities used in hot paths
     "sqlspec/utils/type_guards.py",
     "sqlspec/utils/statement_hashing.py",
@@ -596,18 +596,18 @@ include = [
     "sqlspec/statement/sql.py",        # 0.2-1.3ms bottleneck
     "sqlspec/statement/parameters.py", # Parameter processing
     "sqlspec/statement/pipeline.py",   # AST transformation
-    
+
     # Query builders (frequently instantiated)
     "sqlspec/statement/builder/_base.py",
     "sqlspec/statement/builder/_select.py",
     "sqlspec/statement/builder/_insert.py",
     "sqlspec/statement/builder/_update.py",
     "sqlspec/statement/builder/_delete.py",
-    
+
     # Builder mixins
     "sqlspec/statement/builder/mixins/_where_clause.py",
     "sqlspec/statement/builder/mixins/_join_operations.py",
-    
+
     # Utilities in hot paths
     "sqlspec/utils/type_guards.py",
     "sqlspec/utils/statement_hashing.py",
@@ -687,7 +687,7 @@ from sqlspec.protocols import TypedParameterProtocol
 
 class TypedParameter:
     __slots__ = ("name", "value", "type")
-    
+
     def __init__(self, name: str, value: Any, type_: type) -> None:
         self.name = name
         self.value = value
@@ -768,11 +768,11 @@ stats.print_stats(10)  # Top 10 functions
 def process_batch(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     # Pre-allocate result list
     results: list[dict[str, Any]] = [{}] * len(items)
-    
+
     for i, item in enumerate(items):
         # Process in-place when possible
         results[i] = {"id": item["id"], "processed": True}
-    
+
     return results
 
 # ❌ DON'T: Process one at a time with function call overhead
@@ -809,10 +809,10 @@ def process_records(records: list[Record]) -> int:
     total = 0
     # Cache method lookup outside loop
     get_value = Record.get_value
-    
+
     for record in records:
         total += get_value(record)
-    
+
     return total
 
 # ❌ DON'T: Repeated attribute lookups
@@ -832,11 +832,11 @@ def validate_data(data: Any) -> bool:
     # Fast path for common case
     if data is None:
         return False
-    
+
     # More expensive checks later
     if not isinstance(data, dict):
         return False
-    
+
     # Most expensive validation last
     return all(
         isinstance(k, str) and isinstance(v, (str, int, float))
@@ -886,7 +886,7 @@ def get_config_fast() -> str:
 # Class attributes also use early binding
 class Config:
     VALUE = "initial"
-    
+
     @classmethod
     def get(cls) -> str:
         return cls.VALUE  # Early binding
@@ -907,14 +907,14 @@ class Config:
 class NativeClass:
     """Optimized for compilation."""
     __slots__ = ("_data",)
-    
+
     def __init__(self, data: list[int]) -> None:
         self._data = data
-    
+
     # Use context managers instead of __del__
     def __enter__(self) -> "NativeClass":
         return self
-    
+
     def __exit__(self, *args: Any) -> None:
         # Cleanup code here
         self._data.clear()

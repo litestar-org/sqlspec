@@ -7,6 +7,8 @@ TypedParameter objects and perform appropriate type conversions.
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional, Union
 
+from mypy_extensions import trait
+
 from sqlspec.utils.type_guards import has_parameter_value
 
 if TYPE_CHECKING:
@@ -15,6 +17,7 @@ if TYPE_CHECKING:
 __all__ = ("TypeCoercionMixin",)
 
 
+@trait
 class TypeCoercionMixin:
     """Mixin providing type coercion for database drivers.
 

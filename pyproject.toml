@@ -1,6 +1,12 @@
 [project]
 authors = [{ name = "Cody Fincher", email = "cody@litestar.dev" }]
-dependencies = ["typing-extensions", "eval_type_backport; python_version < \"3.10\"", "click", "sqlglot>=19.9.0"]
+dependencies = [
+  "typing-extensions",
+  "eval_type_backport; python_version < \"3.10\"",
+  "click",
+  "sqlglot>=19.9.0",
+  "mypy-extensions",
+]
 description = "SQL Experiments in Python"
 license = "MIT"
 maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
@@ -95,6 +101,7 @@ lint = [
   "types-protobuf",
   "asyncpg-stubs",
   "pyarrow-stubs",
+
 ]
 test = [
   "anyio",
@@ -131,63 +138,47 @@ packages = ["sqlspec"]
 dependencies = ["hatch-mypyc"]
 enable-by-default = false
 exclude = [
-  # "tests/**",    # All test directories
-  # "sqlspec/__main__.py", # Main entry points (can't be run directly when compiled)
-  # "sqlspec/_typing.py",  # Type definitions
-  # "sqlspec/cli.py",         # CLI module (not performance-critical)
-  # "sqlspec/**/__init__.py", # Init files (usually just imports)
+  "tests/**",                         # Test files
+  "sqlspec/__main__.py",              # Entry point (can't run directly when compiled)
+  "sqlspec/cli.py",                   # CLI module (not performance critical)
+  "sqlspec/**/__init__.py",           # Init files (usually just imports)
+  "sqlspec/protocols.py",             # Protocol definitions
+  "sqlspec/typing.py",                # Type aliases
+  "sqlspec/adapters/*/config.py",     # Configuration classes
+  "sqlspec/config.py",                # Main config
+  "sqlspec/extensions/**",            # All extensions
+  "sqlspec/storage/backends/base.py", # Abstract base
 ]
 include = [
-  # === HOT PATH MODULES (from profiling) ===
-  # SQL parsing and execution (0.2-1.3ms bottleneck)
-  "sqlspec/statement/sql.py",
-  "sqlspec/statement/parameters.py",
+  "sqlspec/statement/**/*.py", # All statement-related modules
   "sqlspec/loader.py",
-  # === PIPELINE COMPONENTS ===
 
-  # Transformers (AST transformation hot paths)
-  "sqlspec/statement/pipeline.py",
 
-  # === ADAPTER-SPECIFIC TRANSFORMERS ===
-  "sqlspec/adapters/adbc/pipeline_steps.py",
-  "sqlspec/adapters/psycopg/pipeline_steps.py",
+  # === DRIVER CORE (NEW) ===
+  "sqlspec/driver/*.py",
+  "sqlspec/driver/mixins/*.py",
+  "sqlspec/driver/mixins/_result_utils.py",
 
-  # === CACHING AND UTILITIES ===
-  "sqlspec/statement/cache.py",
 
-  # === DRIVER CORE ===
-  "sqlspec/driver/parameters.py",
+  # === STORAGE LAYER (NEW) ===
+  "sqlspec/storage/registry.py",
+  "sqlspec/storage/capabilities.py",
+  "sqlspec/storage/backends/obstore.py",
+  "sqlspec/storage/backends/fsspec.py",
 
-  # === STATEMENT PROCESSING ===
-  "sqlspec/statement/splitter.py",
-  "sqlspec/statement/filters.py",
-  "sqlspec/statement/result.py",
+  # === CORE ADAPTERS (NEW) ===
+  "sqlspec/adapters/sqlite/driver.py",
+  "sqlspec/adapters/psycopg/driver.py",
+  "sqlspec/adapters/asyncpg/driver.py",
+  "sqlspec/adapters/duckdb/driver.py",
+  "sqlspec/adapters/aiosqlite/driver.py",
+  "sqlspec/adapters/oracledb/driver.py",
+  "sqlspec/adapters/psqlpy/driver.py",
+  "sqlspec/adapters/adbc/driver.py",
+  "sqlspec/adapters/bigquery/driver.py",
+  "sqlspec/adapters/asyncmy/driver.py",
 
-  # === QUERY BUILDERS ===
-  "sqlspec/statement/builder/_base.py",
-  "sqlspec/statement/builder/_select.py",
-  "sqlspec/statement/builder/_insert.py",
-  "sqlspec/statement/builder/_update.py",
-  "sqlspec/statement/builder/_delete.py",
-  "sqlspec/statement/builder/_merge.py",
-  "sqlspec/statement/builder/_ddl.py",
-  "sqlspec/statement/builder/_column.py",
-  "sqlspec/statement/builder/_ddl_utils.py",
-  "sqlspec/statement/builder/_parsing_utils.py",
-
-  # === BUILDER MIXINS ===
-  "sqlspec/statement/builder/mixins/_where_clause.py",
-  "sqlspec/statement/builder/mixins/_join_operations.py",
-  "sqlspec/statement/builder/mixins/_select_operations.py",
-  "sqlspec/statement/builder/mixins/_insert_operations.py",
-  "sqlspec/statement/builder/mixins/_update_operations.py",
-  "sqlspec/statement/builder/mixins/_delete_operations.py",
-  "sqlspec/statement/builder/mixins/_merge_operations.py",
-  "sqlspec/statement/builder/mixins/_order_limit_operations.py",
-  "sqlspec/statement/builder/mixins/_pivot_operations.py",
-  "sqlspec/statement/builder/mixins/_cte_and_set_ops.py",
-
-  # === UTILITY MODULES (imported by hot paths) ===
+  # === UTILITY MODULES ===
   "sqlspec/utils/statement_hashing.py",
   "sqlspec/utils/text.py",
   "sqlspec/utils/sync_tools.py",
@@ -205,7 +196,6 @@ mypy-args = [
 require-runtime-dependencies = true
 require-runtime-features = ["performance"]
 
-# Mypyc compilation options
 [tool.hatch.build.targets.wheel.hooks.mypyc.options]
 debug_level = "0" # No debug info in production (0-2)
 multi_file = true # Enable cross-module optimization

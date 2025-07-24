@@ -1,8 +1,9 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import logging
 from abc import ABC
-from typing import TYPE_CHECKING, Any, Generic, Optional, Union, overload
+from typing import TYPE_CHECKING, Any, Optional, Union, overload
 
+from mypy_extensions import trait
 from sqlglot import exp, parse_one
 from typing_extensions import Self
 
@@ -33,20 +34,20 @@ logger = logging.getLogger(__name__)
 WINDOWS_PATH_MIN_LENGTH = 3
 
 
-class QueryBase(ABC, Generic[ConnectionT]):
+class QueryBase(ABC):
     """Base class with common query functionality."""
 
     config: Any
-    _connection: Any
+    _connection: "ConnectionT"  # type: ignore[valid-type]
     dialect: "DialectType"
 
     @property
-    def connection(self) -> "ConnectionT":
+    def connection(self) -> "ConnectionT":  # type: ignore[type-var]
         """Get the connection instance."""
-        return self._connection  # type: ignore[no-any-return]
+        return self._connection  # pyright: ignore
 
     @classmethod
-    def new(cls, connection: "ConnectionT") -> Self:
+    def new(cls, connection: "ConnectionT") -> Self:  # pyright: ignore[reportInvalidTypeVarUse]
         return cls(connection)  # type: ignore[call-arg]
 
     def _transform_to_sql(
@@ -76,6 +77,9 @@ class QueryBase(ABC, Generic[ConnectionT]):
             return statement
 
         if isinstance(statement, (str, exp.Expression)):
+            # Process parameters through type coercion
+            if params:
+                params = self._process_parameters(params)  # type: ignore[attr-defined]
             return SQL(statement, parameters=params, config=config)
 
         # Fallback for type safety
@@ -83,7 +87,8 @@ class QueryBase(ABC, Generic[ConnectionT]):
         raise TypeError(msg)
 
 
-class SyncQueryMixin(QueryBase[ConnectionT]):
+@trait
+class SyncQueryMixin(QueryBase):
     """Unified storage operations for synchronous drivers."""
 
     @overload
@@ -119,7 +124,7 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Union[RowT, ModelDTOT]":
+    ) -> "Union[RowT, ModelDTOT]":  # pyright: ignore
         """Execute a select statement and return exactly one row.
 
         Raises an exception if no rows or more than one row is returned.
@@ -161,7 +166,7 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Optional[RowT]": ...
+    ) -> "Optional[RowT]": ...  # pyright: ignore
 
     def select_one_or_none(
         self,
@@ -215,7 +220,7 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "list[RowT]": ...
+    ) -> "list[dict[str, Any]]": ...
 
     def select(
         self,
@@ -226,7 +231,7 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> Union[list[RowT], list[ModelDTOT]]:
+    ) -> Union[list[dict[str, Any]], list[ModelDTOT]]:
         """Execute a select statement and return all rows."""
         result = self.execute(  # type: ignore[attr-defined]
             statement, *parameters, schema_type=schema_type, _connection=_connection, _config=_config, **kwargs
@@ -340,7 +345,7 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "OffsetPagination[RowT]": ...
+    ) -> "OffsetPagination[dict[str, Any]]": ...
 
     def paginate(
         self,
@@ -351,7 +356,7 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Union[OffsetPagination[RowT], OffsetPagination[ModelDTOT]]":
+    ) -> "Union[OffsetPagination[dict[str, Any]], OffsetPagination[ModelDTOT]]":
         """Execute a paginated query with automatic counting.
 
         This method performs two queries:
@@ -480,7 +485,8 @@ class SyncQueryMixin(QueryBase[ConnectionT]):
         return OffsetPagination(items=items, limit=limit, offset=offset, total=total)  # pyright: ignore
 
 
-class AsyncQueryMixin(QueryBase[ConnectionT]):
+@trait
+class AsyncQueryMixin(QueryBase):
     """Unified query operations for asynchronous drivers."""
 
     @overload
@@ -505,7 +511,7 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "RowT": ...
+    ) -> "RowT": ...  # pyright: ignore
 
     async def select_one(
         self,
@@ -516,7 +522,7 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Union[RowT, ModelDTOT]":
+    ) -> "Union[RowT, ModelDTOT]":  # pyright: ignore
         """Execute a select statement and return exactly one row.
 
         Raises an exception if no rows or more than one row is returned.
@@ -555,7 +561,7 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Optional[RowT]": ...
+    ) -> "Optional[RowT]": ...  # pyright: ignore
 
     async def select_one_or_none(
         self,
@@ -566,7 +572,7 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Optional[Union[RowT, ModelDTOT]]":
+    ) -> "Optional[Union[RowT, ModelDTOT]]":  # pyright: ignore
         """Execute a select statement and return at most one row.
 
         Returns None if no rows are found.
@@ -605,8 +611,7 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "list[RowT]": ...
-
+    ) -> "list[RowT]": ...  # pyright: ignore
     async def select(
         self,
         statement: "Union[Statement, Select]",
@@ -616,7 +621,7 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Union[list[RowT], list[ModelDTOT]]":
+    ) -> "Union[list[RowT], list[ModelDTOT]]":  # pyright: ignore
         """Execute a select statement and return all rows."""
         result = await self.execute(  # type: ignore[attr-defined]
             statement, *parameters, schema_type=schema_type, _connection=_connection, _config=_config, **kwargs
@@ -721,7 +726,7 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "OffsetPagination[RowT]": ...
+    ) -> "OffsetPagination[RowT]": ...  # pyright: ignore
 
     async def paginate(
         self,
@@ -732,7 +737,7 @@ class AsyncQueryMixin(QueryBase[ConnectionT]):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Union[OffsetPagination[RowT], OffsetPagination[ModelDTOT]]":
+    ) -> "Union[OffsetPagination[RowT], OffsetPagination[ModelDTOT]]":  # pyright: ignore
         # Separate filters from parameters
         filters: list[StatementFilter] = []
         params: list[Any] = []

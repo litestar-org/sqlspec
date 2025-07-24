@@ -1,8 +1,4 @@
-"""Result conversion utilities for unified storage architecture.
-
-This module contains the result conversion functionality integrated with the unified
-storage architecture.
-"""
+"""Result conversion utilities for unified storage architecture."""
 
 import datetime
 from collections.abc import Sequence
@@ -11,6 +7,8 @@ from functools import partial
 from pathlib import Path, PurePath
 from typing import Any, Callable, Optional, Union, cast, overload
 from uuid import UUID
+
+from mypy_extensions import trait
 
 from sqlspec.exceptions import SQLSpecError, wrap_exceptions
 from sqlspec.statement.result import OperationType
@@ -32,7 +30,11 @@ _DEFAULT_TYPE_DECODERS: list[tuple[Callable[[Any], bool], Callable[[Any, Any], A
 def _default_msgspec_deserializer(
     target_type: Any, value: Any, type_decoders: "Optional[Sequence[tuple[Any, Any]]]" = None
 ) -> Any:
-    """Default msgspec deserializer with type conversion support."""
+    """Default msgspec deserializer with type conversion support.
+
+    Converts values to appropriate types for msgspec deserialization, including
+    UUID, datetime, date, time, Enum, Path, and PurePath types.
+    """
     if type_decoders:
         for predicate, decoder in type_decoders:
             if predicate(target_type):
@@ -51,10 +53,14 @@ def _default_msgspec_deserializer(
     return value
 
 
+@trait
 class ToSchemaMixin:
     @staticmethod
     def _determine_operation_type(statement: "Any") -> OperationType:
         """Determine operation type from SQL statement expression.
+
+        Examines the statement's expression type to determine if it's
+        INSERT, UPDATE, DELETE, SELECT, or generic EXECUTE.
 
         Args:
             statement: SQL statement object with expression attribute
@@ -62,10 +68,15 @@ class ToSchemaMixin:
         Returns:
             OperationType literal value
         """
-        if not hasattr(statement, "expression") or not statement.expression:
+        try:
+            expression = statement.expression
+        except AttributeError:
             return "EXECUTE"
 
-        expr_type = type(statement.expression).__name__.upper()
+        if not expression:
+            return "EXECUTE"
+
+        expr_type = type(expression).__name__.upper()
         if "INSERT" in expr_type:
             return "INSERT"
         if "UPDATE" in expr_type:
@@ -78,16 +89,16 @@ class ToSchemaMixin:
 
     @overload
     @staticmethod
-    def to_schema(data: "ModelT", *, schema_type: None = None) -> "ModelT": ...
-    @overload
-    @staticmethod
-    def to_schema(data: "dict[str, Any]", *, schema_type: "type[ModelDTOT]") -> "ModelDTOT": ...
-    @overload
-    @staticmethod
     def to_schema(data: "Sequence[ModelT]", *, schema_type: None = None) -> "Sequence[ModelT]": ...
     @overload
     @staticmethod
     def to_schema(data: "Sequence[dict[str, Any]]", *, schema_type: "type[ModelDTOT]") -> "Sequence[ModelDTOT]": ...
+    @overload
+    @staticmethod
+    def to_schema(data: "ModelT", *, schema_type: None = None) -> "ModelT": ...
+    @overload
+    @staticmethod
+    def to_schema(data: "dict[str, Any]", *, schema_type: "type[ModelDTOT]") -> "ModelDTOT": ...
 
     @staticmethod
     def to_schema(
@@ -95,7 +106,11 @@ class ToSchemaMixin:
         *,
         schema_type: "Optional[type[ModelDTOT]]" = None,
     ) -> "Union[ModelT, ModelDTOT, Sequence[ModelT], Sequence[ModelDTOT]]":
-        """Convert data to a specified schema type."""
+        """Convert data to a specified schema type.
+
+        Supports conversion to dataclasses, msgspec structs, and Pydantic models.
+        Handles both single objects and sequences.
+        """
         if schema_type is None:
             if not isinstance(data, Sequence):
                 return cast("ModelT", data)

@@ -7,6 +7,9 @@ from collections.abc import Iterator
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, Union, cast
 
+if TYPE_CHECKING:
+    from typing_extensions import TypeAlias
+
 from google.cloud.bigquery import (
     ArrayQueryParameter,
     Client,
@@ -34,7 +37,6 @@ from sqlspec.exceptions import SQLSpecError
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, RowT
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
@@ -45,7 +47,11 @@ if TYPE_CHECKING:
 
 __all__ = ("BigQueryConnection", "BigQueryDriver")
 
-BigQueryConnection = Client
+if TYPE_CHECKING:
+    BigQueryConnection: TypeAlias = Client
+else:
+    # Direct assignment for mypyc runtime
+    BigQueryConnection = Client
 
 logger = logging.getLogger("sqlspec.adapters.bigquery")
 
@@ -56,7 +62,7 @@ TIMESTAMP_ERROR_MSG_LENGTH = 189  # Length check for timestamp parsing error
 
 
 class BigQueryDriver(
-    SyncDriverAdapterBase["BigQueryConnection", RowT],
+    SyncDriverAdapterBase,
     SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -72,6 +78,9 @@ class BigQueryDriver(
     - execute_script() - Multi-statement scripts and DDL operations
     """
 
+    # Type specification for mypyc
+    connection_type = BigQueryConnection
+
     dialect: "DialectType" = "bigquery"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.NAMED_AT,)
     default_parameter_style: ParameterStyle = ParameterStyle.NAMED_AT
@@ -86,11 +95,9 @@ class BigQueryDriver(
         self,
         connection: BigQueryConnection,
         config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
         default_query_job_config: Optional[QueryJobConfig] = None,
         on_job_start: Optional[Callable[[str], None]] = None,
         on_job_complete: Optional[Callable[[str, Any], None]] = None,
-        **kwargs: Any,
     ) -> None:
         """Initialize BigQuery driver with comprehensive feature support.
 
@@ -101,16 +108,15 @@ class BigQueryDriver(
             default_query_job_config: Default job configuration
             on_job_start: Callback executed when a BigQuery job starts
             on_job_complete: Callback executed when a BigQuery job completes
-            **kwargs: Additional driver configuration
+
         """
-        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
+        super().__init__(connection=connection, config=config)
         self.on_job_start = on_job_start
         self.on_job_complete = on_job_complete
-        default_config_kwarg = kwargs.get("default_query_job_config") or default_query_job_config
         conn_default_config = getattr(connection, "default_query_job_config", None)
 
-        if default_config_kwarg is not None and isinstance(default_config_kwarg, QueryJobConfig):
-            self._default_query_job_config = default_config_kwarg
+        if default_query_job_config is not None and isinstance(default_query_job_config, QueryJobConfig):
+            self._default_query_job_config = default_query_job_config
         elif conn_default_config is not None and isinstance(conn_default_config, QueryJobConfig):
             self._default_query_job_config = conn_default_config
         else:

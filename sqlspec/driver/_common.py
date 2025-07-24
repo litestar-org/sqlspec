@@ -3,22 +3,24 @@
 import re
 from abc import ABC
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 import sqlglot
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 from sqlglot.tokens import TokenType
 
-# convert_parameter_sequence removed - TypeCoercionMixin handles all parameter processing
 from sqlspec.exceptions import NotFoundError
-from sqlspec.statement import SQLConfig
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator, TypedParameter
+from sqlspec.statement.pipeline import create_pipeline_from_config
 from sqlspec.statement.splitter import split_sql_script
-from sqlspec.typing import ConnectionT, DictRow, RowT, T
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
+
+    from sqlspec.statement import SQLConfig
+    from sqlspec.typing import ConnectionT, T
 
 
 __all__ = ("CommonDriverAttributesMixin",)
@@ -27,10 +29,14 @@ __all__ = ("CommonDriverAttributesMixin",)
 logger = get_logger("driver")
 
 
-class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
+class CommonDriverAttributesMixin(ABC):
     """Common attributes and methods for driver adapters."""
 
-    __slots__ = ("config", "connection", "default_row_type")
+    __slots__ = ("config", "connection")
+
+    connection_type: "ClassVar[type[ConnectionT]]"  # pyright: ignore
+    """The connection type used by this driver adapter."""
 
     dialect: "DialectType"
     """The SQL dialect supported by the underlying database driver."""
@@ -47,25 +53,7 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
     supports_native_arrow_import: "ClassVar[bool]" = False
     """Indicates if the driver supports native Arrow import operations."""
 
-    def __init__(
-        self,
-        connection: "ConnectionT",
-        config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = dict[str, Any],
-    ) -> None:
-        """Initialize with connection, config, and default_row_type.
-
-        Args:
-            connection: The database connection
-            config: SQL statement configuration
-            default_row_type: Default row type for results (DictRow, TupleRow, etc.)
-        """
-        super().__init__()
-        self.connection = connection
-        self.config = config or SQLConfig()
-        self.default_row_type = default_row_type or dict[str, Any]
-
-    def _connection(self, connection: "Optional[ConnectionT]" = None) -> "ConnectionT":
+    def _connection(self, connection: Optional[Any] = None) -> Any:
         return connection or self.connection
 
     def returns_rows(self, expression: "Optional[exp.Expression]") -> bool:
@@ -75,8 +63,8 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             expression: The SQL expression.
 
         Returns:
-            True if the expression is a SELECT, VALUES, or WITH statement
-            that is not a CTE definition.
+            True if the expression is a SELECT, VALUES, WITH (not CTE definition),
+            INSERT/UPDATE/DELETE with RETURNING, or certain command types.
         """
         if expression is None:
             return False
@@ -91,32 +79,21 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         return False
 
     def _check_anonymous_returns_rows(self, expression: "exp.Anonymous") -> bool:
-        """Check if an Anonymous expression returns rows using robust methods.
+        """Check if an Anonymous expression returns rows.
 
-        This method handles SQL that failed to parse (often due to database-specific
-        placeholders) by:
+        Handles SQL that failed to parse (often due to database-specific placeholders) by:
         1. Attempting to re-parse with placeholders sanitized
-        2. Using the tokenizer as a fallback for keyword detection
-
-        Args:
-            expression: The Anonymous expression to check
-
-        Returns:
-            True if the expression likely returns rows
+        2. Using tokenizer as fallback to detect row-returning statements
         """
-
         sql_text = str(expression.this) if expression.this else ""
         if not sql_text.strip():
             return False
 
-        # Regex to find common SQL placeholders: ?, %s, $1, $2, :name, etc.
         placeholder_regex = re.compile(r"(\?|%s|\$\d+|:\w+|%\(\w+\)s)")
 
-        # Approach 1: Try to re-parse with placeholders replaced
         try:
             sanitized_sql = placeholder_regex.sub("1", sql_text)
 
-            # If we replaced any placeholders, try parsing again
             if sanitized_sql != sql_text:
                 parsed = sqlglot.parse_one(sanitized_sql, read=None)
                 if isinstance(
@@ -132,7 +109,6 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         except Exception:
             logger.debug("Could not parse using placeholders.  Using tokenizer. %s", sql_text)
 
-        # Approach 2: Use tokenizer for robust keyword detection
         try:
             tokens = list(sqlglot.tokenize(sql_text, read=None))
             row_returning_tokens = {
@@ -175,19 +151,17 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
     def _convert_parameters_to_driver_format(  # noqa: C901
         self, sql: str, parameters: Any, target_style: "Optional[ParameterStyle]" = None
     ) -> Any:
-        """Convert parameters to the format expected by the driver, but only when necessary.
+        """Convert parameters to the format expected by the driver.
 
-        This method analyzes the SQL to understand what parameter style is used
-        and only converts when there's a mismatch between provided parameters
-        and what the driver expects.
+        Analyzes SQL to understand parameter style and only converts when there's
+        a mismatch between provided parameters and driver expectations.
 
-        Args:
-            sql: The SQL string with placeholders
-            parameters: The parameters in any format (dict, list, tuple, scalar)
-            target_style: Optional override for the target parameter style
-
-        Returns:
-            Parameters in the format expected by the database driver
+        Handles various conversion scenarios:
+        - Single scalar parameter to dict/list
+        - Dict to list (positional) conversion
+        - List to dict (named) conversion
+        - Special handling for numeric-named parameters (e.g., :1, :2)
+        - Automatic param_N key generation when needed
         """
         if parameters is None:
             return None
@@ -207,7 +181,6 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             if detected_style != target_style:
                 target_style = detected_style
 
-        # Analyze what format the driver expects based on the placeholder style
         driver_expects_dict = target_style in {
             ParameterStyle.NAMED_COLON,
             ParameterStyle.POSITIONAL_COLON,
@@ -221,7 +194,6 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             parameters, (str, bytes)
         )
 
-        # Single scalar parameter
         if len(param_info_list) == 1 and not params_are_dict and not params_are_sequence:
             if driver_expects_dict:
                 param_info = param_info_list[0]
@@ -234,11 +206,8 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             if target_style == ParameterStyle.POSITIONAL_COLON and all(
                 p.name and p.name.isdigit() for p in param_info_list
             ):
-                # If all parameters are numeric but named, convert to dict
-                # SQL has numeric placeholders but params might have named keys
                 numeric_keys_expected = {p.name for p in param_info_list if p.name}
                 if not numeric_keys_expected.issubset(parameters.keys()):
-                    # Need to convert named keys to numeric positions
                     numeric_result: dict[str, Any] = {}
                     param_values = list(parameters.values())
                     for param_info in param_info_list:
@@ -246,38 +215,29 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
                             numeric_result[param_info.name] = param_values[param_info.ordinal]
                     return numeric_result
 
-            # Special case: Auto-generated param_N style when SQL expects specific names
             if all(key.startswith("param_") and key[6:].isdigit() for key in parameters):
                 sql_param_names = {p.name for p in param_info_list if p.name}
                 if sql_param_names and not any(name.startswith("param_") for name in sql_param_names):
-                    # SQL has specific names, not param_N style - don't use these params as-is
-                    # This likely indicates a mismatch in parameter generation
-                    # For now, pass through and let validation catch it
                     pass
 
             return parameters
 
         if not driver_expects_dict and params_are_sequence:
-            # Formats match - return as-is
             return parameters
 
-        # Formats don't match - need conversion
         if driver_expects_dict and params_are_sequence:
             dict_result: dict[str, Any] = {}
             for i, (param_info, value) in enumerate(zip(param_info_list, parameters)):
                 if param_info.name:
                     if param_info.style == ParameterStyle.POSITIONAL_COLON and param_info.name.isdigit():
-                        # Oracle uses string keys even for numeric placeholders
                         dict_result[param_info.name] = value
                     else:
                         dict_result[param_info.name] = value
                 else:
-                    # Use param_N format for unnamed placeholders
                     dict_result[f"param_{i}"] = value
             return dict_result
 
         if not driver_expects_dict and params_are_dict:
-            # First check if it's already in param_N format
             if all(key.startswith("param_") and key[6:].isdigit() for key in parameters):
                 positional_result: list[Any] = []
                 for i in range(len(param_info_list)):
@@ -293,21 +253,20 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
                 elif f"param_{param_info.ordinal}" in parameters:
                     positional_params.append(parameters[f"param_{param_info.ordinal}"])
                 else:
-                    # Try to match by position if we have a simple dict
                     param_values = list(parameters.values())
                     if param_info.ordinal < len(param_values):
                         positional_params.append(param_values[param_info.ordinal])
             return positional_params or list(parameters.values())
 
-        # This shouldn't happen, but return as-is
         return parameters
 
     def _split_script_statements(self, script: str, strip_trailing_semicolon: bool = False) -> list[str]:
         """Split a SQL script into individual statements.
 
-        This method uses a robust lexer-driven state machine to handle
-        multi-statement scripts, including complex constructs like
-        PL/SQL blocks, T-SQL batches, and nested blocks.
+        Uses a robust lexer-driven state machine to handle multi-statement scripts,
+        including complex constructs like PL/SQL blocks, T-SQL batches, and nested blocks.
+        Particularly useful for databases that don't natively support multi-statement
+        execution (e.g., Oracle, some async drivers).
 
         Args:
             script: The SQL script to split
@@ -315,19 +274,15 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
 
         Returns:
             A list of individual SQL statements
-
-        Note:
-            This is particularly useful for databases that don't natively
-            support multi-statement execution (e.g., Oracle, some async drivers).
         """
-        # The split_sql_script function already handles dialect mapping and fallback
         return split_sql_script(script, dialect=str(self.dialect), strip_trailing_semicolon=strip_trailing_semicolon)
 
     def _prepare_driver_parameters(self, parameters: Any) -> Any:
-        """Prepare parameters for database driver consumption by unwrapping TypedParameter objects.
+        """Prepare parameters for database driver consumption.
 
-        This method normalizes parameter structure and unwraps TypedParameter objects
+        Normalizes parameter structure and unwraps TypedParameter objects
         to their underlying values, which database drivers expect.
+        TypeCoercionMixin handles parameter normalization.
 
         Args:
             parameters: Parameters in any format (dict, list, tuple, scalar, TypedParameter)
@@ -335,22 +290,18 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
         Returns:
             Parameters with TypedParameter objects unwrapped to primitive values
         """
-
-        # TypeCoercionMixin handles parameter normalization
         if not parameters:
             return []
 
-        # Handle single parameter
         if not isinstance(parameters, (list, tuple)):
             return [self._coerce_parameter(parameters) if isinstance(parameters, TypedParameter) else parameters]
 
-        # Handle list of parameters
         return [self._coerce_parameter(p) if isinstance(p, TypedParameter) else p for p in parameters]
 
     def _prepare_driver_parameters_many(self, parameters: Any) -> "list[Any]":
         """Prepare parameter sequences for executemany operations.
 
-        This method handles sequences of parameter sets, unwrapping TypedParameter
+        Handles sequences of parameter sets, unwrapping TypedParameter
         objects in each set for database driver consumption.
 
         Args:
@@ -366,7 +317,7 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
     def _coerce_parameter(self, param: "TypedParameter") -> Any:
         """Coerce TypedParameter to driver-safe value.
 
-        This method extracts the underlying value from a TypedParameter object.
+        Extracts the underlying value from a TypedParameter object.
         Individual drivers can override this method to perform driver-specific
         type coercion using the rich type information available in TypedParameter.
 
@@ -377,3 +328,43 @@ class CommonDriverAttributesMixin(ABC, Generic[ConnectionT, RowT]):
             The underlying parameter value suitable for the database driver
         """
         return param.value
+
+    def _apply_pipeline_transformations(
+        self, expression: "exp.Expression", parameters: Any = None, config: "Optional[SQLConfig]" = None
+    ) -> tuple["exp.Expression", Any]:
+        """Apply pipeline transformations to SQL expression.
+
+        This method creates and applies a transformation pipeline based on
+        the SQL configuration, allowing drivers to leverage the pipeline
+        architecture for consistent SQL processing.
+
+        Args:
+            expression: SQLGlot expression to transform
+            parameters: Optional parameters for the SQL
+            config: SQL configuration (uses driver's config if not provided)
+
+        Returns:
+            Tuple of (transformed expression, processed parameters)
+        """
+        config = config or self.config
+
+        # Import here to avoid circular dependency
+        from sqlspec.statement.pipeline import SQLTransformContext
+
+        # Create pipeline from config
+        pipeline = create_pipeline_from_config(config, driver_adapter=self)
+
+        # Create context with driver adapter reference
+        context = SQLTransformContext(
+            current_expression=expression,
+            original_expression=expression,
+            parameters=parameters,
+            dialect=str(self.dialect),
+            metadata={},
+            driver_adapter=self,
+        )
+
+        # Apply pipeline
+        result_context = pipeline(context)
+
+        return result_context.current_expression, result_context.merged_parameters

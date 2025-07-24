@@ -236,39 +236,61 @@ class BenchmarkSummary:
 
     def display_orm_comparison(self, results: dict[str, TimingResult]) -> None:
         """Display comprehensive ORM comparison across all databases."""
-        orm_results = {
-            k: v
-            for k, v in results.items()
-            if any(db in k for db in ["sqlite_", "aiosqlite_", "psycopg_", "asyncpg_", "oracledb_"])
-        }
+        orm_results = {k: v for k, v in results.items() if "orm_comparison" in k}
         if not orm_results:
             return
 
-        # Parse results into structured format
-        db_results: dict[str, dict[str, TimingResult]] = {}
+        # Group results by database and operation
+        grouped_results: dict[str, dict[str, dict[str, TimingResult]]] = {}
         for key, result in orm_results.items():
-            parts = key.split("_", 1)
-            if len(parts) == SPLIT_COUNT_TWO:
-                db_name = parts[0]
-                op_key = parts[1]
+            parts = key.split("_")
+            db_name, op_name, variant = parts[0], parts[1], "_".join(parts[2:])
+            if db_name not in grouped_results:
+                grouped_results[db_name] = {}
+            if op_name not in grouped_results[db_name]:
+                grouped_results[db_name][op_name] = {}
+            grouped_results[db_name][op_name][variant] = result
 
-                if db_name not in db_results:
-                    db_results[db_name] = {}
-                db_results[db_name][op_key] = result
+        for db_name, ops in grouped_results.items():
+            table = Table(title=f"ORM Comparison - {db_name.title()}", show_header=True)
+            table.add_column("Operation", style="cyan")
+            table.add_column("SQLSpec (Cached)", justify="right")
+            table.add_column("SQLSpec (No Cache)", justify="right")
+            table.add_column("SQLAlchemy Core", justify="right")
+            table.add_column("SQLAlchemy ORM", justify="right")
+            table.add_column("Winner", justify="right")
 
-        key_operations = [
-            ("simple_select", "Simple SELECT"),
-            ("filtered_select", "Filtered SELECT"),
-            ("bulk_insert", "Bulk INSERT"),
-            ("bulk_update", "Bulk UPDATE"),
-            ("aggregation", "Aggregation"),
-        ]
+            for op_name, variants in ops.items():
+                sqlspec_cached = variants.get("sqlspec_cache")
+                sqlspec_no_cache = variants.get("sqlspec_no_cache")
+                sqlalchemy_core = variants.get("sqlalchemy_core")
+                sqlalchemy_orm = variants.get("sqlalchemy_orm")
 
-        # Display comprehensive performance metrics
-        self._display_performance_by_driver(db_results, key_operations)
-        self._display_statements_per_second(db_results, key_operations)
-        self._display_performance_comparison(db_results, key_operations)
-        self._display_executive_summary(db_results, key_operations)
+                # Find the winner
+                winner = ""
+                winner_time = float("inf")
+                if sqlspec_cached and sqlspec_cached.avg_ms < winner_time:
+                    winner = "SQLSpec (Cached)"
+                    winner_time = sqlspec_cached.avg_ms
+                if sqlspec_no_cache and sqlspec_no_cache.avg_ms < winner_time:
+                    winner = "SQLSpec (No Cache)"
+                    winner_time = sqlspec_no_cache.avg_ms
+                if sqlalchemy_core and sqlalchemy_core.avg_ms < winner_time:
+                    winner = "SQLAlchemy Core"
+                    winner_time = sqlalchemy_core.avg_ms
+                if sqlalchemy_orm and sqlalchemy_orm.avg_ms < winner_time:
+                    winner = "SQLAlchemy ORM"
+
+                table.add_row(
+                    op_name.replace("_", " ").title(),
+                    f"{sqlspec_cached.avg_ms:.3f}ms" if sqlspec_cached else "N/A",
+                    f"{sqlspec_no_cache.avg_ms:.3f}ms" if sqlspec_no_cache else "N/A",
+                    f"{sqlalchemy_core.avg_ms:.3f}ms" if sqlalchemy_core else "N/A",
+                    f"{sqlalchemy_orm.avg_ms:.3f}ms" if sqlalchemy_orm else "N/A",
+                    winner,
+                )
+
+            self.console.print(table)
 
     def _display_performance_by_driver(
         self, db_results: dict[str, dict[str, TimingResult]], key_operations: list[tuple]

@@ -4,7 +4,6 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from asyncmy import Connection
-from typing_extensions import TypeAlias
 
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.driver.connection import managed_transaction_async
@@ -19,7 +18,6 @@ from sqlspec.driver.mixins import (
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, RowT
 
 if TYPE_CHECKING:
     from asyncmy.cursors import Cursor, DictCursor
@@ -29,7 +27,13 @@ __all__ = ("AsyncmyConnection", "AsyncmyDriver")
 
 logger = logging.getLogger("sqlspec")
 
-AsyncmyConnection: TypeAlias = Connection
+if TYPE_CHECKING:
+    from typing_extensions import TypeAlias
+
+    AsyncmyConnection: TypeAlias = Connection
+else:
+    # Direct assignment for mypyc runtime
+    AsyncmyConnection = Connection
 
 
 # NOTE: This driver uses auto-commit by default via managed_transaction_async(auto_commit=True).
@@ -37,7 +41,7 @@ AsyncmyConnection: TypeAlias = Connection
 # transaction model for most use cases. Users requiring manual transaction control should
 # use the connection's transaction methods directly.
 class AsyncmyDriver(
-    AsyncDriverAdapterBase[AsyncmyConnection, RowT],
+    AsyncDriverAdapterBase,
     AsyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -47,17 +51,14 @@ class AsyncmyDriver(
 ):
     """Asyncmy MySQL/MariaDB Driver Adapter. Modern protocol implementation."""
 
+    connection_type = AsyncmyConnection
+
     dialect: "DialectType" = "mysql"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.POSITIONAL_PYFORMAT,)
     default_parameter_style: ParameterStyle = ParameterStyle.POSITIONAL_PYFORMAT
 
-    def __init__(
-        self,
-        connection: AsyncmyConnection,
-        config: Optional[SQLConfig] = None,
-        default_row_type: type[DictRow] = DictRow,
-    ) -> None:
-        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
+    def __init__(self, connection: AsyncmyConnection, config: Optional[SQLConfig] = None) -> None:
+        super().__init__(connection=connection, config=config)
 
     @asynccontextmanager
     async def _get_cursor(

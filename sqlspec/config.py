@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Optional, TypeVar, Union, cast
 
-from sqlspec.typing import ConnectionT, PoolT  # pyright: ignore
+from sqlspec.typing import ConnectionT, PoolT
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -31,7 +31,7 @@ ConfigT = TypeVar(
     "ConfigT",
     bound="Union[Union[AsyncDatabaseConfig[Any, Any, Any], NoPoolAsyncConfig[Any, Any]], SyncDatabaseConfig[Any, Any, Any], NoPoolSyncConfig[Any, Any]]",
 )
-DriverT = TypeVar("DriverT", bound="Union[SyncDriverAdapterBase[Any], AsyncDriverAdapterBase[Any]]")
+DriverT = TypeVar("DriverT", bound="Union[SyncDriverAdapterBase, AsyncDriverAdapterBase]")
 
 logger = get_logger("config")
 DEFAULT_ADAPTER_CACHE_SIZE = 5000
@@ -89,14 +89,12 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         )
 
     def __repr__(self) -> str:
-        parts = ", ".join(
-            [
-                f"pool_instance={self.pool_instance!r}",
-                f"migration_config={self.migration_config!r}",
-                f"enable_adapter_cache={self.enable_adapter_cache!r}",
-                f"adapter_cache_size={self.adapter_cache_size!r}",
-            ]
-        )
+        parts = ", ".join([
+            f"pool_instance={self.pool_instance!r}",
+            f"migration_config={self.migration_config!r}",
+            f"enable_adapter_cache={self.enable_adapter_cache!r}",
+            f"adapter_cache_size={self.adapter_cache_size!r}",
+        ])
         return f"{type(self).__name__}({parts})"
 
     @property

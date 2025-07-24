@@ -1,7 +1,6 @@
 """AsyncPG database configuration with direct field-based configuration."""
 
 import logging
-from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union
 
@@ -18,6 +17,7 @@ from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from asyncio.events import AbstractEventLoop
+    from collections.abc import AsyncGenerator, Awaitable, Callable
 
 
 __all__ = ("AsyncpgConfig", "AsyncpgConnectionConfig", "AsyncpgPoolConfig")
@@ -64,9 +64,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
     """Configuration for AsyncPG database connections using TypedDict."""
 
     driver_type: "ClassVar[type[AsyncpgDriver]]" = AsyncpgDriver
-    connection_type: ClassVar[type[AsyncpgConnection]] = type(AsyncpgConnection)  # type: ignore[assignment]
-    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("numeric",)
-    default_parameter_style: ClassVar[str] = "numeric"
+    connection_type: "ClassVar[type[AsyncpgConnection]]" = type(AsyncpgConnection)  # type: ignore[assignment]
+    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("numeric",)
+    default_parameter_style: "ClassVar[str]" = "numeric"
 
     def __init__(
         self,
@@ -74,7 +74,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         pool_instance: "Optional[Pool[Record]]" = None,
         pool_config: "Optional[Union[AsyncpgPoolConfig, dict[str, Any]]]" = None,
         statement_config: "Optional[SQLConfig]" = None,
-        default_row_type: type[Any] = dict,
+        default_row_type: "type[Any]" = dict,
         migration_config: "Optional[dict[str, Any]]" = None,
         enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,
@@ -96,7 +96,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """
         # Store the pool config as a dict
         self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
-
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
         self.json_serializer = json_serializer or to_json
@@ -108,13 +107,13 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             adapter_cache_size=adapter_cache_size,
         )
 
-    def _get_pool_config_dict(self) -> dict[str, Any]:
+    def _get_pool_config_dict(self) -> "dict[str, Any]":
         """Get pool configuration as plain dict for external library.
 
         Returns:
             Dictionary with pool parameters, filtering out None values.
         """
-        config: dict[str, Any] = dict(self.pool_config)
+        config: "dict[str, Any]" = dict(self.pool_config)  # noqa: UP037
         # Extract extra parameters if they exist
         extras = config.pop("extra", {})
         config.update(extras)
@@ -131,7 +130,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         if self.pool_instance:
             await self.pool_instance.close()
 
-    async def create_connection(self) -> AsyncpgConnection:
+    async def create_connection(self) -> "AsyncpgConnection":
         """Create a single async connection from the pool.
 
         Returns:
@@ -142,7 +141,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         return await self.pool_instance.acquire()
 
     @asynccontextmanager
-    async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AsyncpgConnection, None]:
+    async def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[AsyncpgConnection, None]":
         """Provide an async connection context manager.
 
         Args:

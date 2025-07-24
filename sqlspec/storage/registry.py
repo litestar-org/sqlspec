@@ -10,7 +10,9 @@ This module provides a flexible, lazy-loading storage registry that supports:
 
 import logging
 from pathlib import Path
-from typing import Any, Optional, TypeVar, Union, cast
+from typing import Any, Final, Optional, TypeVar, Union, cast
+
+from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.protocols import ObjectStoreProtocol
@@ -23,9 +25,15 @@ logger = logging.getLogger(__name__)
 
 BackendT = TypeVar("BackendT", bound=ObjectStoreProtocol)
 
-FSSPEC_ONLY_SCHEMES = {"http", "https", "ftp", "sftp", "ssh"}
+
+FILE_PROTOCOL: Final[str] = "file"
+S3_PROTOCOL: Final[str] = "s3"
+GCS_PROTOCOL: Final[str] = "gs"
+AZURE_PROTOCOL: Final[str] = "az"
+FSSPEC_ONLY_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https", "ftp", "sftp", "ssh"})
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class StorageRegistry:
     """Unified storage registry with URI-first access and intelligent backend selection.
 
@@ -57,10 +65,13 @@ class StorageRegistry:
         # Clear error if neither backend supports the scheme
     """
 
+    __slots__ = ("_alias_configs", "_aliases", "_cache", "_instances")
+
     def __init__(self) -> None:
         self._alias_configs: dict[str, tuple[type[ObjectStoreProtocol], str, dict[str, Any]]] = {}
         self._aliases: dict[str, dict[str, Any]] = {}
         self._instances: dict[Union[str, tuple[str, tuple[tuple[str, Any], ...]]], ObjectStoreProtocol] = {}
+        self._cache: dict[str, tuple[str, type[ObjectStoreProtocol]]] = {}
 
     def register_alias(
         self,
@@ -284,5 +295,4 @@ class StorageRegistry:
         return StorageCapabilities()
 
 
-# Global registry instance
 storage_registry = StorageRegistry()

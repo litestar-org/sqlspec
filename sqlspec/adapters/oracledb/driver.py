@@ -1,6 +1,6 @@
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
-from typing import Any, ClassVar, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
 from sqlglot.dialects.dialect import DialectType
@@ -21,9 +21,11 @@ from sqlspec.driver.mixins import (
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator, TypedParameter
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, RowT, SQLParameterType
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import ensure_async_
+
+if TYPE_CHECKING:
+    from sqlspec.typing import SQLParameterType
 
 __all__ = ("OracleAsyncConnection", "OracleAsyncDriver", "OracleSyncConnection", "OracleSyncDriver")
 
@@ -62,7 +64,7 @@ def _process_oracle_parameters(params: Any) -> Any:
 
 
 class OracleSyncDriver(
-    SyncDriverAdapterBase[OracleSyncConnection, RowT],
+    SyncDriverAdapterBase[OracleSyncConnection],
     SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -80,13 +82,8 @@ class OracleSyncDriver(
     default_parameter_style: ParameterStyle = ParameterStyle.NAMED_COLON
     support_native_arrow_export = True
 
-    def __init__(
-        self,
-        connection: OracleSyncConnection,
-        config: Optional[SQLConfig] = None,
-        default_row_type: type[DictRow] = DictRow,
-    ) -> None:
-        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
+    def __init__(self, connection: OracleSyncConnection, config: Optional[SQLConfig] = None) -> None:
+        super().__init__(connection=connection, config=config)
 
     def _process_parameters(self, parameters: "SQLParameterType") -> "SQLParameterType":
         """Process parameters to handle Oracle-specific requirements.
@@ -160,12 +157,7 @@ class OracleSyncDriver(
                 if self.returns_rows(statement.expression):
                     fetched_data = cursor.fetchall()
                     column_names = [col[0] for col in cursor.description or []]
-
-                    # Convert to dict if default_row_type is dict
-                    if self.default_row_type == DictRow or issubclass(self.default_row_type, dict):
-                        data = cast("list[dict[str, Any]]", [dict(zip(column_names, row)) for row in fetched_data])
-                    else:
-                        data = cast("list[dict[str, Any]]", fetched_data)
+                    data = cast("list[dict[str, Any]]", [dict(zip(column_names, row)) for row in fetched_data])
 
                     return SQLResult(
                         statement=statement,
@@ -318,7 +310,7 @@ class OracleSyncDriver(
 
 
 class OracleAsyncDriver(
-    AsyncDriverAdapterBase[OracleAsyncConnection, RowT],
+    AsyncDriverAdapterBase[OracleAsyncConnection],
     AsyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -334,16 +326,9 @@ class OracleAsyncDriver(
         ParameterStyle.POSITIONAL_COLON,
     )
     default_parameter_style: ParameterStyle = ParameterStyle.NAMED_COLON
-    __supports_arrow__: ClassVar[bool] = True
-    __supports_parquet__: ClassVar[bool] = False
 
-    def __init__(
-        self,
-        connection: OracleAsyncConnection,
-        config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
-    ) -> None:
-        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
+    def __init__(self, connection: OracleAsyncConnection, config: "Optional[SQLConfig]" = None) -> None:
+        super().__init__(connection=connection, config=config)
 
     def _process_parameters(self, parameters: "SQLParameterType") -> "SQLParameterType":
         """Process parameters to handle Oracle-specific requirements.
@@ -433,12 +418,7 @@ class OracleAsyncDriver(
                 if self.returns_rows(statement.expression):
                     fetched_data = await cursor.fetchall()
                     column_names = [col[0] for col in cursor.description or []]
-
-                    # Convert to dict if default_row_type is dict
-                    if self.default_row_type == DictRow or issubclass(self.default_row_type, dict):
-                        data = cast("list[dict[str, Any]]", [dict(zip(column_names, row)) for row in fetched_data])
-                    else:
-                        data = cast("list[dict[str, Any]]", fetched_data)
+                    data = cast("list[dict[str, Any]]", [dict(zip(column_names, row)) for row in fetched_data])
 
                     return SQLResult(
                         statement=statement,

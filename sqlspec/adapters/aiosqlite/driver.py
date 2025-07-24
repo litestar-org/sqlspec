@@ -4,12 +4,12 @@ import re
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from decimal import Decimal
-from pathlib import Path
+from pathlib import Path  # noqa: TC003
 from typing import TYPE_CHECKING, Any, Optional
 
 import aiosqlite
-from typing_extensions import TypeAlias
 
+# TypeAlias removed for mypyc compatibility
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.driver.connection import managed_transaction_async
 from sqlspec.driver.mixins import (
@@ -23,21 +23,25 @@ from sqlspec.driver.mixins import (
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, RowT
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
+    from typing_extensions import TypeAlias
 
 __all__ = ("AiosqliteConnection", "AiosqliteDriver")
 
 logger = logging.getLogger("sqlspec")
 
-AiosqliteConnection: TypeAlias = aiosqlite.Connection
+if TYPE_CHECKING:
+    AiosqliteConnection: TypeAlias = aiosqlite.Connection
+else:
+    # Direct assignment for mypyc runtime
+    AiosqliteConnection = aiosqlite.Connection
 
 
 class AiosqliteDriver(
-    AsyncDriverAdapterBase[AiosqliteConnection, RowT],
+    AsyncDriverAdapterBase,
     AsyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -47,18 +51,16 @@ class AiosqliteDriver(
 ):
     """Aiosqlite SQLite Driver Adapter. Modern protocol implementation."""
 
+    # Type specification for mypyc
+    connection_type = AiosqliteConnection  # type: ignore[assignment]
+
     dialect: "DialectType" = "sqlite"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK, ParameterStyle.NAMED_COLON)
-    default_parameter_style: ParameterStyle = ParameterStyle.QMARK
+    default_parameter_style: "ParameterStyle" = ParameterStyle.QMARK
     supported_bulk_formats: "tuple[str, ...]" = ("csv",)
 
-    def __init__(
-        self,
-        connection: AiosqliteConnection,
-        config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
-    ) -> None:
-        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
+    def __init__(self, connection: "AiosqliteConnection", config: "Optional[SQLConfig]" = None) -> None:
+        super().__init__(connection=connection, config=config)
 
     # AIOSQLite-specific type coercion overrides (same as SQLite)
     def _coerce_boolean(self, value: Any) -> Any:
@@ -89,8 +91,8 @@ class AiosqliteDriver(
 
     @asynccontextmanager
     async def _get_cursor(
-        self, connection: Optional[AiosqliteConnection] = None
-    ) -> AsyncGenerator[aiosqlite.Cursor, None]:
+        self, connection: "Optional[AiosqliteConnection]" = None
+    ) -> "AsyncGenerator[aiosqlite.Cursor, None]":
         conn_to_use = connection or self.connection
         conn_to_use.row_factory = aiosqlite.Row
         cursor = await conn_to_use.cursor()
@@ -99,9 +101,9 @@ class AiosqliteDriver(
         finally:
             await cursor.close()
 
-    async def _execute_statement(
-        self, statement: SQL, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
-    ) -> SQLResult:
+    async def _execute_statement(  # type: ignore[override]
+        self, statement: "SQL", connection: "Optional[AiosqliteConnection]" = None, **kwargs: "Any"
+    ) -> "SQLResult":
         if statement.is_script:
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
@@ -139,8 +141,13 @@ class AiosqliteDriver(
         return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
     async def _execute(
-        self, sql: str, parameters: Any, statement: SQL, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
-    ) -> SQLResult:
+        self,
+        sql: str,
+        parameters: "Any",
+        statement: "SQL",
+        connection: "Optional[AiosqliteConnection]" = None,
+        **kwargs: "Any",
+    ) -> "SQLResult":
         conn = self._connection(connection)
 
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
@@ -185,8 +192,8 @@ class AiosqliteDriver(
                 )
 
     async def _execute_many(
-        self, sql: str, param_list: Any, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
-    ) -> SQLResult:
+        self, sql: str, param_list: "Any", connection: "Optional[AiosqliteConnection]" = None, **kwargs: "Any"
+    ) -> "SQLResult":
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -213,11 +220,9 @@ class AiosqliteDriver(
                 )
 
     async def _execute_script(
-        self, script: str, connection: Optional[AiosqliteConnection] = None, **kwargs: Any
-    ) -> SQLResult:
-        conn = self._connection(connection)
-
-        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
+        self, script: str, connection: "Optional[AiosqliteConnection]" = None, **kwargs: "Any"
+    ) -> "SQLResult":
+        async with managed_transaction_async(self._connection(connection), auto_commit=True) as txn_conn:
             statements = self._split_script_statements(script)
             suppress_warnings = kwargs.get("_suppress_warnings", False)
 
@@ -244,7 +249,9 @@ class AiosqliteDriver(
                 successful_statements=executed_count,
             )
 
-    async def _bulk_load_file(self, file_path: Path, table_name: str, format: str, mode: str, **options: Any) -> int:
+    async def _bulk_load_file(
+        self, file_path: "Path", table_name: str, format: str, mode: str, **options: "Any"
+    ) -> int:
         """Database-specific bulk load implementation using storage backend."""
         if format not in self.supported_bulk_formats:
             supported = ", ".join(self.supported_bulk_formats)
@@ -277,6 +284,6 @@ class AiosqliteDriver(
         finally:
             await conn.close()
 
-    def _connection(self, connection: Optional[AiosqliteConnection] = None) -> AiosqliteConnection:
+    def _connection(self, connection: "Optional[AiosqliteConnection]" = None) -> "AiosqliteConnection":
         """Get the connection to use for the operation."""
         return connection or self.connection

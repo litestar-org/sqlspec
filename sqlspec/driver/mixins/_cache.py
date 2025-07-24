@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING, Any, Optional
 
+from mypy_extensions import trait
+
 from sqlspec.statement.cache import SQLCache
 from sqlspec.statement.parameters import ParameterStyle
 
@@ -97,6 +99,7 @@ class AdapterCacheMixin:
         self._prepared_counter = 0
 
 
+@trait
 class SyncAdapterCacheMixin(AdapterCacheMixin):
     """Sync version of AdapterCacheMixin.
 
@@ -105,6 +108,7 @@ class SyncAdapterCacheMixin(AdapterCacheMixin):
     """
 
 
+@trait
 class AsyncAdapterCacheMixin(AdapterCacheMixin):
     """Async version of AdapterCacheMixin.
 

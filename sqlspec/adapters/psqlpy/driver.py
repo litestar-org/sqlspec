@@ -19,7 +19,6 @@ from sqlspec.driver.mixins import (
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, RowT
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -31,7 +30,7 @@ logger = logging.getLogger("sqlspec")
 
 
 class PsqlpyDriver(
-    AsyncDriverAdapterBase[PsqlpyConnection, RowT],
+    AsyncDriverAdapterBase[PsqlpyConnection],
     AsyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -48,13 +47,8 @@ class PsqlpyDriver(
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.NUMERIC,)
     default_parameter_style: ParameterStyle = ParameterStyle.NUMERIC
 
-    def __init__(
-        self,
-        connection: PsqlpyConnection,
-        config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
-    ) -> None:
-        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
+    def __init__(self, connection: PsqlpyConnection, config: "Optional[SQLConfig]" = None) -> None:
+        super().__init__(connection=connection, config=config)
 
     def _coerce_boolean(self, value: Any) -> Any:
         """PostgreSQL has native boolean support, return as-is."""

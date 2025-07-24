@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import fnmatch
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Final
+
+from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import MissingDependencyError, StorageOperationFailedError
 from sqlspec.storage.backends.base import ObjectStoreBase
@@ -27,6 +29,10 @@ __all__ = ("ObStoreBackend",)
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_OPTIONS: Final[dict[str, Any]] = {"connect_timeout": "30s", "request_timeout": "60s"}
+
+
+@mypyc_attr(allow_interpreted_subclasses=True)
 class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
     """High-performance object storage backend using obstore.
 
@@ -53,6 +59,8 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
         has_low_latency=True,
     )
 
+    __slots__ = ("_path_cache", "base_path", "store", "store_options", "store_uri")
+
     def __init__(self, store_uri: str, base_path: str = "", **store_options: Any) -> None:
         """Initialize obstore backend.
 
@@ -68,8 +76,10 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
         try:
             self.store_uri = store_uri
             self.base_path = base_path.rstrip("/") if base_path else ""
-            self.store_options = store_options
+            self.store_options = dict(DEFAULT_OPTIONS)
+            self.store_options.update(store_options)
             self.store: Any  # Will be set based on store_uri
+            self._path_cache: dict[str, str] = {}  # Add path caching
 
             if store_uri.startswith("memory://"):
                 # MemoryStore doesn't use from_url - create directly

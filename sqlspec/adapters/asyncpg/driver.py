@@ -1,5 +1,5 @@
 import re
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
 
 from asyncpg import Connection as AsyncpgNativeConnection
 from asyncpg import Record
@@ -19,12 +19,12 @@ from sqlspec.exceptions import PipelineExecutionError
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, RowT
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from asyncpg.pool import PoolConnectionProxy
     from sqlglot.dialects.dialect import DialectType
+
 
 __all__ = ("AsyncpgConnection", "AsyncpgDriver")
 
@@ -39,14 +39,23 @@ else:
 # Group 1: Command Tag (e.g., INSERT, UPDATE)
 # Group 2: (Optional) OID count for INSERT (we ignore this)
 # Group 3: Rows affected
-ASYNC_PG_STATUS_REGEX = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
+ASYNC_PG_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 
 # Expected number of groups in the regex match for row count extraction
-EXPECTED_REGEX_GROUPS = 3
+EXPECTED_REGEX_GROUPS: Final[int] = 3
+
+# Operation mapping for fast lookup
+OPERATION_MAP: Final[dict[str, str]] = {
+    "INSERT": "INSERT",
+    "UPDATE": "UPDATE",
+    "DELETE": "DELETE",
+    "SELECT": "SELECT",
+    "COPY": "COPY",
+}
 
 
 class AsyncpgDriver(
-    AsyncDriverAdapterBase[AsyncpgConnection, RowT],
+    AsyncDriverAdapterBase[AsyncpgConnection],
     SQLTranslatorMixin,
     TypeCoercionMixin,
     AsyncStorageMixin,
@@ -60,13 +69,8 @@ class AsyncpgDriver(
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.NUMERIC,)
     default_parameter_style: ParameterStyle = ParameterStyle.NUMERIC
 
-    def __init__(
-        self,
-        connection: "AsyncpgConnection",
-        config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = dict[str, Any],
-    ) -> None:
-        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
+    def __init__(self, connection: "AsyncpgConnection", config: "Optional[SQLConfig]" = None) -> None:
+        super().__init__(connection=connection, config=config)
 
     # AsyncPG-specific type coercion overrides (PostgreSQL has rich native types)
     def _coerce_boolean(self, value: Any) -> Any:
@@ -388,8 +392,13 @@ class AsyncpgDriver(
 
         result_sql = sql
         for filter_obj in filters:
-            if hasattr(filter_obj, "apply"):
-                result_sql = filter_obj.apply(result_sql)
+            # Use try/except for better performance than hasattr
+            try:
+                apply_method = filter_obj.apply
+            except AttributeError:
+                continue
+            else:
+                result_sql = apply_method(result_sql)
 
         return result_sql
 

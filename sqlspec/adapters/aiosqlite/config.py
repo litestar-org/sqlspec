@@ -1,14 +1,16 @@
-"""Aiosqlite database configuration with direct field-based configuration."""
+"""Aiosqlite database configuration with connection pooling."""
 
+import asyncio
 import logging
-from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union
+import time
+from contextlib import asynccontextmanager, suppress
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, TypedDict, Union
 
 import aiosqlite
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.aiosqlite.driver import AiosqliteConnection, AiosqliteDriver
-from sqlspec.config import NoPoolAsyncConfig
+from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import DictRow
@@ -16,9 +18,176 @@ from sqlspec.typing import DictRow
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-__all__ = ("AiosqliteConfig", "AiosqliteConnectionParams")
+__all__ = ("AiosqliteConfig", "AiosqliteConnectionParams", "AiosqliteConnectionPool")
 
 logger = logging.getLogger(__name__)
+
+# Performance constants for Aiosqlite pooling optimization
+DEFAULT_MIN_POOL: Final[int] = 5
+DEFAULT_MAX_POOL: Final[int] = 20
+POOL_TIMEOUT: Final[float] = 30.0
+POOL_RECYCLE: Final[int] = 3600  # 1 hour
+WAL_PRAGMA_SQL: Final[str] = "PRAGMA journal_mode = WAL"
+FOREIGN_KEYS_SQL: Final[str] = "PRAGMA foreign_keys = ON"
+SYNC_NORMAL_SQL: Final[str] = "PRAGMA synchronous = NORMAL"
+CACHE_SIZE_SQL: Final[str] = "PRAGMA cache_size = -64000"  # 64MB cache
+
+
+class AiosqliteConnectionPool:
+    """Async connection pool for Aiosqlite with performance optimizations.
+
+    Implements async connection pooling to achieve performance improvements
+    similar to the sync SQLite pool.
+    """
+
+    __slots__ = (
+        "_checked_out",
+        "_connection_params",
+        "_connection_times",
+        "_created_connections",
+        "_lock",
+        "_max_pool",
+        "_min_pool",
+        "_pool",
+        "_recycle",
+        "_semaphore",
+        "_timeout",
+    )
+
+    def __init__(
+        self,
+        connection_params: "dict[str, Any]",
+        min_pool: int = DEFAULT_MIN_POOL,
+        max_pool: int = DEFAULT_MAX_POOL,
+        timeout: float = POOL_TIMEOUT,
+        recycle: int = POOL_RECYCLE,
+    ) -> None:
+        self._pool: "asyncio.Queue[AiosqliteConnection]" = asyncio.Queue(maxsize=max_pool)  # noqa: UP037
+        self._lock = asyncio.Lock()
+        self._semaphore = asyncio.Semaphore(max_pool)
+        self._min_pool = min_pool
+        self._max_pool = max_pool
+        self._timeout = timeout
+        self._recycle = recycle
+        self._connection_params = connection_params
+        self._created_connections = 0
+        self._checked_out = 0
+        self._connection_times: "dict[int, float]" = {}  # noqa: UP037
+
+    async def _create_connection(self) -> "AiosqliteConnection":
+        """Create a new Aiosqlite connection with performance optimizations."""
+        connection = await aiosqlite.connect(**self._connection_params)
+
+        # Apply SQLite performance optimizations
+        await connection.execute(WAL_PRAGMA_SQL)
+        await connection.execute(FOREIGN_KEYS_SQL)
+        await connection.execute(SYNC_NORMAL_SQL)
+        await connection.execute(CACHE_SIZE_SQL)
+        await connection.execute("PRAGMA temp_store = MEMORY")
+        await connection.execute("PRAGMA mmap_size = 268435456")
+        await connection.commit()
+
+        # Track creation time
+        conn_id = id(connection)
+        async with self._lock:
+            self._created_connections += 1
+            self._connection_times[conn_id] = time.time()
+
+        return connection
+
+    async def initialize(self) -> None:
+        """Pre-populate the pool with minimum connections."""
+        connections_to_create = min(self._min_pool, self._max_pool)
+        for _ in range(connections_to_create):
+            if self._pool.full():
+                break
+            conn = await self._create_connection()
+            await self._pool.put(conn)
+
+    def _should_recycle(self, connection: "AiosqliteConnection") -> bool:
+        """Check if connection should be recycled based on age."""
+        conn_id = id(connection)
+        created_at = self._connection_times.get(conn_id)
+        if created_at is None:
+            return True
+        return (time.time() - created_at) > self._recycle
+
+    @asynccontextmanager
+    async def get_connection(self) -> "AsyncGenerator[AiosqliteConnection, None]":
+        """Get a connection from the pool.
+
+        Yields:
+            An Aiosqlite connection instance.
+        """
+        connection = None
+        acquired = False
+
+        try:
+            acquired = await asyncio.wait_for(self._semaphore.acquire(), timeout=self._timeout)
+            try:
+                connection = self._pool.get_nowait()
+                if self._should_recycle(connection):
+                    conn_id = id(connection)
+                    with suppress(Exception):
+                        await connection.close()
+                    async with self._lock:
+                        self._connection_times.pop(conn_id, None)
+                    connection = None
+
+            except asyncio.QueueEmpty:
+                connection = None
+
+            # Create new connection if needed
+            if connection is None:
+                connection = await self._create_connection()
+
+            async with self._lock:
+                self._checked_out += 1
+
+            yield connection
+
+        except asyncio.TimeoutError:
+            msg = f"Connection pool timeout after {self._timeout} seconds"
+            raise RuntimeError(msg) from None
+
+        finally:
+            if connection is not None:
+                async with self._lock:
+                    self._checked_out -= 1
+
+                try:
+                    await connection.execute("SELECT 1")
+                    try:
+                        self._pool.put_nowait(connection)
+                    except asyncio.QueueFull:
+                        with suppress(Exception):
+                            await connection.close()
+
+                except Exception:
+                    # Connection is broken, close it
+                    with suppress(Exception):
+                        await connection.close()
+
+            if acquired:
+                self._semaphore.release()
+
+    async def close(self) -> None:
+        """Close all connections in the pool."""
+        while not self._pool.empty():
+            connection = self._pool.get_nowait()
+            with suppress(Exception):
+                await connection.close()
+
+        async with self._lock:
+            self._connection_times.clear()
+
+    def size(self) -> int:
+        """Get current pool size."""
+        return self._pool.qsize()
+
+    def checked_out(self) -> int:
+        """Get number of checked out connections."""
+        return self._checked_out
 
 
 class AiosqliteConnectionParams(TypedDict, total=False):
@@ -31,19 +200,20 @@ class AiosqliteConnectionParams(TypedDict, total=False):
     check_same_thread: NotRequired[bool]
     cached_statements: NotRequired[int]
     uri: NotRequired[bool]
-    extra: NotRequired[dict[str, Any]]
+    extra: "NotRequired[dict[str, Any]]"
 
 
-class AiosqliteConfig(NoPoolAsyncConfig[AiosqliteConnection, AiosqliteDriver]):
-    """Configuration for Aiosqlite database connections with direct field-based configuration.
+class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnectionPool, AiosqliteDriver]):
+    """Configuration for Aiosqlite database connections with connection pooling.
 
-    Note: Aiosqlite doesn't support connection pooling, so pool_instance is always None.
+    Implements async connection pooling for improved performance.
     """
 
-    driver_type: ClassVar[type[AiosqliteDriver]] = AiosqliteDriver
-    connection_type: ClassVar[type[AiosqliteConnection]] = AiosqliteConnection
-    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark", "named_colon")
-    default_parameter_style: ClassVar[str] = "qmark"
+    driver_type: "ClassVar[type[AiosqliteDriver]]" = AiosqliteDriver
+    connection_type: "ClassVar[type[AiosqliteConnection]]" = AiosqliteConnection
+    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("qmark", "named_colon")
+    default_parameter_style: "ClassVar[str]" = "qmark"
+    supports_connection_pooling: "ClassVar[bool]" = True
 
     def __init__(
         self,
@@ -53,6 +223,11 @@ class AiosqliteConfig(NoPoolAsyncConfig[AiosqliteConnection, AiosqliteDriver]):
         migration_config: "Optional[dict[str, Any]]" = None,
         enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,
+        min_pool: int = DEFAULT_MIN_POOL,
+        max_pool: int = DEFAULT_MAX_POOL,
+        pool_timeout: float = POOL_TIMEOUT,
+        pool_recycle: int = POOL_RECYCLE,
+        pool_instance: "Optional[AiosqliteConnectionPool]" = None,
     ) -> None:
         """Initialize Aiosqlite configuration.
 
@@ -63,6 +238,11 @@ class AiosqliteConfig(NoPoolAsyncConfig[AiosqliteConnection, AiosqliteDriver]):
             migration_config: Migration configuration
             enable_adapter_cache: Enable SQL compilation caching
             adapter_cache_size: Max cached SQL statements
+            min_pool: Minimum number of connections to maintain (default: 5)
+            max_pool: Maximum number of connections allowed (default: 20)
+            pool_timeout: Pool checkout timeout in seconds (default: 30.0)
+            pool_recycle: Connection recycle time in seconds (default: 3600)
+            pool_instance: Pre-created pool instance
 
         Example:
             >>> config = AiosqliteConfig(
@@ -83,28 +263,58 @@ class AiosqliteConfig(NoPoolAsyncConfig[AiosqliteConnection, AiosqliteDriver]):
 
         self.statement_config = statement_config or SQLConfig()
         self.default_row_type = default_row_type
+        self.min_pool = min_pool
+        self.max_pool = max_pool
+        self.pool_timeout = pool_timeout
+        self.pool_recycle = pool_recycle
+
         super().__init__(
+            pool_instance=pool_instance,
             migration_config=migration_config,
             enable_adapter_cache=enable_adapter_cache,
             adapter_cache_size=adapter_cache_size,
         )
 
+    def _get_connection_config_dict(self) -> "dict[str, Any]":
+        """Get connection configuration as plain dict for pool creation."""
+        config: "dict[str, Any]" = dict(self.connection_config)  # noqa: UP037
+        config.pop("extra", None)
+        return {k: v for k, v in config.items() if v is not None}
+
+    async def _create_pool(self) -> "AiosqliteConnectionPool":
+        """Create the Aiosqlite connection pool."""
+        connection_params = self._get_connection_config_dict()
+        pool = AiosqliteConnectionPool(
+            connection_params=connection_params,
+            min_pool=self.min_pool,
+            max_pool=self.max_pool,
+            timeout=self.pool_timeout,
+            recycle=self.pool_recycle,
+        )
+        await pool.initialize()
+        return pool
+
+    async def _close_pool(self) -> None:
+        """Close the connection pool."""
+        if self.pool_instance:
+            await self.pool_instance.close()
+
     async def create_connection(self) -> "AiosqliteConnection":
-        """Create a single async connection.
+        """Create a single async connection (bypasses pool).
 
         Returns:
             An Aiosqlite connection instance.
         """
         try:
-            # Use connection config directly (extras already merged)
-            return await aiosqlite.connect(**self.connection_config)
+            config = self._get_connection_config_dict()
+            return await aiosqlite.connect(**config)
         except Exception as e:
             msg = f"Could not configure the Aiosqlite connection. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e
 
     @asynccontextmanager
-    async def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[AiosqliteConnection, None]":
-        """Provide an async connection context manager.
+    async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[AiosqliteConnection, None]":
+        """Provide a pooled async connection context manager.
 
         Args:
             *args: Additional arguments.
@@ -113,14 +323,12 @@ class AiosqliteConfig(NoPoolAsyncConfig[AiosqliteConnection, AiosqliteDriver]):
         Yields:
             An Aiosqlite connection instance.
         """
-        connection = await self.create_connection()
-        try:
+        pool = await self.provide_pool()
+        async with pool.get_connection() as connection:
             yield connection
-        finally:
-            await connection.close()
 
     @asynccontextmanager
-    async def provide_session(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[AiosqliteDriver, None]":
+    async def provide_session(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[AiosqliteDriver, None]":
         """Provide an async driver session context manager.
 
         Args:

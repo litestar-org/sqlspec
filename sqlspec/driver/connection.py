@@ -5,11 +5,12 @@ across database adapter implementations.
 """
 
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, Optional, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
 
+from sqlspec.typing import ConnectionT
 from sqlspec.utils.type_guards import is_async_transaction_capable, is_sync_transaction_capable
 
 __all__ = (
@@ -22,8 +23,7 @@ __all__ = (
 )
 
 
-ConnectionT = TypeVar("ConnectionT")
-PoolT = TypeVar("PoolT")
+# Type variables replaced with Any for mypyc compatibility
 
 
 @contextmanager
@@ -65,7 +65,7 @@ def managed_transaction_sync(connection: ConnectionT, auto_commit: bool = True) 
         return
 
     try:
-        yield cast("ConnectionT", connection)
+        yield cast("Any", connection)
         cast("Any", connection).commit()
     except Exception:
         # Some databases (like DuckDB) throw an error if rollback is called
@@ -86,8 +86,8 @@ def managed_transaction_sync(connection: ConnectionT, auto_commit: bool = True) 
 
 @asynccontextmanager
 async def managed_connection_async(
-    config: Any, provided_connection: Optional[ConnectionT] = None
-) -> "AsyncIterator[ConnectionT]":
+    config: Any, provided_connection: Optional[Any] = None
+) -> "AsyncIterator[Any]":
     """Async context manager for database connections.
 
     Args:
@@ -107,7 +107,7 @@ async def managed_connection_async(
 
 
 @asynccontextmanager
-async def managed_transaction_async(connection: ConnectionT, auto_commit: bool = True) -> "AsyncIterator[ConnectionT]":
+async def managed_transaction_async(connection: Any, auto_commit: bool = True) -> "AsyncIterator[Any]":
     """Async context manager for database transactions.
 
     Args:
@@ -125,7 +125,7 @@ async def managed_transaction_async(connection: ConnectionT, auto_commit: bool =
         return
 
     try:
-        yield cast("ConnectionT", connection)
+        yield cast("Any", connection)
         await cast("Any", connection).commit()
     except Exception:
         # Some databases (like DuckDB) throw an error if rollback is called

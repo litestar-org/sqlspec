@@ -51,34 +51,43 @@ if TYPE_CHECKING:
 PYDANTIC_USE_FAILFAST = False  # leave permanently disabled for now
 
 
-T = TypeVar("T")
-ConnectionT = TypeVar("ConnectionT")
-"""Type variable for connection types.
+# TypeVars with TYPE_CHECKING guard for mypyc compatibility
+if TYPE_CHECKING:
+    T = TypeVar("T")
+    ConnectionT = TypeVar("ConnectionT")
+    """Type variable for connection types.
 
-:class:`~sqlspec.typing.ConnectionT`
-"""
-PoolT = TypeVar("PoolT")
-"""Type variable for pool types.
+    :class:`~sqlspec.typing.ConnectionT`
+    """
+    PoolT = TypeVar("PoolT")
+    """Type variable for pool types.
 
-:class:`~sqlspec.typing.PoolT`
-"""
-PoolT_co = TypeVar("PoolT_co", covariant=True)
-"""Type variable for covariant pool types.
+    :class:`~sqlspec.typing.PoolT`
+    """
+    PoolT_co = TypeVar("PoolT_co", covariant=True)
+    """Type variable for covariant pool types.
 
-:class:`~sqlspec.typing.PoolT_co`
-"""
-ModelT = TypeVar("ModelT", bound="Union[dict[str, Any], Struct, BaseModel, DataclassProtocol]")
-"""Type variable for model types.
+    :class:`~sqlspec.typing.PoolT_co`
+    """
+    ModelT = TypeVar("ModelT", bound="Union[dict[str, Any], Struct, BaseModel, DataclassProtocol]")
+    """Type variable for model types.
 
-:class:`dict[str, Any]` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol`
-"""
+    :class:`dict[str, Any]` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol`
+    """
+    RowT = TypeVar("RowT", bound="dict[str, Any]")
+else:
+    T = Any
+    ConnectionT = Any
+    PoolT = Any
+    PoolT_co = Any
+    ModelT = Any
+    RowT = dict[str, Any]
 
 
 DictRow: TypeAlias = "dict[str, Any]"
 """Type variable for DictRow types."""
 TupleRow: TypeAlias = "tuple[Any, ...]"
 """Type variable for TupleRow types."""
-RowT = TypeVar("RowT", default=dict[str, Any])
 
 SupportedSchemaModel: TypeAlias = "Union[Struct, BaseModel, DataclassProtocol]"
 """Type alias for pydantic or msgspec models.

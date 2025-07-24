@@ -11,6 +11,8 @@ and provides high-quality simulated behavior for others.
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
+from mypy_extensions import trait
+
 from sqlspec.exceptions import PipelineExecutionError
 from sqlspec.statement.filters import StatementFilter
 from sqlspec.statement.result import SQLResult
@@ -51,6 +53,7 @@ class PipelineOperation:
     original_params: "Optional[Any]" = None
 
 
+@trait
 class SyncPipelinedExecutionMixin:
     """Mixin providing pipeline execution for sync drivers."""
 
@@ -74,7 +77,7 @@ class SyncPipelinedExecutionMixin:
             A new Pipeline instance for queuing operations
         """
         return Pipeline(
-            driver=cast("SyncDriverAdapterBase[Any, Any]", self),
+            driver=cast("SyncDriverAdapterBase", self),
             isolation_level=isolation_level,
             continue_on_error=continue_on_error,
             max_operations=max_operations,
@@ -82,6 +85,7 @@ class SyncPipelinedExecutionMixin:
         )
 
 
+@trait
 class AsyncPipelinedExecutionMixin:
     """Async version of pipeline execution mixin."""
 
@@ -95,7 +99,7 @@ class AsyncPipelinedExecutionMixin:
     ) -> "AsyncPipeline":
         """Create a new async pipeline for batch operations."""
         return AsyncPipeline(
-            driver=cast("AsyncDriverAdapterBase[Any, Any]", self),
+            driver=cast("AsyncDriverAdapterBase", self),
             isolation_level=isolation_level,
             continue_on_error=continue_on_error,
             max_operations=max_operations,
@@ -341,7 +345,7 @@ class AsyncPipeline:
 
     def __init__(
         self,
-        driver: "AsyncDriverAdapterBase[Any, Any]",
+        driver: "AsyncDriverAdapterBase",
         isolation_level: "Optional[str]" = None,
         continue_on_error: bool = False,
         max_operations: int = 1000,

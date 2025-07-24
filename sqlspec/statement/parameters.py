@@ -148,13 +148,13 @@ class TypedParameter:
         The system automatically wraps parameters with type information.
     """
 
-    __slots__ = ("semantic_name", "sqlglot_type", "type_hint", "value")
+    __slots__ = ("data_type", "semantic_name", "type_hint", "value")
 
     def __init__(
-        self, value: Any, sqlglot_type: "exp.DataType", type_hint: str, semantic_name: "Optional[str]" = None
+        self, value: Any, data_type: "exp.DataType", type_hint: str, semantic_name: "Optional[str]" = None
     ) -> None:
         self.value = value
-        self.sqlglot_type = sqlglot_type
+        self.data_type = data_type
         self.type_hint = type_hint
         self.semantic_name = semantic_name
 
@@ -181,7 +181,7 @@ class TypedParameter:
         # mypyc removes __slots__ at runtime, so we hardcode the comparison
         return (
             self.value == other.value
-            and self.sqlglot_type == other.sqlglot_type
+            and self.data_type == other.data_type
             and self.type_hint == other.type_hint
             and self.semantic_name == other.semantic_name
         )
@@ -191,7 +191,7 @@ class TypedParameter:
         # mypyc removes __slots__ at runtime, so we hardcode the fields
         field_strs = [
             f"semantic_name={self.semantic_name!r}",
-            f"sqlglot_type={self.sqlglot_type!r}",
+            f"data_type={self.data_type!r}",
             f"type_hint={self.type_hint!r}",
             f"value={self.value!r}",
         ]
@@ -224,14 +224,12 @@ class ParameterStyleConversionState:
 
     def __hash__(self) -> int:
         """Hash based on transformation state and style."""
-        return hash(
-            (
-                self.was_transformed,
-                self.transformation_style,
-                tuple(self.original_styles) if self.original_styles else None,
-                tuple(sorted(self.placeholder_map.items())) if self.placeholder_map else None,
-            )
-        )
+        return hash((
+            self.was_transformed,
+            self.transformation_style,
+            tuple(self.original_styles) if self.original_styles else None,
+            tuple(sorted(self.placeholder_map.items())) if self.placeholder_map else None,
+        ))
 
     def __init__(
         self,
@@ -257,7 +255,6 @@ class ParameterStyleConversionState:
         """Equality comparison compatible with dataclass.__eq__."""
         if not isinstance(other, type(self)):
             return False
-        # mypyc removes __slots__ at runtime, so we hardcode the comparison
         return (
             self.was_transformed == other.was_transformed
             and self.original_styles == other.original_styles
@@ -269,7 +266,6 @@ class ParameterStyleConversionState:
 
     def __repr__(self) -> str:
         """String representation compatible with dataclass.__repr__."""
-        # mypyc removes __slots__ at runtime, so we hardcode the fields
         field_strs = [
             f"original_param_info={self.original_param_info!r}",
             f"original_styles={self.original_styles!r}",
@@ -288,13 +284,11 @@ class ConvertedParameters:
 
     def __hash__(self) -> int:
         """Hash based on transformed SQL and conversion state."""
-        return hash(
-            (
-                self.transformed_sql,
-                self.conversion_state,
-                tuple(param.placeholder_text for param in self.parameter_info),
-            )
-        )
+        return hash((
+            self.transformed_sql,
+            self.conversion_state,
+            tuple(param.placeholder_text for param in self.parameter_info),
+        ))
 
     def __init__(
         self,
@@ -312,7 +306,6 @@ class ConvertedParameters:
         """Equality comparison compatible with dataclass.__eq__."""
         if not isinstance(other, type(self)):
             return False
-        # mypyc removes __slots__ at runtime, so we hardcode the comparison
         return (
             self.transformed_sql == other.transformed_sql
             and self.parameter_info == other.parameter_info
@@ -322,7 +315,6 @@ class ConvertedParameters:
 
     def __repr__(self) -> str:
         """String representation compatible with dataclass.__repr__."""
-        # mypyc removes __slots__ at runtime, so we hardcode the fields
         field_strs = [
             f"conversion_state={self.conversion_state!r}",
             f"merged_parameters={self.merged_parameters!r}",
@@ -950,7 +942,7 @@ class ParameterConverter:
             if force_wrap_literals:
                 type_hint, sqlglot_type = infer_type_from_value(value)
                 return TypedParameter(
-                    value=value, sqlglot_type=sqlglot_type, type_hint=type_hint, semantic_name=semantic_name
+                    value=value, data_type=sqlglot_type, type_hint=type_hint, semantic_name=semantic_name
                 )
 
             # Don't wrap simple scalar types unless they need special handling
@@ -961,7 +953,7 @@ class ParameterConverter:
                     # Wrap large integers as bigint
                     type_hint, sqlglot_type = infer_type_from_value(value)
                     return TypedParameter(
-                        value=value, sqlglot_type=sqlglot_type, type_hint=type_hint, semantic_name=semantic_name
+                        value=value, data_type=sqlglot_type, type_hint=type_hint, semantic_name=semantic_name
                     )
                 # Otherwise, return unwrapped for performance
                 return value
@@ -970,7 +962,7 @@ class ParameterConverter:
             if isinstance(value, (datetime, date, time, Decimal, dict, list, tuple, bytes, bool, type(None))):
                 type_hint, sqlglot_type = infer_type_from_value(value)
                 return TypedParameter(
-                    value=value, sqlglot_type=sqlglot_type, type_hint=type_hint, semantic_name=semantic_name
+                    value=value, data_type=sqlglot_type, type_hint=type_hint, semantic_name=semantic_name
                 )
 
             # Default: return unwrapped

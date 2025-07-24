@@ -22,12 +22,12 @@ from sqlspec.driver.mixins import (
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, RowT
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
+
 
 __all__ = ("SqliteConnection", "SqliteDriver")
 
@@ -37,7 +37,7 @@ SqliteConnection: TypeAlias = sqlite3.Connection
 
 
 class SqliteDriver(
-    SyncDriverAdapterBase[SqliteConnection, RowT],
+    SyncDriverAdapterBase[SqliteConnection],
     SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -56,13 +56,8 @@ class SqliteDriver(
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK, ParameterStyle.NAMED_COLON)
     default_parameter_style: ParameterStyle = ParameterStyle.QMARK
 
-    def __init__(
-        self,
-        connection: "SqliteConnection",
-        config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = dict[str, Any],
-    ) -> None:
-        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
+    def __init__(self, connection: "SqliteConnection", config: "Optional[SQLConfig]" = None) -> None:
+        super().__init__(connection=connection, config=config)
 
     # SQLite-specific type coercion overrides
     def _coerce_boolean(self, value: Any) -> Any:
@@ -141,11 +136,13 @@ class SqliteDriver(
         # 3. We must preserve any existing user-provided named parameters
         # NOTE: Accessing _processing_context is not ideal but necessary until
         # the parameter style decision is moved earlier in the pipeline
-        if (
-            hasattr(statement, "_processing_context")
-            and statement._processing_context
-            and statement._processing_context.metadata.get("literals_parameterized")
-        ):
+        # Use try/except for better performance than hasattr
+        try:
+            processing_context = statement._processing_context
+        except AttributeError:
+            processing_context = None
+
+        if processing_context and processing_context.metadata.get("literals_parameterized"):
             # Check if there are other named parameters
             if detected_styles and ParameterStyle.NAMED_COLON in detected_styles:
                 # Keep named style to preserve user parameters

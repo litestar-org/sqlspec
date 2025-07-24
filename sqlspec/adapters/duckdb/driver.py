@@ -21,7 +21,7 @@ from sqlspec.driver.mixins import (
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import ArrowTable, DictRow, RowT
+from sqlspec.typing import ArrowTable
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -37,7 +37,7 @@ logger = get_logger("adapters.duckdb")
 
 
 class DuckDBDriver(
-    SyncDriverAdapterBase["DuckDBConnection", RowT],
+    SyncDriverAdapterBase["DuckDBConnection"],
     SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -65,13 +65,8 @@ class DuckDBDriver(
     supports_native_parquet_export: ClassVar[bool] = True
     supports_native_parquet_import: ClassVar[bool] = True
 
-    def __init__(
-        self,
-        connection: "DuckDBConnection",
-        config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
-    ) -> None:
-        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
+    def __init__(self, connection: "DuckDBConnection", config: "Optional[SQLConfig]" = None) -> None:
+        super().__init__(connection=connection, config=config)
 
     @staticmethod
     @contextmanager
