@@ -1,9 +1,8 @@
 """Common driver attributes and utilities."""
 
-import re
 from abc import ABC
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
 import sqlglot
 from mypy_extensions import mypyc_attr
@@ -11,15 +10,16 @@ from sqlglot import exp
 from sqlglot.tokens import TokenType
 
 from sqlspec.exceptions import NotFoundError
+from sqlspec.statement.cache import anonymous_returns_rows_cache
 from sqlspec.statement.parameters import ParameterStyle, ParameterValidator, TypedParameter
-from sqlspec.statement.pipeline import create_pipeline_from_config
+from sqlspec.statement.pipeline import SQLTransformContext, create_pipeline_from_config
 from sqlspec.statement.splitter import split_sql_script
+from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.statement import SQLConfig
     from sqlspec.typing import ConnectionT, T
 
 
@@ -35,7 +35,12 @@ class CommonDriverAttributesMixin(ABC):
 
     __slots__ = ("config", "connection")
 
-    connection_type: "ClassVar[type[ConnectionT]]"  # pyright: ignore
+    connection: "ConnectionT"  # type: ignore[valid-type]
+    """The connection object."""
+    config: "Optional[SQLConfig]"
+    """The SQL configuration."""
+
+    connection_type: "ClassVar[type[ConnectionT]]"  # type: ignore[valid-type]
     """The connection type used by this driver adapter."""
 
     dialect: "DialectType"
@@ -53,8 +58,8 @@ class CommonDriverAttributesMixin(ABC):
     supports_native_arrow_import: "ClassVar[bool]" = False
     """Indicates if the driver supports native Arrow import operations."""
 
-    def _connection(self, connection: Optional[Any] = None) -> Any:
-        return connection or self.connection
+    def _connection(self, connection: "Optional[Any]" = None) -> "Any":
+        raise NotImplementedError
 
     def returns_rows(self, expression: "Optional[exp.Expression]") -> bool:
         """Check if the SQL expression is expected to return rows.
@@ -81,34 +86,47 @@ class CommonDriverAttributesMixin(ABC):
     def _check_anonymous_returns_rows(self, expression: "exp.Anonymous") -> bool:
         """Check if an Anonymous expression returns rows.
 
-        Handles SQL that failed to parse (often due to database-specific placeholders) by:
-        1. Attempting to re-parse with placeholders sanitized
-        2. Using tokenizer as fallback to detect row-returning statements
+        Handles SQL that failed to parse by:
+        1. Checking the cache for previously analyzed expressions
+        2. Attempting to re-parse the SQL directly (without sanitization)
+        3. Using tokenizer as fallback to detect row-returning statements
+
+        Results are cached to avoid re-parsing the same SQL repeatedly.
         """
         sql_text = str(expression.this) if expression.this else ""
         if not sql_text.strip():
             return False
 
-        placeholder_regex = re.compile(r"(\?|%s|\$\d+|:\w+|%\(\w+\)s)")
+        # Check cache first
+        cache_key = f"returns_rows:{hash(sql_text)}"
+        cached_result = anonymous_returns_rows_cache.get(cache_key)
+        if cached_result is not None:
+            return bool(cached_result)
 
+        # Perform the actual check
+        result = self._check_anonymous_returns_rows_uncached(sql_text)
+
+        # Cache the result
+        anonymous_returns_rows_cache.set(cache_key, result)
+
+        return result
+
+    def _check_anonymous_returns_rows_uncached(self, sql_text: str) -> bool:
+        """Uncached implementation of anonymous expression checking."""
         try:
-            sanitized_sql = placeholder_regex.sub("1", sql_text)
+            # Try parsing the SQL directly - SQLGlot might succeed this time
+            parsed = sqlglot.parse_one(sql_text, read=None)
+            if isinstance(parsed, (exp.Select, exp.Values, exp.Table, exp.Show, exp.Describe, exp.Pragma, exp.Command)):
+                return True
+            if isinstance(parsed, exp.With) and parsed.expressions:
+                return self.returns_rows(parsed.expressions[-1])
+            if isinstance(parsed, (exp.Insert, exp.Update, exp.Delete)):
+                return bool(parsed.find(exp.Returning))
+            # Don't return False for unrecognized types - fall through to tokenizer
+        except Exception:  # noqa: S110
+            pass  # Fall through to tokenizer
 
-            if sanitized_sql != sql_text:
-                parsed = sqlglot.parse_one(sanitized_sql, read=None)
-                if isinstance(
-                    parsed, (exp.Select, exp.Values, exp.Table, exp.Show, exp.Describe, exp.Pragma, exp.Command)
-                ):
-                    return True
-                if isinstance(parsed, exp.With) and parsed.expressions:
-                    return self.returns_rows(parsed.expressions[-1])
-                if isinstance(parsed, (exp.Insert, exp.Update, exp.Delete)):
-                    return bool(parsed.find(exp.Returning))
-                if not isinstance(parsed, exp.Anonymous):
-                    return False
-        except Exception:
-            logger.debug("Could not parse using placeholders.  Using tokenizer. %s", sql_text)
-
+        # Use tokenizer as fallback
         try:
             tokens = list(sqlglot.tokenize(sql_text, read=None))
             row_returning_tokens = {
@@ -123,12 +141,49 @@ class CommonDriverAttributesMixin(ABC):
             for token in tokens:
                 if token.token_type in {TokenType.COMMENT, TokenType.SEMICOLON}:
                     continue
+                # Found a significant token, check if it's row-returning
                 return token.token_type in row_returning_tokens
 
         except Exception:
             return False
 
         return False
+
+    def _select_parameter_style(self, statement: "Union[SQL, exp.Expression]") -> "ParameterStyle":
+        """Select the best parameter style based on detected styles in SQL.
+
+        This method examines the SQL statement for existing parameter placeholders
+        and selects an appropriate style that the driver supports. If mixed or
+        unsupported styles are detected, it falls back to the default style.
+
+        Args:
+            statement: SQL statement to analyze
+
+        Returns:
+            The selected parameter style to use for this statement
+        """
+
+        # Extract raw SQL for analysis
+        sql_str = statement.to_sql(placeholder_style=None) if isinstance(statement, SQL) else str(statement)
+
+        validator = ParameterValidator()
+        param_infos = validator.extract_parameters(sql_str)
+
+        if not param_infos:
+            return self.default_parameter_style
+
+        detected_styles = {p.style for p in param_infos}
+
+        # Check for unsupported or mixed styles
+        if detected_styles - set(self.supported_parameter_styles) or len(detected_styles) > 1:
+            return self.default_parameter_style
+
+        # Single supported style detected
+        detected_style = next(iter(detected_styles))
+        if detected_style not in self.supported_parameter_styles:
+            return self.default_parameter_style
+
+        return detected_style
 
     @staticmethod
     def check_not_found(item_or_none: "Optional[T]" = None) -> "T":
@@ -294,9 +349,9 @@ class CommonDriverAttributesMixin(ABC):
             return []
 
         if not isinstance(parameters, (list, tuple)):
-            return [self._coerce_parameter(parameters) if isinstance(parameters, TypedParameter) else parameters]
+            return [parameters.value if isinstance(parameters, TypedParameter) else parameters]
 
-        return [self._coerce_parameter(p) if isinstance(p, TypedParameter) else p for p in parameters]
+        return [p.value if isinstance(p, TypedParameter) else p for p in parameters]
 
     def _prepare_driver_parameters_many(self, parameters: Any) -> "list[Any]":
         """Prepare parameter sequences for executemany operations.
@@ -313,21 +368,6 @@ class CommonDriverAttributesMixin(ABC):
         if not parameters:
             return []
         return [self._prepare_driver_parameters(param_set) for param_set in parameters]
-
-    def _coerce_parameter(self, param: "TypedParameter") -> Any:
-        """Coerce TypedParameter to driver-safe value.
-
-        Extracts the underlying value from a TypedParameter object.
-        Individual drivers can override this method to perform driver-specific
-        type coercion using the rich type information available in TypedParameter.
-
-        Args:
-            param: TypedParameter object with value and type information
-
-        Returns:
-            The underlying parameter value suitable for the database driver
-        """
-        return param.value
 
     def _apply_pipeline_transformations(
         self, expression: "exp.Expression", parameters: Any = None, config: "Optional[SQLConfig]" = None
@@ -347,14 +387,9 @@ class CommonDriverAttributesMixin(ABC):
             Tuple of (transformed expression, processed parameters)
         """
         config = config or self.config
-
-        # Import here to avoid circular dependency
-        from sqlspec.statement.pipeline import SQLTransformContext
-
-        # Create pipeline from config
+        if config is None:
+            config = SQLConfig()
         pipeline = create_pipeline_from_config(config, driver_adapter=self)
-
-        # Create context with driver adapter reference
         context = SQLTransformContext(
             current_expression=expression,
             original_expression=expression,
@@ -363,8 +398,5 @@ class CommonDriverAttributesMixin(ABC):
             metadata={},
             driver_adapter=self,
         )
-
-        # Apply pipeline
         result_context = pipeline(context)
-
         return result_context.current_expression, result_context.merged_parameters

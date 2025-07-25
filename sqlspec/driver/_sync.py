@@ -29,6 +29,21 @@ EMPTY_FILTERS: "list[StatementFilter]" = []
 class SyncDriverAdapterBase(CommonDriverAttributesMixin, ABC):
     __slots__ = ()
 
+    def __init__(
+        self,
+        connection: "ConnectionT",  # pyright: ignore
+        config: "Optional[SQLConfig]" = None,
+    ) -> None:
+        """Initialize sync driver adapter.
+
+        Args:
+            connection: Database connection instance
+            config: SQL configuration
+        """
+        self.connection = connection
+        self.config = config or SQLConfig()
+        super().__init__()
+
     def _build_statement(
         self,
         statement: "Union[Statement, QueryBuilder]",
@@ -47,7 +62,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, ABC):
         if isinstance(statement, SQL):
             if parameters or kwargs:
                 new_config = _config
-                if self.dialect and not new_config.dialect:
+                if self.dialect and new_config and not new_config.dialect:
                     new_config = new_config.replace(dialect=self.dialect)
                 sql_source = statement._raw_sql or statement._statement
                 existing_state = {
@@ -73,7 +88,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, ABC):
                 return SQL(sql_source, config=new_config, _existing_state=existing_state)
             return statement
         new_config = _config
-        if self.dialect and not new_config.dialect:
+        if self.dialect and new_config and not new_config.dialect:
             new_config = new_config.replace(dialect=self.dialect)
         return SQL(statement, *parameters, config=new_config, **kwargs)
 

@@ -15,7 +15,6 @@ from sqlspec.statement.builder import QueryBuilder
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow
 
 
 @pytest.fixture
@@ -50,7 +49,6 @@ def test_adbc_driver_initialization(mock_adbc_connection: Mock) -> None:
     assert driver.dialect == "postgres"  # Based on mock connection info
     assert driver.supports_native_arrow_export is True
     assert driver.supports_native_arrow_import is True
-    assert driver.default_row_type == DictRow
     assert isinstance(driver.config, SQLConfig)
 
 
@@ -61,6 +59,7 @@ def test_adbc_driver_initialization_with_config(mock_adbc_connection: Mock) -> N
     driver = AdbcDriver(connection=mock_adbc_connection, config=config)
 
     # The driver updates the config to include the dialect
+    assert driver.config is not None
     assert driver.config.parse_errors_as_warnings == config.parse_errors_as_warnings
     assert driver.config.dialect == "postgres"  # Added by driver
 
@@ -211,7 +210,7 @@ def test_adbc_driver_get_cursor_context_manager(adbc_driver: AdbcDriver, mock_cu
     mock_connection = adbc_driver.connection
     mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
 
-    with AdbcDriver._get_cursor(mock_connection) as cursor:
+    with AdbcDriver._get_cursor(mock_connection) as cursor:  # pyright: ignore
         assert cursor == mock_cursor
 
     # Cursor should be closed after context exit
@@ -226,7 +225,7 @@ def test_adbc_driver_get_cursor_exception_handling(adbc_driver: AdbcDriver) -> N
     mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
 
     # Should not raise exception even if cursor.close() fails
-    with AdbcDriver._get_cursor(mock_connection) as cursor:
+    with AdbcDriver._get_cursor(mock_connection) as cursor:  # pyright: ignore
         assert cursor == mock_cursor
 
 
@@ -328,9 +327,11 @@ def test_adbc_driver_fetch_arrow_table_list_parameters(adbc_driver: AdbcDriver, 
     mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
 
     # Setup mock cursor for ADBC native Arrow support
-    mock_arrow_table = pa.table(
-        {"id": [1, 2], "name": ["User 1", "User 2"], "email": ["user1@example.com", "user2@example.com"]}
-    )
+    mock_arrow_table = pa.table({
+        "id": [1, 2],
+        "name": ["User 1", "User 2"],
+        "email": ["user1@example.com", "user2@example.com"],
+    })
     mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
 
     # Pass parameters directly as string SQL, since that's the more common pattern

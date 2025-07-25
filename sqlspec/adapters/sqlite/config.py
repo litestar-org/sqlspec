@@ -11,9 +11,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, TypedDict, Uni
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.sqlite.driver import SqliteConnection, SqliteDriver
-from sqlspec.config import NoPoolSyncConfig, SyncDatabaseConfig
+from sqlspec.config import SyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import DictRow
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -21,9 +20,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Performance constants for SQLite pooling optimization
-DEFAULT_POOL_SIZE: Final[int] = 20
-MAX_OVERFLOW: Final[int] = 10
+DEFAULT_MIN_POOL: Final[int] = 5
+DEFAULT_MAX_POOL: Final[int] = 20
 POOL_TIMEOUT: Final[float] = 30.0
 POOL_RECYCLE: Final[int] = 3600  # 1 hour
 WAL_PRAGMA_SQL: Final[str] = "PRAGMA journal_mode = WAL"
@@ -38,15 +36,15 @@ class SqliteConnectionParams(TypedDict, total=False):
     database: NotRequired[str]
     timeout: NotRequired[float]
     detect_types: NotRequired[int]
-    isolation_level: NotRequired[Optional[str]]
+    isolation_level: "NotRequired[Optional[str]]"
     check_same_thread: NotRequired[bool]
-    factory: NotRequired[Optional[type[SqliteConnection]]]
+    factory: "NotRequired[Optional[type[SqliteConnection]]]"
     cached_statements: NotRequired[int]
     uri: NotRequired[bool]
-    extra: NotRequired[dict[str, Any]]
+    extra: "NotRequired[dict[str, Any]]"
 
 
-__all__ = ("SqliteConfig", "SqliteConnectionParams", "SqliteConnectionPool", "SqlitePooledConfig", "sqlite3")
+__all__ = ("SqliteConfig", "SqliteConnectionParams", "SqliteConnectionPool", "sqlite3")
 
 
 class SqliteConnectionPool:
@@ -63,38 +61,40 @@ class SqliteConnectionPool:
         "_created_connections",
         "_lock",
         "_max_overflow",
+        "_max_pool_size",
+        "_min_pool_size",
         "_pool",
-        "_pool_size",
         "_recycle",
         "_timeout",
     )
 
     def __init__(
         self,
-        connection_params: dict[str, Any],
-        pool_size: int = DEFAULT_POOL_SIZE,
-        max_overflow: int = MAX_OVERFLOW,
+        connection_params: "dict[str, Any]",
+        min_pool_size: int = DEFAULT_MIN_POOL,
+        max_pool_size: int = DEFAULT_MAX_POOL,
         timeout: float = POOL_TIMEOUT,
         recycle: int = POOL_RECYCLE,
     ) -> None:
-        self._pool: Queue[SqliteConnection] = Queue(maxsize=pool_size + max_overflow)
+        """Initialize the connection pool."""
+        self._pool: "Queue[SqliteConnection]" = Queue(maxsize=max_pool_size)  # noqa: UP037
         self._lock = threading.RLock()
-        self._pool_size = pool_size
-        self._max_overflow = max_overflow
+        self._min_pool_size = min_pool_size
+        self._max_pool_size = max_pool_size
         self._timeout = timeout
         self._recycle = recycle
         self._connection_params = connection_params
         self._created_connections = 0
         self._checked_out = 0
-        self._connection_times: dict[int, float] = {}  # Track connection creation times
+        self._connection_times: "dict[int, float]" = {}  # noqa: UP037
 
         # Pre-populate core pool
-        for _ in range(min(pool_size, 5)):  # Start with 5 connections
-            try:
+        try:
+            for _ in range(min_pool_size):
                 conn = self._create_connection()
                 self._pool.put_nowait(conn)
-            except Full:
-                break
+        except Full:
+            pass  # Pool is full, stop creating connections
 
     def _create_connection(self) -> SqliteConnection:
         """Create a new SQLite connection with performance optimizations."""
@@ -126,6 +126,23 @@ class SqliteConnectionPool:
 
         return (time.time() - created_at) > self._recycle
 
+    def _is_connection_alive(self, connection: SqliteConnection) -> bool:
+        """Check if a connection is still alive and usable.
+
+        Args:
+            connection: Connection to check
+
+        Returns:
+            True if connection is alive, False otherwise
+        """
+        try:
+            cursor = connection.execute("SELECT 1")
+            cursor.close()
+        except Exception:
+            return False
+        else:
+            return True
+
     @contextmanager
     def get_connection(self) -> "Generator[SqliteConnection, None, None]":
         """Get a connection from the pool with automatic return."""
@@ -146,16 +163,15 @@ class SqliteConnectionPool:
                     connection = None
 
             except Empty:
-                # Pool is empty, check if we can create overflow connection
+                # Pool is empty, check if we can create new connection
                 with self._lock:
-                    if self._checked_out < (self._pool_size + self._max_overflow):
+                    if self._checked_out < self._max_pool_size:
                         connection = None  # Will create new one below
                     else:
-                        # Wait for a connection to become available
                         try:
                             connection = self._pool.get(timeout=self._timeout)
                         except Empty:
-                            msg = f"QueuePool limit of size {self._pool_size + self._max_overflow} reached, timeout {self._timeout}"
+                            msg = f"Connection pool limit of {self._max_pool_size} reached, timeout {self._timeout}"
                             raise RuntimeError(msg) from None
 
             # Create new connection if needed
@@ -173,32 +189,27 @@ class SqliteConnectionPool:
                 with self._lock:
                     self._checked_out -= 1
 
-                try:
-                    # Test connection is still alive
-                    connection.execute("SELECT 1")
-
-                    # Return to pool if space available
+                # Validate connection before returning to pool
+                if self._is_connection_alive(connection):
                     try:
                         self._pool.put_nowait(connection)
                     except Full:
-                        # Pool is full, close overflow connection
                         with suppress(Exception):
                             connection.close()
-
-                except Exception:
-                    # Connection is broken, close it
+                else:
+                    # Connection is dead, close it
                     with suppress(Exception):
                         connection.close()
 
     def close(self) -> None:
         """Close all connections in the pool."""
-        while True:
-            try:
+        try:
+            while True:
                 connection = self._pool.get_nowait()
                 with suppress(Exception):
                     connection.close()
-            except Empty:
-                break
+        except Empty:
+            pass  # Pool is empty
 
         # Clear connection time tracking
         with self._lock:
@@ -213,134 +224,29 @@ class SqliteConnectionPool:
         return self._checked_out
 
 
-class SqliteConfig(NoPoolSyncConfig[SqliteConnection, SqliteDriver]):
-    """Configuration for SQLite database connections with direct field-based configuration."""
+class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, SqliteDriver]):
+    """SQLite configuration with connection pooling for high performance.
 
-    driver_type: ClassVar[type[SqliteDriver]] = SqliteDriver
-    connection_type: ClassVar[type[SqliteConnection]] = SqliteConnection
-    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark", "named_colon")
-    default_parameter_style: ClassVar[str] = "qmark"
-
-    def __init__(
-        self,
-        *,
-        connection_config: "Optional[Union[SqliteConnectionParams, dict[str, Any]]]" = None,
-        statement_config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
-        migration_config: "Optional[dict[str, Any]]" = None,
-        enable_adapter_cache: bool = True,
-        adapter_cache_size: int = 1000,
-    ) -> None:
-        """Initialize SQLite configuration.
-
-        Args:
-            connection_config: Connection configuration parameters as TypedDict
-            statement_config: Default SQL statement configuration
-            default_row_type: Default row type for results
-            migration_config: Migration configuration
-            enable_adapter_cache: Enable SQL compilation caching
-            adapter_cache_size: Max cached SQL statements
-        """
-        # Store the connection config and extract/merge extras
-        self.connection_config: dict[str, Any] = (
-            dict(connection_config) if connection_config else {"database": ":memory:"}
-        )
-        if "extra" in self.connection_config:
-            extras = self.connection_config.pop("extra")
-            self.connection_config.update(extras)
-
-        # Store other config
-        self.statement_config = statement_config or SQLConfig()
-        self.default_row_type = default_row_type
-        super().__init__(
-            migration_config=migration_config,
-            enable_adapter_cache=enable_adapter_cache,
-            adapter_cache_size=adapter_cache_size,
-        )
-
-    def _get_connection_config_dict(self) -> dict[str, Any]:
-        """Get connection configuration as plain dict for external library.
-
-        Returns:
-            Dictionary with connection parameters, filtering out None values.
-        """
-        config: dict[str, Any] = dict(self.connection_config)
-        # Remove extra key if it exists (it should already be merged)
-        config.pop("extra", None)
-        # Filter out None values since sqlite3.connect doesn't accept them
-        return {k: v for k, v in config.items() if v is not None}
-
-    def create_connection(self) -> SqliteConnection:
-        """Create and return a SQLite connection."""
-        config = self._get_connection_config_dict()
-        connection = sqlite3.connect(**config)
-        connection.row_factory = sqlite3.Row
-        return connection  # type: ignore[no-any-return]
-
-    @contextmanager
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[SqliteConnection, None, None]":
-        """Provide a SQLite connection context manager.
-
-        Args:
-            *args: Variable length argument list
-            **kwargs: Arbitrary keyword arguments
-
-        Yields:
-            SqliteConnection: A SQLite connection
-
-        """
-        connection = self.create_connection()
-        try:
-            yield connection
-        finally:
-            connection.close()
-
-    @contextmanager
-    def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[SqliteDriver, None, None]":
-        """Provide a SQLite driver session context manager.
-
-        Args:
-            *args: Variable length argument list
-            **kwargs: Arbitrary keyword arguments
-
-        Yields:
-            SqliteDriver: A SQLite driver
-        """
-        with self.provide_connection(*args, **kwargs) as connection:
-            statement_config = self.statement_config
-            # Inject parameter style info if not already set
-            if statement_config.allowed_parameter_styles is None:
-                statement_config = statement_config.replace(
-                    allowed_parameter_styles=self.supported_parameter_styles,
-                    default_parameter_style=self.default_parameter_style,
-                )
-            yield self.driver_type(connection=connection, config=statement_config)
-
-
-class SqlitePooledConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, SqliteDriver]):
-    """SQLite configuration with QueuePool-like connection pooling for high performance.
-
-    This configuration implements connection pooling similar to SQLAlchemy's QueuePool
-    to achieve the targeted 4.5x performance improvement (2k → 9k TPS) for SQLite workloads.
+    This configuration implements connection pooling to achieve the targeted 4.5x
+    performance improvement (2k → 9k TPS) for SQLite workloads.
     """
 
-    driver_type: ClassVar[type[SqliteDriver]] = SqliteDriver
-    connection_type: ClassVar[type[SqliteConnection]] = SqliteConnection
-    supports_connection_pooling: ClassVar[bool] = True
-    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark", "named_colon")
-    default_parameter_style: ClassVar[str] = "qmark"
+    driver_type: "ClassVar[type[SqliteDriver]]" = SqliteDriver
+    connection_type: "ClassVar[type[SqliteConnection]]" = SqliteConnection
+    supports_connection_pooling: "ClassVar[bool]" = True
+    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("qmark", "named_colon")
+    default_parameter_style: "ClassVar[str]" = "qmark"
 
     def __init__(
         self,
         *,
         connection_config: "Optional[Union[SqliteConnectionParams, dict[str, Any]]]" = None,
         statement_config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
         migration_config: "Optional[dict[str, Any]]" = None,
         enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,
-        pool_size: int = DEFAULT_POOL_SIZE,
-        max_overflow: int = MAX_OVERFLOW,
+        min_pool_size: int = DEFAULT_MIN_POOL,
+        max_pool_size: int = DEFAULT_MAX_POOL,
         pool_timeout: float = POOL_TIMEOUT,
         pool_recycle: int = POOL_RECYCLE,
         pool_instance: "Optional[SqliteConnectionPool]" = None,
@@ -350,27 +256,39 @@ class SqlitePooledConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPo
         Args:
             connection_config: Connection configuration parameters as TypedDict
             statement_config: Default SQL statement configuration
-            default_row_type: Default row type for results
             migration_config: Migration configuration
             enable_adapter_cache: Enable SQL compilation caching
             adapter_cache_size: Max cached SQL statements
-            pool_size: Core pool size (default: 20)
-            max_overflow: Max overflow connections (default: 10)
+            min_pool_size: Minimum number of connections to maintain (default: 5)
+            max_pool_size: Maximum number of connections allowed (default: 20)
             pool_timeout: Pool checkout timeout in seconds (default: 30.0)
             pool_recycle: Connection recycle time in seconds (default: 3600)
             pool_instance: Pre-created pool instance
         """
         # Store configuration
-        self.connection_config: dict[str, Any] = (
+        self.connection_config: "dict[str, Any]" = (  # noqa: UP037
             dict(connection_config) if connection_config else {"database": ":memory:"}
         )
         extras = self.connection_config.pop("extra", {})
         self.connection_config.update(extras)
 
+        # Check if this is an in-memory database
+        database = self.connection_config.get("database", ":memory:")
+        is_memory_db = self._is_memory_database(database)
+
+        # Override pool sizes for in-memory databases
+        if is_memory_db:
+            logger.warning(
+                "In-memory SQLite database detected. Disabling connection pooling to ensure data consistency. "
+                "Each pooled connection creates a separate in-memory database. Use a file-based database or "
+                "'file::memory:?cache=shared' with uri=True for shared memory access."
+            )
+            min_pool_size = 1
+            max_pool_size = 1
+
         self.statement_config = statement_config or SQLConfig()
-        self.default_row_type = default_row_type
-        self.pool_size = pool_size
-        self.max_overflow = max_overflow
+        self.min_pool_size = min_pool_size
+        self.max_pool_size = max_pool_size
         self.pool_timeout = pool_timeout
         self.pool_recycle = pool_recycle
 
@@ -381,9 +299,9 @@ class SqlitePooledConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPo
             adapter_cache_size=adapter_cache_size,
         )
 
-    def _get_connection_config_dict(self) -> dict[str, Any]:
+    def _get_connection_config_dict(self) -> "dict[str, Any]":
         """Get connection configuration as plain dict for pool creation."""
-        config: dict[str, Any] = dict(self.connection_config)
+        config: "dict[str, Any]" = dict(self.connection_config)  # noqa: UP037
         config.pop("extra", None)
         return {k: v for k, v in config.items() if v is not None}
 
@@ -392,11 +310,30 @@ class SqlitePooledConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPo
         connection_params = self._get_connection_config_dict()
         return SqliteConnectionPool(
             connection_params=connection_params,
-            pool_size=self.pool_size,
-            max_overflow=self.max_overflow,
+            min_pool_size=self.min_pool_size,
+            max_pool_size=self.max_pool_size,
             timeout=self.pool_timeout,
             recycle=self.pool_recycle,
         )
+
+    def _is_memory_database(self, database: str) -> bool:
+        """Check if the database is an in-memory database.
+
+        Args:
+            database: Database path or connection string
+
+        Returns:
+            True if this is an in-memory database
+        """
+        if not database:
+            return True
+
+        # Standard :memory: database
+        if database == ":memory:":
+            return True
+
+        # Check for URI-style memory database but NOT shared cache
+        return "file::memory:" in database and "cache=shared" not in database
 
     def _close_pool(self) -> None:
         """Close the connection pool."""
@@ -411,14 +348,14 @@ class SqlitePooledConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPo
         return connection  # type: ignore[no-any-return]
 
     @contextmanager
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[SqliteConnection, None, None]":
+    def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Generator[SqliteConnection, None, None]":
         """Provide a pooled SQLite connection context manager."""
         pool = self.provide_pool()
         with pool.get_connection() as connection:
             yield connection
 
     @contextmanager
-    def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[SqliteDriver, None, None]":
+    def provide_session(self, *args: "Any", **kwargs: "Any") -> "Generator[SqliteDriver, None, None]":
         """Provide a SQLite driver session using pooled connections."""
         with self.provide_connection(*args, **kwargs) as connection:
             statement_config = self.statement_config

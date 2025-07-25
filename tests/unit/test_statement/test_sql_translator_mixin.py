@@ -12,7 +12,6 @@ from sqlspec.driver.mixins._sql_translator import SQLTranslatorMixin
 from sqlspec.exceptions import SQLConversionError
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow
 
 
 class MockConnection:
@@ -21,7 +20,7 @@ class MockConnection:
     pass
 
 
-class MockDriver(SyncDriverAdapterBase[MockConnection, DictRow], SQLTranslatorMixin):
+class MockDriver(SyncDriverAdapterBase, SQLTranslatorMixin):
     """Mock driver with SQLTranslatorMixin for testing."""
 
     dialect = "sqlite"  # Use a real dialect for testing

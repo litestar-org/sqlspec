@@ -15,7 +15,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
+from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
@@ -60,6 +60,10 @@ class AsyncmyDriver(
     def __init__(self, connection: AsyncmyConnection, config: Optional[SQLConfig] = None) -> None:
         super().__init__(connection=connection, config=config)
 
+    def _connection(self, connection: "Optional[AsyncmyConnection]" = None) -> "AsyncmyConnection":
+        """Get the connection to use for the operation."""
+        return connection or self.connection
+
     @asynccontextmanager
     async def _get_cursor(
         self, connection: "Optional[AsyncmyConnection]" = None
@@ -78,25 +82,7 @@ class AsyncmyDriver(
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
-        validator = self.config.parameter_validator if self.config else ParameterValidator()
-        detected_styles = {p.style for p in validator.extract_parameters(statement.to_sql())}
-
-        # Determine target style based on what's in the SQL
-        target_style = self.default_parameter_style
-
-        # Check if there are unsupported styles
-        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
-        if unsupported_styles:
-            # Force conversion to default style
-            target_style = self.default_parameter_style
-        elif detected_styles:
-            # Prefer the first supported style found
-            for style in detected_styles:
-                if style in self.supported_parameter_styles:
-                    target_style = style
-                    break
-
-        # Compile with the determined style
+        target_style = self._select_parameter_style(statement)
         sql, params = self._get_compiled_sql(statement, target_style)
 
         if statement.is_many:
@@ -219,7 +205,3 @@ class AsyncmyDriver(
             sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
             await cursor.executemany(sql, data_for_ingest)
             return cursor.rowcount if cursor.rowcount is not None else -1
-
-    def _connection(self, connection: Optional["AsyncmyConnection"] = None) -> "AsyncmyConnection":
-        """Get the connection to use for the operation."""
-        return connection or self.connection

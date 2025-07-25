@@ -79,7 +79,6 @@ def test_config_initialization(connection_config: dict[str, Any], expected_confi
 
     # Check base class attributes
     assert isinstance(config.statement_config, SQLConfig)
-    assert config.default_row_type is dict
 
 
 def test_default_connection_config() -> None:
@@ -127,13 +126,16 @@ def test_provide_connection_success(mock_connect: MagicMock) -> None:
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
 
-    config = SqliteConfig(connection_config={"database": ":memory:"})
+    # Both file and memory databases now use pooling
+    config = SqliteConfig(connection_config={"database": "test.db"})
 
     with config.provide_connection() as conn:
         assert conn is mock_connection
+        # With pooling, close is not called directly
         mock_connection.close.assert_not_called()
 
-    mock_connection.close.assert_called_once()
+    # Pool manages connection lifecycle - connection is returned to pool, not closed
+    mock_connection.close.assert_not_called()
 
 
 @patch("sqlspec.adapters.sqlite.config.sqlite3.connect")
@@ -142,15 +144,15 @@ def test_provide_connection_error_handling(mock_connect: MagicMock) -> None:
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
 
-    config = SqliteConfig(connection_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": "test.db"})
 
     with pytest.raises(ValueError, match="Test error"):
         with config.provide_connection() as conn:
             assert conn is mock_connection
             raise ValueError("Test error")
 
-    # Connection should still be closed on error
-    mock_connection.close.assert_called_once()
+    # With pooling, connection is returned to pool even on error
+    mock_connection.close.assert_not_called()
 
 
 @patch("sqlspec.adapters.sqlite.config.sqlite3.connect")
@@ -159,19 +161,21 @@ def test_provide_session(mock_connect: MagicMock) -> None:
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
 
-    config = SqliteConfig(connection_config={"database": ":memory:"})
+    config = SqliteConfig(connection_config={"database": "test.db"})
 
     with config.provide_session() as session:
         assert isinstance(session, SqliteDriver)
         assert session.connection is mock_connection
 
         # Check parameter style injection
+        assert session.config is not None
         assert session.config.allowed_parameter_styles == ("qmark", "named_colon")
         assert session.config.default_parameter_style == "qmark"
 
         mock_connection.close.assert_not_called()
 
-    mock_connection.close.assert_called_once()
+    # With pooling, connection is returned to pool, not closed
+    mock_connection.close.assert_not_called()
 
 
 @patch("sqlspec.adapters.sqlite.config.sqlite3.connect")
@@ -186,6 +190,7 @@ def test_provide_session_with_custom_config(mock_connect: MagicMock) -> None:
 
     with config.provide_session() as session:
         # Should use the custom config's parameter styles
+        assert session.config is not None
         assert session.config.allowed_parameter_styles == ("qmark",)
         assert session.config.default_parameter_style == "qmark"
 
@@ -296,3 +301,101 @@ def test_edge_cases(connection_config: dict[str, Any], expected_error: "type[Exc
     else:
         config = SqliteConfig(connection_config=connection_config)
         assert config.connection_config == connection_config
+
+
+# Memory Database Detection Tests
+def test_is_memory_database() -> None:
+    """Test memory database detection logic."""
+    config = SqliteConfig()
+
+    # Test standard :memory: database
+    assert config._is_memory_database(":memory:") is True
+
+    # Test empty string
+    assert config._is_memory_database("") is True
+
+    # Test None (though shouldn't happen in practice)
+    assert config._is_memory_database(None) is True  # type: ignore[arg-type]
+
+    # Test file::memory: without shared cache
+    assert config._is_memory_database("file::memory:") is True
+    assert config._is_memory_database("file::memory:?mode=memory") is True
+
+    # Test shared memory (should NOT be detected as problematic)
+    assert config._is_memory_database("file::memory:?cache=shared") is False
+    assert config._is_memory_database("file::memory:?mode=memory&cache=shared") is False
+
+    # Test regular file databases
+    assert config._is_memory_database("test.db") is False
+    assert config._is_memory_database("/path/to/database.db") is False
+    assert config._is_memory_database("file:test.db") is False
+
+
+@pytest.mark.parametrize(
+    "database,uri,expected_min,expected_max,should_warn",
+    [
+        (":memory:", None, 1, 1, True),
+        ("", None, 1, 1, True),
+        ("file::memory:", True, 1, 1, True),
+        ("file::memory:?cache=shared", True, 5, 20, False),
+        ("test.db", None, 5, 20, False),
+        ("/tmp/test.db", None, 3, 10, False),
+    ],
+    ids=["memory", "empty", "uri_memory", "shared_memory", "file", "absolute_path"],
+)
+def test_memory_database_pooling_override(
+    database: str,
+    uri: "bool | None",
+    expected_min: int,
+    expected_max: int,
+    should_warn: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test that memory databases override pool sizes."""
+    connection_config = {"database": database}
+    if uri is not None:
+        connection_config["uri"] = uri  # type: ignore[assignment]
+
+    # Clear any previous log records
+    caplog.clear()
+
+    # Create config with explicit pool sizes
+    config = SqliteConfig(
+        connection_config=connection_config,
+        min_pool_size=expected_min if not should_warn else 5,
+        max_pool_size=expected_max if not should_warn else 20,
+    )
+
+    # Check pool sizes
+    assert config.min_pool_size == expected_min
+    assert config.max_pool_size == expected_max
+
+    # Check warning
+    if should_warn:
+        assert "In-memory SQLite database detected" in caplog.text
+        assert "Disabling connection pooling" in caplog.text
+    else:
+        assert "In-memory SQLite database detected" not in caplog.text
+
+
+@patch("sqlspec.adapters.sqlite.config.sqlite3.connect")
+def test_connection_health_check(mock_connect: MagicMock) -> None:
+    """Test connection health check functionality."""
+    mock_connection = MagicMock()
+    mock_cursor = MagicMock()
+    mock_connection.cursor.return_value = mock_cursor
+    mock_connect.return_value = mock_connection
+
+    config = SqliteConfig(connection_config={"database": "test.db"})
+    pool = config.provide_pool()
+
+    # Test healthy connection
+    mock_connection.execute.return_value = mock_cursor
+    assert pool._is_connection_alive(mock_connection) is True
+    mock_connection.execute.assert_called_with("SELECT 1")
+    mock_cursor.close.assert_called_once()
+
+    # Test unhealthy connection (execute fails)
+    mock_connection.execute.reset_mock()
+    mock_connection.execute.side_effect = Exception("Connection error")
+    assert pool._is_connection_alive(mock_connection) is False

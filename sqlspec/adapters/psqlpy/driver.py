@@ -4,6 +4,9 @@ import io
 import logging
 from typing import TYPE_CHECKING, Any, Optional, cast
 
+if TYPE_CHECKING:
+    from typing_extensions import TypeAlias
+
 from psqlpy import Connection
 
 from sqlspec.driver import AsyncDriverAdapterBase
@@ -16,7 +19,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
+from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
@@ -25,12 +28,16 @@ if TYPE_CHECKING:
 
 __all__ = ("PsqlpyConnection", "PsqlpyDriver")
 
-PsqlpyConnection = Connection
+if TYPE_CHECKING:
+    PsqlpyConnection: TypeAlias = Connection
+else:
+    # Direct assignment for mypyc runtime
+    PsqlpyConnection = Connection
 logger = logging.getLogger("sqlspec")
 
 
 class PsqlpyDriver(
-    AsyncDriverAdapterBase[PsqlpyConnection],
+    AsyncDriverAdapterBase,
     AsyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -43,12 +50,18 @@ class PsqlpyDriver(
     Modern, high-performance driver for PostgreSQL.
     """
 
+    connection_type = PsqlpyConnection
+
     dialect: "DialectType" = "postgres"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.NUMERIC,)
     default_parameter_style: ParameterStyle = ParameterStyle.NUMERIC
 
     def __init__(self, connection: PsqlpyConnection, config: "Optional[SQLConfig]" = None) -> None:
         super().__init__(connection=connection, config=config)
+
+    def _connection(self, connection: "Optional[PsqlpyConnection]" = None) -> "PsqlpyConnection":
+        """Get the connection to use for the operation."""
+        return connection or self.connection
 
     def _coerce_boolean(self, value: Any) -> Any:
         """PostgreSQL has native boolean support, return as-is."""
@@ -77,28 +90,8 @@ class PsqlpyDriver(
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
-        # Detect parameter styles in the SQL
-        detected_styles = set()
-        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
-        validator = self.config.parameter_validator if self.config else ParameterValidator()
-        param_infos = validator.extract_parameters(sql_str)
-        if param_infos:
-            detected_styles = {p.style for p in param_infos}
-
         # Determine target style based on what's in the SQL
-        target_style = self.default_parameter_style
-
-        # Check if there are unsupported styles
-        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
-        if unsupported_styles:
-            # Force conversion to default style
-            target_style = self.default_parameter_style
-        elif detected_styles:
-            # Prefer the first supported style found
-            for style in detected_styles:
-                if style in self.supported_parameter_styles:
-                    target_style = style
-                    break
+        target_style = self._select_parameter_style(statement)
 
         # Compile with the determined style
         sql, params = self._get_compiled_sql(statement, target_style)
@@ -259,7 +252,3 @@ class PsqlpyDriver(
             return table.num_rows  # type: ignore[no-any-return]
         msg = "Connection does not support COPY operations"
         raise NotImplementedError(msg)
-
-    def _connection(self, connection: Optional[PsqlpyConnection] = None) -> PsqlpyConnection:
-        """Get the connection to use for the operation."""
-        return connection or self.connection

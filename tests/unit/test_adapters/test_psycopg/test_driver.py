@@ -20,7 +20,6 @@ import pytest
 from sqlspec.adapters.psycopg import PsycopgAsyncDriver, PsycopgSyncDriver
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow
 
 if TYPE_CHECKING:
     pass
@@ -112,18 +111,15 @@ def test_sync_driver_initialization() -> None:
     assert driver.supported_parameter_styles == (ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT)
 
 
-def test_sync_driver_default_row_type() -> None:
-    """Test sync driver default row type."""
+def test_sync_driver_row_handling() -> None:
+    """Test sync driver row handling."""
     mock_conn = MagicMock()
 
-    # Default row type - Psycopg uses dict as default
+    # Test that driver can be initialized without row type parameters
     driver = PsycopgSyncDriver(connection=mock_conn)
-    assert driver.default_row_type is dict
-
-    # Custom row type
-    custom_type: type[DictRow] = dict
-    driver = PsycopgSyncDriver(connection=mock_conn, default_row_type=custom_type)
-    assert driver.default_row_type is custom_type
+    assert driver.connection is mock_conn
+    assert hasattr(driver, "config")
+    assert driver.config is not None
 
 
 # Async Driver Initialization Tests
@@ -140,16 +136,15 @@ def test_async_driver_initialization() -> None:
     assert driver.supported_parameter_styles == (ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT)
 
 
-def test_async_driver_default_row_type() -> None:
-    """Test async driver default row type."""
+def test_async_driver_row_handling() -> None:
+    """Test async driver row handling."""
     mock_conn = AsyncMock()
 
-    # Default row type - Psycopg uses dict as default
+    # Test that driver can be initialized without row type parameters
     driver = PsycopgAsyncDriver(connection=mock_conn)
-    assert driver.default_row_type is dict
-
-    # Note: PsycopgAsyncDriver doesn't support custom default_row_type in constructor
-    # It's hardcoded to DictRow in the driver implementation
+    assert driver.connection is mock_conn
+    assert hasattr(driver, "config")
+    assert driver.config is not None
 
 
 # Arrow Support Tests

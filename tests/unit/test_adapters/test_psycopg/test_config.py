@@ -76,7 +76,6 @@ def test_sync_config_initialization(pool_config: dict[str, Any], expected_attrs:
 
     # Check base class attributes
     assert isinstance(config.statement_config, SQLConfig)
-    assert config.default_row_type is dict
 
 
 def test_sync_config_with_no_pool_config() -> None:
@@ -88,7 +87,6 @@ def test_sync_config_with_no_pool_config() -> None:
 
     # Check base class attributes
     assert isinstance(config.statement_config, SQLConfig)
-    assert config.default_row_type is dict
 
 
 @pytest.mark.parametrize(
@@ -132,7 +130,6 @@ def test_async_config_initialization(pool_config: dict[str, Any], expected_attrs
 
     # Check base class attributes
     assert isinstance(config.statement_config, SQLConfig)
-    assert config.default_row_type is dict
 
 
 # Connection Configuration Tests
@@ -348,6 +345,7 @@ def test_sync_provide_session() -> None:
         assert session.connection is mock_connection
 
         # Check parameter style injection
+        assert session.config is not None
         assert session.config.allowed_parameter_styles == ("pyformat_positional", "pyformat_named")
         assert session.config.default_parameter_style == "pyformat_positional"
 
@@ -434,6 +432,7 @@ async def test_async_provide_session() -> None:
         assert session.connection is mock_connection
 
         # Check parameter style injection
+        assert session.config is not None
         assert session.config.allowed_parameter_styles == ("pyformat_positional", "pyformat_named")
         assert session.config.default_parameter_style == "pyformat_positional"
 

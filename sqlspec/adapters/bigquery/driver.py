@@ -7,6 +7,8 @@ from collections.abc import Iterator
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, Union, cast
 
+from sqlglot import exp
+
 if TYPE_CHECKING:
     from typing_extensions import TypeAlias
 
@@ -34,7 +36,7 @@ from sqlspec.driver.mixins import (
     TypeCoercionMixin,
 )
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
+from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.utils.serializers import to_json
@@ -90,6 +92,8 @@ class BigQueryDriver(
     supports_native_parquet_export: ClassVar[bool] = True
     supports_native_arrow_import: ClassVar[bool] = True
     supports_native_arrow_export: ClassVar[bool] = True
+    supports_native_csv_export: ClassVar[bool] = True
+    supports_native_json_export: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -104,7 +108,6 @@ class BigQueryDriver(
         Args:
             connection: BigQuery Client instance
             config: SQL statement configuration
-            default_row_type: Default row type for results
             default_query_job_config: Default job configuration
             on_job_start: Callback executed when a BigQuery job starts
             on_job_complete: Callback executed when a BigQuery job completes
@@ -121,6 +124,10 @@ class BigQueryDriver(
             self._default_query_job_config = conn_default_config
         else:
             self._default_query_job_config = None
+
+    def _connection(self, connection: "Optional[BigQueryConnection]" = None) -> "BigQueryConnection":
+        """Get the connection to use for the operation."""
+        return connection or self.connection
 
     @staticmethod
     def _copy_job_config_attrs(source_config: QueryJobConfig, target_config: QueryJobConfig) -> None:
@@ -356,23 +363,7 @@ class BigQueryDriver(
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
-        detected_styles = set()
-        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
-        validator = self.config.parameter_validator if self.config else ParameterValidator()
-        param_infos = validator.extract_parameters(sql_str)
-        if param_infos:
-            detected_styles = {p.style for p in param_infos}
-
-        target_style = self.default_parameter_style
-
-        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
-        if unsupported_styles:
-            target_style = self.default_parameter_style
-        elif detected_styles:
-            for style in detected_styles:
-                if style in self.supported_parameter_styles:
-                    target_style = style
-                    break
+        target_style = self._select_parameter_style(statement)
 
         if statement.is_many:
             sql, params = self._compile_bigquery_compatible(statement, target_style)
@@ -502,10 +493,6 @@ class BigQueryDriver(
                 successful_statements=successful,
             )
 
-    def _connection(self, connection: "Optional[Client]" = None) -> "Client":
-        """Get the connection to use for the operation."""
-        return connection or self.connection
-
     # ============================================================================
     # BigQuery Native Export Support
     # ============================================================================
@@ -585,12 +572,17 @@ class BigQueryDriver(
         temp_table_id = f"temp_export_{uuid.uuid4().hex[:8]}"
         dataset_id = getattr(self.connection, "default_dataset", None) or options.get("dataset", "temp")
 
-        query_with_table = f"CREATE OR REPLACE TABLE `{dataset_id}.{temp_table_id}` AS {query}"
-        create_job = self._run_query_job(query_with_table, [])
+        # Use SQLglot builder instead of string concatenation
+        table_ref = exp.Table(this=exp.Identifier(temp_table_id), db=exp.Identifier(dataset_id))
+        create_expr = exp.Create(
+            this=table_ref, expression=exp.parse_one(query, dialect=self.dialect), kind="TABLE", replace=True
+        )
+        create_job = self._run_query_job(create_expr.sql(dialect=self.dialect), [])
         create_job.result()
 
-        count_query = f"SELECT COUNT(*) as cnt FROM `{dataset_id}.{temp_table_id}`"
-        count_job = self._run_query_job(count_query, [])
+        # Use SQLglot builder for count query
+        count_expr = exp.Select(exp.Alias(this=exp.func("COUNT", exp.Star()), alias="cnt")).from_(table_ref)
+        count_job = self._run_query_job(count_expr.sql(dialect=self.dialect), [])
         count_result = list(count_job.result())
         row_count = count_result[0]["cnt"] if count_result else 0
 
@@ -614,8 +606,9 @@ class BigQueryDriver(
         finally:
             # Clean up temporary table
             try:
-                delete_query = f"DROP TABLE IF EXISTS `{dataset_id}.{temp_table_id}`"
-                delete_job = self._run_query_job(delete_query, [])
+                # Use SQLglot builder for drop table
+                drop_expr = exp.Drop(this=table_ref, kind="TABLE", exists=True)
+                delete_job = self._run_query_job(drop_expr.sql(dialect=self.dialect), [])
                 delete_job.result()
             except Exception as e:
                 logger.warning("Failed to clean up temporary table %s: %s", temp_table_id, e)

@@ -1,11 +1,9 @@
-import csv
 import logging
 import re
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from decimal import Decimal
-from pathlib import Path  # noqa: TC003
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 import aiosqlite
 
@@ -20,7 +18,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
+from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.utils.serializers import to_json
@@ -52,12 +50,11 @@ class AiosqliteDriver(
     """Aiosqlite SQLite Driver Adapter. Modern protocol implementation."""
 
     # Type specification for mypyc
-    connection_type = AiosqliteConnection  # type: ignore[assignment]
+    connection_type: "ClassVar[type[AiosqliteConnection]]" = AiosqliteConnection
 
     dialect: "DialectType" = "sqlite"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK, ParameterStyle.NAMED_COLON)
     default_parameter_style: "ParameterStyle" = ParameterStyle.QMARK
-    supported_bulk_formats: "tuple[str, ...]" = ("csv",)
 
     def __init__(self, connection: "AiosqliteConnection", config: "Optional[SQLConfig]" = None) -> None:
         super().__init__(connection=connection, config=config)
@@ -108,24 +105,7 @@ class AiosqliteDriver(
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
-        detected_styles = set()
-        sql_str = statement.to_sql(placeholder_style=None)
-        validator = self.config.parameter_validator if self.config else ParameterValidator()
-        param_infos = validator.extract_parameters(sql_str)
-        if param_infos:
-            detected_styles = {p.style for p in param_infos}
-
-        target_style = self.default_parameter_style
-
-        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
-        if unsupported_styles:
-            target_style = self.default_parameter_style
-        elif detected_styles:
-            # Prefer the first supported style found
-            for style in detected_styles:
-                if style in self.supported_parameter_styles:
-                    target_style = style
-                    break
+        target_style = self._select_parameter_style(statement)
 
         if statement.is_many:
             sql, params = self._get_compiled_sql(statement, target_style)
@@ -248,41 +228,6 @@ class AiosqliteDriver(
                 total_statements=executed_count,
                 successful_statements=executed_count,
             )
-
-    async def _bulk_load_file(
-        self, file_path: "Path", table_name: str, format: str, mode: str, **options: "Any"
-    ) -> int:
-        """Database-specific bulk load implementation using storage backend."""
-        if format not in self.supported_bulk_formats:
-            supported = ", ".join(self.supported_bulk_formats)
-            msg = f"aiosqlite driver supports {supported} for bulk loading, not {format}."
-            raise NotImplementedError(msg)
-
-        conn = await self._create_connection()  # type: ignore[attr-defined]
-        try:
-            async with self._get_cursor(conn) as cursor:
-                if mode == "replace":
-                    await cursor.execute(f"DELETE FROM {table_name}")
-
-                # Use async storage backend to read the file
-                file_path_str = str(file_path)
-                backend = self._get_storage_backend(file_path_str)
-                content = await backend.read_text_async(file_path_str, encoding="utf-8")
-                # Parse CSV content
-                import io
-
-                csv_file = io.StringIO(content)
-                reader = csv.reader(csv_file, **options)
-                header = next(reader)  # Skip header
-                placeholders = ", ".join("?" for _ in header)
-                sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
-                data_iter = list(reader)
-                await cursor.executemany(sql, data_iter)
-                rowcount = cursor.rowcount
-                await conn.commit()
-                return rowcount
-        finally:
-            await conn.close()
 
     def _connection(self, connection: "Optional[AiosqliteConnection]" = None) -> "AiosqliteConnection":
         """Get the connection to use for the operation."""

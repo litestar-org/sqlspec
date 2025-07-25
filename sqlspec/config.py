@@ -1,8 +1,11 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Optional, TypeVar, Union, cast
 
-from sqlspec.typing import ConnectionT, PoolT
 from sqlspec.utils.logging import get_logger
+
+# Define TypeVars for runtime use
+ConnectionT = TypeVar("ConnectionT")
+PoolT = TypeVar("PoolT")
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -40,14 +43,7 @@ DEFAULT_ADAPTER_CACHE_SIZE = 5000
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     """Protocol defining the interface for database configurations."""
 
-    __slots__ = (
-        "_dialect",
-        "adapter_cache_size",
-        "default_row_type",
-        "enable_adapter_cache",
-        "migration_config",
-        "pool_instance",
-    )
+    __slots__ = ("_dialect", "adapter_cache_size", "enable_adapter_cache", "migration_config", "pool_instance")
     driver_type: "ClassVar[type[Any]]"
     connection_type: "ClassVar[type[Any]]"
     is_async: "ClassVar[bool]" = False
@@ -71,7 +67,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
         self.enable_adapter_cache = enable_adapter_cache
         self.adapter_cache_size = adapter_cache_size
-        self.default_row_type: type[Any] = dict
         self._dialect: Optional[DialectType] = None
 
     def __hash__(self) -> int:
@@ -89,12 +84,14 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         )
 
     def __repr__(self) -> str:
-        parts = ", ".join([
-            f"pool_instance={self.pool_instance!r}",
-            f"migration_config={self.migration_config!r}",
-            f"enable_adapter_cache={self.enable_adapter_cache!r}",
-            f"adapter_cache_size={self.adapter_cache_size!r}",
-        ])
+        parts = ", ".join(
+            [
+                f"pool_instance={self.pool_instance!r}",
+                f"migration_config={self.migration_config!r}",
+                f"enable_adapter_cache={self.enable_adapter_cache!r}",
+                f"adapter_cache_size={self.adapter_cache_size!r}",
+            ]
+        )
         return f"{type(self).__name__}({parts})"
 
     @property

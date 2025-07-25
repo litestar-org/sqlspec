@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypeVar, Union, cast
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import AIOSQL_INSTALLED, RowT
+from sqlspec.typing import AIOSQL_INSTALLED
 
 if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
@@ -95,7 +95,7 @@ def _normalize_dialect(dialect: "Union[str, Any, None]") -> str:
 class _AiosqlAdapterBase:
     """Base adapter for common logic."""
 
-    def __init__(self, driver: "Union[SyncDriverAdapterBase[Any, Any], AsyncDriverAdapterBase[Any, Any]]") -> None:
+    def __init__(self, driver: "Union[SyncDriverAdapterBase, AsyncDriverAdapterBase]") -> None:
         """Initialize the base adapter.
 
         Args:
@@ -125,7 +125,7 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
 
     is_aio_driver: ClassVar[bool] = False
 
-    def __init__(self, driver: "SyncDriverAdapterBase[Any, Any]") -> None:
+    def __init__(self, driver: "SyncDriverAdapterBase") -> None:
         """Initialize the sync adapter.
 
         Args:
@@ -167,7 +167,7 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
 
     def select_one(
         self, conn: Any, query_name: str, sql: str, parameters: "Any", record_class: Optional[Any] = None
-    ) -> Optional[RowT]:
+    ) -> Optional[dict[str, Any]]:
         """Execute a SELECT query and return first result.
 
         Args:
@@ -194,7 +194,7 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
         result = cast("SQLResult", self.driver.execute(sql_obj, connection=conn))
 
         if hasattr(result, "data") and result.data and isinstance(result, SQLResult):
-            return cast("Optional[RowT]", result.data[0])
+            return cast("Optional[dict[str, Any]]", result.data[0])
         return None
 
     def select_value(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Optional[Any]:
@@ -300,7 +300,7 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
 
     is_aio_driver: ClassVar[bool] = True
 
-    def __init__(self, driver: "AsyncDriverAdapterBase[Any, Any]") -> None:
+    def __init__(self, driver: "AsyncDriverAdapterBase") -> None:
         """Initialize the async adapter.
 
         Args:

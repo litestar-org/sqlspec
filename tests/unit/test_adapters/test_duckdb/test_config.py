@@ -77,7 +77,6 @@ def test_duckdb_config_with_no_connection_config() -> None:
 
     # Check base class attributes
     assert isinstance(config.statement_config, SQLConfig)
-    assert config.default_row_type is dict
 
 
 def test_duckdb_config_initialization() -> None:
@@ -274,14 +273,17 @@ def test_provide_connection_success(mock_connect: MagicMock) -> None:
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
 
-    connection_config = {"database": ":memory:"}
+    # Both file and memory databases now use pooling
+    connection_config = {"database": "test.db"}
     config = DuckDBConfig(connection_config=connection_config)
 
     with config.provide_connection() as conn:
         assert conn is mock_connection
+        # With pooling, close is not called directly
         mock_connection.close.assert_not_called()
 
-    mock_connection.close.assert_called_once()
+    # Pool manages connection lifecycle - connection is returned to pool, not closed
+    mock_connection.close.assert_not_called()
 
 
 @patch("sqlspec.adapters.duckdb.config.duckdb.connect")
@@ -290,7 +292,7 @@ def test_provide_connection_error_handling(mock_connect: MagicMock) -> None:
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
 
-    connection_config = {"database": ":memory:"}
+    connection_config = {"database": "test.db"}
     config = DuckDBConfig(connection_config=connection_config)
 
     with pytest.raises(ValueError, match="Test error"):
@@ -298,8 +300,8 @@ def test_provide_connection_error_handling(mock_connect: MagicMock) -> None:
             assert conn is mock_connection
             raise ValueError("Test error")
 
-    # Connection should still be closed on error
-    mock_connection.close.assert_called_once()
+    # With pooling, connection is returned to pool even on error
+    mock_connection.close.assert_not_called()
 
 
 @patch("sqlspec.adapters.duckdb.config.duckdb.connect")
@@ -308,7 +310,7 @@ def test_provide_session(mock_connect: MagicMock) -> None:
     mock_connection = MagicMock()
     mock_connect.return_value = mock_connection
 
-    connection_config = {"database": ":memory:"}
+    connection_config = {"database": "test.db"}
     config = DuckDBConfig(connection_config=connection_config)
 
     with config.provide_session() as session:
@@ -316,12 +318,14 @@ def test_provide_session(mock_connect: MagicMock) -> None:
         assert session.connection is mock_connection
 
         # Check parameter style injection
+        assert session.config is not None
         assert session.config.allowed_parameter_styles == ("qmark", "numeric")
         assert session.config.default_parameter_style == "qmark"
 
         mock_connection.close.assert_not_called()
 
-    mock_connection.close.assert_called_once()
+    # With pooling, connection is returned to pool, not closed
+    mock_connection.close.assert_not_called()
 
 
 # Property Tests
@@ -352,11 +356,11 @@ def test_is_async() -> None:
 
 def test_supports_connection_pooling() -> None:
     """Test supports_connection_pooling class attribute."""
-    assert DuckDBConfig.supports_connection_pooling is False
+    assert DuckDBConfig.supports_connection_pooling is True
 
     connection_config = {"database": ":memory:"}
     config = DuckDBConfig(connection_config=connection_config)
-    assert config.supports_connection_pooling is False
+    assert config.supports_connection_pooling is True
 
 
 # Parameter Style Tests
@@ -474,3 +478,77 @@ def test_config_readonly_memory() -> None:
     config = DuckDBConfig(connection_config=connection_config)
     assert config.connection_config["database"] == ":memory:"
     assert config.connection_config["read_only"] is True
+
+
+# Memory Database Detection Tests
+def test_is_memory_database() -> None:
+    """Test memory database detection logic."""
+    config = DuckDBConfig()
+
+    # Test standard :memory: database
+    assert config._is_memory_database(":memory:") is True
+
+    # Test empty string
+    assert config._is_memory_database("") is True
+
+    # Test None (though shouldn't happen in practice)
+    assert config._is_memory_database(None) is True  # type: ignore[arg-type]
+
+    # Test regular file databases
+    assert config._is_memory_database("test.db") is False
+    assert config._is_memory_database("/path/to/database.db") is False
+    assert config._is_memory_database("file:test.db") is False
+
+
+@pytest.mark.parametrize(
+    "database,expected_min,expected_max,should_warn",
+    [(":memory:", 1, 1, True), ("", 1, 1, True), ("test.db", 5, 20, False), ("/tmp/test.db", 3, 10, False)],
+    ids=["memory", "empty", "file", "absolute_path"],
+)
+def test_memory_database_pooling_override(
+    database: str, expected_min: int, expected_max: int, should_warn: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that memory databases override pool sizes."""
+    import logging
+
+    connection_config = {"database": database} if database else {}
+
+    # Clear any previous log records
+    caplog.clear()
+    caplog.set_level(logging.WARNING)
+
+    # Create config with explicit pool sizes
+    config = DuckDBConfig(
+        connection_config=connection_config,
+        min_pool=expected_min if not should_warn else 5,
+        max_pool=expected_max if not should_warn else 20,
+    )
+
+    # Check pool sizes
+    assert config.min_pool == expected_min
+    assert config.max_pool == expected_max
+
+    # Check warning
+    if should_warn:
+        assert "In-memory DuckDB database detected" in caplog.text
+        assert "Disabling connection pooling" in caplog.text
+    else:
+        assert "In-memory DuckDB database detected" not in caplog.text
+
+
+def test_connection_health_check() -> None:
+    """Test connection health check functionality."""
+    mock_connection = MagicMock()
+
+    config = DuckDBConfig(connection_config={"database": "test.db"})
+    pool = config.provide_pool()
+
+    # Test healthy connection
+    mock_connection.execute.return_value.fetchall.return_value = [(1,)]
+    assert pool._is_connection_alive(mock_connection) is True
+    mock_connection.execute.assert_called_once_with("SELECT 1")
+    mock_connection.execute.return_value.fetchall.assert_called_once()
+
+    # Test unhealthy connection (execute fails)
+    mock_connection.execute.side_effect = Exception("Connection error")
+    assert pool._is_connection_alive(mock_connection) is False

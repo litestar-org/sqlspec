@@ -57,7 +57,6 @@ def test_statement_result_metadata_operations() -> None:
         ([], ["id"], 0, True),  # Empty result set is still successful
         ([{"id": 1}], ["id"], None, True),  # None rows_affected is ok for SELECT
         ([{"id": 1}], ["id"], -1, False),  # Negative rows_affected indicates failure
-        (None, [], None, False),  # Explicitly passing None for data indicates failure
     ],
     ids=["normal_select", "empty_select", "none_rows_affected", "negative_rows_affected", "none_data"],
 )

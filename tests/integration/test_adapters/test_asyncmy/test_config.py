@@ -110,6 +110,7 @@ async def test_asyncmy_config_provide_session(mysql_service: MySQLService) -> No
     async with config.provide_session() as session:
         assert isinstance(session, AsyncmyDriver)
         # Check that parameter styles were set
+        assert session.config is not None
         assert session.config.allowed_parameter_styles == ("pyformat_positional",)
         assert session.config.default_parameter_style == "pyformat_positional"
 

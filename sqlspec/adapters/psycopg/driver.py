@@ -4,10 +4,14 @@ from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 if TYPE_CHECKING:
+    from psycopg.rows import DictRow as PsycopgDictRow
+    from typing_extensions import TypeAlias
+
+if TYPE_CHECKING:
     from psycopg.abc import Query
 
+
 from psycopg import AsyncConnection, Connection
-from psycopg.rows import DictRow as PsycopgDictRow
 from sqlglot.dialects.dialect import DialectType
 
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
@@ -24,11 +28,9 @@ from sqlspec.driver.mixins import (
     TypeCoercionMixin,
 )
 from sqlspec.exceptions import PipelineExecutionError
-from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
+from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
-from sqlspec.statement.splitter import split_sql_script
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, RowT
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -38,12 +40,16 @@ logger = get_logger("adapters.psycopg")
 
 __all__ = ("PsycopgAsyncConnection", "PsycopgAsyncDriver", "PsycopgSyncConnection", "PsycopgSyncDriver")
 
-PsycopgSyncConnection = Connection[PsycopgDictRow]
-PsycopgAsyncConnection = AsyncConnection[PsycopgDictRow]
+if TYPE_CHECKING:
+    PsycopgSyncConnection: TypeAlias = Connection[PsycopgDictRow]
+    PsycopgAsyncConnection: TypeAlias = AsyncConnection[PsycopgDictRow]
+else:
+    PsycopgSyncConnection = Connection
+    PsycopgAsyncConnection = AsyncConnection
 
 
 class PsycopgSyncDriver(
-    SyncDriverAdapterBase[PsycopgSyncConnection, RowT],
+    SyncDriverAdapterBase,
     SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -53,6 +59,8 @@ class PsycopgSyncDriver(
 ):
     """Psycopg Sync Driver Adapter. Refactored for new protocol."""
 
+    connection_type = PsycopgSyncConnection
+
     dialect: "DialectType" = "postgres"  # pyright: ignore[reportInvalidTypeForm]
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (
         ParameterStyle.POSITIONAL_PYFORMAT,
@@ -60,13 +68,12 @@ class PsycopgSyncDriver(
     )
     default_parameter_style: ParameterStyle = ParameterStyle.POSITIONAL_PYFORMAT
 
-    def __init__(
-        self,
-        connection: PsycopgSyncConnection,
-        config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = dict,
-    ) -> None:
-        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
+    def __init__(self, connection: PsycopgSyncConnection, config: "Optional[SQLConfig]" = None) -> None:
+        super().__init__(connection=connection, config=config)
+
+    def _connection(self, connection: "Optional[PsycopgSyncConnection]" = None) -> "PsycopgSyncConnection":
+        """Get the connection to use for the operation."""
+        return connection or self.connection
 
     @staticmethod
     @contextmanager
@@ -81,57 +88,17 @@ class PsycopgSyncDriver(
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
-        detected_styles = set()
-        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
-        validator = self.config.parameter_validator if self.config else ParameterValidator()
-        param_infos = validator.extract_parameters(sql_str)
-        if param_infos:
-            detected_styles = {p.style for p in param_infos}
-
-        # Set default target_style
-        target_style = self.default_parameter_style
-
-        # Only adjust target_style if there are actual parameters
-        if param_infos:
-            unsupported_styles = detected_styles - set(self.supported_parameter_styles)
-            if unsupported_styles:
-                target_style = self.default_parameter_style
-            elif detected_styles:
-                for style in detected_styles:
-                    if style in self.supported_parameter_styles:
-                        target_style = style
-                        break
+        # Determine target parameter style
+        target_style = self._select_parameter_style(statement)
 
         if statement.is_many:
-            # Check if parameters were provided in kwargs first
-            kwargs_params = kwargs.get("parameters")
-            if kwargs_params is not None:
-                # Use the SQL string directly if parameters come from kwargs
-                sql = statement.to_sql(placeholder_style=target_style)
-                params = kwargs_params
-            else:
-                sql, params = self._get_compiled_sql(statement, target_style)
+            sql, params = self._get_compiled_sql(statement, target_style)
             if params is not None:
                 processed_params = [self._process_parameters(param_set) for param_set in params]
                 params = processed_params
-            # Remove 'parameters' from kwargs to avoid conflicts in _execute_many method signature
-            exec_kwargs = {k: v for k, v in kwargs.items() if k != "parameters"}
-            return self._execute_many(sql, params, connection=connection, **exec_kwargs)
+            return self._execute_many(sql, params, connection=connection, **kwargs)
 
-        # Check if parameters were provided in kwargs (user-provided parameters)
-        kwargs_params = kwargs.get("parameters")
-        if kwargs_params is not None:
-            # Use the SQL string directly if parameters come from kwargs
-            sql = statement.to_sql(placeholder_style=target_style)
-            params = kwargs_params
-        elif target_style is None:
-            # No parameters, use raw SQL without conversion
-            sql = statement.to_sql(placeholder_style=None)
-            # For psycopg, we need to escape literal % characters even when there are no parameters
-            sql = sql.replace("%", "%%")
-            params = {}
-        else:
-            sql, params = self._get_compiled_sql(statement, target_style)
+        sql, params = self._get_compiled_sql(statement, target_style)
         params = self._process_parameters(params)
 
         # Fix over-nested parameters for Psycopg
@@ -139,9 +106,7 @@ class PsycopgSyncDriver(
         if isinstance(params, tuple) and len(params) == 1 and isinstance(params[0], (tuple, dict, list)):
             params = params[0]
 
-        # Remove 'parameters' from kwargs to avoid conflicts in _execute method signature
-        exec_kwargs = {k: v for k, v in kwargs.items() if k != "parameters"}
-        return self._execute(sql, params, statement, connection=connection, **exec_kwargs)
+        return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
         self,
@@ -301,6 +266,8 @@ class PsycopgSyncDriver(
 
     def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
         self._ensure_pyarrow_installed()
+        # Validate mode parameter using centralized method
+        mode = self._standardize_mode_parameter(mode)
         import pyarrow.csv as pacsv
 
         conn = self._connection(None)
@@ -319,10 +286,6 @@ class PsycopgSyncDriver(
                 copy.write(buffer.read())
 
             return cursor.rowcount if cursor.rowcount is not None else -1
-
-    def _connection(self, connection: Optional[PsycopgSyncConnection] = None) -> PsycopgSyncConnection:
-        """Get the connection to use for the operation."""
-        return connection or self.connection
 
     def _execute_pipeline_native(self, operations: "list[Any]", **options: Any) -> "list[SQLResult]":
         """Native pipeline execution using Psycopg's pipeline support.
@@ -475,26 +438,9 @@ class PsycopgSyncDriver(
         # Single parameter
         return (params,)
 
-    def _apply_operation_filters(self, sql: "SQL", filters: "list[Any]") -> "SQL":
-        """Apply filters to a SQL object for pipeline operations."""
-        if not filters:
-            return sql
-
-        result_sql = sql
-        for filter_obj in filters:
-            if hasattr(filter_obj, "apply"):
-                result_sql = filter_obj.apply(result_sql)
-
-        return result_sql
-
-    def _split_script_statements(self, script: str, strip_trailing_semicolon: bool = False) -> "list[str]":
-        """Split a SQL script into individual statements."""
-
-        return split_sql_script(script=script, dialect="postgresql", strip_trailing_semicolon=strip_trailing_semicolon)
-
 
 class PsycopgAsyncDriver(
-    AsyncDriverAdapterBase[PsycopgAsyncConnection, RowT],
+    AsyncDriverAdapterBase,
     AsyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -504,6 +450,8 @@ class PsycopgAsyncDriver(
 ):
     """Psycopg Async Driver Adapter. Refactored for new protocol."""
 
+    connection_type = PsycopgAsyncConnection
+
     dialect: "DialectType" = "postgres"  # pyright: ignore[reportInvalidTypeForm]
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (
         ParameterStyle.POSITIONAL_PYFORMAT,
@@ -511,13 +459,12 @@ class PsycopgAsyncDriver(
     )
     default_parameter_style: ParameterStyle = ParameterStyle.POSITIONAL_PYFORMAT
 
-    def __init__(
-        self,
-        connection: PsycopgAsyncConnection,
-        config: Optional[SQLConfig] = None,
-        default_row_type: "type[DictRow]" = dict,
-    ) -> None:
-        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
+    def __init__(self, connection: PsycopgAsyncConnection, config: Optional[SQLConfig] = None) -> None:
+        super().__init__(connection=connection, config=config)
+
+    def _connection(self, connection: "Optional[PsycopgAsyncConnection]" = None) -> "PsycopgAsyncConnection":
+        """Get the connection to use for the operation."""
+        return connection or self.connection
 
     @staticmethod
     @asynccontextmanager
@@ -532,37 +479,11 @@ class PsycopgAsyncDriver(
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
-        detected_styles = set()
-        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
-        validator = self.config.parameter_validator if self.config else ParameterValidator()
-        param_infos = validator.extract_parameters(sql_str)
-        if param_infos:
-            detected_styles = {p.style for p in param_infos}
-
-        target_style = self.default_parameter_style
-
-        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
-        if unsupported_styles:
-            target_style = self.default_parameter_style
-        elif detected_styles:
-            # Prefer the first supported style found
-            for style in detected_styles:
-                if style in self.supported_parameter_styles:
-                    target_style = style
-                    break
+        # Determine target parameter style
+        target_style = self._select_parameter_style(statement)
 
         if statement.is_many:
-            # Check if parameters were provided in kwargs first
-            kwargs_params = kwargs.get("parameters")
-            if kwargs_params is not None:
-                # Use the SQL string directly if parameters come from kwargs
-                sql = statement.to_sql(placeholder_style=target_style)
-                params = kwargs_params
-            else:
-                sql, params = self._get_compiled_sql(statement, target_style)
-            # DEBUG: Check parameter style conversion
-            if "script_test" in sql:
-                pass
+            sql, params = self._get_compiled_sql(statement, target_style)
             if params is not None:
                 processed_params = [self._process_parameters(param_set) for param_set in params]
                 params = processed_params
@@ -575,24 +496,9 @@ class PsycopgAsyncDriver(
                     else:
                         fixed_params.append(param_set)
                 params = fixed_params
-            # Remove 'parameters' from kwargs to avoid conflicts in _execute_many method signature
-            exec_kwargs = {k: v for k, v in kwargs.items() if k != "parameters"}
-            return await self._execute_many(sql, params, connection=connection, **exec_kwargs)
+            return await self._execute_many(sql, params, connection=connection, **kwargs)
 
-        # Check if parameters were provided in kwargs (user-provided parameters)
-        kwargs_params = kwargs.get("parameters")
-        if kwargs_params is not None:
-            # Use the SQL string directly if parameters come from kwargs
-            sql = statement.to_sql(placeholder_style=target_style)
-            params = kwargs_params
-        elif target_style is None:
-            # No parameters, use raw SQL without conversion
-            sql = statement.to_sql(placeholder_style=None)
-            # For psycopg, we need to escape literal % characters even when there are no parameters
-            sql = sql.replace("%", "%%")
-            params = {}
-        else:
-            sql, params = self._get_compiled_sql(statement, target_style)
+        sql, params = self._get_compiled_sql(statement, target_style)
         params = self._process_parameters(params)
 
         # Fix over-nested parameters for Psycopg
@@ -604,13 +510,10 @@ class PsycopgAsyncDriver(
         context = getattr(statement, "_processing_context", None)
         if context and context.metadata.get("is_copy_command"):
             # For COPY commands, pass the data from context metadata
-            exec_kwargs = {k: v for k, v in kwargs.items() if k != "parameters"}
-            exec_kwargs["_copy_data"] = context.metadata.get("copy_data", params)
-            return await self._execute(sql, None, statement, connection=connection, **exec_kwargs)
+            copy_data = context.metadata.get("copy_data", params)
+            return await self._handle_copy_command(sql, copy_data, self._connection(connection))
 
-        # Remove 'parameters' from kwargs to avoid conflicts in _execute method signature
-        exec_kwargs = {k: v for k, v in kwargs.items() if k != "parameters"}
-        return await self._execute(sql, params, statement, connection=connection, **exec_kwargs)
+        return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
     async def _execute(
         self,
@@ -783,16 +686,18 @@ class PsycopgAsyncDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(connection)
 
+        # Use centralized SQL compilation from storage mixin
+        compiled_sql, params = self._get_compiled_sql_for_arrow(sql)
+
         async with conn.cursor() as cursor:
-            await cursor.execute(
-                cast("Query", sql.to_sql(placeholder_style=self.default_parameter_style)),
-                sql.get_parameters(style=self.default_parameter_style) or [],
-            )
+            await cursor.execute(cast("Query", compiled_sql), params or [])
             arrow_table = await cursor.fetch_arrow_table()  # type: ignore[attr-defined]
             return ArrowResult(statement=sql, data=arrow_table)
 
     async def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
         self._ensure_pyarrow_installed()
+        # Validate mode parameter using centralized method
+        mode = self._standardize_mode_parameter(mode)
         import pyarrow.csv as pacsv
 
         conn = self._connection(None)
@@ -811,10 +716,6 @@ class PsycopgAsyncDriver(
                 await copy.write(buffer.read())
 
             return cursor.rowcount if cursor.rowcount is not None else -1
-
-    def _connection(self, connection: Optional[PsycopgAsyncConnection] = None) -> PsycopgAsyncConnection:
-        """Get the connection to use for the operation."""
-        return connection or self.connection
 
     async def _execute_pipeline_native(self, operations: "list[Any]", **options: Any) -> "list[SQLResult]":
         """Native async pipeline execution using Psycopg's pipeline support."""
@@ -968,15 +869,3 @@ class PsycopgAsyncDriver(
             return tuple(params)
         # Single parameter
         return (params,)
-
-    def _apply_operation_filters(self, sql: "SQL", filters: "list[Any]") -> "SQL":
-        """Apply filters to a SQL object for pipeline operations."""
-        if not filters:
-            return sql
-
-        result_sql = sql
-        for filter_obj in filters:
-            if hasattr(filter_obj, "apply"):
-                result_sql = filter_obj.apply(result_sql)
-
-        return result_sql

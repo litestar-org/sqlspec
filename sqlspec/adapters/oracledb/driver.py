@@ -2,6 +2,9 @@ from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional, cast
 
+if TYPE_CHECKING:
+    from typing_extensions import TypeAlias
+
 from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
 from sqlglot.dialects.dialect import DialectType
 
@@ -18,7 +21,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.statement.parameters import ParameterStyle, ParameterValidator, TypedParameter
+from sqlspec.statement.parameters import ParameterStyle, TypedParameter
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.utils.logging import get_logger
@@ -29,8 +32,13 @@ if TYPE_CHECKING:
 
 __all__ = ("OracleAsyncConnection", "OracleAsyncDriver", "OracleSyncConnection", "OracleSyncDriver")
 
-OracleSyncConnection = Connection
-OracleAsyncConnection = AsyncConnection
+if TYPE_CHECKING:
+    OracleSyncConnection: TypeAlias = Connection
+    OracleAsyncConnection: TypeAlias = AsyncConnection
+else:
+    # Direct assignment for mypyc runtime
+    OracleSyncConnection = Connection
+    OracleAsyncConnection = AsyncConnection
 
 logger = get_logger("adapters.oracledb")
 
@@ -64,7 +72,7 @@ def _process_oracle_parameters(params: Any) -> Any:
 
 
 class OracleSyncDriver(
-    SyncDriverAdapterBase[OracleSyncConnection],
+    SyncDriverAdapterBase,
     SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -73,6 +81,8 @@ class OracleSyncDriver(
     ToSchemaMixin,
 ):
     """Oracle Sync Driver Adapter. Refactored for new protocol."""
+
+    connection_type = OracleSyncConnection
 
     dialect: "DialectType" = "oracle"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (
@@ -109,24 +119,7 @@ class OracleSyncDriver(
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
-        detected_styles = set()
-        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
-        validator = self.config.parameter_validator if self.config else ParameterValidator()
-        param_infos = validator.extract_parameters(sql_str)
-        if param_infos:
-            detected_styles = {p.style for p in param_infos}
-
-        target_style = self.default_parameter_style
-
-        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
-        if unsupported_styles:
-            target_style = self.default_parameter_style
-        elif detected_styles:
-            # Prefer the first supported style found
-            for style in detected_styles:
-                if style in self.supported_parameter_styles:
-                    target_style = style
-                    break
+        target_style = self._select_parameter_style(statement)
 
         if statement.is_many:
             sql, params = self._get_compiled_sql(statement, target_style)
@@ -248,25 +241,8 @@ class OracleSyncDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(connection)
 
-        # Use the exact same parameter style detection logic as _execute_statement
-        detected_styles = set()
-        sql_str = sql.to_sql(placeholder_style=None)  # Get raw SQL
-        validator = self.config.parameter_validator if self.config else ParameterValidator()
-        param_infos = validator.extract_parameters(sql_str)
-        if param_infos:
-            detected_styles = {p.style for p in param_infos}
-
-        target_style = self.default_parameter_style
-
-        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
-        if unsupported_styles:
-            target_style = self.default_parameter_style
-        elif detected_styles:
-            # Prefer the first supported style found
-            for style in detected_styles:
-                if style in self.supported_parameter_styles:
-                    target_style = style
-                    break
+        # Use the same parameter style detection logic as _execute_statement
+        target_style = self._select_parameter_style(sql)
 
         sql_str, params = sql.compile(placeholder_style=target_style)
         processed_params = self._process_parameters(params) if params is not None else []
@@ -304,13 +280,9 @@ class OracleSyncDriver(
             cursor.executemany(sql, data_for_ingest)
             return cursor.rowcount
 
-    def _connection(self, connection: Optional[OracleSyncConnection] = None) -> OracleSyncConnection:
-        """Get the connection to use for the operation."""
-        return connection or self.connection
-
 
 class OracleAsyncDriver(
-    AsyncDriverAdapterBase[OracleAsyncConnection],
+    AsyncDriverAdapterBase,
     AsyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -319,6 +291,8 @@ class OracleAsyncDriver(
     ToSchemaMixin,
 ):
     """Oracle Async Driver Adapter. Refactored for new protocol."""
+
+    connection_type = OracleAsyncConnection
 
     dialect: DialectType = "oracle"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (
@@ -356,24 +330,7 @@ class OracleAsyncDriver(
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
-        detected_styles = set()
-        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
-        validator = self.config.parameter_validator if self.config else ParameterValidator()
-        param_infos = validator.extract_parameters(sql_str)
-        if param_infos:
-            detected_styles = {p.style for p in param_infos}
-
-        target_style = self.default_parameter_style
-
-        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
-        if unsupported_styles:
-            target_style = self.default_parameter_style
-        elif detected_styles:
-            # Prefer the first supported style found
-            for style in detected_styles:
-                if style in self.supported_parameter_styles:
-                    target_style = style
-                    break
+        target_style = self._select_parameter_style(statement)
 
         if statement.is_many:
             sql, params = self._get_compiled_sql(statement, target_style)
@@ -511,25 +468,8 @@ class OracleAsyncDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(connection)
 
-        # Use the exact same parameter style detection logic as _execute_statement
-        detected_styles = set()
-        sql_str = sql.to_sql(placeholder_style=None)  # Get raw SQL
-        validator = self.config.parameter_validator if self.config else ParameterValidator()
-        param_infos = validator.extract_parameters(sql_str)
-        if param_infos:
-            detected_styles = {p.style for p in param_infos}
-
-        target_style = self.default_parameter_style
-
-        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
-        if unsupported_styles:
-            target_style = self.default_parameter_style
-        elif detected_styles:
-            # Prefer the first supported style found
-            for style in detected_styles:
-                if style in self.supported_parameter_styles:
-                    target_style = style
-                    break
+        # Use the same parameter style detection logic as _execute_statement
+        target_style = self._select_parameter_style(sql)
 
         sql_str, params = sql.compile(placeholder_style=target_style)
         processed_params = self._process_parameters(params) if params is not None else []
@@ -563,7 +503,3 @@ class OracleAsyncDriver(
             sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
             await cursor.executemany(sql, data_for_ingest)
             return cursor.rowcount
-
-    def _connection(self, connection: Optional[OracleAsyncConnection] = None) -> OracleAsyncConnection:
-        """Get the connection to use for the operation."""
-        return connection or self.connection

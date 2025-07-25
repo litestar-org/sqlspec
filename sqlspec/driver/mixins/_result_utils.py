@@ -11,7 +11,7 @@ from uuid import UUID
 from mypy_extensions import trait
 
 from sqlspec.exceptions import SQLSpecError, wrap_exceptions
-from sqlspec.statement.result import OperationType
+from sqlspec.statement.result import OperationType, SQLResult
 from sqlspec.typing import ModelDTOT, ModelT, convert, get_type_adapter
 from sqlspec.utils.type_guards import is_dataclass, is_msgspec_struct, is_pydantic_model
 
@@ -86,6 +86,28 @@ class ToSchemaMixin:
         if "SELECT" in expr_type:
             return "SELECT"
         return "EXECUTE"
+
+    def _build_modify_result(self, cursor: "Any", statement: "Any") -> "Any":
+        """Build result for non-SELECT operations.
+
+        Standard implementation for INSERT, UPDATE, DELETE, and other
+        non-SELECT operations that return a row count.
+
+        Args:
+            cursor: Database cursor object with rowcount attribute
+            statement: SQL statement object
+
+        Returns:
+            SQLResult object with operation metadata
+        """
+
+        return SQLResult(
+            statement=statement,
+            data=cast("list[dict[str, Any]]", []),
+            rows_affected=cursor.rowcount,
+            operation_type=self._determine_operation_type(statement),
+            metadata={"status_message": "OK"},
+        )
 
     @overload
     @staticmethod

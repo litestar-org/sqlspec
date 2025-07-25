@@ -7,6 +7,7 @@ import pytest
 
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+from sqlspec.statement.sql import SQLConfig
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
@@ -35,13 +36,13 @@ class MockPool:
         self.closed = True
 
 
-class MockSyncDriver(SyncDriverAdapterBase["MockConnection", "dict[str, Any]"]):
+class MockSyncDriver(SyncDriverAdapterBase):
     """Mock sync driver."""
 
     dialect = "mock"
 
-    def __init__(self, connection: "MockConnection", default_row_type: "type[Any]" = dict) -> None:
-        super().__init__(connection=connection, config=None, default_row_type=default_row_type)
+    def __init__(self, connection: "MockConnection", config: "Optional[SQLConfig]" = None) -> None:
+        super().__init__(connection=connection, config=config)
 
     def _execute_statement(
         self, statement: "Any", connection: "Optional[MockConnection]" = None, **kwargs: "Any"
@@ -66,13 +67,13 @@ class MockSyncDriver(SyncDriverAdapterBase["MockConnection", "dict[str, Any]"]):
         return Mock(affected_count=result.get("rowcount", 0), last_insert_id=None)
 
 
-class MockAsyncDriver(AsyncDriverAdapterBase["MockConnection", "dict[str, Any]"]):
+class MockAsyncDriver(AsyncDriverAdapterBase):
     """Mock async driver."""
 
     dialect = "mock"
 
-    def __init__(self, connection: "MockConnection", default_row_type: "type[Any]" = dict) -> None:
-        super().__init__(connection=connection, config=None, default_row_type=default_row_type)
+    def __init__(self, connection: "MockConnection", config: "Optional[SQLConfig]" = None) -> None:
+        super().__init__(connection=connection, config=config)
 
     async def _execute_statement(
         self, statement: "Any", connection: "Optional[MockConnection]" = None, **kwargs: "Any"
@@ -123,7 +124,7 @@ class MockSyncTestConfig(NoPoolSyncConfig["MockConnection", "MockSyncDriver"]):
             enable_adapter_cache=enable_adapter_cache,
             adapter_cache_size=adapter_cache_size,
         )
-        self.default_row_type = dict
+        pass
 
     def __hash__(self) -> int:
         return id(self)
@@ -143,7 +144,7 @@ class MockSyncTestConfig(NoPoolSyncConfig["MockConnection", "MockSyncDriver"]):
 
     def provide_session(self, *args: "Any", **kwargs: "Any") -> "AbstractContextManager[MockSyncDriver]":
         conn = MockConnection("sync")
-        driver = self.driver_type(conn, default_row_type=self.default_row_type)
+        driver = self.driver_type(conn)
         mock = Mock()
         mock.__enter__ = Mock(return_value=driver)
         mock.__exit__ = Mock(return_value=None)
@@ -173,7 +174,7 @@ class MockAsyncTestConfig(NoPoolAsyncConfig["MockConnection", "MockAsyncDriver"]
             enable_adapter_cache=enable_adapter_cache,
             adapter_cache_size=adapter_cache_size,
         )
-        self.default_row_type = dict
+        pass
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -190,7 +191,7 @@ class MockAsyncTestConfig(NoPoolAsyncConfig["MockConnection", "MockAsyncDriver"]
 
     def provide_session(self, *args: "Any", **kwargs: "Any") -> "AbstractAsyncContextManager[MockAsyncDriver]":
         conn = MockConnection("async")
-        driver = self.driver_type(conn, default_row_type=self.default_row_type)
+        driver = self.driver_type(conn)
         mock = Mock()
         mock.__aenter__ = AsyncMock(return_value=driver)
         mock.__aexit__ = AsyncMock(return_value=None)
@@ -222,7 +223,7 @@ class MockSyncPoolTestConfig(SyncDatabaseConfig["MockConnection", "MockPool", "M
             enable_adapter_cache=enable_adapter_cache,
             adapter_cache_size=adapter_cache_size,
         )
-        self.default_row_type = dict
+        pass
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -239,7 +240,7 @@ class MockSyncPoolTestConfig(SyncDatabaseConfig["MockConnection", "MockPool", "M
 
     def provide_session(self, *args: "Any", **kwargs: "Any") -> "AbstractContextManager[MockSyncDriver]":
         conn = MockConnection("sync_pool")
-        driver = self.driver_type(conn, default_row_type=self.default_row_type)
+        driver = self.driver_type(conn)
         mock = Mock()
         mock.__enter__ = Mock(return_value=driver)
         mock.__exit__ = Mock(return_value=None)
@@ -278,7 +279,7 @@ class MockAsyncPoolTestConfig(AsyncDatabaseConfig["MockConnection", "MockPool", 
             enable_adapter_cache=enable_adapter_cache,
             adapter_cache_size=adapter_cache_size,
         )
-        self.default_row_type = dict
+        pass
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -295,7 +296,7 @@ class MockAsyncPoolTestConfig(AsyncDatabaseConfig["MockConnection", "MockPool", 
 
     def provide_session(self, *args: "Any", **kwargs: "Any") -> "AbstractAsyncContextManager[MockAsyncDriver]":
         conn = MockConnection("async_pool")
-        driver = self.driver_type(conn, default_row_type=self.default_row_type)
+        driver = self.driver_type(conn)
         mock = Mock()
         mock.__aenter__ = AsyncMock(return_value=driver)
         mock.__aexit__ = AsyncMock(return_value=None)
@@ -511,14 +512,7 @@ async def test_async_provide_session(config_class: "type", driver_class: "type")
 
 
 # Test default row type
-@pytest.mark.parametrize("row_type", [dict, list, tuple])
-def test_config_default_row_type(row_type: "type") -> None:
-    """Test configuration with different default row types."""
-    config = MockSyncTestConfig()
-    config.default_row_type = row_type
-
-    with config.provide_session() as driver:
-        assert driver.default_row_type == row_type
+# default_row_type has been removed in mypyc-compatible version
 
 
 # Test connection_config_dict property

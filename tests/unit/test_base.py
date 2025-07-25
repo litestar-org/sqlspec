@@ -24,29 +24,17 @@ class MockConnection:
 class MockDriver:
     """Mock driver for testing."""
 
-    def __init__(
-        self,
-        connection: "MockConnection",
-        config: "Optional[Any]" = None,
-        default_row_type: "Optional[type[Any]]" = None,
-    ) -> None:
+    def __init__(self, connection: "MockConnection", config: "Optional[Any]" = None) -> None:
         self.connection = connection
         self.config = config
-        self.default_row_type = default_row_type or dict
 
 
 class MockAsyncDriver:
     """Mock async driver for testing."""
 
-    def __init__(
-        self,
-        connection: "MockConnection",
-        config: "Optional[Any]" = None,
-        default_row_type: "Optional[type[Any]]" = None,
-    ) -> None:
+    def __init__(self, connection: "MockConnection", config: "Optional[Any]" = None) -> None:
         self.connection = connection
         self.config = config
-        self.default_row_type = default_row_type or dict
 
 
 class MockSyncConfig(NoPoolSyncConfig["MockConnection", "MockDriver"]):  # type: ignore[type-var]
@@ -60,7 +48,6 @@ class MockSyncConfig(NoPoolSyncConfig["MockConnection", "MockDriver"]):  # type:
         super().__init__()
         self.name = name
         self._connection = MockConnection(name)
-        self.default_row_type = dict
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -76,7 +63,7 @@ class MockSyncConfig(NoPoolSyncConfig["MockConnection", "MockDriver"]):  # type:
         return mock
 
     def provide_session(self, *args: "Any", **kwargs: "Any") -> "Any":
-        driver = self.driver_type(self._connection, None, self.default_row_type)
+        driver = self.driver_type(self._connection, None)
         mock = Mock()
         mock.__enter__ = Mock(return_value=driver)
         mock.__exit__ = Mock(return_value=None)
@@ -94,7 +81,6 @@ class MockAsyncConfig(NoPoolAsyncConfig["MockConnection", "MockAsyncDriver"]):  
         super().__init__()
         self.name = name
         self._connection = MockConnection(name)
-        self.default_row_type = dict
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -110,7 +96,7 @@ class MockAsyncConfig(NoPoolAsyncConfig["MockConnection", "MockAsyncDriver"]):  
         return mock
 
     def provide_session(self, *args: "Any", **kwargs: "Any") -> "Any":
-        driver = self.driver_type(self._connection, default_row_type=self.default_row_type)
+        driver = self.driver_type(self._connection)
         mock = Mock()
         mock.__aenter__ = AsyncMock(return_value=driver)
         mock.__aexit__ = AsyncMock(return_value=None)
@@ -140,7 +126,6 @@ class MockSyncPoolConfig(SyncDatabaseConfig["MockConnection", "MockPool", "MockD
         self.name = name
         self._connection = MockConnection(name)
         self._pool: Optional[MockPool] = None
-        self.default_row_type = dict
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -156,7 +141,7 @@ class MockSyncPoolConfig(SyncDatabaseConfig["MockConnection", "MockPool", "MockD
         return mock
 
     def provide_session(self, *args: "Any", **kwargs: "Any") -> "Any":
-        driver = self.driver_type(self._connection, None, self.default_row_type)
+        driver = self.driver_type(self._connection, None)
         mock = Mock()
         mock.__enter__ = Mock(return_value=driver)
         mock.__exit__ = Mock(return_value=None)
@@ -183,7 +168,6 @@ class MockAsyncPoolConfig(AsyncDatabaseConfig["MockConnection", "MockPool", "Moc
         self.name = name
         self._connection = MockConnection(name)
         self._pool: Optional[MockPool] = None
-        self.default_row_type = dict
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -199,7 +183,7 @@ class MockAsyncPoolConfig(AsyncDatabaseConfig["MockConnection", "MockPool", "Moc
         return mock
 
     def provide_session(self, *args: "Any", **kwargs: "Any") -> "Any":
-        driver = self.driver_type(self._connection, default_row_type=self.default_row_type)
+        driver = self.driver_type(self._connection)
         mock = Mock()
         mock.__aenter__ = AsyncMock(return_value=driver)
         mock.__aexit__ = AsyncMock(return_value=None)

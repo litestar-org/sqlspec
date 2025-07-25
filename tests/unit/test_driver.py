@@ -12,7 +12,6 @@ from sqlspec.driver import AsyncDriverAdapterBase, CommonDriverAttributesMixin, 
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow
 
 # Test Fixtures and Mock Classes
 
@@ -62,22 +61,20 @@ class MockAsyncConnection:
         self.connected = False
 
 
-class MockSyncDriver(SyncDriverAdapterBase[MockConnection, DictRow]):
+class MockSyncDriver(SyncDriverAdapterBase):
     """Test sync driver implementation."""
 
     dialect = "sqlite"  # Use valid SQLGlot dialect
     parameter_style = ParameterStyle.NAMED_COLON
 
-    def __init__(
-        self, connection: MockConnection, config: SQLConfig | None = None, default_row_type: type[DictRow] = DictRow
-    ) -> None:
-        super().__init__(connection, config, default_row_type)
+    def __init__(self, connection: MockConnection, config: SQLConfig | None = None) -> None:
+        super().__init__(connection, config)
 
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.NAMED_COLON
 
     def _execute_statement(self, statement: SQL, connection: MockConnection | None = None, **kwargs: Any) -> SQLResult:
-        conn = connection or self.connection
+        conn = connection or self.connection  # type: ignore[assignment]
         if statement.is_script:
             return SQLResult(
                 statement=statement,
@@ -122,19 +119,14 @@ class MockSyncDriver(SyncDriverAdapterBase[MockConnection, DictRow]):
         return result  # type: ignore
 
 
-class MockAsyncDriver(AsyncDriverAdapterBase[MockAsyncConnection, DictRow]):
+class MockAsyncDriver(AsyncDriverAdapterBase):
     """Test async driver implementation."""
 
     dialect = "postgres"  # Use valid SQLGlot dialect
     parameter_style = ParameterStyle.NAMED_COLON
 
-    def __init__(
-        self,
-        connection: MockAsyncConnection,
-        config: SQLConfig | None = None,
-        default_row_type: type[DictRow] = DictRow,
-    ) -> None:
-        super().__init__(connection, config, default_row_type)
+    def __init__(self, connection: MockAsyncConnection, config: SQLConfig | None = None) -> None:
+        super().__init__(connection, config)
 
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.NAMED_COLON
@@ -142,7 +134,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase[MockAsyncConnection, DictRow]):
     async def _execute_statement(
         self, statement: SQL, connection: MockAsyncConnection | None = None, **kwargs: Any
     ) -> SQLResult:
-        conn = connection or self.connection
+        conn = connection or self.connection  # type: ignore[assignment]
         if statement.is_script:
             return SQLResult(
                 statement=statement,
@@ -194,11 +186,10 @@ def test_common_driver_attributes_initialization() -> None:
     connection = MockConnection()
     config = SQLConfig()
 
-    driver = MockSyncDriver(connection, config, DictRow)
+    driver = MockSyncDriver(connection, config)
 
     assert driver.connection is connection
     assert driver.config is config
-    assert driver.default_row_type is DictRow
 
 
 def test_common_driver_attributes_default_values() -> None:
@@ -208,7 +199,6 @@ def test_common_driver_attributes_default_values() -> None:
 
     assert driver.connection is connection
     assert isinstance(driver.config, SQLConfig)
-    assert driver.default_row_type is not None
 
 
 @pytest.mark.parametrize(

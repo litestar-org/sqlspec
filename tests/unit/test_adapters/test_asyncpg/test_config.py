@@ -74,7 +74,6 @@ def test_config_initialization(pool_config: dict[str, Any] | None, expected_conf
 
     # Check base class attributes
     assert isinstance(config.statement_config, SQLConfig)
-    assert config.default_row_type is dict
 
 
 @pytest.mark.parametrize(

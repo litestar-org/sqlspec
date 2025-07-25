@@ -72,7 +72,6 @@ def test_bigquery_config_with_no_connection_config() -> None:
 
     # Check base class attributes
     assert isinstance(config.statement_config, SQLConfig)
-    assert config.default_row_type is dict
 
 
 def test_bigquery_config_initialization() -> None:
@@ -242,6 +241,7 @@ def test_provide_session() -> None:
             assert config.connection_config["dataset_id"] == "test_dataset"
 
             # Check parameter style injection
+            assert session.config is not None
             assert session.config.allowed_parameter_styles == ("named_at",)
             assert session.config.default_parameter_style == "named_at"
 

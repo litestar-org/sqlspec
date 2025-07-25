@@ -21,7 +21,6 @@ import pytest
 from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.statement.parameters import ParameterInfo, ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow
 
 
 # Test Fixtures
@@ -71,20 +70,6 @@ def test_driver_initialization() -> None:
     assert driver.dialect == "sqlite"
     assert driver.default_parameter_style == ParameterStyle.QMARK
     assert driver.supported_parameter_styles == (ParameterStyle.QMARK, ParameterStyle.NAMED_COLON)
-
-
-def test_driver_default_row_type() -> None:
-    """Test driver default row type."""
-    mock_conn = MagicMock()
-
-    # Default row type
-    driver = SqliteDriver(connection=mock_conn)
-    assert driver.default_row_type == dict[str, Any]
-
-    # Custom row type
-    custom_type: type[DictRow] = dict
-    driver = SqliteDriver(connection=mock_conn, default_row_type=custom_type)
-    assert driver.default_row_type is custom_type
 
 
 # Type Coercion Tests

@@ -10,7 +10,6 @@ from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncCon
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow
 
 
 class MockConnection:
@@ -19,7 +18,7 @@ class MockConnection:
     pass
 
 
-class MockDriver(SyncDriverAdapterBase[MockConnection, DictRow]):
+class MockDriver(SyncDriverAdapterBase):
     """Mock driver for testing."""
 
     dialect = "sqlite"  # Use a real dialect for testing
@@ -38,7 +37,7 @@ class MockDriver(SyncDriverAdapterBase[MockConnection, DictRow]):
         return ParameterStyle.QMARK
 
 
-class MockAsyncDriver(AsyncDriverAdapterBase[MockConnection, DictRow]):
+class MockAsyncDriver(AsyncDriverAdapterBase):
     """Mock async driver for testing."""
 
     dialect = "postgres"  # Use a real dialect for testing
@@ -89,7 +88,7 @@ class TestSyncConfigDialect:
         """Test that config raises AttributeError when driver_type is not set and driver has no dialect."""
 
         # Create a driver without dialect attribute
-        class DriverWithoutDialect(SyncDriverAdapterBase[MockConnection, DictRow]):
+        class DriverWithoutDialect(SyncDriverAdapterBase):
             # No dialect attribute
             parameter_style = ParameterStyle.QMARK
 
@@ -367,7 +366,7 @@ class TestDialectValidation:
         """Test proper error when accessing dialect on config without driver_type."""
 
         # Create a driver without dialect attribute
-        class DriverWithoutDialect(SyncDriverAdapterBase[MockConnection, DictRow]):
+        class DriverWithoutDialect(SyncDriverAdapterBase):
             # No dialect attribute
             parameter_style = ParameterStyle.QMARK
 

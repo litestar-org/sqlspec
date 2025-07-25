@@ -18,7 +18,6 @@ from sqlspec.adapters.psycopg.driver import (
 from sqlspec.adapters.psycopg.pipeline_steps import psycopg_copy_transform_step
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import DictRow
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
@@ -80,7 +79,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         pool_config: "Optional[Union[PsycopgPoolParams, dict[str, Any]]]" = None,
         pool_instance: Optional["ConnectionPool"] = None,
         statement_config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
         migration_config: Optional[dict[str, Any]] = None,
         enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,
@@ -91,7 +89,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             pool_config: Pool configuration parameters (TypedDict or dict)
             pool_instance: Existing pool instance to use
             statement_config: Default SQL statement configuration
-            default_row_type: Default row type for results
             migration_config: Migration configuration
             enable_adapter_cache: Enable SQL compilation caching
             adapter_cache_size: Max cached SQL statements
@@ -107,7 +104,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
         # Store other config
         self.statement_config = statement_config or SQLConfig()
-        self.default_row_type = default_row_type
 
         super().__init__(
             pool_instance=pool_instance,
@@ -286,7 +282,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         *,
         pool_config: "Optional[Union[PsycopgPoolParams, dict[str, Any]]]" = None,
         statement_config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
         pool_instance: "Optional[AsyncConnectionPool]" = None,
         migration_config: "Optional[dict[str, Any]]" = None,
         enable_adapter_cache: bool = True,
@@ -298,7 +293,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             pool_config: Pool configuration parameters (TypedDict or dict)
             pool_instance: Existing pool instance to use
             statement_config: Default SQL statement configuration
-            default_row_type: Default row type for results
             migration_config: Migration configuration
             enable_adapter_cache: Enable SQL compilation caching
             adapter_cache_size: Max cached SQL statements
@@ -311,7 +305,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
         # Store other config
         self.statement_config = statement_config or SQLConfig()
-        self.default_row_type = default_row_type
 
         super().__init__(
             pool_instance=pool_instance,

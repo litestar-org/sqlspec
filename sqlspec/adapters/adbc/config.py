@@ -11,7 +11,6 @@ from sqlspec.adapters.adbc.pipeline_steps import adbc_null_transform_step
 from sqlspec.config import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import DictRow
 from sqlspec.utils.module_loader import import_string
 
 if TYPE_CHECKING:
@@ -85,7 +84,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         *,
         connection_config: Optional[Union[AdbcConnectionParams, dict[str, Any]]] = None,
         statement_config: Optional[SQLConfig] = None,
-        default_row_type: type[DictRow] = DictRow,
         on_connection_create: Optional[Callable[[AdbcConnection], None]] = None,
         migration_config: Optional[dict[str, Any]] = None,
         enable_adapter_cache: bool = True,
@@ -96,7 +94,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         Args:
             connection_config: Connection configuration parameters
             statement_config: Default SQL statement configuration
-            default_row_type: Default row type for results
             on_connection_create: Callback executed when connection is created
             migration_config: Migration configuration
             enable_adapter_cache: Enable SQL compilation caching
@@ -143,7 +140,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             self.connection_config.update(extras)
 
         self.statement_config = statement_config or SQLConfig()
-        self.default_row_type = default_row_type
         self.on_connection_create = on_connection_create
         super().__init__(
             migration_config=migration_config,

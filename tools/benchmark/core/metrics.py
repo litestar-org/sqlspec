@@ -44,10 +44,10 @@ class TimingResult:
 class SystemInfo:
     """System information for benchmark context."""
 
-    platform: str = field(default_factory=lambda: platform.platform())
+    platform: str = field(default_factory=platform.platform)
     python_version: str = field(default_factory=lambda: platform.python_version())
     cpu_model: str = field(default_factory=lambda: platform.processor() or "Unknown")
-    cpu_count: int = field(default_factory=lambda: psutil.cpu_count())
+    cpu_count: int = field(default_factory=psutil.cpu_count)
     memory_gb: float = field(default_factory=lambda: psutil.virtual_memory().total / (1024**3))
 
     def to_dict(self) -> dict[str, Any]:

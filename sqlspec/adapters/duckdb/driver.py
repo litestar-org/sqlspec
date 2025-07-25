@@ -1,9 +1,9 @@
+# ruff: noqa: D104 RUF100 FA100 BLE001 UP037 PLR0913 ANN401 COM812 S608 A002 ARG002 SLF001
 import contextlib
 import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
+from typing import TYPE_CHECKING
 
 from duckdb import DuckDBPyConnection
 from sqlglot import exp
@@ -21,23 +21,29 @@ from sqlspec.driver.mixins import (
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import ArrowTable
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from pathlib import Path
+    from typing import Any, ClassVar, Optional, Union
+
     from sqlglot.dialects.dialect import DialectType
+    from typing_extensions import TypeAlias
 
     from sqlspec.typing import ArrowTable
 
 __all__ = ("DuckDBConnection", "DuckDBDriver")
 
-DuckDBConnection = DuckDBPyConnection
+if TYPE_CHECKING:
+    DuckDBConnection: TypeAlias = DuckDBPyConnection
+else:
+    DuckDBConnection = DuckDBPyConnection
 
 logger = get_logger("adapters.duckdb")
 
 
 class DuckDBDriver(
-    SyncDriverAdapterBase["DuckDBConnection"],
+    SyncDriverAdapterBase,
     SyncAdapterCacheMixin,
     SQLTranslatorMixin,
     TypeCoercionMixin,
@@ -57,16 +63,26 @@ class DuckDBDriver(
     - Zero-copy operations where possible
     """
 
+    connection_type = DuckDBConnection
+
     dialect: "DialectType" = "duckdb"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK, ParameterStyle.NUMERIC)
     default_parameter_style: ParameterStyle = ParameterStyle.QMARK
-    supports_native_arrow_export: ClassVar[bool] = True
-    supports_native_arrow_import: ClassVar[bool] = True
-    supports_native_parquet_export: ClassVar[bool] = True
-    supports_native_parquet_import: ClassVar[bool] = True
+    supports_native_arrow_export: "ClassVar[bool]" = True
+    supports_native_arrow_import: "ClassVar[bool]" = True
+    supports_native_parquet_export: "ClassVar[bool]" = True
+    supports_native_parquet_import: "ClassVar[bool]" = True
+    supports_native_csv_export: "ClassVar[bool]" = True
+    supports_native_csv_import: "ClassVar[bool]" = True
+    supports_native_json_export: "ClassVar[bool]" = True
+    supports_native_json_import: "ClassVar[bool]" = True
 
-    def __init__(self, connection: "DuckDBConnection", config: "Optional[SQLConfig]" = None) -> None:
+    def __init__(self, connection: "DuckDBConnection", config: "Optional[SQLConfig]" = None) -> None:  # noqa: FA100
         super().__init__(connection=connection, config=config)
+
+    def _connection(self, connection: "Optional[DuckDBConnection]" = None) -> "DuckDBConnection":
+        """Get the connection to use for the operation."""
+        return connection or self.connection
 
     @staticmethod
     @contextmanager
@@ -77,14 +93,35 @@ class DuckDBDriver(
         finally:
             cursor.close()
 
-    def _execute_statement(
-        self, statement: SQL, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
+    def _select_parameter_style(self, statement: "Union[SQL, exp.Expression]") -> "ParameterStyle":
+        """Select the best parameter style based on detected styles.
+
+        DuckDB-specific override: prefer QMARK style when available.
+        """
+        detected_style = super()._select_parameter_style(statement)
+
+        # DuckDB performs better with QMARK style
+        if detected_style in self.supported_parameter_styles:
+            return detected_style
+
+        # Fallback to QMARK if it's supported
+        if ParameterStyle.QMARK in self.supported_parameter_styles:
+            return ParameterStyle.QMARK
+
+        return self.default_parameter_style
+
+    def _execute_statement(  # type: ignore[override]
+        self,
+        statement: SQL,
+        connection: "Optional[DuckDBConnection]" = None,
+        **kwargs: "Any",  # noqa: FA100
     ) -> SQLResult:
         if statement.is_script:
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
-        sql, params = self._get_compiled_sql(statement, self.default_parameter_style)
+        parameter_style = self._select_parameter_style(statement)
+        sql, params = self._get_compiled_sql(statement, parameter_style)
         params = self._process_parameters(params)
 
         if statement.is_many:
@@ -92,8 +129,31 @@ class DuckDBDriver(
 
         return self._execute(sql, params, statement, connection=connection, **kwargs)
 
-    def _execute(
-        self, sql: str, parameters: Any, statement: SQL, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
+    def _build_select_result(self, result: "Any", statement: "SQL") -> "SQLResult":
+        """Build SQLResult for SELECT operations."""
+        fetched_data = result.fetchall()
+        column_names = [col[0] for col in result.description or []]
+
+        if fetched_data and isinstance(fetched_data[0], tuple):
+            dict_data = [dict(zip(column_names, row)) for row in fetched_data]
+        else:
+            dict_data = fetched_data
+
+        return SQLResult(
+            statement=statement,
+            data=dict_data,
+            column_names=column_names,
+            rows_affected=len(dict_data),
+            operation_type="SELECT",
+        )
+
+    def _execute(  # noqa: PLR0913
+        self,
+        sql: str,
+        parameters: "Any",
+        statement: SQL,
+        connection: "Optional[DuckDBConnection]" = None,
+        **kwargs: "Any",  # noqa: FA100, ANN401
     ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
@@ -104,47 +164,18 @@ class DuckDBDriver(
 
             if self.returns_rows(statement.expression):
                 result = txn_conn.execute(sql, final_params)
-                fetched_data = result.fetchall()
-                column_names = [col[0] for col in result.description or []]
-
-                if fetched_data and isinstance(fetched_data[0], tuple):
-                    dict_data = [dict(zip(column_names, row)) for row in fetched_data]
-                else:
-                    dict_data = fetched_data
-
-                return SQLResult(
-                    statement=statement,
-                    data=dict_data,
-                    column_names=column_names,
-                    rows_affected=len(dict_data),
-                    operation_type="SELECT",
-                )
+                return self._build_select_result(result, statement)
 
             with self._get_cursor(txn_conn) as cursor:
                 cursor.execute(sql, final_params)
-                # DuckDB returns -1 for rowcount on DML operations
-                # However, fetchone() returns the actual affected row count as (count,)
-                rows_affected = cursor.rowcount
-                if rows_affected < 0:
-                    try:
-                        fetch_result = cursor.fetchone()
-                        if fetch_result and isinstance(fetch_result, (tuple, list)) and len(fetch_result) > 0:
-                            rows_affected = fetch_result[0]
-                        else:
-                            rows_affected = 0
-                    except Exception:
-                        rows_affected = 1
-
-                return SQLResult(
-                    statement=statement,
-                    data=[],
-                    rows_affected=rows_affected,
-                    operation_type=self._determine_operation_type(statement),
-                    metadata={"status_message": "OK"},
-                )
+                return self._build_modify_result(cursor, statement)
 
     def _execute_many(
-        self, sql: str, param_list: Any, connection: Optional["DuckDBConnection"] = None, **kwargs: Any
+        self,
+        sql: str,
+        param_list: "Any",
+        connection: "Optional[DuckDBConnection]" = None,
+        **kwargs: "Any",  # noqa: FA100, ANN401
     ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
@@ -177,7 +208,15 @@ class DuckDBDriver(
                     metadata={"status_message": "OK"},
                 )
 
-    def _execute_script(self, script: str, connection: Optional["DuckDBConnection"] = None, **kwargs: Any) -> SQLResult:
+    def _validate_statement(self, statement: str) -> None:
+        """Validate a single statement from a script."""
+        temp_sql = SQL(statement, config=self.config)
+        temp_sql._ensure_processed()  # noqa: SLF001
+        # Validation errors are logged as warnings by default
+
+    def _execute_script(
+        self, script: str, connection: "Optional[DuckDBConnection]" = None, **kwargs: "Any"
+    ) -> SQLResult:  # noqa: FA100, ANN401
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -194,10 +233,7 @@ class DuckDBDriver(
                     if statement.strip():
                         # Validate each statement unless warnings suppressed
                         if not suppress_warnings:
-                            # Run validation through pipeline
-                            temp_sql = SQL(statement, config=self.config)
-                            temp_sql._ensure_processed()
-                            # Validation errors are logged as warnings by default
+                            self._validate_statement(statement)
 
                         cursor.execute(statement)
                         executed_count += 1
@@ -220,11 +256,11 @@ class DuckDBDriver(
     # DuckDB Native Arrow Support
     # ============================================================================
 
-    def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
+    def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: "Any") -> "ArrowResult":  # noqa: FA100, ANN401
         """Enhanced DuckDB native Arrow table fetching with streaming support."""
         conn = self._connection(connection)
-        sql_string, parameters = self._get_compiled_sql(sql, self.default_parameter_style)
-        parameters = self._process_parameters(parameters)
+        # Use centralized SQL compilation from storage mixin
+        sql_string, parameters = self._get_compiled_sql_for_arrow(sql)
         result = conn.execute(sql_string, parameters or [])
 
         batch_size = kwargs.get("batch_size")
@@ -244,19 +280,9 @@ class DuckDBDriver(
     # ============================================================================
     # DuckDB Native Storage Operations (Override base implementations)
     # ============================================================================
+    # Note: _has_native_capability is now inherited from StorageMixinBase
 
-    def _has_native_capability(self, operation: str, uri: str = "", format: str = "") -> bool:
-        if format:
-            format_lower = format.lower()
-            if operation == "export" and format_lower in {"parquet", "csv", "json"}:
-                return True
-            if operation == "import" and format_lower in {"parquet", "csv", "json"}:
-                return True
-            if operation == "read" and format_lower == "parquet":
-                return True
-        return False
-
-    def _export_native(self, query: str, destination_uri: Union[str, Path], format: str, **options: Any) -> int:
+    def _export_native(self, query: str, destination_uri: "Union[str, Path]", format: str, **options: "Any") -> int:  # noqa: FA100, A002, ANN401
         conn = self._connection(None)
         copy_options: list[str] = []
 
@@ -288,45 +314,66 @@ class DuckDBDriver(
             raise ValueError(msg)
 
         options_str = f"({', '.join(copy_options)})" if copy_options else ""
-        copy_sql = f"COPY ({query}) TO '{destination_uri!s}' {options_str}"
+        copy_sql = f"COPY ({query}) TO '{destination_uri!s}' {options_str}"  # noqa: S608
         result_rel = conn.execute(copy_sql)
         result = result_rel.fetchone() if result_rel else None
         return result[0] if result else 0
 
-    def _import_native(
-        self, source_uri: Union[str, Path], table_name: str, format: str, mode: str, **options: Any
+    def _import_native(  # noqa: PLR0913
+        self,
+        source_uri: "Union[str, Path]",
+        table_name: str,
+        format: str,
+        mode: str,
+        **options: "Any",  # noqa: FA100, A002, ANN401
     ) -> int:
         conn = self._connection(None)
+        # Build the appropriate read function expression
         if format == "parquet":
-            read_func = f"read_parquet('{source_uri!s}')"
+            read_func_expr = exp.func("read_parquet", exp.Literal.string(str(source_uri)))
         elif format == "csv":
-            read_func = f"read_csv_auto('{source_uri!s}')"
+            read_func_expr = exp.func("read_csv_auto", exp.Literal.string(str(source_uri)))
         elif format == "json":
-            read_func = f"read_json_auto('{source_uri!s}')"
+            read_func_expr = exp.func("read_json_auto", exp.Literal.string(str(source_uri)))
         else:
             msg = f"Unsupported format for DuckDB native import: {format}"
             raise ValueError(msg)
 
+        # Build SQL expression using SQLglot
         if mode == "create":
-            sql = f"CREATE TABLE {table_name} AS SELECT * FROM {read_func}"
+            sql_expr = exp.Create(
+                this=exp.to_table(table_name), expression=exp.Select().from_(read_func_expr).select("*"), kind="TABLE"
+            )
         elif mode == "replace":
-            sql = f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM {read_func}"
+            sql_expr = exp.Create(
+                this=exp.to_table(table_name),
+                expression=exp.Select().from_(read_func_expr).select("*"),
+                kind="TABLE",
+                replace=True,
+            )
         elif mode == "append":
-            sql = f"INSERT INTO {table_name} SELECT * FROM {read_func}"
+            sql_expr = exp.Insert(
+                this=exp.to_table(table_name), expression=exp.Select().from_(read_func_expr).select("*")
+            )
         else:
             msg = f"Unsupported import mode: {mode}"
             raise ValueError(msg)
 
-        result_rel = conn.execute(sql)
+        # Execute the SQL
+        sql_str = sql_expr.sql(dialect=self.dialect)
+        result_rel = conn.execute(sql_str)
         result = result_rel.fetchone() if result_rel else None
         if result:
             return int(result[0])
 
-        count_result_rel = conn.execute(f"SELECT COUNT(*) FROM {table_name}")
+        # Get row count if result doesn't contain it
+        count_expr = exp.Select(exp.func("COUNT", exp.Star())).from_(table_name)
+        count_sql = count_expr.sql(dialect=self.dialect)
+        count_result_rel = conn.execute(count_sql)
         count_result = count_result_rel.fetchone() if count_result_rel else None
         return int(count_result[0]) if count_result else 0
 
-    def _read_parquet_native(
+    def _read_parquet_native(  # noqa: PLR0913
         # NOTE: This method uses direct SQL string construction for DuckDB's read_parquet function
         # rather than the builder API because:
         # 1. read_parquet() is a DuckDB-specific table function, not standard SQL
@@ -334,9 +381,9 @@ class DuckDBDriver(
         # 3. Direct construction is more straightforward for this specific use case
         # Future enhancement: Add table function support to the builder API
         self,
-        source_uri: Union[str, Path],
-        columns: Optional[list[str]] = None,
-        **options: Any,
+        source_uri: "Union[str, Path]",  # noqa: FA100
+        columns: "Optional[list[str]]" = None,  # noqa: FA100, UP037
+        **options: "Any",  # noqa: ANN401
     ) -> "SQLResult":
         conn = self._connection(None)
         if isinstance(source_uri, list):
@@ -348,7 +395,7 @@ class DuckDBDriver(
             read_func = f"read_parquet('{source_uri!s}')"
 
         column_list = ", ".join(columns) if columns else "*"
-        query = f"SELECT {column_list} FROM {read_func}"
+        query = f"SELECT {column_list} FROM {read_func}"  # noqa: S608
 
         filters = options.get("filters")
         if filters:
@@ -374,7 +421,10 @@ class DuckDBDriver(
         )
 
     def _write_parquet_native(
-        self, data: Union[str, "ArrowTable"], destination_uri: Union[str, Path], **options: Any
+        self,
+        data: "Union[str, ArrowTable]",
+        destination_uri: "Union[str, Path]",
+        **options: "Any",  # noqa: FA100, ANN401
     ) -> None:
         conn = self._connection(None)
         copy_options: list[str] = ["FORMAT PARQUET"]
@@ -386,25 +436,23 @@ class DuckDBDriver(
         options_str = f"({', '.join(copy_options)})"
 
         if isinstance(data, str):
-            copy_sql = f"COPY ({data}) TO '{destination_uri!s}' {options_str}"
+            copy_sql = f"COPY ({data}) TO '{destination_uri!s}' {options_str}"  # noqa: S608
             conn.execute(copy_sql)
         else:
             temp_name = f"_arrow_data_{uuid.uuid4().hex[:8]}"
             conn.register(temp_name, data)
             try:
-                copy_sql = f"COPY {temp_name} TO '{destination_uri!s}' {options_str}"
+                copy_sql = f"COPY {temp_name} TO '{destination_uri!s}' {options_str}"  # noqa: S608
                 conn.execute(copy_sql)
             finally:
                 with contextlib.suppress(Exception):
                     conn.unregister(temp_name)
 
-    def _connection(self, connection: Optional["DuckDBConnection"] = None) -> "DuckDBConnection":
-        """Get the connection to use for the operation."""
-        return connection or self.connection
-
-    def _ingest_arrow_table(self, table: "ArrowTable", table_name: str, mode: str = "create", **options: Any) -> int:
+    def _ingest_arrow_table(self, table: "ArrowTable", table_name: str, mode: str = "create", **options: "Any") -> int:  # noqa: ANN401
         """DuckDB-optimized Arrow table ingestion using native registration."""
         self._ensure_pyarrow_installed()
+        # Validate mode parameter using centralized method
+        mode = self._standardize_mode_parameter(mode)
         conn = self._connection(None)
         temp_name = f"_arrow_temp_{uuid.uuid4().hex[:8]}"
 
@@ -433,5 +481,5 @@ class DuckDBDriver(
             result = self.execute(SQL(sql_expr.sql(dialect=self.dialect), _dialect=self.dialect))
             return result.rows_affected or table.num_rows
         finally:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception):  # noqa: BLE001
                 conn.unregister(temp_name)

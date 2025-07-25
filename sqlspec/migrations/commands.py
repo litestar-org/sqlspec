@@ -95,8 +95,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
             current = self.tracker.get_current_version(driver)
             all_migrations = self.runner.get_migration_files()
-
-            # Determine pending migrations
             pending = []
             for version, file_path in all_migrations:
                 if (current is None or version > current) and (revision == "head" or version <= revision):
@@ -115,14 +113,10 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 console.print(f"\n[cyan]Applying {version}:[/] {migration['description']}")
 
                 try:
-                    # Execute migration
                     _, execution_time = self.runner.execute_upgrade(driver, migration)
-
-                    # Record in tracking table
                     self.tracker.record_migration(
                         driver, migration["version"], migration["description"], execution_time, migration["checksum"]
                     )
-
                     console.print(f"[green]✓ Applied in {execution_time}ms[/]")
 
                 except Exception as e:
@@ -137,19 +131,14 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         """
         with self.config.provide_session() as driver:
             self.tracker.ensure_tracking_table(driver)
-
             applied = self.tracker.get_applied_migrations(driver)
             if not applied:
                 console.print("[yellow]No migrations to downgrade[/]")
                 return
-
-            # Determine migrations to revert
             to_revert = []
             if revision == "-1":
-                # Downgrade one step
                 to_revert = [applied[-1]]
             else:
-                # Downgrade to specific version
                 for migration in reversed(applied):
                     if migration["version_num"] > revision:
                         to_revert.append(migration)
@@ -159,29 +148,18 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 return
 
             console.print(f"[yellow]Reverting {len(to_revert)} migrations[/]")
-
-            # Load migration files
             all_files = dict(self.runner.get_migration_files())
-
             for migration_record in to_revert:
                 version = migration_record["version_num"]
-
                 if version not in all_files:
                     console.print(f"[red]Migration file not found for {version}[/]")
                     continue
-
                 migration = self.runner.load_migration(all_files[version])
                 console.print(f"\n[cyan]Reverting {version}:[/] {migration['description']}")
-
                 try:
-                    # Execute downgrade
                     _, execution_time = self.runner.execute_downgrade(driver, migration)
-
-                    # Remove from tracking table
                     self.tracker.remove_migration(driver, version)
-
                     console.print(f"[green]✓ Reverted in {execution_time}ms[/]")
-
                 except Exception as e:
                     console.print(f"[red]✗ Failed: {e}[/]")
                     raise
@@ -194,19 +172,13 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         """
         with self.config.provide_session() as driver:
             self.tracker.ensure_tracking_table(driver)
-
-            # Validate revision exists
             all_migrations = dict(self.runner.get_migration_files())
             if revision not in all_migrations:
                 console.print(f"[red]Unknown revision: {revision}[/]")
                 return
-
-            # Clear existing records and stamp
             clear_sql = SQL(f"DELETE FROM {self.tracker.version_table}")
             driver.execute(clear_sql)
-
             self.tracker.record_migration(driver, revision, f"Stamped to {revision}", 0, "manual-stamp")
-
             console.print(f"[green]Database stamped at revision {revision}[/]")
 
     def revision(self, message: str) -> None:
@@ -215,19 +187,14 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         Args:
             message: Description for the migration.
         """
-        # Determine next version number
         existing = self.runner.get_migration_files()
         if existing:
             last_version = existing[-1][0]
             next_num = int(last_version) + 1
         else:
             next_num = 1
-
         next_version = str(next_num).zfill(4)
-
-        # Create migration file
         file_path = create_migration_file(self.migrations_path, next_version, message)
-
         console.print(f"[green]Created migration:[/] {file_path}")
 
 
@@ -251,7 +218,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             directory: Directory path for migrations.
             package: Whether to create __init__.py in the directory.
         """
-        # For async, we still use sync directory operations
         self.init_directory(directory, package)
 
     async def current(self, verbose: bool = False) -> None:
@@ -269,17 +235,14 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 return
 
             console.print(f"[green]Current version:[/] {current}")
-
             if verbose:
                 applied = await self.tracker.get_applied_migrations(driver)
-
                 table = Table(title="Applied Migrations")
                 table.add_column("Version", style="cyan")
                 table.add_column("Description")
                 table.add_column("Applied At")
                 table.add_column("Time (ms)", justify="right")
                 table.add_column("Applied By")
-
                 for migration in applied:
                     table.add_row(
                         migration["version_num"],
@@ -288,7 +251,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                         str(migration.get("execution_time_ms", "")),
                         migration.get("applied_by", ""),
                     )
-
                 console.print(table)
 
     async def upgrade(self, revision: str = "head") -> None:
@@ -302,36 +264,23 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
             current = await self.tracker.get_current_version(driver)
             all_migrations = await self.runner.get_migration_files()
-
-            # Determine pending migrations
             pending = []
             for version, file_path in all_migrations:
                 if (current is None or version > current) and (revision == "head" or version <= revision):
                     pending.append((version, file_path))
-
             if not pending:
                 console.print("[green]Already at latest version[/]")
                 return
-
             console.print(f"[yellow]Found {len(pending)} pending migrations[/]")
-
-            # Execute migrations
             for version, file_path in pending:
                 migration = await self.runner.load_migration(file_path)
-
                 console.print(f"\n[cyan]Applying {version}:[/] {migration['description']}")
-
                 try:
-                    # Execute migration
                     _, execution_time = await self.runner.execute_upgrade(driver, migration)
-
-                    # Record in tracking table
                     await self.tracker.record_migration(
                         driver, migration["version"], migration["description"], execution_time, migration["checksum"]
                     )
-
                     console.print(f"[green]✓ Applied in {execution_time}ms[/]")
-
                 except Exception as e:
                     console.print(f"[red]✗ Failed: {e}[/]")
                     raise
@@ -349,30 +298,21 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             if not applied:
                 console.print("[yellow]No migrations to downgrade[/]")
                 return
-
-            # Determine migrations to revert
             to_revert = []
             if revision == "-1":
-                # Downgrade one step
                 to_revert = [applied[-1]]
             else:
-                # Downgrade to specific version
                 for migration in reversed(applied):
                     if migration["version_num"] > revision:
                         to_revert.append(migration)
-
             if not to_revert:
                 console.print("[yellow]Nothing to downgrade[/]")
                 return
 
             console.print(f"[yellow]Reverting {len(to_revert)} migrations[/]")
-
-            # Load migration files
             all_files = dict(await self.runner.get_migration_files())
-
             for migration_record in to_revert:
                 version = migration_record["version_num"]
-
                 if version not in all_files:
                     console.print(f"[red]Migration file not found for {version}[/]")
                     continue
@@ -381,14 +321,9 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 console.print(f"\n[cyan]Reverting {version}:[/] {migration['description']}")
 
                 try:
-                    # Execute downgrade
                     _, execution_time = await self.runner.execute_downgrade(driver, migration)
-
-                    # Remove from tracking table
                     await self.tracker.remove_migration(driver, version)
-
                     console.print(f"[green]✓ Reverted in {execution_time}ms[/]")
-
                 except Exception as e:
                     console.print(f"[red]✗ Failed: {e}[/]")
                     raise
@@ -402,18 +337,14 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         async with self.config.provide_session() as driver:
             await self.tracker.ensure_tracking_table(driver)
 
-            # Validate revision exists
             all_migrations = dict(await self.runner.get_migration_files())
             if revision not in all_migrations:
                 console.print(f"[red]Unknown revision: {revision}[/]")
                 return
 
-            # Clear existing records and stamp
             clear_sql = SQL(f"DELETE FROM {self.tracker.version_table}")
             await driver.execute(clear_sql)
-
             await self.tracker.record_migration(driver, revision, f"Stamped to {revision}", 0, "manual-stamp")
-
             console.print(f"[green]Database stamped at revision {revision}[/]")
 
     async def revision(self, message: str) -> None:
@@ -422,19 +353,14 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         Args:
             message: Description of the migration.
         """
-        # Determine next version number
         existing = await self.runner.get_migration_files()
         if existing:
             last_version = existing[-1][0]
             next_num = int(last_version) + 1
         else:
             next_num = 1
-
         next_version = str(next_num).zfill(4)
-
-        # Create migration file
         file_path = create_migration_file(self.migrations_path, next_version, message)
-
         console.print(f"[green]Created migration:[/] {file_path}")
 
 
@@ -447,14 +373,12 @@ class MigrationCommands:
         Args:
             config: The SQLSpec configuration (sync or async).
         """
-
         if config.is_async:
             self._impl: Union[AsyncMigrationCommands[Any], SyncMigrationCommands[Any]] = AsyncMigrationCommands(
                 cast("AsyncConfigT", config)
             )
         else:
             self._impl = SyncMigrationCommands(cast("SyncConfigT", config))
-
         self._is_async = config.is_async
 
     def init(self, directory: str, package: bool = True) -> None:

@@ -11,7 +11,6 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.psqlpy.driver import PsqlpyConnection, PsqlpyDriver
 from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import DictRow
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -92,7 +91,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         *,
         pool_config: Optional[Union[PsqlpyPoolParams, dict[str, Any]]] = None,
         statement_config: Optional[SQLConfig] = None,
-        default_row_type: type[DictRow] = DictRow,
         pool_instance: Optional[ConnectionPool] = None,
         migration_config: Optional[dict[str, Any]] = None,
         enable_adapter_cache: bool = True,
@@ -104,7 +102,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             pool_config: Pool configuration parameters (TypedDict or dict)
             pool_instance: Existing connection pool instance to use
             statement_config: Default SQL statement configuration
-            default_row_type: Default row type for results
             migration_config: Migration configuration
             enable_adapter_cache: Enable SQL compilation caching
             adapter_cache_size: Max cached SQL statements
@@ -133,7 +130,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
         # Store other config
         self.statement_config = statement_config or SQLConfig()
-        self.default_row_type = default_row_type
 
         super().__init__(
             pool_instance=pool_instance,

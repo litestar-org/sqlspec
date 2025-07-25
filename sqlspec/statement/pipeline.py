@@ -6,11 +6,14 @@ the complex multi-stage processing with a clean, efficient approach.
 """
 
 import operator
-from typing import Any, Callable, Union
+from typing import TYPE_CHECKING, Any, Callable, Union
 
 import sqlglot.expressions as exp
 
 from sqlspec.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from sqlspec.statement.sql import SQLConfig
 
 logger = get_logger(__name__)
 
@@ -18,6 +21,7 @@ __all__ = (
     "PipelineStep",
     "SQLTransformContext",
     "compose_pipeline",
+    "create_pipeline_from_config",
     "normalize_step",
     "optimize_step",
     "parameterize_literals_step",
@@ -36,7 +40,7 @@ class SQLTransformContext:
     transformations and parameters in a single pass.
     """
 
-    __slots__ = ("current_expression", "dialect", "metadata", "original_expression", "parameters")
+    __slots__ = ("current_expression", "dialect", "driver_adapter", "metadata", "original_expression", "parameters")
 
     def __init__(
         self,
@@ -45,16 +49,28 @@ class SQLTransformContext:
         parameters: "Union[dict[str, Any], list[Any], tuple[Any, ...], None]" = None,
         dialect: str = "",
         metadata: "dict[str, Any] | None" = None,
+        driver_adapter: "Any" = None,
     ) -> None:
         self.current_expression = current_expression
         self.original_expression = original_expression
         self.parameters = parameters if parameters is not None else {}
         self.dialect = dialect
         self.metadata = metadata if metadata is not None else {}
+        self.driver_adapter = driver_adapter
 
     @property
     def merged_parameters(self) -> Any:
-        """Get parameters in appropriate format for the dialect."""
+        """Get parameters in appropriate format for the dialect.
+
+        If a driver adapter is available, delegates to its parameter
+        conversion logic for consistency.
+        """
+        if self.driver_adapter and hasattr(self.driver_adapter, "_convert_parameters_to_driver_format"):
+            # Use driver's parameter conversion logic
+            sql_str = self.current_expression.sql(dialect=self.dialect)
+            return self.driver_adapter._convert_parameters_to_driver_format(sql_str, self.parameters)
+
+        # Fallback to original logic if no driver adapter
         if isinstance(self.parameters, dict) and self.dialect in {"mysql", "sqlite"}:
             # Convert to positional list ordered by parameter position in SQL
             # This ensures parameters are ordered as they appear in the SQL query
@@ -100,6 +116,42 @@ def compose_pipeline(steps: list[PipelineStep]) -> PipelineStep:
         return context
 
     return composed
+
+
+def create_pipeline_from_config(config: "SQLConfig", driver_adapter: "Any" = None) -> PipelineStep:
+    """Create a pipeline based on SQL configuration.
+
+    This function creates a pipeline that respects the configuration
+    settings and can leverage driver-specific optimizations.
+
+    Args:
+        config: SQL configuration object
+        driver_adapter: Optional driver adapter for driver-specific behavior
+
+    Returns:
+        Composed pipeline function
+    """
+    steps: list[PipelineStep] = []
+
+    # Always normalize first
+    steps.append(normalize_step)
+
+    # Apply transformations if enabled (includes parameterization)
+    if config.enable_transformations:
+        steps.append(parameterize_literals_step)
+        # Apply expression simplification if enabled
+        if config.enable_expression_simplification:
+            steps.append(optimize_step)
+
+    # Security validation if enabled
+    if config.enable_validation:
+        steps.extend((validate_step, validate_dml_safety_step, validate_parameter_style_step))
+
+    # Custom pipeline steps if provided
+    if hasattr(config, "custom_pipeline_steps") and config.custom_pipeline_steps:
+        steps.extend(config.custom_pipeline_steps)
+
+    return compose_pipeline(steps)
 
 
 def normalize_step(context: SQLTransformContext) -> SQLTransformContext:
@@ -221,6 +273,7 @@ def validate_step(context: SQLTransformContext) -> SQLTransformContext:
 
     Performs comprehensive security checks on the SQL expression
     to detect potential injection patterns and unsafe operations.
+    Can leverage driver-specific validation if available.
     """
     issues = []
     warnings = []
@@ -236,6 +289,9 @@ def validate_step(context: SQLTransformContext) -> SQLTransformContext:
         "xp_cmdshell",
         "sp_executesql",
     }
+
+    if context.driver_adapter and hasattr(context.driver_adapter, "suspicious_functions"):
+        suspicious_functions.update(context.driver_adapter.suspicious_functions)
 
     for node in context.current_expression.walk():
         # Check for suspicious functions
@@ -264,7 +320,6 @@ def validate_step(context: SQLTransformContext) -> SQLTransformContext:
         if isinstance(node, exp.Comment):
             warnings.append("SQL comment detected - potential injection vector")
 
-    # Store validation results
     context.metadata["validation_issues"] = issues
     context.metadata["validation_warnings"] = warnings
     context.metadata["validated"] = True

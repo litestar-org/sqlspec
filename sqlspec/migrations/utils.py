@@ -25,16 +25,12 @@ def create_migration_file(migrations_dir: Path, version: str, message: str) -> P
     Returns:
         Path to the created migration file.
     """
-    # Sanitize message for filename
     safe_message = message.lower()
     safe_message = "".join(c if c.isalnum() or c in " -" else "" for c in safe_message)
     safe_message = safe_message.replace(" ", "_").replace("-", "_")
     safe_message = "_".join(filter(None, safe_message.split("_")))[:50]
-
     filename = f"{version}_{safe_message}.sql"
     file_path = migrations_dir / filename
-
-    # Generate template content
     template = f"""-- SQLSpec Migration
 -- Version: {version}
 -- Description: {message}
@@ -54,7 +50,6 @@ def create_migration_file(migrations_dir: Path, version: str, message: str) -> P
 -- Example:
 -- DROP TABLE example;
 """
-
     file_path.write_text(template)
     return file_path
 
@@ -68,9 +63,7 @@ def get_author() -> str:
     return os.environ.get("USER", "unknown")
 
 
-async def drop_all(
-    engine: "AsyncDriverAdapterBase[Any]", version_table_name: str, metadata: Optional[Any] = None
-) -> None:
+async def drop_all(engine: "AsyncDriverAdapterBase", version_table_name: str, metadata: Optional[Any] = None) -> None:
     """Drop all tables from the database.
 
     This is a placeholder for database-specific implementations.
@@ -83,7 +76,5 @@ async def drop_all(
     Raises:
         NotImplementedError: Always, as this requires database-specific logic.
     """
-    # This would need database-specific implementation
-    # For now, it's a placeholder
     msg = "drop_all functionality requires database-specific implementation"
     raise NotImplementedError(msg)

@@ -281,8 +281,6 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
             config: The SQLSpec configuration.
         """
         self.config = config
-
-        # Get migration settings from config
         migration_config = getattr(self.config, "migration_config", {})
         if migration_config is None:
             migration_config = {}

@@ -2,7 +2,9 @@
 import logging
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Union
+
+from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.storage.backends.base import ObjectStoreBase
@@ -22,14 +24,26 @@ __all__ = ("FSSpecBackend",)
 logger = logging.getLogger(__name__)
 
 # Constants for URI validation
-URI_PARTS_MIN_COUNT = 2
+URI_PARTS_MIN_COUNT: Final[int] = 2
 """Minimum number of parts in a valid cloud storage URI (bucket/path)."""
 
-AZURE_URI_PARTS_MIN_COUNT = 2
+AZURE_URI_PARTS_MIN_COUNT: Final[int] = 2
 """Minimum number of parts in an Azure URI (account/container)."""
 
-AZURE_URI_BLOB_INDEX = 2
+AZURE_URI_BLOB_INDEX: Final[int] = 2
 """Index of blob name in Azure URI parts."""
+
+# Protocol mapping for fast detection
+PROTOCOL_MAP: Final[dict[str, str]] = {
+    "s3": "s3",
+    "s3a": "s3",
+    "s3n": "s3",
+    "gs": "gcs",
+    "gcs": "gcs",
+    "az": "abfs",
+    "abfs": "abfs",
+    "file": "file",
+}
 
 
 def _join_path(prefix: str, path: str) -> str:
@@ -40,6 +54,7 @@ def _join_path(prefix: str, path: str) -> str:
     return f"{prefix}/{path}"
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class FSSpecBackend(ObjectStoreBase):
     """Extended protocol support via fsspec.
 

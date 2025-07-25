@@ -14,16 +14,11 @@ from sqlspec.typing import ConnectionT
 from sqlspec.utils.type_guards import is_async_transaction_capable, is_sync_transaction_capable
 
 __all__ = (
-    "get_connection_info",
     "managed_connection_async",
     "managed_connection_sync",
     "managed_transaction_async",
     "managed_transaction_sync",
-    "validate_pool_config",
 )
-
-
-# Type variables replaced with Any for mypyc compatibility
 
 
 @contextmanager
@@ -85,9 +80,7 @@ def managed_transaction_sync(connection: ConnectionT, auto_commit: bool = True) 
 
 
 @asynccontextmanager
-async def managed_connection_async(
-    config: Any, provided_connection: Optional[Any] = None
-) -> "AsyncIterator[Any]":
+async def managed_connection_async(config: Any, provided_connection: Optional[Any] = None) -> "AsyncIterator[Any]":
     """Async context manager for database connections.
 
     Args:
@@ -142,66 +135,3 @@ async def managed_transaction_async(connection: Any, auto_commit: bool = True) -
                 # Re-raise other rollback errors
                 raise
         raise
-
-
-def get_connection_info(connection: Any) -> dict[str, Any]:
-    """Extract connection information for logging/debugging.
-
-    Args:
-        connection: Database connection object
-
-    Returns:
-        Dictionary of connection information
-    """
-    info = {"type": type(connection).__name__, "module": type(connection).__module__}
-
-    # Try to get database name
-    for attr in ("database", "dbname", "db", "catalog"):
-        value = getattr(connection, attr, None)
-        if value is not None:
-            info["database"] = value
-            break
-
-    # Try to get host information
-    for attr in ("host", "hostname", "server"):
-        value = getattr(connection, attr, None)
-        if value is not None:
-            info["host"] = value
-            break
-
-    return info
-
-
-def validate_pool_config(
-    min_size: int, max_size: int, max_idle_time: Optional[int] = None, max_lifetime: Optional[int] = None
-) -> None:
-    """Validate connection pool configuration.
-
-    Args:
-        min_size: Minimum pool size
-        max_size: Maximum pool size
-        max_idle_time: Maximum idle time in seconds
-        max_lifetime: Maximum connection lifetime in seconds
-
-    Raises:
-        ValueError: If configuration is invalid
-    """
-    if min_size < 0:
-        msg = f"min_size must be >= 0, got {min_size}"
-        raise ValueError(msg)
-
-    if max_size < 1:
-        msg = f"max_size must be >= 1, got {max_size}"
-        raise ValueError(msg)
-
-    if min_size > max_size:
-        msg = f"min_size ({min_size}) cannot be greater than max_size ({max_size})"
-        raise ValueError(msg)
-
-    if max_idle_time is not None and max_idle_time < 0:
-        msg = f"max_idle_time must be >= 0, got {max_idle_time}"
-        raise ValueError(msg)
-
-    if max_lifetime is not None and max_lifetime < 0:
-        msg = f"max_lifetime must be >= 0, got {max_lifetime}"
-        raise ValueError(msg)

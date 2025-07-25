@@ -94,6 +94,7 @@ def test_adbc_config_provide_session() -> None:
     with config.provide_session() as session:
         assert isinstance(session, AdbcDriver)
         # Check that parameter styles were set
+        assert session.config is not None
         assert session.config.allowed_parameter_styles == ("qmark", "named_colon")
         assert session.config.default_parameter_style == "qmark"
 

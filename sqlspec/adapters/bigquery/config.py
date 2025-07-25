@@ -11,7 +11,7 @@ from sqlspec.adapters.bigquery.driver import BigQueryConnection, BigQueryDriver
 from sqlspec.config import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import DictRow, Empty
+from sqlspec.typing import Empty
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -88,7 +88,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         connection_instance: "Optional[BigQueryConnection]" = None,
         connection_config: "Optional[Union[BigQueryConnectionParams, dict[str, Any]]]" = None,
         statement_config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
         on_connection_create: Optional[Callable[[BigQueryConnection], None]] = None,
         on_job_start: Optional[Callable[[str], None]] = None,
         on_job_complete: Optional[Callable[[str, Any], None]] = None,
@@ -102,7 +101,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             connection_config: Connection configuration parameters
             connection_instance: Existing connection instance to use
             statement_config: Default SQL statement configuration
-            default_row_type: Default row type for results
             on_connection_create: Callback executed when connection is created
             on_job_start: Callback executed when a BigQuery job starts
             on_job_complete: Callback executed when a BigQuery job completes
@@ -154,7 +152,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
         # Store other config
         self.statement_config = statement_config or SQLConfig(dialect="bigquery")
-        self.default_row_type = default_row_type
         self.on_connection_create = on_connection_create
         self.on_job_start = on_job_start
         self.on_job_complete = on_job_complete
@@ -265,7 +262,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             driver = self.driver_type(
                 connection=connection,
                 config=statement_config,
-                default_row_type=self.default_row_type,
                 default_query_job_config=self.connection_config.get("default_query_job_config"),
                 on_job_start=self.on_job_start,
                 on_job_complete=self.on_job_complete,

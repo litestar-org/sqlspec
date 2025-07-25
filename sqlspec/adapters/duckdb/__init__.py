@@ -1,3 +1,5 @@
+"""DuckDB adapter for SQLSpec."""
+
 from sqlspec.adapters.duckdb.config import (
     DuckDBConfig,
     DuckDBConnectionParams,

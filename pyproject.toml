@@ -452,6 +452,7 @@ ignore = [
   "S608",    # ruff - Possible sql injection
   "PLR0904", # too many public methods
   "PLR6301", # method could be static or class method
+  "B903",    # class could be a dataclass or named tuple
 ]
 select = ["ALL"]
 

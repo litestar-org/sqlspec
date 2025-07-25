@@ -20,7 +20,6 @@ from sqlspec.adapters.duckdb import DuckDBDriver
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow
 
 if TYPE_CHECKING:
     pass
@@ -79,19 +78,15 @@ def test_driver_initialization() -> None:
     assert driver.supported_parameter_styles == (ParameterStyle.QMARK, ParameterStyle.NUMERIC)
 
 
-def test_driver_default_row_type() -> None:
-    """Test driver default row type."""
+def test_driver_row_handling() -> None:
+    """Test driver row handling."""
     mock_conn = MagicMock()
 
-    # Default row type - DuckDB uses a string type hint
+    # Test that driver can be initialized without row type parameters
     driver = DuckDBDriver(connection=mock_conn)
-    # DuckDB driver has a string representation for default row type
-    assert str(driver.default_row_type) == "dict[str, Any]" or driver.default_row_type == DictRow
-
-    # Custom row type
-    custom_type: type[DictRow] = dict
-    driver = DuckDBDriver(connection=mock_conn, default_row_type=custom_type)
-    assert driver.default_row_type is custom_type
+    assert driver.connection is mock_conn
+    assert hasattr(driver, "config")
+    assert driver.config is not None
 
 
 # Arrow Support Tests

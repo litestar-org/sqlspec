@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
 from urllib.parse import urlparse
 
+from mypy_extensions import trait
+
 from sqlspec.driver.mixins._csv_writer import write_csv
 from sqlspec.driver.parameters import separate_filters_and_parameters
 from sqlspec.exceptions import MissingDependencyError
@@ -44,10 +46,14 @@ class StorageMixinBase(ABC):
     """Base class with common storage functionality."""
 
     config: Any
-    _connection: Any
+    _connection: "ConnectionT"  # type: ignore[valid-type]
     dialect: "DialectType"
     supports_native_parquet_export: "ClassVar[bool]"
     supports_native_parquet_import: "ClassVar[bool]"
+    supports_native_csv_export: "ClassVar[bool]" = False
+    supports_native_csv_import: "ClassVar[bool]" = False
+    supports_native_json_export: "ClassVar[bool]" = False
+    supports_native_json_import: "ClassVar[bool]" = False
 
     @staticmethod
     def _ensure_pyarrow_installed() -> None:
@@ -57,6 +63,92 @@ class StorageMixinBase(ABC):
         if not PYARROW_INSTALLED:
             msg = "pyarrow is required for Arrow operations. Install with: pip install pyarrow"
             raise MissingDependencyError(msg)
+
+    def _get_compiled_sql_for_arrow(self, sql: "SQL") -> "tuple[str, Any]":
+        """Get compiled SQL with standardized parameter handling for Arrow operations.
+
+        Centralizes the logic for parameter style selection and SQL compilation
+        that's common across all Arrow/CSV methods.
+
+        Args:
+            sql: SQL object to compile
+
+        Returns:
+            Tuple of (compiled_sql, processed_parameters)
+        """
+        # Use centralized parameter style selection
+        target_style = self._select_parameter_style(sql)  # type: ignore[attr-defined]
+
+        # Compile with the determined style
+        compiled_sql, params = sql.compile(placeholder_style=target_style)
+
+        # Process parameters through type coercion
+        params = self._process_parameters(params)  # type: ignore[attr-defined]
+
+        return compiled_sql, params
+
+    def _standardize_mode_parameter(self, mode: str) -> str:
+        """Standardize and validate the mode parameter across all operations.
+
+        Args:
+            mode: Raw mode parameter from user
+
+        Returns:
+            Validated mode parameter
+
+        Raises:
+            ValueError: If mode is not supported
+        """
+        mode = mode.lower().strip()
+        valid_modes = {"create", "append", "replace"}
+
+        if mode not in valid_modes:
+            msg = f"Invalid mode '{mode}'. Must be one of: {', '.join(sorted(valid_modes))}"
+            raise ValueError(msg)
+
+        return mode
+
+    def _has_native_capability(self, operation: str, format: str = "") -> bool:
+        """Check if driver has native capability for specific operation.
+
+        This centralized method replaces individual driver implementations.
+        Drivers declare their capabilities through class attributes.
+
+        Args:
+            operation: Operation type ('export', 'import', 'read', 'write')
+            format: File format ('parquet', 'csv', 'json')
+
+        Returns:
+            True if driver has native support for operation/format
+        """
+        if not format:
+            return False
+
+        format_lower = format.lower()
+
+        # Check capability based on operation and format
+        if operation == "export":
+            if format_lower == "parquet" and getattr(self, "supports_native_parquet_export", False):
+                return True
+            if format_lower == "csv" and getattr(self, "supports_native_csv_export", False):
+                return True
+            if format_lower == "json" and getattr(self, "supports_native_json_export", False):
+                return True
+        elif operation == "import":
+            if format_lower == "parquet" and getattr(self, "supports_native_parquet_import", False):
+                return True
+            if format_lower == "csv" and getattr(self, "supports_native_csv_import", False):
+                return True
+            if format_lower == "json" and getattr(self, "supports_native_json_import", False):
+                return True
+        elif operation == "read" and format_lower == "parquet":
+            # Read operations typically only support parquet natively
+            return getattr(self, "supports_native_parquet_import", False)
+        elif operation == "write" and format_lower == "parquet":
+            # Write operations typically only support parquet natively
+            return getattr(self, "supports_native_parquet_export", False)
+
+        return False
 
     @staticmethod
     def _get_storage_backend(uri_or_key: "Union[str, Path]") -> "ObjectStoreProtocol":
@@ -130,14 +222,14 @@ class StorageMixinBase(ABC):
 
         if isinstance(rows[0], dict):
             # Dict rows
-            data = {col: [cast("dict[str, Any]", row).get(col) for row in rows] for col in columns}
+            data = {col: [row.get(col) for row in rows] for col in columns}
         else:
-            # Tuple/list rows
             data = {col: [cast("tuple[Any, ...]", row)[i] for row in rows] for i, col in enumerate(columns)}
 
         return pa.table(data)
 
 
+@trait
 class SyncStorageMixin(StorageMixinBase):
     """Unified storage operations for synchronous drivers."""
 
@@ -158,6 +250,9 @@ class SyncStorageMixin(StorageMixinBase):
         Drivers with more efficient, native Arrow ingestion methods should override this.
         """
         import pyarrow.parquet as pq
+
+        # Validate mode parameter
+        mode = self._standardize_mode_parameter(mode)
 
         with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
             tmp_path = Path(tmp.name)
@@ -233,7 +328,8 @@ class SyncStorageMixin(StorageMixinBase):
         try:
             result = cast("SQLResult", self.execute(sql, _connection=connection))  # type: ignore[attr-defined]
         except Exception:
-            compiled_sql, compiled_params = sql.compile("qmark")
+            # Use centralized SQL compilation
+            compiled_sql, compiled_params = self._get_compiled_sql_for_arrow(sql)
 
             # Execute directly via the driver's _execute method
             driver_result = self._execute(compiled_sql, compiled_params, sql, connection=connection)  # type: ignore[attr-defined]
@@ -323,7 +419,7 @@ class SyncStorageMixin(StorageMixinBase):
 
         # Use storage backend - resolve AFTER modifying destination_uri
         backend, path = self._resolve_backend_and_path(destination_uri)
-        if file_format == "parquet" and self.supports_native_parquet_export:
+        if self._has_native_capability("export", file_format):
             try:
                 compiled_sql, _ = sql.compile(placeholder_style="static")
                 return self._export_native(compiled_sql, destination_uri, file_format, **kwargs)
@@ -384,11 +480,14 @@ class SyncStorageMixin(StorageMixinBase):
         Returns:
             Number of rows imported
         """
+        # Validate mode parameter
+        mode = self._standardize_mode_parameter(mode)
+
         # Auto-detect format if not provided
         file_format = format or self._detect_format(source_uri)
 
         # Try native database import first
-        if file_format == "parquet" and self.supports_native_parquet_import:
+        if self._has_native_capability("import", file_format):
             return self._import_native(source_uri, table_name, file_format, mode, **options)
 
         # Use storage backend
@@ -460,8 +559,8 @@ class SyncStorageMixin(StorageMixinBase):
         try:
             result = cast("SQLResult", self.execute(sql_obj))  # type: ignore[attr-defined]
         except Exception:
-            # Fall back to direct execution
-            compiled_sql, compiled_params = sql_obj.compile("qmark")
+            # Use centralized SQL compilation
+            compiled_sql, compiled_params = self._get_compiled_sql_for_arrow(sql_obj)
             driver_result = self._execute(compiled_sql, compiled_params, sql_obj)  # type: ignore[attr-defined]
             if "data" in driver_result:
                 result = self._wrap_select_result(sql_obj, driver_result)  # type: ignore[attr-defined]
@@ -561,6 +660,7 @@ class SyncStorageMixin(StorageMixinBase):
         raise NotImplementedError(msg)
 
 
+@trait
 class AsyncStorageMixin(StorageMixinBase):
     """Unified storage operations for asynchronous drivers."""
 
@@ -586,6 +686,9 @@ class AsyncStorageMixin(StorageMixinBase):
         Drivers with more efficient, native Arrow ingestion methods should override this.
         """
         import pyarrow.parquet as pq
+
+        # Validate mode parameter
+        mode = self._standardize_mode_parameter(mode)
 
         # Use an async-friendly way to handle the temporary file if possible,
         # but for simplicity, standard tempfile is acceptable here as it's a fallback.
@@ -664,8 +767,18 @@ class AsyncStorageMixin(StorageMixinBase):
         Returns:
             ArrowResult with converted data
         """
-        # Execute regular query
-        result = await self.execute(sql, _connection=connection)  # type: ignore[attr-defined]
+        try:
+            # Execute regular query
+            result = await self.execute(sql, _connection=connection)  # type: ignore[attr-defined]
+        except Exception:
+            # Use centralized SQL compilation
+            compiled_sql, compiled_params = self._get_compiled_sql_for_arrow(sql)
+
+            driver_result = await self._execute(compiled_sql, compiled_params, sql, connection=connection)  # type: ignore[attr-defined]
+            if "data" in driver_result:
+                result = self._wrap_select_result(sql, driver_result)  # type: ignore[attr-defined]
+            else:
+                result = self._wrap_execute_result(sql, driver_result)  # type: ignore[attr-defined]
 
         arrow_table = self._rows_to_arrow_table(result.data or [], result.column_names or [])
 
@@ -735,7 +848,7 @@ class AsyncStorageMixin(StorageMixinBase):
         backend, path = self._resolve_backend_and_path(destination_uri)
 
         # Try native database export first
-        if file_format == "parquet" and self.supports_native_parquet_export:
+        if self._has_native_capability("export", file_format):
             try:
                 compiled_sql, _ = query.compile(placeholder_style="static")
                 return await self._export_native(compiled_sql, destination_uri, file_format, **kwargs)
@@ -749,7 +862,7 @@ class AsyncStorageMixin(StorageMixinBase):
             arrow_table = arrow_result.data
             if arrow_table is not None:
                 await backend.write_arrow_async(path, arrow_table, **kwargs)
-                return arrow_table.num_rows
+                return int(arrow_table.num_rows)
             return 0
 
         return await self._export_via_backend(query, backend, path, file_format, **kwargs)
@@ -798,6 +911,9 @@ class AsyncStorageMixin(StorageMixinBase):
         Returns:
             Number of rows imported
         """
+        # Validate mode parameter
+        mode = self._standardize_mode_parameter(mode)
+
         file_format = format or self._detect_format(source_uri)
         backend, path = self._resolve_backend_and_path(source_uri)
 
@@ -813,6 +929,7 @@ class AsyncStorageMixin(StorageMixinBase):
 
     async def _export_native(self, query: str, destination_uri: "Union[str, Path]", format: str, **options: Any) -> int:
         """Async database-specific native export."""
+        _ = query, destination_uri, format, options  # pyright: ignore[reportUnusedVariable]
         msg = "Driver should implement _export_native"
         raise NotImplementedError(msg)
 
@@ -820,6 +937,7 @@ class AsyncStorageMixin(StorageMixinBase):
         self, source_uri: "Union[str, Path]", table_name: str, format: str, mode: str, **options: Any
     ) -> int:
         """Async database-specific native import."""
+        _ = source_uri, table_name, format, mode, options  # pyright: ignore[reportUnusedVariable]
         msg = "Driver should implement _import_native"
         raise NotImplementedError(msg)
 
@@ -832,8 +950,9 @@ class AsyncStorageMixin(StorageMixinBase):
         try:
             result = await self.execute(sql_obj)  # type: ignore[attr-defined]
         except Exception:
-            # Fall back to direct execution
-            compiled_sql, compiled_params = sql_obj.compile("qmark")
+            # Use centralized SQL compilation
+            compiled_sql, compiled_params = self._get_compiled_sql_for_arrow(sql_obj)
+
             driver_result = await self._execute(compiled_sql, compiled_params, sql_obj)  # type: ignore[attr-defined]
             if "data" in driver_result:
                 result = self._wrap_select_result(sql_obj, driver_result)  # type: ignore[attr-defined]
@@ -904,5 +1023,6 @@ class AsyncStorageMixin(StorageMixinBase):
 
     async def _bulk_load_file(self, file_path: Path, table_name: str, format: str, mode: str, **options: Any) -> int:
         """Async database-specific bulk load implementation."""
+        _ = file_path, table_name, format, mode, options  # pyright: ignore[reportUnusedVariable]
         msg = "Driver should implement _bulk_load_file"
         raise NotImplementedError(msg)

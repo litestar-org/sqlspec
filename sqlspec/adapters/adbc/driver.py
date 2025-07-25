@@ -10,6 +10,8 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
     from typing_extensions import TypeAlias
 
+    from sqlspec.typing import ConnectionT
+
 from adbc_driver_manager.dbapi import Connection, Cursor
 
 from sqlspec.driver import SyncDriverAdapterBase
@@ -81,7 +83,7 @@ class AdbcDriver(
     - Driver manager abstraction for easy multi-database support
     """
 
-    connection_type = AdbcConnection  # type: ignore[assignment]
+    connection_type = AdbcConnection
     supports_native_arrow_import: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_parquet_export: "ClassVar[bool]" = False  # TODO: Implement native Parquet export
@@ -144,17 +146,6 @@ class AdbcDriver(
             return None
         return params
 
-    def _select_parameter_style(self, detected_styles: "set[ParameterStyle]") -> "ParameterStyle":
-        """Select the best parameter style based on detected and supported styles."""
-        if not detected_styles or detected_styles - set(self.supported_parameter_styles):
-            return self.default_parameter_style
-
-        # Use first supported style found
-        for style in detected_styles:
-            if style in self.supported_parameter_styles:
-                return style
-        return self.default_parameter_style
-
     @staticmethod
     @contextmanager
     def _get_cursor(connection: "AdbcConnection") -> "Iterator[Cursor]":
@@ -165,16 +156,15 @@ class AdbcDriver(
             with contextlib.suppress(Exception):
                 cursor.close()  # type: ignore[no-untyped-call]
 
-    def _execute_statement(  # type: ignore[override]
-        self, statement: "SQL", connection: "Optional[AdbcConnection]" = None, **kwargs: "Any"
+    def _execute_statement(
+        self, statement: "SQL", connection: "Optional[ConnectionT]" = None, **kwargs: "Any"
     ) -> "SQLResult":
         if statement.is_script:
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return self._execute_script(sql, connection=connection, **kwargs)
 
         # Determine target parameter style
-        detected_styles = {p.style for p in statement.parameter_info}
-        target_style = self._select_parameter_style(detected_styles)
+        target_style = self._select_parameter_style(statement)
 
         statement._ensure_processed()
         sql, params = self._get_compiled_sql(statement, target_style)
@@ -190,7 +180,7 @@ class AdbcDriver(
         sql: str,
         parameters: "Any",
         statement: "SQL",
-        connection: "Optional[AdbcConnection]" = None,
+        connection: "Optional[ConnectionT]" = None,
         **kwargs: "Any",
     ) -> "SQLResult":
         conn = self._connection(connection)
@@ -235,18 +225,8 @@ class AdbcDriver(
             operation_type="SELECT",
         )
 
-    def _build_modify_result(self, cursor: "Cursor", statement: "SQL") -> "SQLResult":
-        """Build result for non-SELECT operations."""
-        return SQLResult(
-            statement=statement,
-            data=cast("list[dict[str, Any]]", []),
-            rows_affected=cursor.rowcount,
-            operation_type=self._determine_operation_type(statement),
-            metadata={"status_message": "OK"},
-        )
-
     def _execute_many(
-        self, sql: str, param_list: "Any", connection: "Optional[AdbcConnection]" = None, **kwargs: "Any"
+        self, sql: str, param_list: "Any", connection: "Optional[ConnectionT]" = None, **kwargs: "Any"
     ) -> "SQLResult":
         conn = self._connection(connection)
 
@@ -276,7 +256,7 @@ class AdbcDriver(
             )
 
     def _execute_script(
-        self, script: str, connection: "Optional[AdbcConnection]" = None, **kwargs: "Any"
+        self, script: str, connection: "Optional[ConnectionT]" = None, **kwargs: "Any"
     ) -> "SQLResult":
         with managed_transaction_sync(self._connection(connection), auto_commit=True) as txn_conn:
             statements = self._split_script_statements(script)
@@ -308,10 +288,11 @@ class AdbcDriver(
         """Execute a single statement from a script and handle errors."""
         try:
             cursor.execute(statement)
-            return cursor.rowcount or 0
         except Exception as e:
             self._handle_postgres_rollback(cursor)
             raise e from e
+        else:
+            return cursor.rowcount or 0
 
     def _fetch_arrow_table(self, sql: "SQL", connection: "Optional[Any]" = None, **kwargs: "Any") -> "ArrowResult":
         """ADBC native Arrow table fetching with zero-copy data transfer."""
@@ -384,6 +365,6 @@ class AdbcDriver(
 
         return super()._import_from_storage(source_uri, table_name, format, mode, **options)
 
-    def _connection(self, connection: Optional["AdbcConnection"] = None) -> "AdbcConnection":
+    def _connection(self, connection: "Optional[ConnectionT]" = None) -> "AdbcConnection":
         """Get the connection to use for the operation."""
-        return connection or self.connection
+        return cast("AdbcConnection", connection or self.connection)

@@ -1,10 +1,6 @@
 import re
 from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
 
-from asyncpg import Connection as AsyncpgNativeConnection
-from asyncpg import Record
-from typing_extensions import TypeAlias
-
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.driver.connection import managed_transaction_async
 from sqlspec.driver.mixins import (
@@ -16,14 +12,17 @@ from sqlspec.driver.mixins import (
     TypeCoercionMixin,
 )
 from sqlspec.exceptions import PipelineExecutionError
-from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
+from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from asyncpg import Connection as AsyncpgNativeConnection
+    from asyncpg import Record
     from asyncpg.pool import PoolConnectionProxy
     from sqlglot.dialects.dialect import DialectType
+    from typing_extensions import TypeAlias
 
 
 __all__ = ("AsyncpgConnection", "AsyncpgDriver")
@@ -33,7 +32,7 @@ logger = get_logger("adapters.asyncpg")
 if TYPE_CHECKING:
     AsyncpgConnection: TypeAlias = Union[AsyncpgNativeConnection[Record], PoolConnectionProxy[Record]]
 else:
-    AsyncpgConnection: TypeAlias = Union[AsyncpgNativeConnection, Any]
+    AsyncpgConnection = Any
 
 # Compiled regex to parse asyncpg status messages like "INSERT 0 1" or "UPDATE 1"
 # Group 1: Command Tag (e.g., INSERT, UPDATE)
@@ -55,7 +54,7 @@ OPERATION_MAP: Final[dict[str, str]] = {
 
 
 class AsyncpgDriver(
-    AsyncDriverAdapterBase[AsyncpgConnection],
+    AsyncDriverAdapterBase,
     SQLTranslatorMixin,
     TypeCoercionMixin,
     AsyncStorageMixin,
@@ -65,12 +64,24 @@ class AsyncpgDriver(
 ):
     """AsyncPG PostgreSQL Driver Adapter. Modern protocol implementation."""
 
+    connection_type = type(AsyncpgConnection)
     dialect: "DialectType" = "postgres"
     supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.NUMERIC,)
     default_parameter_style: ParameterStyle = ParameterStyle.NUMERIC
 
     def __init__(self, connection: "AsyncpgConnection", config: "Optional[SQLConfig]" = None) -> None:
         super().__init__(connection=connection, config=config)
+
+    def _connection(self, connection: "Optional[AsyncpgConnection]" = None) -> "AsyncpgConnection":
+        """Get connection to use for operation.
+
+        Args:
+            connection: Optional specific connection to use
+
+        Returns:
+            The connection to use (provided connection or driver's default)
+        """
+        return connection if connection is not None else self.connection
 
     # AsyncPG-specific type coercion overrides (PostgreSQL has rich native types)
     def _coerce_boolean(self, value: Any) -> Any:
@@ -91,29 +102,14 @@ class AsyncpgDriver(
             return list(value)
         return value
 
-    async def _execute_statement(
-        self, statement: SQL, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
-    ) -> SQLResult:
+    async def _execute_statement(  # type: ignore[override]
+        self, statement: "SQL", connection: "Optional[AsyncpgConnection]" = None, **kwargs: Any
+    ) -> "SQLResult":
         if statement.is_script:
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
             return await self._execute_script(sql, connection=connection, **kwargs)
 
-        detected_styles = set()
-        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL string without parameters
-        validator = self.config.parameter_validator if self.config else ParameterValidator()
-        param_infos = validator.extract_parameters(sql_str)
-        if param_infos:
-            detected_styles = {p.style for p in param_infos}
-
-        target_style = self.default_parameter_style
-        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
-        if unsupported_styles:
-            target_style = self.default_parameter_style
-        elif detected_styles:
-            for style in detected_styles:
-                if style in self.supported_parameter_styles:
-                    target_style = style
-                    break
+        target_style = self._select_parameter_style(statement)
 
         if statement.is_many:
             sql, params = self._get_compiled_sql(statement, target_style)
@@ -122,9 +118,47 @@ class AsyncpgDriver(
         sql, params = self._get_compiled_sql(statement, target_style)
         return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
+    async def _build_select_result(self, statement: "SQL", records: "list[Any]") -> "SQLResult":
+        """Build SQLResult for SELECT operations."""
+        data = [dict(record) for record in records]
+        column_names = list(records[0].keys()) if records else []
+        return SQLResult(
+            statement=statement,
+            data=cast("list[dict[str, Any]]", data),
+            column_names=column_names,
+            rows_affected=len(records),
+            operation_type="SELECT",
+        )
+
+    def _build_modify_result_async(self, statement: "SQL", status: str) -> "SQLResult":
+        """Build SQLResult for non-SELECT operations with AsyncPG status string.
+
+        Args:
+            statement: SQL statement object
+            status: AsyncPG status string like "INSERT 0 1", "UPDATE 3", etc.
+
+        Returns:
+            SQLResult object with operation metadata
+        """
+        rows_affected = self._parse_asyncpg_status(status)
+        operation_type = self._determine_operation_type(statement)
+
+        return SQLResult(
+            statement=statement,
+            data=cast("list[dict[str, Any]]", []),
+            rows_affected=rows_affected,
+            operation_type=operation_type,
+            metadata={"status_message": status},
+        )
+
     async def _execute(
-        self, sql: str, parameters: Any, statement: SQL, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
-    ) -> SQLResult:
+        self,
+        sql: str,
+        parameters: Any,
+        statement: "SQL",
+        connection: "Optional[AsyncpgConnection]" = None,
+        **kwargs: Any,
+    ) -> "SQLResult":
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -142,36 +176,14 @@ class AsyncpgDriver(
 
             if self.returns_rows(statement.expression):
                 records = await txn_conn.fetch(sql, *args_for_driver)
-                data = [dict(record) for record in records]
-                column_names = list(records[0].keys()) if records else []
-                return SQLResult(
-                    statement=statement,
-                    data=cast("list[dict[str, Any]]", data),  # type: ignore[redundant-cast]
-                    column_names=column_names,
-                    rows_affected=len(records),
-                    operation_type="SELECT",
-                )
+                return await self._build_select_result(statement, records)
 
             status = await txn_conn.execute(sql, *args_for_driver)
-            # Parse row count from status string
-            rows_affected = 0
-            if status and isinstance(status, str):
-                match = ASYNC_PG_STATUS_REGEX.match(status)
-                if match and len(match.groups()) >= EXPECTED_REGEX_GROUPS:
-                    rows_affected = int(match.group(3))
-
-            operation_type = self._determine_operation_type(statement)
-            return SQLResult(
-                statement=statement,
-                data=cast("list[dict[str, Any]]", []),
-                rows_affected=rows_affected,
-                operation_type=operation_type,
-                metadata={"status_message": status or "OK"},
-            )
+            return self._build_modify_result_async(statement, status)
 
     async def _execute_many(
-        self, sql: str, param_list: Any, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
-    ) -> SQLResult:
+        self, sql: str, param_list: Any, connection: "Optional[AsyncpgConnection]" = None, **kwargs: Any
+    ) -> "SQLResult":
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -203,9 +215,15 @@ class AsyncpgDriver(
                 metadata={"status_message": "OK"},
             )
 
+    def _validate_statement(self, statement: str, **kwargs: Any) -> None:
+        """Validate a single statement if warnings not suppressed."""
+        if not kwargs.get("_suppress_warnings") and statement.strip():
+            temp_sql = SQL(statement, config=self.config)
+            temp_sql._ensure_processed()
+
     async def _execute_script(
-        self, script: str, connection: Optional[AsyncpgConnection] = None, **kwargs: Any
-    ) -> SQLResult:
+        self, script: str, connection: "Optional[AsyncpgConnection]" = None, **kwargs: Any
+    ) -> "SQLResult":
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -217,9 +235,7 @@ class AsyncpgDriver(
             last_status = None
             for statement in statements:
                 if statement.strip():
-                    if not kwargs.get("_suppress_warnings"):
-                        temp_sql = SQL(statement, config=self.config)
-                        temp_sql._ensure_processed()
+                    self._validate_statement(statement, **kwargs)
                     status = await txn_conn.execute(statement)
                     executed_count += 1
                     last_status = status
@@ -232,10 +248,6 @@ class AsyncpgDriver(
                 total_statements=executed_count,
                 successful_statements=executed_count,
             )
-
-    def _connection(self, connection: Optional[AsyncpgConnection] = None) -> AsyncpgConnection:
-        """Get the connection to use for the operation."""
-        return connection or self.connection
 
     async def _execute_pipeline_native(self, operations: "list[Any]", **options: Any) -> "list[SQLResult]":
         """Native pipeline execution using AsyncPG's efficient batch handling.
@@ -251,9 +263,8 @@ class AsyncpgDriver(
         Returns:
             List of SQLResult objects from all operations
         """
-
         results: list[Any] = []
-        connection = self._connection()
+        connection = self._connection(None)
         async with connection.transaction():
             for i, op in enumerate(operations):
                 await self._execute_pipeline_operation(connection, i, op, options, results)
@@ -261,18 +272,21 @@ class AsyncpgDriver(
         return results
 
     async def _execute_pipeline_operation(
-        self, connection: Any, i: int, op: Any, options: dict[str, Any], results: list[Any]
+        self, connection: Any, i: int, op: Any, options: "dict[str, Any]", results: "list[Any]"
     ) -> None:
         """Execute a single pipeline operation with error handling."""
-
         try:
             sql_str = op.sql.to_sql(placeholder_style=ParameterStyle.NUMERIC)
             params = self._convert_to_positional_params(op.sql.parameters)
 
-            filtered_sql = self._apply_operation_filters(op.sql, op.filters)
-            if filtered_sql != op.sql:
-                sql_str = filtered_sql.to_sql(placeholder_style=ParameterStyle.NUMERIC)
-                params = self._convert_to_positional_params(filtered_sql.parameters)
+            # Apply filters if any
+            if op.filters:
+                filtered_sql = op.sql
+                for filter_obj in op.filters:
+                    filtered_sql = filter_obj.append_to_statement(filtered_sql)
+                if filtered_sql != op.sql:
+                    sql_str = filtered_sql.to_sql(placeholder_style=ParameterStyle.NUMERIC)
+                    params = self._convert_to_positional_params(filtered_sql.parameters)
 
             # Execute based on operation type
             if op.operation_type == "execute_many":
@@ -384,29 +398,6 @@ class AsyncpgDriver(
         if isinstance(params, (list, tuple)):
             return tuple(params)
         return (params,)
-
-    def _apply_operation_filters(self, sql: "SQL", filters: "list[Any]") -> "SQL":
-        """Apply filters to a SQL object for pipeline operations."""
-        if not filters:
-            return sql
-
-        result_sql = sql
-        for filter_obj in filters:
-            # Use try/except for better performance than hasattr
-            try:
-                apply_method = filter_obj.apply
-            except AttributeError:
-                continue
-            else:
-                result_sql = apply_method(result_sql)
-
-        return result_sql
-
-    def _split_script_statements(self, script: str, strip_trailing_semicolon: bool = False) -> "list[str]":
-        """Split a SQL script into individual statements."""
-        # Simple splitting on semicolon - could be enhanced with proper SQL parsing
-        statements = [stmt.strip() for stmt in script.split(";")]
-        return [stmt for stmt in statements if stmt]
 
     @staticmethod
     def _parse_asyncpg_status(status: str) -> int:

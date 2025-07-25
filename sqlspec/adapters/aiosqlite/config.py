@@ -13,7 +13,6 @@ from sqlspec.adapters.aiosqlite.driver import AiosqliteConnection, AiosqliteDriv
 from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import DictRow
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -112,6 +111,22 @@ class AiosqliteConnectionPool:
             return True
         return (time.time() - created_at) > self._recycle
 
+    async def _is_connection_alive(self, connection: "AiosqliteConnection") -> bool:
+        """Check if a connection is still alive and usable.
+
+        Args:
+            connection: Connection to check
+
+        Returns:
+            True if connection is alive, False otherwise
+        """
+        try:
+            await connection.execute("SELECT 1")
+        except Exception:
+            return False
+        else:
+            return True
+
     @asynccontextmanager
     async def get_connection(self) -> "AsyncGenerator[AiosqliteConnection, None]":
         """Get a connection from the pool.
@@ -126,7 +141,7 @@ class AiosqliteConnectionPool:
             acquired = await asyncio.wait_for(self._semaphore.acquire(), timeout=self._timeout)
             try:
                 connection = self._pool.get_nowait()
-                if self._should_recycle(connection):
+                if self._should_recycle(connection) or not await self._is_connection_alive(connection):
                     conn_id = id(connection)
                     with suppress(Exception):
                         await connection.close()
@@ -155,16 +170,15 @@ class AiosqliteConnectionPool:
                 async with self._lock:
                     self._checked_out -= 1
 
-                try:
-                    await connection.execute("SELECT 1")
+                # Validate connection before returning to pool
+                if await self._is_connection_alive(connection):
                     try:
                         self._pool.put_nowait(connection)
                     except asyncio.QueueFull:
                         with suppress(Exception):
                             await connection.close()
-
-                except Exception:
-                    # Connection is broken, close it
+                else:
+                    # Connection is dead, close it
                     with suppress(Exception):
                         await connection.close()
 
@@ -219,7 +233,6 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
         self,
         connection_config: "Optional[Union[AiosqliteConnectionParams, dict[str, Any]]]" = None,
         statement_config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
         migration_config: "Optional[dict[str, Any]]" = None,
         enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,
@@ -234,7 +247,6 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
         Args:
             connection_config: Connection configuration parameters (TypedDict or dict)
             statement_config: Default SQL statement configuration
-            default_row_type: Default row type for results
             migration_config: Migration configuration
             enable_adapter_cache: Enable SQL compilation caching
             adapter_cache_size: Max cached SQL statements
@@ -260,9 +272,18 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
         if "extra" in self.connection_config:
             extras = self.connection_config.pop("extra")
             self.connection_config.update(extras)
+        database = self.connection_config.get("database", ":memory:")
+        is_memory_db = self._is_memory_database(database)
+        if is_memory_db:
+            logger.warning(
+                "In-memory SQLite database detected. Disabling connection pooling to ensure data consistency. "
+                "Each pooled connection creates a separate in-memory database. Use a file-based database or "
+                "'file::memory:?cache=shared' with uri=True for shared memory access."
+            )
+            min_pool = 1
+            max_pool = 1
 
         self.statement_config = statement_config or SQLConfig()
-        self.default_row_type = default_row_type
         self.min_pool = min_pool
         self.max_pool = max_pool
         self.pool_timeout = pool_timeout
@@ -293,6 +314,25 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
         )
         await pool.initialize()
         return pool
+
+    def _is_memory_database(self, database: str) -> bool:
+        """Check if the database is an in-memory database.
+
+        Args:
+            database: Database path or connection string
+
+        Returns:
+            True if this is an in-memory database
+        """
+        if not database:
+            return True
+
+        # Standard :memory: database
+        if database == ":memory:":
+            return True
+
+        # Check for URI-style memory database but NOT shared cache
+        return "file::memory:" in database and "cache=shared" not in database
 
     async def _close_pool(self) -> None:
         """Close the connection pool."""

@@ -64,7 +64,6 @@ def test_oracledb_config_with_no_pool_config() -> None:
 
     # Check base class attributes
     assert isinstance(config.statement_config, SQLConfig)
-    assert config.default_row_type is dict
 
 
 def test_oracledb_config_initialization() -> None:
@@ -96,6 +95,7 @@ def test_oracledb_config_provide_session() -> None:
         with config.provide_session() as session:
             assert isinstance(session, OracleSyncDriver)
             # Check that parameter styles were set
+            assert session.config is not None
             assert session.config.allowed_parameter_styles == ("named_colon", "positional_colon")
             assert session.config.default_parameter_style == "named_colon"
 

@@ -74,7 +74,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         pool_instance: "Optional[Pool[Record]]" = None,
         pool_config: "Optional[Union[AsyncpgPoolConfig, dict[str, Any]]]" = None,
         statement_config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[Any]" = dict,
         migration_config: "Optional[dict[str, Any]]" = None,
         enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,
@@ -87,7 +86,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             pool_config: Pool configuration parameters (TypedDict or dict)
             pool_instance: Existing pool instance to use
             statement_config: SQL statement configuration
-            default_row_type: Default row type for results
             json_serializer: JSON serialization function
             json_deserializer: JSON deserialization function
             migration_config: Migration configuration
@@ -97,7 +95,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         # Store the pool config as a dict
         self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
         self.statement_config = statement_config or SQLConfig()
-        self.default_row_type = default_row_type
         self.json_serializer = json_serializer or to_json
         self.json_deserializer = json_deserializer or from_json
         super().__init__(

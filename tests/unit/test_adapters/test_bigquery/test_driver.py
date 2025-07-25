@@ -23,7 +23,6 @@ from sqlspec.adapters.bigquery import BigQueryDriver
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow
 
 if TYPE_CHECKING:
     pass
@@ -78,20 +77,6 @@ def test_driver_initialization() -> None:
     assert driver.dialect == "bigquery"
     assert driver.default_parameter_style == ParameterStyle.NAMED_AT
     assert driver.supported_parameter_styles == (ParameterStyle.NAMED_AT,)
-
-
-def test_driver_default_row_type() -> None:
-    """Test driver default row type."""
-    mock_conn = MagicMock()
-
-    # Default row type - BigQuery uses a string type hint
-    driver = BigQueryDriver(connection=mock_conn)
-    assert driver.default_row_type == DictRow
-
-    # Custom row type
-    custom_type: type[DictRow] = dict
-    driver = BigQueryDriver(connection=mock_conn, default_row_type=custom_type)
-    assert driver.default_row_type is custom_type
 
 
 def test_driver_initialization_with_callbacks() -> None:

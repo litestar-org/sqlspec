@@ -12,7 +12,6 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.asyncmy.driver import AsyncmyConnection, AsyncmyDriver
 from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import DictRow
 
 if TYPE_CHECKING:
     from asyncmy.cursors import Cursor, DictCursor
@@ -69,7 +68,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         pool_config: "Optional[Union[AsyncmyPoolParams, dict[str, Any]]]" = None,
         pool_instance: "Optional[Pool]" = None,
         statement_config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
         migration_config: Optional[dict[str, Any]] = None,
         enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,
@@ -80,7 +78,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             pool_config: Pool configuration parameters
             pool_instance: Existing pool instance to use
             statement_config: Default SQL statement configuration
-            default_row_type: Default row type for results
             migration_config: Migration configuration
             enable_adapter_cache: Enable SQL compilation caching
             adapter_cache_size: Max cached SQL statements
@@ -92,7 +89,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             self.pool_config.update(extras)
 
         self.statement_config = statement_config or SQLConfig()
-        self.default_row_type = default_row_type
 
         super().__init__(
             pool_instance=pool_instance,

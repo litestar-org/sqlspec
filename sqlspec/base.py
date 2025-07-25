@@ -243,14 +243,13 @@ class SQLSpec:
             async def _create_driver_async() -> "DriverT":
                 resolved_connection = await connection_obj  # pyright: ignore
                 return cast(  # pyright: ignore
-                    "DriverT",
-                    config.driver_type(connection=resolved_connection, default_row_type=config.default_row_type),
+                    "DriverT", config.driver_type(connection=resolved_connection)
                 )
 
             return _create_driver_async()
 
         return cast(  # pyright: ignore
-            "DriverT", config.driver_type(connection=connection_obj, default_row_type=config.default_row_type)
+            "DriverT", config.driver_type(connection=connection_obj)
         )
 
     @overload

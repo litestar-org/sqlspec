@@ -13,12 +13,10 @@ def test_typed_parameter_hashable() -> None:
     from sqlglot import exp
 
     tp1 = TypedParameter(
-        value="test", sqlglot_type=exp.DataType.build("VARCHAR"), type_hint="string", semantic_name="username"
+        value="test", data_type=exp.DataType.build("VARCHAR"), type_hint="string", semantic_name="username"
     )
 
-    tp2 = TypedParameter(
-        value=[1, 2, 3], sqlglot_type=exp.DataType.build("ARRAY"), type_hint="array", semantic_name="ids"
-    )
+    tp2 = TypedParameter(value=[1, 2, 3], data_type=exp.DataType.build("ARRAY"), type_hint="array", semantic_name="ids")
 
     # Should be hashable
     hash(tp1)
@@ -124,7 +122,7 @@ def test_wrap_parameters_with_types_already_wrapped() -> None:
     from sqlglot import exp
 
     tp = TypedParameter(
-        value="test", sqlglot_type=exp.DataType.build("VARCHAR"), type_hint="string", semantic_name="test_param"
+        value="test", data_type=exp.DataType.build("VARCHAR"), type_hint="string", semantic_name="test_param"
     )
 
     params = {"param": tp}
@@ -201,7 +199,7 @@ def test_typed_parameter_type_inference() -> None:
             assert isinstance(wrapped["param"], TypedParameter)
             assert wrapped["param"].value == value
             assert wrapped["param"].type_hint == expected_hint
-            assert str(wrapped["param"].sqlglot_type) == expected_type
+            assert str(wrapped["param"].data_type) == expected_type
 
 
 def test_typed_parameter_performance_optimization() -> None:

@@ -19,7 +19,7 @@ __all__ = ("AsyncMigrationRunner", "SyncMigrationRunner")
 logger = get_logger("migrations.runner")
 
 
-class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase[Any]"]):
+class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase"]):
     """Sync version - executes migrations using SQLFileLoader."""
 
     def get_migration_files(self) -> "list[tuple[str, Path]]":
@@ -42,7 +42,7 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase[Any]"]):
         return self._load_migration_metadata(file_path)
 
     def execute_upgrade(
-        self, driver: "SyncDriverAdapterBase[Any]", migration: "dict[str, Any]"
+        self, driver: "SyncDriverAdapterBase", migration: "dict[str, Any]"
     ) -> "tuple[Optional[str], int]":
         """Execute an upgrade migration.
 
@@ -58,15 +58,12 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase[Any]"]):
             return None, 0
 
         start_time = time.time()
-
-        # Execute migration
         driver.execute(upgrade_sql)
-
         execution_time = int((time.time() - start_time) * 1000)
         return None, execution_time
 
     def execute_downgrade(
-        self, driver: "SyncDriverAdapterBase[Any]", migration: "dict[str, Any]"
+        self, driver: "SyncDriverAdapterBase", migration: "dict[str, Any]"
     ) -> "tuple[Optional[str], int]":
         """Execute a downgrade migration.
 
@@ -82,10 +79,7 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase[Any]"]):
             return None, 0
 
         start_time = time.time()
-
-        # Execute migration
         driver.execute(downgrade_sql)
-
         execution_time = int((time.time() - start_time) * 1000)
         return None, execution_time
 
@@ -107,16 +101,12 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase[Any]"]):
 
         for _version, file_path in migrations:
             self.loader.load_sql(file_path)
-
-            # Get all queries from this file
             for query_name in self.loader.list_queries():
-                # Store with full query name for uniqueness
                 all_queries[query_name] = self.loader.get_sql(query_name)
-
         return all_queries
 
 
-class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase[Any]"]):
+class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase"]):
     """Async version - executes migrations using SQLFileLoader."""
 
     async def get_migration_files(self) -> "list[tuple[str, Path]]":
@@ -125,7 +115,6 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase[Any]"]):
         Returns:
             List of tuples containing (version, file_path).
         """
-        # For async, we still use the sync file operations since Path.glob is sync
         return self._get_migration_files_sync()
 
     async def load_migration(self, file_path: Path) -> "dict[str, Any]":
@@ -137,11 +126,10 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase[Any]"]):
         Returns:
             Dictionary containing migration metadata.
         """
-        # File loading is still sync, so we use the base implementation
         return self._load_migration_metadata(file_path)
 
     async def execute_upgrade(
-        self, driver: "AsyncDriverAdapterBase[Any]", migration: "dict[str, Any]"
+        self, driver: "AsyncDriverAdapterBase", migration: "dict[str, Any]"
     ) -> "tuple[Optional[str], int]":
         """Execute an upgrade migration.
 
@@ -157,15 +145,12 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase[Any]"]):
             return None, 0
 
         start_time = time.time()
-
-        # Execute migration
         await driver.execute(upgrade_sql)
-
         execution_time = int((time.time() - start_time) * 1000)
         return None, execution_time
 
     async def execute_downgrade(
-        self, driver: "AsyncDriverAdapterBase[Any]", migration: "dict[str, Any]"
+        self, driver: "AsyncDriverAdapterBase", migration: "dict[str, Any]"
     ) -> "tuple[Optional[str], int]":
         """Execute a downgrade migration.
 
@@ -181,10 +166,7 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase[Any]"]):
             return None, 0
 
         start_time = time.time()
-
-        # Execute migration
         await driver.execute(downgrade_sql)
-
         execution_time = int((time.time() - start_time) * 1000)
         return None, execution_time
 
@@ -206,10 +188,6 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase[Any]"]):
 
         for _version, file_path in migrations:
             self.loader.load_sql(file_path)
-
-            # Get all queries from this file
             for query_name in self.loader.list_queries():
-                # Store with full query name for uniqueness
                 all_queries[query_name] = self.loader.get_sql(query_name)
-
         return all_queries

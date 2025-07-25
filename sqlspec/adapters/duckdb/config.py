@@ -1,24 +1,275 @@
-"""DuckDB database configuration with direct field-based configuration."""
+"""DuckDB database configuration with connection pooling."""
+# ruff: noqa: D107 W293 RUF100 S110 PLR0913 FA100 BLE001 UP037 COM812 ARG002
 
 import logging
-from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict, Union
+import threading
+import time
+from contextlib import contextmanager, suppress
+from queue import Empty as QueueEmpty
+from queue import Full, Queue
+from typing import TYPE_CHECKING, Any, Final, Optional, TypedDict
 
 import duckdb
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.duckdb.driver import DuckDBConnection, DuckDBDriver
-from sqlspec.config import NoPoolSyncConfig
+from sqlspec.config import SyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import DictRow, Empty
+from sqlspec.typing import Empty
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
+    from typing import Callable, ClassVar, Union
 
 
 logger = logging.getLogger(__name__)
 
-__all__ = ("DuckDBConfig", "DuckDBConnectionParams", "DuckDBExtensionConfig", "DuckDBSecretConfig")
+# Performance constants for DuckDB pooling
+DEFAULT_MIN_POOL: Final[int] = 2
+DEFAULT_MAX_POOL: Final[int] = 10
+POOL_TIMEOUT: Final[float] = 30.0
+POOL_RECYCLE: Final[int] = 3600  # 1 hour
+
+__all__ = (
+    "DuckDBConfig",
+    "DuckDBConnectionParams",
+    "DuckDBConnectionPool",
+    "DuckDBExtensionConfig",
+    "DuckDBSecretConfig",
+)
+
+
+class DuckDBConnectionPool:
+    """Connection pool for DuckDB with performance optimizations.
+
+    While DuckDB has internal connection management, this pool provides
+    external connection pooling for managing multiple concurrent connections.
+    """
+
+    __slots__ = (
+        "_checked_out",
+        "_connection_config",
+        "_connection_times",
+        "_created_connections",
+        "_extensions",
+        "_lock",
+        "_max_pool",
+        "_min_pool",
+        "_on_connection_create",
+        "_pool",
+        "_recycle",
+        "_secrets",
+        "_timeout",
+    )
+
+    def __init__(  # noqa: PLR0913
+        self,
+        connection_config: "dict[str, Any]",  # noqa: UP037
+        min_pool: int = DEFAULT_MIN_POOL,
+        max_pool: int = DEFAULT_MAX_POOL,
+        timeout: float = POOL_TIMEOUT,
+        recycle: int = POOL_RECYCLE,
+        extensions: "Optional[list[dict[str, Any]]]" = None,  # noqa: FA100, UP037
+        secrets: "Optional[list[dict[str, Any]]]" = None,  # noqa: FA100, UP037
+        on_connection_create: "Optional[Callable[[DuckDBConnection], None]]" = None,  # noqa: FA100
+    ) -> None:
+        self._pool: "Queue[DuckDBConnection]" = Queue(maxsize=max_pool)  # noqa: UP037
+        self._lock = threading.RLock()
+        self._min_pool = min_pool
+        self._max_pool = max_pool
+        self._timeout = timeout
+        self._recycle = recycle
+        self._connection_config = connection_config
+        self._extensions = extensions or []
+        self._secrets = secrets or []
+        self._on_connection_create = on_connection_create
+        self._created_connections = 0
+        self._checked_out = 0
+        self._connection_times: "dict[int, float]" = {}  # noqa: UP037
+
+        # Pre-populate pool
+        for _ in range(min_pool):
+            if self._pool.full():
+                break
+            conn = self._create_connection()
+            try:
+                self._pool.put_nowait(conn)
+            except Full:
+                break
+
+    def _create_connection(self) -> DuckDBConnection:
+        """Create a new DuckDB connection with extensions and secrets."""
+        connection = duckdb.connect(**self._connection_config)
+
+        # Install and load extensions
+        for ext_config in self._extensions:
+            ext_name = ext_config.get("name")
+            if not ext_name:
+                continue
+
+            install_kwargs = {}
+            if "version" in ext_config:
+                install_kwargs["version"] = ext_config["version"]
+            if "repository" in ext_config:
+                install_kwargs["repository"] = ext_config["repository"]
+            if ext_config.get("force_install", False):
+                install_kwargs["force_install"] = True
+
+            try:
+                if install_kwargs:
+                    connection.install_extension(ext_name, **install_kwargs)
+                connection.load_extension(ext_name)
+            except Exception:  # noqa: BLE001, S110
+                pass
+
+        # Configure secrets
+        for secret_config in self._secrets:
+            secret_type = secret_config.get("secret_type")
+            secret_name = secret_config.get("name")
+            secret_value = secret_config.get("value")
+
+            if not (secret_type and secret_name and secret_value):
+                continue
+
+            value_pairs = []
+            for key, value in secret_value.items():
+                escaped_value = str(value).replace("'", "''")
+                value_pairs.append(f"'{key}' = '{escaped_value}'")
+            value_string = ", ".join(value_pairs)
+            scope_clause = ""
+            if "scope" in secret_config:
+                scope_clause = f" SCOPE '{secret_config['scope']}'"
+
+            sql = f"""  # noqa: S608
+                CREATE SECRET {secret_name} (
+                    TYPE {secret_type},
+                    {value_string}
+                ){scope_clause}
+            """
+            with suppress(Exception):
+                connection.execute(sql)
+
+        # Run custom initialization
+        if self._on_connection_create:
+            with suppress(Exception):
+                self._on_connection_create(connection)
+
+        # Track creation time
+        conn_id = id(connection)
+        with self._lock:
+            self._created_connections += 1
+            self._connection_times[conn_id] = time.time()
+
+        return connection
+
+    def _should_recycle(self, connection: DuckDBConnection) -> bool:
+        """Check if connection should be recycled based on age."""
+        conn_id = id(connection)
+        created_at = self._connection_times.get(conn_id)
+        if created_at is None:
+            return True
+        return (time.time() - created_at) > self._recycle
+
+    def _is_connection_alive(self, connection: DuckDBConnection) -> bool:
+        """Check if a connection is still alive and usable.
+
+        Args:
+            connection: Connection to check
+
+        Returns:
+            True if connection is alive, False otherwise
+        """
+        try:
+            connection.execute("SELECT 1").fetchall()
+        except Exception:
+            return False
+        else:
+            return True
+
+    @contextmanager
+    def get_connection(self) -> "Generator[DuckDBConnection, None, None]":
+        """Get a connection from the pool with automatic return.
+
+        Yields:
+            DuckDBConnection: A connection instance from the pool.
+        """
+        connection = None
+        try:
+            # Try to get existing connection
+            try:
+                connection = self._pool.get(timeout=self._timeout)
+
+                # Check if connection should be recycled
+                if self._should_recycle(connection) or not self._is_connection_alive(connection):
+                    conn_id = id(connection)
+                    with suppress(Exception):  # noqa: BLE001
+                        connection.close()
+                    with self._lock:
+                        self._connection_times.pop(conn_id, None)
+                    connection = None
+
+            except QueueEmpty:
+                # Pool is empty, check if we can create new connection
+                with self._lock:
+                    if self._checked_out < self._max_pool:
+                        connection = None  # Will create new one below
+                    else:
+                        # Wait for a connection to become available
+                        try:
+                            connection = self._pool.get(timeout=self._timeout)
+                        except QueueEmpty:
+                            msg = f"Connection pool limit of {self._max_pool} reached, timeout {self._timeout}"
+                            raise RuntimeError(msg) from None
+
+            # Create new connection if needed
+            if connection is None:
+                connection = self._create_connection()
+
+            with self._lock:
+                self._checked_out += 1
+
+            yield connection
+
+        finally:
+            if connection is not None:
+                with self._lock:
+                    self._checked_out -= 1
+
+                # Validate connection before returning to pool
+                if self._is_connection_alive(connection):
+                    # Return to pool if space available
+                    try:
+                        self._pool.put_nowait(connection)
+                    except Full:
+                        # Pool is full, close overflow connection
+                        with suppress(Exception):  # noqa: BLE001
+                            connection.close()
+                else:
+                    # Connection is dead, close it
+                    with suppress(Exception):  # noqa: BLE001
+                        connection.close()
+
+    def close(self) -> None:
+        """Close all connections in the pool."""
+        while True:
+            try:
+                connection = self._pool.get_nowait()
+            except QueueEmpty:
+                break
+            with suppress(Exception):  # noqa: BLE001
+                connection.close()
+
+        # Clear connection time tracking
+        with self._lock:
+            self._connection_times.clear()
+
+    def size(self) -> int:
+        """Get current pool size."""
+        return self._pool.qsize()
+
+    def checked_out(self) -> int:
+        """Get number of checked out connections."""
+        return self._checked_out
 
 
 class DuckDBConnectionParams(TypedDict, total=False):
@@ -92,12 +343,12 @@ class DuckDBSecretConfig(TypedDict, total=False):
     """Scope of the secret (LOCAL or PERSISTENT)."""
 
 
-class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
-    """Enhanced DuckDB configuration with intelligent features and modern architecture.
+class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, DuckDBDriver]):
+    """Enhanced DuckDB configuration with connection pooling and intelligent features.
 
-    DuckDB is an embedded analytical database that doesn't require connection pooling.
     This configuration supports all of DuckDB's unique features including:
 
+    - Connection pooling for concurrent operations
     - Extension auto-management and installation
     - Secret management for API integrations
     - Intelligent auto configuration settings
@@ -110,31 +361,40 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
     connection_type: "ClassVar[type[DuckDBConnection]]" = DuckDBConnection
     supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("qmark", "numeric")
     default_parameter_style: "ClassVar[str]" = "qmark"
+    supports_connection_pooling: "ClassVar[bool]" = True
 
     def __init__(
         self,
         connection_config: "Optional[Union[DuckDBConnectionParams, dict[str, Any]]]" = None,
         statement_config: "Optional[SQLConfig]" = None,
         migration_config: Optional[dict[str, Any]] = None,
-        default_row_type: type[DictRow] = DictRow,
         enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,
         extensions: "Optional[Sequence[DuckDBExtensionConfig]]" = None,
         secrets: "Optional[Sequence[DuckDBSecretConfig]]" = None,
         on_connection_create: "Optional[Callable[[DuckDBConnection], Optional[DuckDBConnection]]]" = None,
+        min_pool: int = DEFAULT_MIN_POOL,
+        max_pool: int = DEFAULT_MAX_POOL,
+        pool_timeout: float = POOL_TIMEOUT,
+        pool_recycle: int = POOL_RECYCLE,
+        pool_instance: "Optional[DuckDBConnectionPool]" = None,
     ) -> None:
         """Initialize DuckDB configuration with intelligent features.
 
         Args:
             connection_config: Connection configuration parameters
             statement_config: Default SQL statement configuration
-            default_row_type: Default row type for results
             extensions: List of extension dicts to auto-install/load with keys: name, version, repository, force_install
             secrets: List of secret dicts for AI/API integrations with keys: secret_type, name, value, scope
             on_connection_create: Callback executed when connection is created
             migration_config: Migration configuration
             enable_adapter_cache: Enable SQL compilation caching
             adapter_cache_size: Max cached SQL statements
+            min_pool: Minimum number of connections to maintain (default: 2)
+            max_pool: Maximum number of connections allowed (default: 10)
+            pool_timeout: Pool checkout timeout in seconds (default: 30.0)
+            pool_recycle: Connection recycle time in seconds (default: 3600)
+            pool_instance: Pre-created pool instance
 
         Example:
             >>> config = DuckDBConfig(
@@ -167,13 +427,32 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         if "database" not in self.connection_config or not self.connection_config["database"]:
             self.connection_config["database"] = ":memory:"
 
+        # Check if this is an in-memory database
+        database = self.connection_config.get("database", ":memory:")
+        is_memory_db = self._is_memory_database(database)
+
+        # Override pool sizes for in-memory databases
+        if is_memory_db:
+            logger.warning(
+                "In-memory DuckDB database detected. Disabling connection pooling to ensure data consistency. "
+                "Each pooled connection creates a separate in-memory database. Use a file-based database "
+                "for proper connection pooling."
+            )
+            min_pool = 1
+            max_pool = 1
+
         # Store other config
         self.statement_config = statement_config or SQLConfig()
-        self.default_row_type = default_row_type
-        self.extensions = extensions or []
-        self.secrets = secrets or []
+        self.extensions = list(extensions) if extensions else []
+        self.secrets = list(secrets) if secrets else []
         self.on_connection_create = on_connection_create
+        self.min_pool = min_pool
+        self.max_pool = max_pool
+        self.pool_timeout = pool_timeout
+        self.pool_recycle = pool_recycle
+
         super().__init__(
+            pool_instance=pool_instance,
             migration_config=migration_config,
             enable_adapter_cache=enable_adapter_cache,
             adapter_cache_size=adapter_cache_size,
@@ -215,8 +494,42 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
 
         return connect_params
 
+    def _create_pool(self) -> DuckDBConnectionPool:
+        """Create the DuckDB connection pool."""
+        connection_config = self._get_connection_config_dict()
+        return DuckDBConnectionPool(
+            connection_config=connection_config,
+            min_pool=self.min_pool,
+            max_pool=self.max_pool,
+            timeout=self.pool_timeout,
+            recycle=self.pool_recycle,
+            extensions=self.extensions,
+            secrets=self.secrets,
+            on_connection_create=self.on_connection_create,
+        )
+
+    def _is_memory_database(self, database: str) -> bool:
+        """Check if the database is an in-memory database.
+
+        Args:
+            database: Database path or connection string
+
+        Returns:
+            True if this is an in-memory database
+        """
+        if not database:
+            return True
+
+        # Standard :memory: database
+        return database == ":memory:"
+
+    def _close_pool(self) -> None:
+        """Close the connection pool."""
+        if self.pool_instance:
+            self.pool_instance.close()
+
     def create_connection(self) -> DuckDBConnection:
-        """Create and return a DuckDB connection with intelligent configuration applied."""
+        """Create and return a DuckDB connection with intelligent configuration applied (bypasses pool)."""
 
         logger.info("Creating DuckDB connection", extra={"adapter": "duckdb"})
 
@@ -228,70 +541,64 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
 
             # Install and load extensions
             for ext_config in self.extensions:
-                ext_name = None
-                try:
-                    ext_name = ext_config.get("name")
-                    if not ext_name:
-                        continue
-                    install_kwargs: dict[str, Any] = {}
-                    if "version" in ext_config:
-                        install_kwargs["version"] = ext_config["version"]
-                    if "repository" in ext_config:
-                        install_kwargs["repository"] = ext_config["repository"]
-                    if ext_config.get("force_install", False):
-                        install_kwargs["force_install"] = True
+                ext_name = ext_config.get("name")
+                if not ext_name:
+                    continue
 
+                install_kwargs: "dict[str, Any]" = {}  # noqa: UP037
+                if "version" in ext_config:
+                    install_kwargs["version"] = ext_config["version"]
+                if "repository" in ext_config:
+                    install_kwargs["repository"] = ext_config["repository"]
+                if ext_config.get("force_install", False):
+                    install_kwargs["force_install"] = True
+
+                try:
                     if install_kwargs or self.connection_config.get("autoinstall_known_extensions"):
                         connection.install_extension(ext_name, **install_kwargs)
                     connection.load_extension(ext_name)
                     logger.debug("Loaded DuckDB extension: %s", ext_name, extra={"adapter": "duckdb"})
-
-                except Exception as e:
-                    if ext_name:
-                        logger.warning(
-                            "Failed to load DuckDB extension: %s",
-                            ext_name,
-                            extra={"adapter": "duckdb", "error": str(e)},
-                        )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "Failed to load DuckDB extension: %s", ext_name, extra={"adapter": "duckdb", "error": str(e)}
+                    )
 
             for secret_config in self.secrets:
-                secret_name = None
+                secret_type = secret_config.get("secret_type")
+                secret_name = secret_config.get("name")
+                secret_value = secret_config.get("value")
+
+                if not (secret_type and secret_name and secret_value):
+                    continue
+
+                value_pairs = []
+                for key, value in secret_value.items():
+                    escaped_value = str(value).replace("'", "''")
+                    value_pairs.append(f"'{key}' = '{escaped_value}'")
+                value_string = ", ".join(value_pairs)
+                scope_clause = ""
+                if "scope" in secret_config:
+                    scope_clause = f" SCOPE '{secret_config['scope']}'"
+
+                sql = f"""  # noqa: S608
+                    CREATE SECRET {secret_name} (
+                        TYPE {secret_type},
+                        {value_string}
+                    ){scope_clause}
+                """
+
                 try:
-                    secret_type = secret_config.get("secret_type")
-                    secret_name = secret_config.get("name")
-                    secret_value = secret_config.get("value")
-
-                    if secret_type and secret_name and secret_value:
-                        value_pairs = []
-                        for key, value in secret_value.items():
-                            escaped_value = str(value).replace("'", "''")
-                            value_pairs.append(f"'{key}' = '{escaped_value}'")
-                        value_string = ", ".join(value_pairs)
-                        scope_clause = ""
-                        if "scope" in secret_config:
-                            scope_clause = f" SCOPE '{secret_config['scope']}'"
-
-                        sql = f"""
-                            CREATE SECRET {secret_name} (
-                                TYPE {secret_type},
-                                {value_string}
-                            ){scope_clause}
-                        """
-                        connection.execute(sql)
-                        logger.debug("Created DuckDB secret: %s", secret_name, extra={"adapter": "duckdb"})
-
-                except Exception as e:
-                    if secret_name:
-                        logger.warning(
-                            "Failed to create DuckDB secret: %s",
-                            secret_name,
-                            extra={"adapter": "duckdb", "error": str(e)},
-                        )
+                    connection.execute(sql)
+                    logger.debug("Created DuckDB secret: %s", secret_name, extra={"adapter": "duckdb"})
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "Failed to create DuckDB secret: %s", secret_name, extra={"adapter": "duckdb", "error": str(e)}
+                    )
             if self.on_connection_create:
                 try:
                     self.on_connection_create(connection)
                     logger.debug("Executed connection creation hook", extra={"adapter": "duckdb"})
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.warning("Connection creation hook failed", extra={"adapter": "duckdb", "error": str(e)})
 
         except Exception as e:
@@ -301,7 +608,7 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
 
     @contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[DuckDBConnection, None, None]":
-        """Provide a DuckDB connection context manager.
+        """Provide a pooled DuckDB connection context manager.
 
         Args:
             *args: Additional arguments.
@@ -310,11 +617,9 @@ class DuckDBConfig(NoPoolSyncConfig[DuckDBConnection, DuckDBDriver]):
         Yields:
             A DuckDB connection instance.
         """
-        connection = self.create_connection()
-        try:
+        pool = self.provide_pool()
+        with pool.get_connection() as connection:
             yield connection
-        finally:
-            connection.close()
 
     @contextmanager
     def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[DuckDBDriver, None, None]":
