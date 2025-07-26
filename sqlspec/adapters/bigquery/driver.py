@@ -1,3 +1,4 @@
+# pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import contextlib
 import datetime
 import io
@@ -7,7 +8,7 @@ from collections.abc import Iterator
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, Union, cast
 
-from sqlglot import exp
+from sqlglot import exp, parse_one
 
 if TYPE_CHECKING:
     from typing_extensions import TypeAlias
@@ -35,6 +36,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
+from sqlspec.driver.mixins._query_tools import SyncQueryMixin
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
@@ -71,6 +73,7 @@ class BigQueryDriver(
     SyncStorageMixin,
     SyncPipelinedExecutionMixin,
     ToSchemaMixin,
+    SyncQueryMixin,
 ):
     """Advanced BigQuery Driver with comprehensive Google Cloud capabilities.
 
@@ -573,15 +576,15 @@ class BigQueryDriver(
         dataset_id = getattr(self.connection, "default_dataset", None) or options.get("dataset", "temp")
 
         # Use SQLglot builder instead of string concatenation
-        table_ref = exp.Table(this=exp.Identifier(temp_table_id), db=exp.Identifier(dataset_id))
+        sqlglot_table_ref = exp.to_table(f"{dataset_id}.{temp_table_id}")
         create_expr = exp.Create(
-            this=table_ref, expression=exp.parse_one(query, dialect=self.dialect), kind="TABLE", replace=True
+            this=sqlglot_table_ref, expression=parse_one(query, dialect=self.dialect), kind="TABLE", replace=True
         )
         create_job = self._run_query_job(create_expr.sql(dialect=self.dialect), [])
         create_job.result()
 
         # Use SQLglot builder for count query
-        count_expr = exp.Select(exp.Alias(this=exp.func("COUNT", exp.Star()), alias="cnt")).from_(table_ref)
+        count_expr = exp.select(exp.alias_(exp.func("COUNT", exp.Star()), "cnt")).from_(sqlglot_table_ref)
         count_job = self._run_query_job(count_expr.sql(dialect=self.dialect), [])
         count_result = list(count_job.result())
         row_count = count_result[0]["cnt"] if count_result else 0
@@ -607,7 +610,7 @@ class BigQueryDriver(
             # Clean up temporary table
             try:
                 # Use SQLglot builder for drop table
-                drop_expr = exp.Drop(this=table_ref, kind="TABLE", exists=True)
+                drop_expr = exp.Drop(this=sqlglot_table_ref, kind="TABLE", exists=True)
                 delete_job = self._run_query_job(drop_expr.sql(dialect=self.dialect), [])
                 delete_job.result()
             except Exception as e:

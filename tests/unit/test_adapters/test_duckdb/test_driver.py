@@ -187,13 +187,23 @@ def test_execute_dml_statement(driver: DuckDBDriver, mock_connection: MagicMock)
 
 # Parameter Style Handling Tests
 @pytest.mark.parametrize(
-    "sql_text,detected_style,expected_style",
+    "sql_text,detected_style,expected_style,expected_sql_pattern",
     [
-        ("SELECT * FROM users WHERE id = ?", ParameterStyle.QMARK, ParameterStyle.QMARK),
-        ("SELECT * FROM users WHERE id = $1", ParameterStyle.NUMERIC, ParameterStyle.QMARK),  # Converted
-        ("SELECT * FROM users WHERE id = :id", ParameterStyle.NAMED_COLON, ParameterStyle.QMARK),  # Converted
+        ("SELECT * FROM users WHERE id = ?", ParameterStyle.QMARK, ParameterStyle.QMARK, "?"),
+        (
+            "SELECT * FROM users WHERE id = $1",
+            ParameterStyle.NUMERIC,
+            ParameterStyle.NUMERIC,
+            "$1",
+        ),  # DuckDB supports NUMERIC natively
+        (
+            "SELECT * FROM users WHERE id = :id",
+            ParameterStyle.NAMED_COLON,
+            ParameterStyle.QMARK,
+            "?",
+        ),  # Converted (not supported)
     ],
-    ids=["qmark", "numeric_converted", "named_colon_converted"],
+    ids=["qmark", "numeric_native", "named_colon_converted"],
 )
 def test_parameter_style_handling(
     driver: DuckDBDriver,
@@ -201,8 +211,13 @@ def test_parameter_style_handling(
     sql_text: str,
     detected_style: ParameterStyle,
     expected_style: ParameterStyle,
+    expected_sql_pattern: str,
 ) -> None:
-    """Test parameter style detection and conversion."""
+    """Test parameter style detection and conversion.
+
+    DuckDB supports both QMARK and NUMERIC styles natively.
+    Only unsupported styles (like NAMED_COLON) are converted to QMARK.
+    """
     statement = SQL(sql_text, [123])  # Add a parameter
 
     # Mock execute to avoid actual execution
@@ -213,13 +228,12 @@ def test_parameter_style_handling(
 
     driver._execute_statement(statement)
 
-    # Check that execute was called (parameter style conversion happens in compile())
+    # Check that execute was called
     mock_connection.execute.assert_called_once()
 
-    # The SQL should have been converted to the expected style
-    # DuckDB's default is QMARK, so $1 and :id should be converted to ?
-    if expected_style == ParameterStyle.QMARK and detected_style != ParameterStyle.QMARK:
-        assert "?" in mock_connection.execute.call_args[0][0]
+    # Verify the SQL contains the expected parameter pattern
+    executed_sql = mock_connection.execute.call_args[0][0]
+    assert expected_sql_pattern in executed_sql
 
 
 # Execute Many Tests

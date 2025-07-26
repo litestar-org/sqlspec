@@ -406,8 +406,7 @@ async def test_asyncpg_with_schema_type(asyncpg_session: AsyncpgDriver) -> None:
         value: int
 
     # Insert test data
-    await asyncpg_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("schema_test", 456))
-
+    await asyncpg_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("schema_test", 456)) 
     # Query with schema type
     result = await asyncpg_session.execute(
         "SELECT id, name, value FROM test_table WHERE name = $1", ("schema_test"), schema_type=TestRecord

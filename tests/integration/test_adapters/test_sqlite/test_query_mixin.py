@@ -1,6 +1,7 @@
 """Integration tests for SQLite driver with query mixin functionality."""
 
 from collections.abc import Generator
+from typing import Any
 
 import pytest
 
@@ -48,7 +49,7 @@ class TestSqliteQueryMixin:
 
     def test_select_one_success(self, sqlite_driver: SqliteDriver) -> None:
         """Test select_one returns exactly one row."""
-        result = sqlite_driver.select_one("SELECT * FROM users WHERE id = 1")
+        result: dict[str, Any] = sqlite_driver.select_one("SELECT * FROM users WHERE id = 1")
         assert result["id"] == 1
         assert result["name"] == "John Doe"
         assert result["email"] == "john@example.com"
@@ -167,7 +168,9 @@ class TestSqliteQueryMixin:
     def test_select_with_parameters(self, sqlite_driver: SqliteDriver) -> None:
         """Test select methods with parameterized queries."""
         # Test with named parameters
-        result = sqlite_driver.select_one(SQL("SELECT * FROM users WHERE email = :email", email="bob@example.com"))
+        result: dict[str, Any] = sqlite_driver.select_one(
+            SQL("SELECT * FROM users WHERE email = :email", email="bob@example.com")
+        )
         assert result["name"] == "Bob Johnson"
 
         # Test with positional parameters

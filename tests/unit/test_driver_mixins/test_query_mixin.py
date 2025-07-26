@@ -63,7 +63,7 @@ class TestSyncQueryMixin:
         )
         driver.execute.return_value = mock_result
 
-        result = driver.select_one("SELECT * FROM users WHERE id = 1")
+        result: Any = driver.select_one("SELECT * FROM users WHERE id = 1")
         assert result == {"id": 1, "name": "John"}
         driver.execute.assert_called_once()
 
@@ -281,7 +281,7 @@ class TestAsyncQueryMixin:
         )
         driver.execute.return_value = mock_result
 
-        result = await driver.select_one("SELECT * FROM users WHERE id = 1")
+        result: Any = await driver.select_one("SELECT * FROM users WHERE id = 1")
         assert result == {"id": 1, "name": "John"}
         driver.execute.assert_called_once()
 
@@ -326,7 +326,7 @@ class TestAsyncQueryMixin:
 
         driver.execute.side_effect = [count_result, data_result]
 
-        result = await driver.paginate("SELECT * FROM users", limit=10, offset=0)
+        result: Any = await driver.paginate("SELECT * FROM users", limit=10, offset=0)
 
         # Check all attributes of the result
         assert result.limit == 10

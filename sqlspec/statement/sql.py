@@ -108,13 +108,11 @@ class _ProcessedState:
 
     def __hash__(self) -> int:
         """Hash based on processed SQL and expression."""
-        return hash(
-            (
-                self.processed_sql,
-                str(self.processed_expression),  # Convert expression to string for hashing
-                len(self.validation_errors) if self.validation_errors else 0,
-            )
-        )
+        return hash((
+            self.processed_sql,
+            str(self.processed_expression),
+            len(self.validation_errors) if self.validation_errors else 0,
+        ))
 
     def __init__(
         self,
@@ -207,20 +205,18 @@ class SQLConfig:
 
     def __hash__(self) -> int:
         """Hash based on key configuration settings."""
-        return hash(
-            (
-                self.enable_parsing,
-                self.enable_validation,
-                self.enable_transformations,
-                self.enable_analysis,
-                self.enable_expression_simplification,
-                self.enable_parameter_type_wrapping,
-                self.enable_caching,
-                self.dialect,
-                self.default_parameter_style,
-                tuple(self.allowed_parameter_styles) if self.allowed_parameter_styles else None,
-            )
-        )
+        return hash((
+            self.enable_parsing,
+            self.enable_validation,
+            self.enable_transformations,
+            self.enable_analysis,
+            self.enable_expression_simplification,
+            self.enable_parameter_type_wrapping,
+            self.enable_caching,
+            self.dialect,
+            self.default_parameter_style,
+            tuple(self.allowed_parameter_styles) if self.allowed_parameter_styles else None,
+        ))
 
     def __init__(
         self,
@@ -465,6 +461,12 @@ class SQL:
         self._is_script = existing_state.get("is_script", self._is_script)
         self._raw_sql = existing_state.get("raw_sql", self._raw_sql)
         self._original_parameters = existing_state.get("original_parameters", self._original_parameters)
+        self._parameter_conversion_state = existing_state.get(
+            "parameter_conversion_state", self._parameter_conversion_state
+        )
+        self._placeholder_mapping = existing_state.get("placeholder_mapping", self._placeholder_mapping)
+        self._original_sql = existing_state.get("original_sql", self._original_sql)
+        self._processing_context = existing_state.get("processing_context", self._processing_context)
 
     def _set_original_parameters(self, *parameters: Any) -> None:
         """Set the original parameters."""
@@ -995,6 +997,10 @@ class SQL:
             "raw_sql": self._raw_sql,
         }
         existing_state["original_parameters"] = self._original_parameters
+        existing_state["parameter_conversion_state"] = self._parameter_conversion_state
+        existing_state["placeholder_mapping"] = self._placeholder_mapping
+        existing_state["original_sql"] = self._original_sql
+        existing_state["processing_context"] = self._processing_context
 
         new_statement = statement if statement is not None else self._statement
         new_dialect = dialect if dialect is not None else self._dialect
@@ -1288,8 +1294,10 @@ class SQL:
         The pipeline processed the first parameter set to extract literals.
         Now we need to apply those extracted literals to all parameter sets.
         """
-        sql = self.sql
         self._ensure_processed()
+
+        # Get the processed SQL (which may have been transformed for SQLGlot compatibility)
+        sql = self._processed_state.processed_sql if self._processed_state is not Empty else self.sql
 
         # Get the original parameter sets
         param_sets = self._original_parameters or []
@@ -1320,6 +1328,24 @@ class SQL:
                         literals = [get_value_attribute(p) for p in extracted_literals]
                         enhanced_params.append((param_set, *literals))
                 param_sets = enhanced_params
+
+        # Handle deconversion if needed (same logic as in compile())
+        if self._processing_context and self._processing_context.metadata.get("parameter_conversion"):
+            norm_state = self._processing_context.metadata["parameter_conversion"]
+
+            # If original SQL had incompatible styles, denormalize back to the original style
+            # when no specific style requested OR when the requested style matches the original
+            if norm_state.was_transformed and norm_state.original_styles:
+                original_style = norm_state.original_styles[0]
+                should_denormalize = placeholder_style is None or (
+                    placeholder_style and ParameterStyle(placeholder_style) == original_style
+                )
+
+                if should_denormalize and original_style in SQLGLOT_INCOMPATIBLE_STYLES:
+                    # Denormalize SQL back to original style
+                    sql = self._config.parameter_converter._convert_sql_placeholders(
+                        sql, norm_state.original_param_info, original_style
+                    )
 
         if placeholder_style:
             sql, param_sets = self._convert_placeholder_style(sql, param_sets, placeholder_style)

@@ -147,7 +147,7 @@ async def test_asyncpg_arrow_large_dataset(asyncpg_arrow_session: AsyncpgDriver)
 
     assert isinstance(result, ArrowResult)
     assert result.num_rows == 1
-    total_count = result.data["total"].to_pylist()[0]
+    total_count = result.data["total"].to_pylist()[0]  # type: ignore[call-overload]
 
     # Let's also check the actual records
     all_records = await asyncpg_arrow_session.fetch_arrow_table("SELECT name, value FROM test_arrow ORDER BY value")

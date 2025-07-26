@@ -1,11 +1,9 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import logging
-from abc import ABC
 from typing import TYPE_CHECKING, Any, Optional, Union, overload
 
 from mypy_extensions import trait
 from sqlglot import exp, parse_one
-from typing_extensions import Self
 
 from sqlspec.exceptions import NotFoundError
 from sqlspec.statement.filters import LimitOffsetFilter, OffsetPagination
@@ -20,8 +18,6 @@ from sqlspec.utils.type_guards import (
 )
 
 if TYPE_CHECKING:
-    from sqlglot.dialects.dialect import DialectType
-
     from sqlspec.statement import Statement, StatementFilter
     from sqlspec.statement.builder import Select
     from sqlspec.statement.sql import SQLConfig
@@ -34,21 +30,8 @@ logger = logging.getLogger(__name__)
 WINDOWS_PATH_MIN_LENGTH = 3
 
 
-class QueryBase(ABC):
+class QueryBase:
     """Base class with common query functionality."""
-
-    config: Any
-    _connection: "ConnectionT"  # type: ignore[valid-type]
-    dialect: "DialectType"
-
-    @property
-    def connection(self) -> "ConnectionT":  # type: ignore[type-var]
-        """Get the connection instance."""
-        return self._connection  # pyright: ignore
-
-    @classmethod
-    def new(cls, connection: "ConnectionT") -> Self:  # pyright: ignore[reportInvalidTypeVarUse]
-        return cls(connection)  # type: ignore[call-arg]
 
     def _transform_to_sql(
         self,
@@ -113,7 +96,7 @@ class SyncQueryMixin(QueryBase):
         _connection: "Optional[ConnectionT]" = None,
         _config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "RowT": ...  # type: ignore[type-var]
+    ) -> "RowT": ...  # type: ignore[type-var,misc]
 
     def select_one(
         self,

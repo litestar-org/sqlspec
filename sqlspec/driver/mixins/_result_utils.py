@@ -87,7 +87,7 @@ class ToSchemaMixin:
             return "SELECT"
         return "EXECUTE"
 
-    def _build_modify_result(self, cursor: "Any", statement: "Any") -> "Any":
+    def _build_modify_result(self, cursor: "Any", statement: "Any") -> "SQLResult":
         """Build result for non-SELECT operations.
 
         Standard implementation for INSERT, UPDATE, DELETE, and other

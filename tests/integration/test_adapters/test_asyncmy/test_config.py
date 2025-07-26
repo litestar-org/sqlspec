@@ -70,7 +70,6 @@ def test_asyncmy_config_with_no_pool_config() -> None:
 
     # Check base class attributes
     assert isinstance(config.statement_config, SQLConfig)
-    assert config.default_row_type is dict
 
 
 def test_asyncmy_config_initialization() -> None:

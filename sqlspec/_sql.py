@@ -13,7 +13,7 @@ from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder import Column, Delete, Insert, Merge, Select, Update
+from sqlspec.statement.builder import Column, Delete, Insert, Merge, Select, Truncate, Update
 
 __all__ = ("SQLFactory",)
 
@@ -804,6 +804,82 @@ class SQLFactory:
             sub_expr = exp.Literal.string(str(substitute_value))
 
         return exp.Coalesce(expressions=[col_expr, sub_expr])
+
+    # ===================
+    # Bulk Operations
+    # ===================
+
+    @staticmethod
+    def bulk_insert(table_name: str, column_count: int, placeholder_style: str = "?") -> exp.Expression:
+        """Create bulk INSERT expression for executemany operations.
+
+        This is specifically for bulk loading operations like CSV ingestion where
+        we need an INSERT expression with placeholders for executemany().
+
+        Args:
+            table_name: Name of the table to insert into
+            column_count: Number of columns (for placeholder generation)
+            placeholder_style: Placeholder style ("?" for SQLite/PostgreSQL, "%s" for MySQL, ":1" for Oracle)
+
+        Returns:
+            INSERT expression with proper placeholders for bulk operations
+
+        Example:
+            ```python
+            from sqlspec import sql
+
+            # SQLite/PostgreSQL style
+            insert_expr = sql.bulk_insert("my_table", 3)
+            # Creates: INSERT INTO "my_table" VALUES (?, ?, ?)
+
+            # MySQL style
+            insert_expr = sql.bulk_insert(
+                "my_table", 3, placeholder_style="%s"
+            )
+            # Creates: INSERT INTO "my_table" VALUES (%s, %s, %s)
+
+            # Oracle style
+            insert_expr = sql.bulk_insert(
+                "my_table", 3, placeholder_style=":1"
+            )
+            # Creates: INSERT INTO "my_table" VALUES (:1, :2, :3)
+            ```
+        """
+        table_expr = exp.Table(this=exp.to_identifier(table_name))
+        placeholder_expressions = [exp.Placeholder(this=placeholder_style) for _ in range(column_count)]
+        values_expr = exp.Values(expressions=[exp.Tuple(expressions=placeholder_expressions)])
+
+        return exp.Insert(this=table_expr, expression=values_expr)
+
+    def truncate(self, table_name: str) -> "Truncate":
+        """Create a TRUNCATE TABLE builder.
+
+        Args:
+            table_name: Name of the table to truncate
+
+        Returns:
+            TruncateTable builder instance
+
+        Example:
+            ```python
+            from sqlspec import sql
+
+            # Simple truncate
+            truncate_sql = sql.truncate_table("my_table").build().sql
+
+            # Truncate with options
+            truncate_sql = (
+                sql.truncate_table("my_table")
+                .cascade()
+                .restart_identity()
+                .build()
+                .sql
+            )
+            ```
+        """
+        builder = Truncate(dialect=self.dialect)
+        builder._table_name = table_name
+        return builder
 
     # ===================
     # Case Expressions

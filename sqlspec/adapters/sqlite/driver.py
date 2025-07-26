@@ -1,3 +1,4 @@
+# pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import contextlib
 import csv
 import sqlite3
@@ -40,7 +41,7 @@ else:
     SqliteConnection = sqlite3.Connection
 
 
-class SqliteDriver(
+class SqliteDriver(  # pyright: ignore[reportIncompatibleVariableOverride]
     SyncDriverAdapterBase,
     SyncAdapterCacheMixin,
     SQLTranslatorMixin,
@@ -66,7 +67,7 @@ class SqliteDriver(
 
     def _connection(self, connection: "Optional[SqliteConnection]" = None) -> "SqliteConnection":
         """Get the connection to use for the operation."""
-        return connection or self.connection
+        return connection or self.connection  # pyright: ignore[reportReturnType]
 
     # SQLite-specific type coercion overrides
     def _coerce_boolean(self, value: "Any") -> "Any":
@@ -139,16 +140,18 @@ class SqliteDriver(
         detected_style = super()._select_parameter_style(statement)
 
         # Handle parameterized literals optimization specific to SQLite
-        try:
-            processing_context = statement._processing_context
-            if (
-                processing_context
-                and processing_context.metadata.get("literals_parameterized")
-                and detected_style == ParameterStyle.NAMED_COLON
-            ):
-                return self.default_parameter_style  # QMARK for better performance
-        except AttributeError:
-            pass
+        # Only SQL objects have _processing_context attribute
+        if isinstance(statement, SQL):
+            try:
+                processing_context = statement._processing_context
+                if (
+                    processing_context
+                    and processing_context.metadata.get("literals_parameterized")
+                    and detected_style == ParameterStyle.NAMED_COLON
+                ):
+                    return self.default_parameter_style  # QMARK for better performance
+            except AttributeError:
+                pass
 
         return detected_style
 
@@ -179,6 +182,17 @@ class SqliteDriver(
             column_names=[col[0] for col in cursor.description or []],
             rows_affected=len(fetched_data),
             operation_type="SELECT",
+        )
+
+    def _build_modify_result(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "SQLResult":
+        """Build SQLResult for non-SELECT operations (INSERT, UPDATE, DELETE)."""
+        rows_affected = max(cursor.rowcount, 0)
+        return SQLResult(
+            statement=statement,
+            data=[],
+            rows_affected=rows_affected,
+            operation_type="EXECUTE",
+            metadata={"status_message": "OK"},
         )
 
     def _execute_many(
@@ -312,10 +326,11 @@ class SqliteDriver(
             csv_file = io.StringIO(content)
             reader = csv.reader(csv_file, **options)
             header = next(reader)  # Skip header
-            placeholders = ", ".join("?" for _ in header)
-            sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
+            from sqlspec import sql
+
+            bulk_sql = sql.bulk_insert_sql(table_name, len(header), self.dialect)
 
             # executemany is efficient for bulk inserts
             data_iter = list(reader)  # Read all data into memory
-            cursor.executemany(sql, data_iter)
+            cursor.executemany(bulk_sql, data_iter)
             return cursor.rowcount

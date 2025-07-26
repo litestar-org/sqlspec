@@ -127,6 +127,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, ABC):
         Passes first parameter set through pipeline to enable literal extraction
         and consistent parameter processing.
         """
+        # Handle parameters passed as keyword argument for backward compatibility
+        if not parameters and "parameters" in kwargs:
+            parameters = (kwargs.pop("parameters"),)
+
         filters, param_sequence = process_execute_many_parameters(parameters)
 
         first_params = param_sequence[0] if param_sequence else None

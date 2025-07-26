@@ -20,9 +20,7 @@ from sqlspec.statement.sql import SQL
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import (
     is_async_pipeline_capable_driver,
-    is_async_transaction_state_capable,
     is_sync_pipeline_capable_driver,
-    is_sync_transaction_state_capable,
 )
 
 if TYPE_CHECKING:
@@ -226,10 +224,9 @@ class Pipeline:
         return cast("list[SQLResult]", results)
 
     def _execute_pipeline_simulated(self) -> "list[SQLResult]":
-        """Enhanced simulation with transaction support and error handling."""
+        """Enhanced simulation with error handling."""
         results: list[SQLResult] = []
         connection = None
-        auto_transaction = False
 
         if not self._simulation_logged:
             logger.info(
@@ -242,20 +239,10 @@ class Pipeline:
         try:
             connection = self.driver._connection()
 
-            if is_sync_transaction_state_capable(connection) and not connection.in_transaction():
-                connection.begin()
-                auto_transaction = True
-
             for i, op in enumerate(self._operations):
-                self._execute_single_operation(i, op, results, connection, auto_transaction)
-
-            # Commit if we started the transaction
-            if auto_transaction and is_sync_transaction_state_capable(connection):
-                connection.commit()
+                self._execute_single_operation(i, op, results, connection)
 
         except Exception as e:
-            if connection and auto_transaction and is_sync_transaction_state_capable(connection):
-                connection.rollback()
             if not isinstance(e, PipelineExecutionError):
                 msg = f"Pipeline execution failed: {e}"
                 raise PipelineExecutionError(msg) from e
@@ -264,7 +251,7 @@ class Pipeline:
         return results
 
     def _execute_single_operation(
-        self, i: int, op: PipelineOperation, results: "list[SQLResult]", connection: Any, auto_transaction: bool
+        self, i: int, op: PipelineOperation, results: "list[SQLResult]", connection: Any
     ) -> None:
         """Execute a single pipeline operation with error handling."""
         try:
@@ -288,8 +275,6 @@ class Pipeline:
                 )
                 results.append(error_result)
             else:
-                if auto_transaction and is_sync_transaction_state_capable(connection):
-                    connection.rollback()
                 msg = f"Pipeline failed at operation {i}: {e}"
                 raise PipelineExecutionError(
                     msg, operation_index=i, partial_results=results, failed_operation=op
@@ -438,7 +423,6 @@ class AsyncPipeline:
         """Async version of simulated pipeline execution."""
         results: list[SQLResult] = []
         connection = None
-        auto_transaction = False
 
         if not self._simulation_logged:
             logger.info(
@@ -451,19 +435,10 @@ class AsyncPipeline:
         try:
             connection = self.driver._connection()
 
-            if is_async_transaction_state_capable(connection) and not connection.in_transaction():
-                await connection.begin()
-                auto_transaction = True
-
             for i, op in enumerate(self._operations):
-                await self._execute_single_operation_async(i, op, results, connection, auto_transaction)
-
-            if auto_transaction and is_async_transaction_state_capable(connection):
-                await connection.commit()
+                await self._execute_single_operation_async(i, op, results, connection)
 
         except Exception as e:
-            if connection and auto_transaction and is_async_transaction_state_capable(connection):
-                await connection.rollback()
             if not isinstance(e, PipelineExecutionError):
                 msg = f"Async pipeline execution failed: {e}"
                 raise PipelineExecutionError(msg) from e
@@ -472,7 +447,7 @@ class AsyncPipeline:
         return results
 
     async def _execute_single_operation_async(
-        self, i: int, op: PipelineOperation, results: "list[SQLResult]", connection: Any, auto_transaction: bool
+        self, i: int, op: PipelineOperation, results: "list[SQLResult]", connection: Any
     ) -> None:
         """Execute a single async pipeline operation with error handling."""
         try:
@@ -495,8 +470,6 @@ class AsyncPipeline:
                 )
                 results.append(error_result)
             else:
-                if auto_transaction and is_async_transaction_state_capable(connection):
-                    await connection.rollback()
                 msg = f"Async pipeline failed at operation {i}: {e}"
                 raise PipelineExecutionError(
                     msg, operation_index=i, partial_results=results, failed_operation=op

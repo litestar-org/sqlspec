@@ -1,4 +1,5 @@
 # ruff: noqa: D104 RUF100 FA100 BLE001 UP037 PLR0913 ANN401 COM812 S608 A002 ARG002 SLF001
+# pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import contextlib
 import uuid
 from collections.abc import Generator
@@ -18,6 +19,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
+from sqlspec.driver.mixins._query_tools import SyncQueryMixin
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -30,7 +32,7 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
     from typing_extensions import TypeAlias
 
-    from sqlspec.typing import ArrowTable
+    from sqlspec.typing import ArrowTable, ConnectionT
 
 __all__ = ("DuckDBConnection", "DuckDBDriver")
 
@@ -50,6 +52,7 @@ class DuckDBDriver(
     SyncStorageMixin,
     SyncPipelinedExecutionMixin,
     ToSchemaMixin,
+    SyncQueryMixin,
 ):
     """DuckDB Sync Driver Adapter with modern architecture.
 
@@ -80,9 +83,11 @@ class DuckDBDriver(
     def __init__(self, connection: "DuckDBConnection", config: "Optional[SQLConfig]" = None) -> None:  # noqa: FA100
         super().__init__(connection=connection, config=config)
 
-    def _connection(self, connection: "Optional[DuckDBConnection]" = None) -> "DuckDBConnection":
+    def _connection(self, connection: "Optional[ConnectionT]" = None) -> "DuckDBConnection":
         """Get the connection to use for the operation."""
-        return connection or self.connection
+        from typing import cast
+
+        return cast("DuckDBConnection", connection or self.connection)
 
     @staticmethod
     @contextmanager
@@ -110,10 +115,10 @@ class DuckDBDriver(
 
         return self.default_parameter_style
 
-    def _execute_statement(  # type: ignore[override]
+    def _execute_statement(
         self,
         statement: SQL,
-        connection: "Optional[DuckDBConnection]" = None,
+        connection: "Optional[ConnectionT]" = None,
         **kwargs: "Any",  # noqa: FA100
     ) -> SQLResult:
         if statement.is_script:
@@ -147,12 +152,23 @@ class DuckDBDriver(
             operation_type="SELECT",
         )
 
+    def _build_modify_result(self, cursor: "Any", statement: "SQL") -> "SQLResult":
+        """Build SQLResult for non-SELECT operations (INSERT, UPDATE, DELETE)."""
+        rows_affected = max(cursor.rowcount, 0)
+        return SQLResult(
+            statement=statement,
+            data=[],
+            rows_affected=rows_affected,
+            operation_type="EXECUTE",
+            metadata={"status_message": "OK"},
+        )
+
     def _execute(  # noqa: PLR0913
         self,
         sql: str,
         parameters: "Any",
         statement: SQL,
-        connection: "Optional[DuckDBConnection]" = None,
+        connection: "Optional[ConnectionT]" = None,
         **kwargs: "Any",  # noqa: FA100, ANN401
     ) -> SQLResult:
         # Use provided connection or driver's default connection
@@ -174,7 +190,7 @@ class DuckDBDriver(
         self,
         sql: str,
         param_list: "Any",
-        connection: "Optional[DuckDBConnection]" = None,
+        connection: "Optional[ConnectionT]" = None,
         **kwargs: "Any",  # noqa: FA100, ANN401
     ) -> SQLResult:
         # Use provided connection or driver's default connection
@@ -214,9 +230,7 @@ class DuckDBDriver(
         temp_sql._ensure_processed()  # noqa: SLF001
         # Validation errors are logged as warnings by default
 
-    def _execute_script(
-        self, script: str, connection: "Optional[DuckDBConnection]" = None, **kwargs: "Any"
-    ) -> SQLResult:  # noqa: FA100, ANN401
+    def _execute_script(self, script: str, connection: "Optional[ConnectionT]" = None, **kwargs: "Any") -> SQLResult:  # noqa: FA100, ANN401
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -340,6 +354,7 @@ class DuckDBDriver(
             raise ValueError(msg)
 
         # Build SQL expression using SQLglot
+        sql_expr: "Union[exp.Create, exp.Insert]"
         if mode == "create":
             sql_expr = exp.Create(
                 this=exp.to_table(table_name), expression=exp.Select().from_(read_func_expr).select("*"), kind="TABLE"
@@ -367,7 +382,7 @@ class DuckDBDriver(
             return int(result[0])
 
         # Get row count if result doesn't contain it
-        count_expr = exp.Select(exp.func("COUNT", exp.Star())).from_(table_name)
+        count_expr = exp.select(exp.func("COUNT", exp.Star())).from_(table_name)
         count_sql = count_expr.sql(dialect=self.dialect)
         count_result_rel = conn.execute(count_sql)
         count_result = count_result_rel.fetchone() if count_result_rel else None

@@ -22,7 +22,7 @@ from sqlspec.statement.builder._ddl import (
     DropTable,
     DropView,
     RenameTable,
-    TruncateTable,
+    Truncate,
 )
 from sqlspec.statement.builder._delete import Delete
 from sqlspec.statement.builder._insert import Insert
@@ -56,7 +56,7 @@ __all__ = (
     "SQLBuilderError",
     "SafeQuery",
     "Select",
-    "TruncateTable",
+    "Truncate",
     "Update",
     "WhereClauseMixin",
 )

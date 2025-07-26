@@ -23,6 +23,7 @@ __all__ = (
     "CachedFragment",
     "FilterCache",
     "SQLCache",
+    "anonymous_returns_rows_cache",
     "ast_fragment_cache",
     "base_statement_cache",
     "filtered_ast_cache",
@@ -52,6 +53,8 @@ class CacheConfig:
     fragment_cache_enabled: bool = True
     optimized_cache_size: int = DEFAULT_CACHE_MAX_SIZE
     optimized_cache_enabled: bool = True
+    anonymous_returns_rows_cache_size: int = DEFAULT_CACHE_MAX_SIZE
+    anonymous_returns_rows_cache_enabled: bool = True
 
     def __post_init__(self) -> None:
         """Validate configuration values."""
@@ -63,6 +66,9 @@ class CacheConfig:
             raise ValueError(msg)
         if self.optimized_cache_size < 0:
             msg = "optimized_cache_size must be non-negative"
+            raise ValueError(msg)
+        if self.anonymous_returns_rows_cache_size < 0:
+            msg = "anonymous_returns_rows_cache_size must be non-negative"
             raise ValueError(msg)
 
 
@@ -88,6 +94,12 @@ class CacheStats:
     optimized_evictions: int = 0
     optimized_size: int = 0
 
+    # Anonymous returns rows cache stats
+    anonymous_returns_rows_hits: int = 0
+    anonymous_returns_rows_misses: int = 0
+    anonymous_returns_rows_evictions: int = 0
+    anonymous_returns_rows_size: int = 0
+
     # Timing stats (in seconds)
     avg_cache_lookup_time: float = 0.0
     avg_parse_time: float = 0.0
@@ -112,9 +124,15 @@ class CacheStats:
         return self.optimized_hits / total if total > 0 else 0.0
 
     @property
+    def anonymous_returns_rows_hit_rate(self) -> float:
+        """Calculate anonymous returns rows cache hit rate."""
+        total = self.anonymous_returns_rows_hits + self.anonymous_returns_rows_misses
+        return self.anonymous_returns_rows_hits / total if total > 0 else 0.0
+
+    @property
     def overall_hit_rate(self) -> float:
         """Calculate overall cache hit rate across all caches."""
-        total_hits = self.sql_hits + self.fragment_hits + self.optimized_hits
+        total_hits = self.sql_hits + self.fragment_hits + self.optimized_hits + self.anonymous_returns_rows_hits
         total_accesses = (
             self.sql_hits
             + self.sql_misses
@@ -122,6 +140,8 @@ class CacheStats:
             + self.fragment_misses
             + self.optimized_hits
             + self.optimized_misses
+            + self.anonymous_returns_rows_hits
+            + self.anonymous_returns_rows_misses
         )
         return total_hits / total_accesses if total_accesses > 0 else 0.0
 
@@ -149,6 +169,13 @@ class CacheStats:
                 "evictions": self.optimized_evictions,
                 "size": self.optimized_size,
             },
+            "anonymous_returns_rows_cache": {
+                "hits": self.anonymous_returns_rows_hits,
+                "misses": self.anonymous_returns_rows_misses,
+                "hit_rate": self.anonymous_returns_rows_hit_rate,
+                "evictions": self.anonymous_returns_rows_evictions,
+                "size": self.anonymous_returns_rows_size,
+            },
             "performance": {
                 "avg_cache_lookup_time_ms": self.avg_cache_lookup_time * 1000,
                 "avg_parse_time_ms": self.avg_parse_time * 1000,
@@ -156,7 +183,10 @@ class CacheStats:
             },
             "overall": {
                 "hit_rate": self.overall_hit_rate,
-                "total_size": self.sql_size + self.fragment_size + self.optimized_size,
+                "total_size": self.sql_size
+                + self.fragment_size
+                + self.optimized_size
+                + self.anonymous_returns_rows_size,
             },
         }
 
@@ -265,6 +295,8 @@ class SQLCache:
             _cache_stats.sql_hits += 1
         elif self.cache_name == "optimized":
             _cache_stats.optimized_hits += 1
+        elif self.cache_name == "anonymous_returns_rows":
+            _cache_stats.anonymous_returns_rows_hits += 1
 
     def _record_miss(self) -> None:
         """Record a cache miss in statistics."""
@@ -272,6 +304,8 @@ class SQLCache:
             _cache_stats.sql_misses += 1
         elif self.cache_name == "optimized":
             _cache_stats.optimized_misses += 1
+        elif self.cache_name == "anonymous_returns_rows":
+            _cache_stats.anonymous_returns_rows_misses += 1
 
     def _record_eviction(self) -> None:
         """Record a cache eviction in statistics."""
@@ -279,6 +313,8 @@ class SQLCache:
             _cache_stats.sql_evictions += 1
         elif self.cache_name == "optimized":
             _cache_stats.optimized_evictions += 1
+        elif self.cache_name == "anonymous_returns_rows":
+            _cache_stats.anonymous_returns_rows_evictions += 1
 
 
 class CachedFragment:
@@ -694,6 +730,11 @@ def update_cache_config(config: CacheConfig) -> None:
     else:
         optimized_expression_cache.clear()
 
+    if config.anonymous_returns_rows_cache_enabled:
+        anonymous_returns_rows_cache.max_size = config.anonymous_returns_rows_cache_size
+    else:
+        anonymous_returns_rows_cache.clear()
+
 
 def get_cache_stats() -> CacheStats:
     """Get current cache statistics."""
@@ -701,6 +742,7 @@ def get_cache_stats() -> CacheStats:
     _cache_stats.sql_size = sql_cache.size
     _cache_stats.fragment_size = ast_fragment_cache.size
     _cache_stats.optimized_size = optimized_expression_cache.size
+    _cache_stats.anonymous_returns_rows_size = anonymous_returns_rows_cache.size
 
     # Update fragment cache stats from internal counters
     _cache_stats.fragment_hits = ast_fragment_cache._hit_count
@@ -726,12 +768,11 @@ def log_cache_stats() -> None:
     logger.info("Cache Statistics", extra=stats.to_dict())
 
 
-# Global cache instances - initialized with configuration values
 sql_cache = SQLCache(max_size=_cache_config.sql_cache_size, cache_name="sql")
 ast_fragment_cache = ASTFragmentCache(max_size=_cache_config.fragment_cache_size)
 optimized_expression_cache = SQLCache(max_size=_cache_config.optimized_cache_size, cache_name="optimized")
 base_statement_cache = BaseStatementCache()
 filtered_ast_cache = FilterCache()
-
-# Note: Caches are enabled by default and will be used unless explicitly disabled
-# via update_cache_config() or by setting cache sizes to 0
+anonymous_returns_rows_cache = SQLCache(
+    max_size=_cache_config.anonymous_returns_rows_cache_size, cache_name="anonymous_returns_rows"
+)

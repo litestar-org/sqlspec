@@ -73,8 +73,8 @@ class MockSyncDriver(SyncDriverAdapterBase):
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.NAMED_COLON
 
-    def _execute_statement(self, statement: SQL, connection: MockConnection | None = None, **kwargs: Any) -> SQLResult:
-        conn = connection or self.connection  # type: ignore[assignment]
+    def _execute_statement(self, statement: SQL, connection: Any | None = None, **kwargs: Any) -> SQLResult:
+        conn = connection or self.connection
         if statement.is_script:
             return SQLResult(
                 statement=statement,
@@ -83,7 +83,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
                 metadata={"message": "Script executed successfully"},
             )
 
-        result_data = conn.execute(statement.sql, statement.parameters)
+        result_data = conn.execute(statement.sql, statement.parameters)  # pyright: ignore[reportAttributeAccessIssue]
 
         # Determine operation type from SQL
         sql_upper = statement.sql.upper().strip()
@@ -131,10 +131,8 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.NAMED_COLON
 
-    async def _execute_statement(
-        self, statement: SQL, connection: MockAsyncConnection | None = None, **kwargs: Any
-    ) -> SQLResult:
-        conn = connection or self.connection  # type: ignore[assignment]
+    async def _execute_statement(self, statement: SQL, connection: Any | None = None, **kwargs: Any) -> SQLResult:
+        conn = connection or self.connection
         if statement.is_script:
             return SQLResult(
                 statement=statement,
@@ -143,7 +141,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
                 metadata={"message": "Async script executed successfully"},
             )
 
-        result_data = await conn.execute(statement.sql, statement.parameters)
+        result_data = await conn.execute(statement.sql, statement.parameters)  # pyright: ignore[reportAttributeAccessIssue]
 
         # Determine operation type from SQL
         sql_upper = statement.sql.upper().strip()

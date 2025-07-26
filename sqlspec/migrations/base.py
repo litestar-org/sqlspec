@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Generic, Optional, TypeVar
 
+from sqlspec import sql
 from sqlspec.loader import SQLFileLoader
 from sqlspec.statement.sql import SQL
 from sqlspec.utils.logging import get_logger
@@ -38,18 +39,26 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         Returns:
             SQL object for table creation.
         """
-        return SQL(
-            f"""
-            CREATE TABLE IF NOT EXISTS {self.version_table} (
-                version_num VARCHAR(32) PRIMARY KEY,
-                description TEXT,
-                applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                execution_time_ms INTEGER,
-                checksum VARCHAR(64),
-                applied_by VARCHAR(255)
-            )
-        """
-        )
+        from sqlspec.statement.builder._ddl import CreateTable
+
+        builder = CreateTable(self.version_table)
+        # Initialize the fields that aren't properly initialized by __init__
+        if not hasattr(builder, "_columns"):
+            builder._columns = []
+        if not hasattr(builder, "_constraints"):
+            builder._constraints = []
+        if not hasattr(builder, "_table_options"):
+            builder._table_options = {}
+
+        return (
+            builder.if_not_exists()
+            .column("version_num", "VARCHAR(32)", primary_key=True)
+            .column("description", "TEXT")
+            .column("applied_at", "TIMESTAMP", not_null=True, default="CURRENT_TIMESTAMP")
+            .column("execution_time_ms", "INTEGER")
+            .column("checksum", "VARCHAR(64)")
+            .column("applied_by", "VARCHAR(255)")
+        ).to_statement()
 
     def _get_current_version_sql(self) -> SQL:
         """Get SQL for retrieving current version.
@@ -57,7 +66,10 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         Returns:
             SQL object for version query.
         """
-        return SQL(f"SELECT version_num FROM {self.version_table} ORDER BY version_num DESC LIMIT 1")
+
+        return (
+            sql.select("version_num").from_(self.version_table).order_by("version_num DESC").limit(1)
+        ).to_statement()
 
     def _get_applied_migrations_sql(self) -> SQL:
         """Get SQL for retrieving all applied migrations.
@@ -65,7 +77,8 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         Returns:
             SQL object for migrations query.
         """
-        return SQL(f"SELECT * FROM {self.version_table} ORDER BY version_num")
+
+        return (sql.select("*").from_(self.version_table).order_by("version_num")).to_statement()
 
     def _get_record_migration_sql(
         self, version: str, description: str, execution_time_ms: int, checksum: str, applied_by: str
@@ -82,14 +95,12 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         Returns:
             SQL object for insert.
         """
-        return SQL(
-            f"INSERT INTO {self.version_table} (version_num, description, execution_time_ms, checksum, applied_by) VALUES (?, ?, ?, ?, ?)",
-            version,
-            description,
-            execution_time_ms,
-            checksum,
-            applied_by,
-        )
+
+        return (
+            sql.insert(self.version_table)
+            .columns("version_num", "description", "execution_time_ms", "checksum", "applied_by")
+            .values(version, description, execution_time_ms, checksum, applied_by)
+        ).to_statement()
 
     def _get_remove_migration_sql(self, version: str) -> SQL:
         """Get SQL for removing a migration record.
@@ -100,7 +111,8 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         Returns:
             SQL object for delete.
         """
-        return SQL(f"DELETE FROM {self.version_table} WHERE version_num = ?", version)
+
+        return (sql.delete().from_(self.version_table).where(sql.version_num == version)).to_statement()
 
     @abstractmethod
     def ensure_tracking_table(self, driver: DriverT) -> Any:

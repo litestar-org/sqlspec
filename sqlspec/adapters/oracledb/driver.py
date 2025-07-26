@@ -1,13 +1,12 @@
+# pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional, cast
 
-if TYPE_CHECKING:
-    from typing_extensions import TypeAlias
-
 from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
 from sqlglot.dialects.dialect import DialectType
 
+from sqlspec import sql
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.driver.connection import managed_transaction_async, managed_transaction_sync
 from sqlspec.driver.mixins import (
@@ -21,6 +20,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
+from sqlspec.driver.mixins._query_tools import AsyncQueryMixin, SyncQueryMixin
 from sqlspec.statement.parameters import ParameterStyle, TypedParameter
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -28,7 +28,9 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import ensure_async_
 
 if TYPE_CHECKING:
-    from sqlspec.typing import SQLParameterType
+    from typing_extensions import TypeAlias
+
+    from sqlspec.typing import ConnectionT, SQLParameterType
 
 __all__ = ("OracleAsyncConnection", "OracleAsyncDriver", "OracleSyncConnection", "OracleSyncDriver")
 
@@ -79,6 +81,7 @@ class OracleSyncDriver(
     SyncStorageMixin,
     SyncPipelinedExecutionMixin,
     ToSchemaMixin,
+    SyncQueryMixin,
 ):
     """Oracle Sync Driver Adapter. Refactored for new protocol."""
 
@@ -95,6 +98,10 @@ class OracleSyncDriver(
     def __init__(self, connection: OracleSyncConnection, config: Optional[SQLConfig] = None) -> None:
         super().__init__(connection=connection, config=config)
 
+    def _connection(self, connection: "Optional[ConnectionT]" = None) -> "OracleSyncConnection":
+        """Get the connection to use for the operation."""
+        return cast("OracleSyncConnection", connection or self.connection)
+
     def _process_parameters(self, parameters: "SQLParameterType") -> "SQLParameterType":
         """Process parameters to handle Oracle-specific requirements.
 
@@ -106,14 +113,14 @@ class OracleSyncDriver(
     @contextmanager
     def _get_cursor(self, connection: Optional[OracleSyncConnection] = None) -> Generator[Cursor, None, None]:
         conn_to_use = connection or self.connection
-        cursor: Cursor = conn_to_use.cursor()
+        cursor: Cursor = conn_to_use.cursor()  # pyright: ignore[reportAttributeAccessIssue]
         try:
             yield cursor
         finally:
             cursor.close()
 
     def _execute_statement(
-        self, statement: SQL, connection: Optional[OracleSyncConnection] = None, **kwargs: Any
+        self, statement: SQL, connection: "Optional[ConnectionT]" = None, **kwargs: Any
     ) -> SQLResult:
         if statement.is_script:
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
@@ -130,12 +137,7 @@ class OracleSyncDriver(
         return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
-        self,
-        sql: str,
-        parameters: Any,
-        statement: SQL,
-        connection: Optional[OracleSyncConnection] = None,
-        **kwargs: Any,
+        self, sql: str, parameters: Any, statement: SQL, connection: "Optional[ConnectionT]" = None, **kwargs: Any
     ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
@@ -169,7 +171,7 @@ class OracleSyncDriver(
                 )
 
     def _execute_many(
-        self, sql: str, param_list: Any, connection: Optional[OracleSyncConnection] = None, **kwargs: Any
+        self, sql: str, param_list: Any, connection: "Optional[ConnectionT]" = None, **kwargs: Any
     ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
@@ -201,9 +203,7 @@ class OracleSyncDriver(
                     metadata={"status_message": "OK"},
                 )
 
-    def _execute_script(
-        self, script: str, connection: Optional[OracleSyncConnection] = None, **kwargs: Any
-    ) -> SQLResult:
+    def _execute_script(self, script: str, connection: "Optional[ConnectionT]" = None, **kwargs: Any) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
@@ -264,7 +264,8 @@ class OracleSyncDriver(
         # Use proper transaction management like other methods
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
             if mode == "replace":
-                cursor.execute(f"TRUNCATE TABLE {table_name}")
+                truncate_stmt = sql.truncate(table_name).build()
+                cursor.execute(truncate_stmt.sql)
             elif mode == "create":
                 msg = "'create' mode is not supported for oracledb ingestion."
                 raise NotImplementedError(msg)
@@ -275,9 +276,9 @@ class OracleSyncDriver(
 
             # Generate column placeholders: :1, :2, etc.
             num_columns = len(data_for_ingest[0])
-            placeholders = ", ".join(f":{i + 1}" for i in range(num_columns))
-            sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
-            cursor.executemany(sql, data_for_ingest)
+
+            bulk_sql = sql.bulk_insert_sql(table_name, num_columns, self.dialect, placeholder_style="oracle")
+            cursor.executemany(bulk_sql, data_for_ingest)
             return cursor.rowcount
 
 
@@ -289,6 +290,7 @@ class OracleAsyncDriver(
     AsyncStorageMixin,
     AsyncPipelinedExecutionMixin,
     ToSchemaMixin,
+    AsyncQueryMixin,
 ):
     """Oracle Async Driver Adapter. Refactored for new protocol."""
 
@@ -304,6 +306,10 @@ class OracleAsyncDriver(
     def __init__(self, connection: OracleAsyncConnection, config: "Optional[SQLConfig]" = None) -> None:
         super().__init__(connection=connection, config=config)
 
+    def _connection(self, connection: "Optional[ConnectionT]" = None) -> "OracleAsyncConnection":
+        """Get the connection to use for the operation."""
+        return cast("OracleAsyncConnection", connection or self.connection)
+
     def _process_parameters(self, parameters: "SQLParameterType") -> "SQLParameterType":
         """Process parameters to handle Oracle-specific requirements.
 
@@ -316,7 +322,7 @@ class OracleAsyncDriver(
     async def _get_cursor(
         self, connection: Optional[OracleAsyncConnection] = None
     ) -> AsyncGenerator[AsyncCursor, None]:
-        conn_to_use = connection or self.connection
+        conn_to_use = self._connection(connection)
         cursor: AsyncCursor = conn_to_use.cursor()
         try:
             yield cursor
@@ -324,7 +330,7 @@ class OracleAsyncDriver(
             await ensure_async_(cursor.close)()
 
     async def _execute_statement(
-        self, statement: SQL, connection: Optional[OracleAsyncConnection] = None, **kwargs: Any
+        self, statement: SQL, connection: "Optional[ConnectionT]" = None, **kwargs: Any
     ) -> SQLResult:
         if statement.is_script:
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
@@ -351,12 +357,7 @@ class OracleAsyncDriver(
         return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
     async def _execute(
-        self,
-        sql: str,
-        parameters: Any,
-        statement: SQL,
-        connection: Optional[OracleAsyncConnection] = None,
-        **kwargs: Any,
+        self, sql: str, parameters: Any, statement: SQL, connection: "Optional[ConnectionT]" = None, **kwargs: Any
     ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
@@ -394,7 +395,7 @@ class OracleAsyncDriver(
                 )
 
     async def _execute_many(
-        self, sql: str, param_list: Any, connection: Optional[OracleAsyncConnection] = None, **kwargs: Any
+        self, sql: str, param_list: Any, connection: "Optional[ConnectionT]" = None, **kwargs: Any
     ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
@@ -427,7 +428,7 @@ class OracleAsyncDriver(
                 )
 
     async def _execute_script(
-        self, script: str, connection: Optional[OracleAsyncConnection] = None, **kwargs: Any
+        self, script: str, connection: "Optional[ConnectionT]" = None, **kwargs: Any
     ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
@@ -488,7 +489,8 @@ class OracleAsyncDriver(
         # Use proper transaction management like other methods
         async with managed_transaction_async(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
             if mode == "replace":
-                await cursor.execute(f"TRUNCATE TABLE {table_name}")
+                truncate_stmt = sql.truncate(table_name).build()
+                await cursor.execute(truncate_stmt.sql)
             elif mode == "create":
                 msg = "'create' mode is not supported for oracledb ingestion."
                 raise NotImplementedError(msg)
@@ -499,7 +501,6 @@ class OracleAsyncDriver(
 
             # Generate column placeholders: :1, :2, etc.
             num_columns = len(data_for_ingest[0])
-            placeholders = ", ".join(f":{i + 1}" for i in range(num_columns))
-            sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
-            await cursor.executemany(sql, data_for_ingest)
+            bulk_sql = sql.bulk_insert_sql(table_name, num_columns, self.dialect, placeholder_style="oracle")
+            await cursor.executemany(bulk_sql, data_for_ingest)
             return cursor.rowcount

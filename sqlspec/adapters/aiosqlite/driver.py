@@ -1,3 +1,4 @@
+# pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import logging
 import re
 from collections.abc import AsyncGenerator, Sequence
@@ -18,6 +19,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
+from sqlspec.driver.mixins._query_tools import AsyncQueryMixin
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -46,6 +48,7 @@ class AiosqliteDriver(
     AsyncStorageMixin,
     AsyncPipelinedExecutionMixin,
     ToSchemaMixin,
+    AsyncQueryMixin,
 ):
     """Aiosqlite SQLite Driver Adapter. Modern protocol implementation."""
 
@@ -91,8 +94,8 @@ class AiosqliteDriver(
         self, connection: "Optional[AiosqliteConnection]" = None
     ) -> "AsyncGenerator[aiosqlite.Cursor, None]":
         conn_to_use = connection or self.connection
-        conn_to_use.row_factory = aiosqlite.Row
-        cursor = await conn_to_use.cursor()
+        conn_to_use.row_factory = aiosqlite.Row  # pyright: ignore[reportAttributeAccessIssue]
+        cursor = await conn_to_use.cursor()  # pyright: ignore[reportAttributeAccessIssue]
         try:
             yield cursor
         finally:
@@ -231,4 +234,4 @@ class AiosqliteDriver(
 
     def _connection(self, connection: "Optional[AiosqliteConnection]" = None) -> "AiosqliteConnection":
         """Get the connection to use for the operation."""
-        return connection or self.connection
+        return connection or self.connection  # pyright: ignore[reportReturnType]

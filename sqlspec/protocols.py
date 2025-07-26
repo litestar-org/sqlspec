@@ -4,6 +4,7 @@ This module provides protocols that can be used for static type checking
 and runtime isinstance() checks, replacing defensive hasattr() patterns.
 """
 
+from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Protocol, Union, runtime_checkable
 
 from typing_extensions import Self
@@ -23,6 +24,7 @@ __all__ = (
     "AsyncCopyCapableConnectionProtocol",
     "AsyncPipelineCapableDriverProtocol",
     "AsyncTransactionCapableConnectionProtocol",
+    "AsyncTransactionMixin",
     "AsyncTransactionStateConnectionProtocol",
     "BytesConvertibleProtocol",
     "DictProtocol",
@@ -50,6 +52,7 @@ __all__ = (
     "SyncCopyCapableConnectionProtocol",
     "SyncPipelineCapableDriverProtocol",
     "SyncTransactionCapableConnectionProtocol",
+    "SyncTransactionMixin",
     "SyncTransactionStateConnectionProtocol",
     "WithMethodProtocol",
 )
@@ -252,6 +255,38 @@ class AsyncTransactionStateConnectionProtocol(AsyncTransactionCapableConnectionP
     async def begin(self) -> None:
         """Begin a new transaction."""
         ...
+
+
+@runtime_checkable
+class SyncTransactionMixin(SyncTransactionStateConnectionProtocol, Protocol):
+    """Explicit synchronous transaction management interface."""
+    
+    @contextmanager
+    def transaction(self):
+        """Context manager for transaction handling."""
+        self.begin()
+        try:
+            yield self
+            self.commit()
+        except Exception:
+            self.rollback()
+            raise
+
+
+@runtime_checkable
+class AsyncTransactionMixin(AsyncTransactionStateConnectionProtocol, Protocol):
+    """Explicit asynchronous transaction management interface."""
+    
+    @asynccontextmanager
+    async def transaction(self):
+        """Async context manager for transaction handling."""
+        await self.begin()
+        try:
+            yield self
+            await self.commit()
+        except Exception:
+            await self.rollback()
+            raise
 
 
 @runtime_checkable

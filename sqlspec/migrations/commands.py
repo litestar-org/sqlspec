@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING, Any, Union, cast
 from rich.console import Console
 from rich.table import Table
 
+from sqlspec import sql
 from sqlspec.migrations.base import BaseMigrationCommands
 from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.migrations.utils import create_migration_file
-from sqlspec.statement.sql import SQL
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import await_
 
@@ -176,7 +176,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             if revision not in all_migrations:
                 console.print(f"[red]Unknown revision: {revision}[/]")
                 return
-            clear_sql = SQL(f"DELETE FROM {self.tracker.version_table}")
+            clear_sql = sql.delete().from_(self.tracker.version_table)
             driver.execute(clear_sql)
             self.tracker.record_migration(driver, revision, f"Stamped to {revision}", 0, "manual-stamp")
             console.print(f"[green]Database stamped at revision {revision}[/]")
@@ -342,7 +342,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 console.print(f"[red]Unknown revision: {revision}[/]")
                 return
 
-            clear_sql = SQL(f"DELETE FROM {self.tracker.version_table}")
+            clear_sql = sql.delete().from_(self.tracker.version_table)
             await driver.execute(clear_sql)
             await self.tracker.record_migration(driver, revision, f"Stamped to {revision}", 0, "manual-stamp")
             console.print(f"[green]Database stamped at revision {revision}[/]")

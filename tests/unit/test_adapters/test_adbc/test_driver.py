@@ -327,11 +327,9 @@ def test_adbc_driver_fetch_arrow_table_list_parameters(adbc_driver: AdbcDriver, 
     mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
 
     # Setup mock cursor for ADBC native Arrow support
-    mock_arrow_table = pa.table({
-        "id": [1, 2],
-        "name": ["User 1", "User 2"],
-        "email": ["user1@example.com", "user2@example.com"],
-    })
+    mock_arrow_table = pa.table(
+        {"id": [1, 2], "name": ["User 1", "User 2"], "email": ["user1@example.com", "user2@example.com"]}
+    )
     mock_cursor.fetch_arrow_table.return_value = mock_arrow_table
 
     # Pass parameters directly as string SQL, since that's the more common pattern

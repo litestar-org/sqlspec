@@ -1,4 +1,5 @@
 """Psqlpy Driver Implementation."""
+# pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 
 import io
 import logging
@@ -6,6 +7,8 @@ from typing import TYPE_CHECKING, Any, Optional, cast
 
 if TYPE_CHECKING:
     from typing_extensions import TypeAlias
+
+    from sqlspec.typing import ConnectionT
 
 from psqlpy import Connection
 
@@ -19,6 +22,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
+from sqlspec.driver.mixins._query_tools import AsyncQueryMixin
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -44,6 +48,7 @@ class PsqlpyDriver(
     AsyncStorageMixin,
     AsyncPipelinedExecutionMixin,
     ToSchemaMixin,
+    AsyncQueryMixin,
 ):
     """Psqlpy Driver Adapter.
 
@@ -59,9 +64,9 @@ class PsqlpyDriver(
     def __init__(self, connection: PsqlpyConnection, config: "Optional[SQLConfig]" = None) -> None:
         super().__init__(connection=connection, config=config)
 
-    def _connection(self, connection: "Optional[PsqlpyConnection]" = None) -> "PsqlpyConnection":
+    def _connection(self, connection: "Optional[ConnectionT]" = None) -> "PsqlpyConnection":
         """Get the connection to use for the operation."""
-        return connection or self.connection
+        return cast("PsqlpyConnection", connection or self.connection)
 
     def _coerce_boolean(self, value: Any) -> Any:
         """PostgreSQL has native boolean support, return as-is."""
@@ -84,7 +89,7 @@ class PsqlpyDriver(
         return value
 
     async def _execute_statement(
-        self, statement: SQL, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
+        self, statement: SQL, connection: "Optional[ConnectionT]" = None, **kwargs: Any
     ) -> SQLResult:
         if statement.is_script:
             sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
@@ -103,7 +108,7 @@ class PsqlpyDriver(
         return await self._execute(sql, params, statement, connection=connection, **kwargs)
 
     async def _execute(
-        self, sql: str, parameters: Any, statement: SQL, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
+        self, sql: str, parameters: Any, statement: SQL, connection: "Optional[ConnectionT]" = None, **kwargs: Any
     ) -> SQLResult:
         _ = kwargs  # Unused but required for protocol compatibility
         # Use provided connection or driver's default connection
@@ -137,7 +142,7 @@ class PsqlpyDriver(
                 column_names = list(dict_rows[0].keys()) if dict_rows else []
                 return SQLResult(
                     statement=statement,
-                    data=cast("list[dict[str, Any]]", dict_rows),  # type: ignore[redundant-cast]
+                    data=dict_rows,
                     column_names=column_names,
                     rows_affected=len(dict_rows),
                     operation_type="SELECT",
@@ -160,7 +165,7 @@ class PsqlpyDriver(
             )
 
     async def _execute_many(
-        self, sql: str, param_list: Any, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
+        self, sql: str, param_list: Any, connection: "Optional[ConnectionT]" = None, **kwargs: Any
     ) -> SQLResult:
         _ = kwargs  # Unused but required for protocol compatibility
         # Use provided connection or driver's default connection
@@ -191,7 +196,7 @@ class PsqlpyDriver(
             )
 
     async def _execute_script(
-        self, script: str, connection: Optional[PsqlpyConnection] = None, **kwargs: Any
+        self, script: str, connection: "Optional[ConnectionT]" = None, **kwargs: Any
     ) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
@@ -235,7 +240,10 @@ class PsqlpyDriver(
 
         conn = self._connection(None)
         if mode == "replace":
-            await conn.execute(f"TRUNCATE TABLE {table_name}")
+            from sqlspec import sql
+
+            truncate_stmt = sql.truncate(table_name).build()
+            await conn.execute(truncate_stmt.sql)
         elif mode == "create":
             msg = "'create' mode is not supported for psqlpy ingestion."
             raise NotImplementedError(msg)
@@ -249,6 +257,6 @@ class PsqlpyDriver(
         copy_method = getattr(conn, "copy_from_raw", getattr(conn, "copy_from_query", None))
         if copy_method:
             await copy_method(f"COPY {table_name} FROM STDIN WITH (FORMAT CSV, HEADER)", data=buffer.read())
-            return table.num_rows  # type: ignore[no-any-return]
+            return int(table.num_rows)
         msg = "Connection does not support COPY operations"
         raise NotImplementedError(msg)

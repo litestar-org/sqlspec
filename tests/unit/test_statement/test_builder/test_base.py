@@ -33,7 +33,7 @@ from sqlspec.statement.builder._ddl import (
     DropTable,
     DropView,
     RenameTable,
-    TruncateTable,
+    Truncate,
 )
 from sqlspec.statement.builder._select import Select
 from sqlspec.statement.builder.mixins._where_clause import WhereClauseMixin
@@ -595,7 +595,7 @@ def test_create_index_builder_basic() -> None:
 
 def test_truncate_table_builder_basic() -> None:
     """Test basic TRUNCATE TABLE functionality."""
-    sql = TruncateTable().table("my_table").build().sql
+    sql = Truncate().table("my_table").build().sql
     assert "TRUNCATE TABLE" in sql
 
 

@@ -332,6 +332,7 @@ async def test_provide_session() -> None:
             assert session.connection is mock_connection
 
             # Check parameter style injection
+            assert session.config is not None
             assert session.config.allowed_parameter_styles == ("numeric",)
             assert session.config.default_parameter_style == "numeric"
 

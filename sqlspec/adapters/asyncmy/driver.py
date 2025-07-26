@@ -1,3 +1,4 @@
+# pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import logging
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
@@ -15,6 +16,7 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
+from sqlspec.driver.mixins._query_tools import AsyncQueryMixin
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -48,6 +50,7 @@ class AsyncmyDriver(
     AsyncStorageMixin,
     AsyncPipelinedExecutionMixin,
     ToSchemaMixin,
+    AsyncQueryMixin,
 ):
     """Asyncmy MySQL/MariaDB Driver Adapter. Modern protocol implementation."""
 
@@ -190,7 +193,10 @@ class AsyncmyDriver(
         conn = self._connection(None)
         async with managed_transaction_async(conn) as txn_conn, self._get_cursor(txn_conn) as cursor:
             if mode == "replace":
-                await cursor.execute(f"TRUNCATE TABLE {table_name}")
+                from sqlspec import sql
+
+                truncate_stmt = sql.truncate(table_name).build()
+                await cursor.execute(truncate_stmt.sql)
             elif mode == "create":
                 msg = "'create' mode is not supported for asyncmy ingestion."
                 raise NotImplementedError(msg)
@@ -201,7 +207,8 @@ class AsyncmyDriver(
 
             # Generate column placeholders: %s, %s, etc.
             num_columns = len(data_for_ingest[0])
-            placeholders = ", ".join("%s" for _ in range(num_columns))
-            sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
-            await cursor.executemany(sql, data_for_ingest)
+            from sqlspec import sql
+
+            bulk_sql = sql.bulk_insert_sql(table_name, num_columns, self.dialect, placeholder_style="%s")
+            await cursor.executemany(bulk_sql, data_for_ingest)
             return cursor.rowcount if cursor.rowcount is not None else -1

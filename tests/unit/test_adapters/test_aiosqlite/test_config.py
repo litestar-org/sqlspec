@@ -83,6 +83,7 @@ async def test_aiosqlite_config_provide_session() -> None:
     async with config.provide_session() as session:
         assert isinstance(session, AiosqliteDriver)
         # Check that parameter styles were set
+        assert session.config is not None
         assert session.config.allowed_parameter_styles == ("qmark", "named_colon")
         assert session.config.default_parameter_style == "qmark"
 

@@ -33,7 +33,7 @@ __all__ = (
     "DropTable",
     "DropView",
     "RenameTable",
-    "TruncateTable",
+    "Truncate",
 )
 
 
@@ -651,7 +651,7 @@ class CreateIndex(DDLBuilder):
 
 # --- TRUNCATE TABLE ---
 @dataclass
-class TruncateTable(DDLBuilder):
+class Truncate(DDLBuilder):
     """Builder for TRUNCATE TABLE ... [CASCADE|RESTRICT] [RESTART IDENTITY|CONTINUE IDENTITY]."""
 
     _table_name: Optional[str] = None

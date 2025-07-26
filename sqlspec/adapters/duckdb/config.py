@@ -497,15 +497,30 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
     def _create_pool(self) -> DuckDBConnectionPool:
         """Create the DuckDB connection pool."""
         connection_config = self._get_connection_config_dict()
+
+        # Convert extension and secret configs to plain dicts for pool compatibility
+        extensions_dicts = [dict(ext) for ext in self.extensions] if self.extensions else None
+        secrets_dicts = [dict(secret) for secret in self.secrets] if self.secrets else None
+
+        # Wrap callback to match expected signature (ignore return value)
+        pool_callback = None
+        if self.on_connection_create:
+            original_callback = self.on_connection_create
+
+            def wrapped_callback(conn: DuckDBConnection) -> None:
+                original_callback(conn)
+
+            pool_callback = wrapped_callback
+
         return DuckDBConnectionPool(
             connection_config=connection_config,
             min_pool=self.min_pool,
             max_pool=self.max_pool,
             timeout=self.pool_timeout,
             recycle=self.pool_recycle,
-            extensions=self.extensions,
-            secrets=self.secrets,
-            on_connection_create=self.on_connection_create,
+            extensions=extensions_dicts,
+            secrets=secrets_dicts,
+            on_connection_create=pool_callback,
         )
 
     def _is_memory_database(self, database: str) -> bool:

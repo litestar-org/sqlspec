@@ -17,6 +17,11 @@ from tools.benchmark.core.metrics import TimingResult
 from tools.benchmark.infrastructure.containers import ContainerManager
 from tools.benchmark.suites.base import BaseBenchmarkSuite
 
+# Constants for benchmark queries to avoid magic values
+SINGLE_ROW_ID = 500
+BATCH_UPDATE_LIMIT = 100
+BATCH_SELECT_LIMIT = 100
+
 # SQLAlchemy setup
 Base = declarative_base()
 
@@ -327,8 +332,8 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
     ) -> dict[str, TimingResult]:
         """Benchmark selecting a single record by ID (sync)."""
         results = {}
-        sql = SQL("SELECT * FROM users WHERE id = ?", 500)
-        stmt = select(users_table).where(users_table.c.id == 500)
+        sql = SQL("SELECT * FROM users WHERE id = ?", SINGLE_ROW_ID)
+        stmt = select(users_table).where(users_table.c.id == SINGLE_ROW_ID)
         session_local = sessionmaker(bind=engine)
 
         # SQLSpec (no cache)
@@ -424,8 +429,8 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
     ) -> dict[str, TimingResult]:
         """Benchmark updating 100 records (sync)."""
         results = {}
-        sql = SQL("UPDATE users SET status = 'updated' WHERE id <= 100")
-        stmt = update(users_table).where(users_table.c.id <= 100).values(status="updated")
+        sql = SQL(f"UPDATE users SET status = 'updated' WHERE id <= {BATCH_UPDATE_LIMIT}")
+        stmt = update(users_table).where(users_table.c.id <= BATCH_UPDATE_LIMIT).values(status="updated")
 
         # SQLSpec (no cache)
         with config_no_cache.provide_session() as session:
@@ -449,16 +454,16 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
     ) -> dict[str, TimingResult]:
         """Benchmark selecting a single record by ID (async)."""
         results = {}
-        SQL("SELECT * FROM users WHERE id = 500")
-        stmt = select(users_table).where(users_table.c.id == 500)
+        SQL(f"SELECT * FROM users WHERE id = {SINGLE_ROW_ID}")
+        stmt = select(users_table).where(users_table.c.id == SINGLE_ROW_ID)
         async_session_local = async_sessionmaker(bind=engine)
 
         # SQLSpec (no cache)
         async with config_no_cache.provide_session() as session:
 
-            async def op():
+            async def op() -> Any:
                 # Use literal SQL to avoid parameter binding issues
-                session_sql = SQL("SELECT * FROM users WHERE id = 500")
+                session_sql = SQL(f"SELECT * FROM users WHERE id = {SINGLE_ROW_ID}")
                 result = await session.execute(session_sql)
                 return result.one()
 
@@ -470,9 +475,9 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLSpec (with cache)
         async with config_with_cache.provide_session() as session:
 
-            async def op():
+            async def op() -> Any:
                 # Use literal SQL to avoid parameter binding issues
-                session_sql = SQL("SELECT * FROM users WHERE id = 500")
+                session_sql = SQL(f"SELECT * FROM users WHERE id = {SINGLE_ROW_ID}")
                 result = await session.execute(session_sql)
                 return result.one()
 
@@ -482,7 +487,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLAlchemy Core
         async with engine.connect() as conn:
 
-            async def op():
+            async def op() -> Any:
                 result = await conn.execute(stmt)
                 return result.one()
 
@@ -510,7 +515,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLSpec (no cache)
         async with config_no_cache.provide_session() as session:
 
-            async def op():
+            async def op() -> Any:
                 result = await session.execute(sql)
                 return result.all()
 
@@ -520,7 +525,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLSpec (with cache)
         async with config_with_cache.provide_session() as session:
 
-            async def op():
+            async def op() -> Any:
                 result = await session.execute(sql)
                 return result.all()
 
@@ -530,7 +535,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLAlchemy Core
         async with engine.connect() as conn:
 
-            async def op():
+            async def op() -> Any:
                 result = await conn.execute(stmt)
                 return result.fetchall()
 
@@ -540,8 +545,8 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLAlchemy ORM
         async with async_session_local() as session:
 
-            async def op():
-                result = await session.execute(select(User).limit(100))
+            async def op() -> Any:
+                result = await session.execute(select(User).limit(BATCH_SELECT_LIMIT))
                 return result.scalars().all()
 
             times = await self.runner.metrics.time_operation_async(op, self.config.iterations)
@@ -562,7 +567,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLSpec (no cache)
         async with config_no_cache.provide_session() as session:
 
-            async def op():
+            async def op() -> Any:
                 return await session.execute_many(sql, [list(d.values()) for d in insert_data])
 
             times = await self.runner.metrics.time_operation_async(op, 10)
@@ -571,7 +576,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLSpec (with cache)
         async with config_with_cache.provide_session() as session:
 
-            async def op():
+            async def op() -> Any:
                 return await session.execute_many(sql, [list(d.values()) for d in insert_data])
 
             times = await self.runner.metrics.time_operation_async(op, 10)
@@ -580,7 +585,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLAlchemy Core
         async with engine.begin() as conn:
 
-            async def op():
+            async def op() -> Any:
                 return await conn.execute(insert(users_table), insert_data)
 
             times = await self.runner.metrics.time_operation_async(op, 10)
@@ -593,13 +598,13 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
     ) -> dict[str, TimingResult]:
         """Benchmark updating 100 records (async)."""
         results = {}
-        sql = SQL("UPDATE users SET status = 'updated' WHERE id <= 100")
-        stmt = update(users_table).where(users_table.c.id <= 100).values(status="updated")
+        sql = SQL(f"UPDATE users SET status = 'updated' WHERE id <= {BATCH_UPDATE_LIMIT}")
+        stmt = update(users_table).where(users_table.c.id <= BATCH_UPDATE_LIMIT).values(status="updated")
 
         # SQLSpec (no cache)
         async with config_no_cache.provide_session() as session:
 
-            async def op():
+            async def op() -> Any:
                 return await session.execute(sql)
 
             times = await self.runner.metrics.time_operation_async(op, self.config.iterations)
@@ -608,7 +613,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLSpec (with cache)
         async with config_with_cache.provide_session() as session:
 
-            async def op():
+            async def op() -> Any:
                 return await session.execute(sql)
 
             times = await self.runner.metrics.time_operation_async(op, self.config.iterations)
@@ -617,7 +622,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLAlchemy Core
         async with engine.begin() as conn:
 
-            async def op():
+            async def op() -> Any:
                 return await conn.execute(stmt)
 
             times = await self.runner.metrics.time_operation_async(op, self.config.iterations)

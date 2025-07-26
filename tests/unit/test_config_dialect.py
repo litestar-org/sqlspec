@@ -24,7 +24,11 @@ class MockDriver(SyncDriverAdapterBase):
     dialect = "sqlite"  # Use a real dialect for testing
     parameter_style = ParameterStyle.QMARK
 
-    def _execute_statement(self, statement: Any, connection: Optional[MockConnection] = None, **kwargs: Any) -> Any:
+    def _connection(self, connection: "Optional[Any]" = None) -> "Any":
+        """Get the connection to use for the operation."""
+        return connection or self.connection
+
+    def _execute_statement(self, statement: Any, connection: "Optional[Any]" = None, **kwargs: Any) -> Any:  # type: ignore[override]
         return {"data": [], "column_names": []}
 
     def _wrap_select_result(self, statement: Any, result: Any, schema_type: Any = None, **kwargs: Any) -> Any:
@@ -43,9 +47,11 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
     dialect = "postgres"  # Use a real dialect for testing
     parameter_style = ParameterStyle.NUMERIC
 
-    async def _execute_statement(
-        self, statement: Any, connection: Optional[MockConnection] = None, **kwargs: Any
-    ) -> Any:
+    def _connection(self, connection: "Optional[Any]" = None) -> "Any":
+        """Get the connection to use for the operation."""
+        return connection or self.connection
+
+    async def _execute_statement(self, statement: Any, connection: "Optional[Any]" = None, **kwargs: Any) -> Any:  # type: ignore[override]
         return {"data": [], "column_names": []}
 
     async def _wrap_select_result(self, statement: Any, result: Any, schema_type: Any = None, **kwargs: Any) -> Any:

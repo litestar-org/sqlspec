@@ -1,3 +1,4 @@
+# pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import contextlib
 import logging
 from contextlib import contextmanager
@@ -24,7 +25,8 @@ from sqlspec.driver.mixins import (
     ToSchemaMixin,
     TypeCoercionMixin,
 )
-from sqlspec.exceptions import wrap_exceptions
+from sqlspec.driver.mixins._query_tools import SyncQueryMixin
+from sqlspec.statement.builder._ddl import DropTable, Truncate
 from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -39,7 +41,7 @@ if TYPE_CHECKING:
 else:
     AdbcConnection = Connection
 
-# Dialect detection mappings
+
 DIALECT_PATTERNS = {
     "postgres": ["postgres", "postgresql"],
     "bigquery": ["bigquery"],
@@ -69,6 +71,7 @@ class AdbcDriver(
     SyncStorageMixin,
     SyncPipelinedExecutionMixin,
     ToSchemaMixin,
+    SyncQueryMixin,
 ):
     """ADBC Sync Driver Adapter with modern architecture.
 
@@ -98,8 +101,6 @@ class AdbcDriver(
 
         super().__init__(connection=connection, config=config)
         self.dialect: DialectType = dialect
-
-        # Get parameter styles from configuration
         default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
             self.dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
         )
@@ -176,12 +177,7 @@ class AdbcDriver(
         return self._execute(sql, params, statement, connection=connection, **kwargs)
 
     def _execute(
-        self,
-        sql: str,
-        parameters: "Any",
-        statement: "SQL",
-        connection: "Optional[ConnectionT]" = None,
-        **kwargs: "Any",
+        self, sql: str, parameters: "Any", statement: "SQL", connection: "Optional[ConnectionT]" = None, **kwargs: "Any"
     ) -> "SQLResult":
         conn = self._connection(connection)
 
@@ -225,12 +221,20 @@ class AdbcDriver(
             operation_type="SELECT",
         )
 
+    def _build_modify_result(self, cursor: "Cursor", statement: "SQL") -> "SQLResult":
+        """Build SQLResult for non-SELECT operations (INSERT, UPDATE, DELETE)."""
+        rows_affected = max(cursor.rowcount, 0)
+        return SQLResult(
+            statement=statement,
+            data=[],
+            rows_affected=rows_affected,
+            operation_type="EXECUTE",
+            metadata={"status_message": "OK"},
+        )
+
     def _execute_many(
         self, sql: str, param_list: "Any", connection: "Optional[ConnectionT]" = None, **kwargs: "Any"
     ) -> "SQLResult":
-        conn = self._connection(connection)
-
-        # Handle empty parameter list case for PostgreSQL
         if not param_list and self.dialect == "postgres":
             return SQLResult(
                 statement=SQL(sql, _dialect=self.dialect),
@@ -240,7 +244,10 @@ class AdbcDriver(
                 metadata={"status_message": "OK"},
             )
 
-        with managed_transaction_sync(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
+        with (
+            managed_transaction_sync(self._connection(connection), auto_commit=True) as txn_conn,
+            self._get_cursor(txn_conn) as cursor,
+        ):
             try:
                 cursor.executemany(sql, param_list or [])
             except Exception as e:
@@ -255,9 +262,7 @@ class AdbcDriver(
                 metadata={"status_message": "OK"},
             )
 
-    def _execute_script(
-        self, script: str, connection: "Optional[ConnectionT]" = None, **kwargs: "Any"
-    ) -> "SQLResult":
+    def _execute_script(self, script: str, connection: "Optional[ConnectionT]" = None, **kwargs: "Any") -> "SQLResult":
         with managed_transaction_sync(self._connection(connection), auto_commit=True) as txn_conn:
             statements = self._split_script_statements(script)
             executed_count = 0
@@ -299,7 +304,7 @@ class AdbcDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(connection)
 
-        with wrap_exceptions(), managed_transaction_sync(conn, auto_commit=True) as txn_conn:
+        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
             sql._ensure_processed()
             compiled_sql, params = self._get_compiled_sql(sql, self.default_parameter_style)
             params = self._process_parameters(params)
@@ -318,8 +323,8 @@ class AdbcDriver(
         conn = self._connection(None)
         with managed_transaction_sync(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
             if mode == "replace":
-                truncate_sql = SQL(f"TRUNCATE TABLE {table_name}", _dialect=self.dialect)
-                cursor.execute(truncate_sql.to_sql(placeholder_style=ParameterStyle.STATIC))
+                truncate_stmt = Truncate().table(table_name).to_statement(config=self.config)
+                cursor.execute(truncate_stmt.to_sql(placeholder_style=ParameterStyle.STATIC))
             elif mode == "create":
                 msg = "'create' mode is not supported for ADBC ingestion"
                 raise NotImplementedError(msg)
@@ -351,8 +356,8 @@ class AdbcDriver(
             format = path_obj.suffix.lstrip(".").lower()  # noqa: A001
 
         if mode == "replace":
-            drop_sql = SQL(f"DROP TABLE IF EXISTS {table_name}", _dialect=self.dialect)
-            self.execute(drop_sql)
+            drop_stmt = DropTable(table_name).if_exists().to_statement(config=self.config)
+            self.execute(drop_stmt)
 
         # Leverage native Arrow capabilities for Parquet
         if format == "parquet" and self.supports_native_parquet_import:

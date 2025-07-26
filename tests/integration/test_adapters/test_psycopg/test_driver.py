@@ -52,7 +52,7 @@ def psycopg_session(postgres_service: PostgresService) -> Generator[PsycopgSyncD
             except Exception:
                 # If the transaction is in an error state, rollback first
                 if hasattr(session.connection, "rollback"):
-                    session.connection.rollback()
+                    session.connection.rollback()  # pyright: ignore[reportAttributeAccessIssue]
                 # Try again after rollback
                 try:
                     session.execute_script("DROP TABLE IF EXISTS test_table")

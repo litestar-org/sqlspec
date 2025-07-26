@@ -1,3 +1,4 @@
+# pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import re
 from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
 
@@ -6,6 +7,7 @@ from sqlspec.driver.connection import managed_transaction_async
 from sqlspec.driver.mixins import (
     AsyncAdapterCacheMixin,
     AsyncPipelinedExecutionMixin,
+    AsyncQueryMixin,
     AsyncStorageMixin,
     SQLTranslatorMixin,
     ToSchemaMixin,
@@ -61,6 +63,7 @@ class AsyncpgDriver(
     AsyncPipelinedExecutionMixin,
     AsyncAdapterCacheMixin,
     ToSchemaMixin,
+    AsyncQueryMixin,
 ):
     """AsyncPG PostgreSQL Driver Adapter. Modern protocol implementation."""
 
@@ -81,7 +84,7 @@ class AsyncpgDriver(
         Returns:
             The connection to use (provided connection or driver's default)
         """
-        return connection if connection is not None else self.connection
+        return connection if connection is not None else self.connection  # pyright: ignore[reportReturnType]
 
     # AsyncPG-specific type coercion overrides (PostgreSQL has rich native types)
     def _coerce_boolean(self, value: Any) -> Any:

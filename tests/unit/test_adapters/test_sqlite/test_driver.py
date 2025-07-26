@@ -198,6 +198,7 @@ def test_execute_statement_routing(
     expected_method: str,
 ) -> None:
     """Test that _execute_statement routes to correct method."""
+    from sqlspec.statement.result import SQLResult
     from sqlspec.statement.sql import SQLConfig
 
     # Create config that allows DDL
@@ -210,7 +211,10 @@ def test_execute_statement_routing(
     statement._is_script = is_script
     statement._is_many = is_many
 
-    with patch.object(SqliteDriver, expected_method, return_value={"rows_affected": 0}) as mock_method:
+    # Create a proper SQLResult mock
+    mock_result = SQLResult(statement=statement, data=[], rows_affected=0, operation_type="EXECUTE")
+
+    with patch.object(SqliteDriver, expected_method, return_value=mock_result) as mock_method:
         driver._execute_statement(statement)
         mock_method.assert_called_once()
 
@@ -225,14 +229,23 @@ def test_execute_select_statement(driver: SqliteDriver, mock_connection: MagicMo
     ]
     mock_cursor.rowcount = 2
 
-    statement = SQL("SELECT * FROM users")
-    result = driver._execute_statement(statement)
+    # Mock _connection method to return the mock_connection
+    with (
+        patch.object(SqliteDriver, "_connection", return_value=mock_connection),
+        patch("sqlspec.driver.connection.managed_transaction_sync") as mock_managed_tx,
+    ):
+        mock_managed_tx.return_value.__enter__.return_value = mock_connection
+        mock_managed_tx.return_value.__exit__.return_value = None
 
-    assert result.data == mock_cursor.fetchall.return_value
-    assert result.column_names == ["id", "name", "email"]
-    assert result.rows_affected == 2
+        statement = SQL("SELECT * FROM users")
+        result = driver._execute_statement(statement)
 
-    mock_cursor.execute.assert_called_once_with("SELECT * FROM users", {})
+        assert result.data == mock_cursor.fetchall.return_value
+        assert result.column_names == ["id", "name", "email"]
+        assert result.rows_affected == 2
+
+        # Check that parameters were processed to an empty dict for no params
+        mock_cursor.execute.assert_called_once_with("SELECT * FROM users", {})
 
 
 def test_execute_dml_statement(driver: SqliteDriver, mock_connection: MagicMock) -> None:
@@ -240,15 +253,24 @@ def test_execute_dml_statement(driver: SqliteDriver, mock_connection: MagicMock)
     mock_cursor = mock_connection.cursor.return_value
     mock_cursor.rowcount = 1
 
-    statement = SQL("INSERT INTO users (name, email) VALUES (?, ?)", ["Alice", "alice@example.com"])
-    result = driver._execute_statement(statement)
+    # Mock _connection method to return the mock_connection
+    with (
+        patch.object(SqliteDriver, "_connection", return_value=mock_connection),
+        patch("sqlspec.driver.connection.managed_transaction_sync") as mock_managed_tx,
+    ):
+        mock_managed_tx.return_value.__enter__.return_value = mock_connection
+        mock_managed_tx.return_value.__exit__.return_value = None
 
-    assert result.rows_affected == 1
-    assert result.metadata["status_message"] == "OK"
+        statement = SQL("INSERT INTO users (name, email) VALUES (?, ?)", ["Alice", "alice@example.com"])
+        result = driver._execute_statement(statement)
 
-    mock_cursor.execute.assert_called_once_with(
-        "INSERT INTO users (name, email) VALUES (?, ?)", ("Alice", "alice@example.com")
-    )
+        assert result.rows_affected == 1
+        assert result.metadata["status_message"] == "OK"
+
+        # SQLite expects positional params as tuple
+        mock_cursor.execute.assert_called_once_with(
+            "INSERT INTO users (name, email) VALUES (?, ?)", ("Alice", "alice@example.com")
+        )
 
 
 # Parameter Style Handling Tests
@@ -276,8 +298,17 @@ def test_parameter_style_handling(
     with (
         patch.object(type(statement), "parameter_info", new_callable=PropertyMock, return_value=mock_param_info),
         patch.object(type(statement), "compile") as mock_compile,
+        patch("sqlspec.driver.connection.managed_transaction_sync") as mock_managed_tx,
     ):
         mock_compile.return_value = (sql_text, None)
+        mock_managed_tx.return_value.__enter__.return_value = mock_connection
+        mock_managed_tx.return_value.__exit__.return_value = None
+
+        # Set up cursor behavior
+        mock_cursor = mock_connection.cursor.return_value
+        mock_cursor.fetchall.return_value = []
+        mock_cursor.description = None
+
         driver._execute_statement(statement)
 
         mock_compile.assert_called_with(placeholder_style=expected_style)
