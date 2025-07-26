@@ -10,7 +10,6 @@ from duckdb import DuckDBPyConnection
 from sqlglot import exp
 
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
     SyncAdapterCacheMixin,
@@ -79,6 +78,24 @@ class DuckDBDriver(
     supports_native_csv_import: "ClassVar[bool]" = True
     supports_native_json_export: "ClassVar[bool]" = True
     supports_native_json_import: "ClassVar[bool]" = True
+
+    def begin(self) -> None:
+        """Begin a new transaction.
+
+        In DuckDB, transactions start automatically with the first SQL statement.
+        This method is provided for consistency with the transaction protocol.
+        """
+        # DuckDB automatically starts transactions
+        # We could call execute("BEGIN") but it's not necessary
+        pass
+
+    def commit(self) -> None:
+        """Commit the current transaction."""
+        self.connection.commit()
+
+    def rollback(self) -> None:
+        """Rollback the current transaction."""
+        self.connection.rollback()
 
     def __init__(self, connection: "DuckDBConnection", config: "Optional[SQLConfig]" = None) -> None:  # noqa: FA100
         super().__init__(connection=connection, config=config)
@@ -153,13 +170,30 @@ class DuckDBDriver(
         )
 
     def _build_modify_result(self, cursor: "Any", statement: "SQL") -> "SQLResult":
-        """Build SQLResult for non-SELECT operations (INSERT, UPDATE, DELETE)."""
-        rows_affected = max(cursor.rowcount, 0)
+        """Build SQLResult for non-SELECT operations (INSERT, UPDATE, DELETE).
+        
+        DuckDB returns -1 for rowcount, but the actual count is available via fetchone().
+        """
+        # DuckDB cursor.rowcount is always -1, but the actual count is returned as a result
+        try:
+            # For DML operations, DuckDB returns the affected row count as a result
+            result = cursor.fetchone()
+            if result and isinstance(result, tuple) and len(result) == 1:
+                rows_affected = int(result[0])
+            else:
+                rows_affected = 0
+        except Exception:
+            # Fallback to rowcount if fetchone() fails
+            rows_affected = max(cursor.rowcount, 0)
+            
+        # Determine operation type from statement
+        operation_type = self._determine_operation_type(statement)
+            
         return SQLResult(
             statement=statement,
             data=[],
             rows_affected=rows_affected,
-            operation_type="EXECUTE",
+            operation_type=operation_type,
             metadata={"status_message": "OK"},
         )
 
@@ -174,17 +208,16 @@ class DuckDBDriver(
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
-        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # TypeCoercionMixin handles parameter processing
-            final_params = parameters or []
+        # TypeCoercionMixin handles parameter processing
+        final_params = parameters or []
 
-            if self.returns_rows(statement.expression):
-                result = txn_conn.execute(sql, final_params)
-                return self._build_select_result(result, statement)
+        if self.returns_rows(statement.expression):
+            result = conn.execute(sql, final_params)
+            return self._build_select_result(result, statement)
 
-            with self._get_cursor(txn_conn) as cursor:
-                cursor.execute(sql, final_params)
-                return self._build_modify_result(cursor, statement)
+        with self._get_cursor(conn) as cursor:
+            cursor.execute(sql, final_params)
+            return self._build_modify_result(cursor, statement)
 
     def _execute_many(
         self,
@@ -196,33 +229,32 @@ class DuckDBDriver(
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
-        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # TypeCoercionMixin handles parameter processing
-            final_param_list = param_list or []
+        # TypeCoercionMixin handles parameter processing
+        final_param_list = param_list or []
 
-            # DuckDB throws an error if executemany is called with empty parameter list
-            if not final_param_list:
-                return SQLResult(  # pyright: ignore
-                    statement=SQL(sql, _dialect=self.dialect),
-                    data=[],
-                    rows_affected=0,
-                    operation_type="EXECUTE",
-                    metadata={"status_message": "OK"},
-                )
+        # DuckDB throws an error if executemany is called with empty parameter list
+        if not final_param_list:
+            return SQLResult(  # pyright: ignore
+                statement=SQL(sql, _dialect=self.dialect),
+                data=[],
+                rows_affected=0,
+                operation_type="EXECUTE",
+                metadata={"status_message": "OK"},
+            )
 
-            with self._get_cursor(txn_conn) as cursor:
-                cursor.executemany(sql, final_param_list)
-                # DuckDB returns -1 for rowcount on DML operations
-                # For executemany, fetchone() only returns the count from the last operation,
-                # so use parameter list length as the most accurate estimate
-                rows_affected = cursor.rowcount if cursor.rowcount >= 0 else len(final_param_list)
-                return SQLResult(  # pyright: ignore
-                    statement=SQL(sql, _dialect=self.dialect),
-                    data=[],
-                    rows_affected=rows_affected,
-                    operation_type="EXECUTE",
-                    metadata={"status_message": "OK"},
-                )
+        with self._get_cursor(conn) as cursor:
+            cursor.executemany(sql, final_param_list)
+            # DuckDB's executemany only returns the count from the last operation,
+            # not the total. For accurate counting, use the parameter list length.
+            rows_affected = len(final_param_list)
+                
+            return SQLResult(  # pyright: ignore
+                statement=SQL(sql, _dialect=self.dialect),
+                data=[],
+                rows_affected=rows_affected,
+                operation_type="EXECUTE",
+                metadata={"status_message": "OK"},
+            )
 
     def _validate_statement(self, statement: str) -> None:
         """Validate a single statement from a script."""
@@ -234,37 +266,43 @@ class DuckDBDriver(
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
-        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # Split script into individual statements for validation
-            statements = self._split_script_statements(script)
-            suppress_warnings = kwargs.get("_suppress_warnings", False)
+        # Split script into individual statements for validation
+        statements = self._split_script_statements(script)
+        suppress_warnings = kwargs.get("_suppress_warnings", False)
 
-            executed_count = 0
-            total_rows = 0
+        executed_count = 0
+        total_rows = 0
 
-            with self._get_cursor(txn_conn) as cursor:
-                for statement in statements:
-                    if statement.strip():
-                        # Validate each statement unless warnings suppressed
-                        if not suppress_warnings:
-                            self._validate_statement(statement)
+        with self._get_cursor(conn) as cursor:
+            for statement in statements:
+                if statement.strip():
+                    # Validate each statement unless warnings suppressed
+                    if not suppress_warnings:
+                        self._validate_statement(statement)
 
-                        cursor.execute(statement)
-                        executed_count += 1
-                        total_rows += cursor.rowcount or 0
+                    cursor.execute(statement)
+                    executed_count += 1
+                    # Try to get row count from result for DML operations
+                    try:
+                        result = cursor.fetchone()
+                        if result and isinstance(result, tuple) and len(result) == 1:
+                            total_rows += int(result[0])
+                    except Exception:
+                        # For statements that don't return a count (like CREATE TABLE)
+                        pass
 
-            return SQLResult(
-                statement=SQL(script, _dialect=self.dialect).as_script(),
-                data=[],
-                rows_affected=total_rows,
-                operation_type="SCRIPT",
-                metadata={
-                    "status_message": "Script executed successfully.",
-                    "description": "The script was sent to the database.",
-                },
-                total_statements=executed_count,
-                successful_statements=executed_count,
-            )
+        return SQLResult(
+            statement=SQL(script, _dialect=self.dialect).as_script(),
+            data=[],
+            rows_affected=total_rows,
+            operation_type="SCRIPT",
+            metadata={
+                "status_message": "Script executed successfully.",
+                "description": "The script was sent to the database.",
+            },
+            total_statements=executed_count,
+            successful_statements=executed_count,
+        )
 
     # ============================================================================
     # DuckDB Native Arrow Support

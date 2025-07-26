@@ -63,6 +63,23 @@ class PsycopgSyncDriver(
 ):
     """Psycopg Sync Driver Adapter. Refactored for new protocol."""
 
+    def begin(self) -> None:
+        """Begin a new transaction.
+
+        In psycopg, transactions start automatically with the first command.
+        This method ensures autocommit is disabled.
+        """
+        if self.connection.autocommit:
+            self.connection.autocommit = False
+
+    def commit(self) -> None:
+        """Commit the current transaction."""
+        self.connection.commit()
+
+    def rollback(self) -> None:
+        """Rollback the current transaction."""
+        self.connection.rollback()
+
     connection_type = PsycopgSyncConnection
 
     dialect: "DialectType" = "postgres"  # pyright: ignore[reportInvalidTypeForm]
@@ -450,6 +467,23 @@ class PsycopgAsyncDriver(
     AsyncQueryMixin,
 ):
     """Psycopg Async Driver Adapter. Refactored for new protocol."""
+
+    async def begin(self) -> None:
+        """Begin a new transaction.
+
+        In psycopg, transactions start automatically with the first command.
+        This method ensures autocommit is disabled.
+        """
+        if self.connection.autocommit:
+            await self.connection.set_autocommit(False)
+
+    async def commit(self) -> None:
+        """Commit the current transaction."""
+        await self.connection.commit()
+
+    async def rollback(self) -> None:
+        """Rollback the current transaction."""
+        await self.connection.rollback()
 
     connection_type = PsycopgAsyncConnection
 

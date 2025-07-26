@@ -3,7 +3,6 @@ import re
 from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
 
 from sqlspec.driver import AsyncDriverAdapterBase
-from sqlspec.driver.connection import managed_transaction_async
 from sqlspec.driver.mixins import (
     AsyncAdapterCacheMixin,
     AsyncPipelinedExecutionMixin,
@@ -85,6 +84,19 @@ class AsyncpgDriver(
             The connection to use (provided connection or driver's default)
         """
         return connection if connection is not None else self.connection  # pyright: ignore[reportReturnType]
+
+    async def begin(self) -> None:
+        """Begin a transaction. AsyncPG starts transactions automatically."""
+        # AsyncPG transactions start automatically with first SQL statement
+        pass
+
+    async def commit(self) -> None:
+        """Commit the current transaction."""
+        await self.connection.execute("COMMIT")
+
+    async def rollback(self) -> None:
+        """Rollback the current transaction."""
+        await self.connection.execute("ROLLBACK")
 
     # AsyncPG-specific type coercion overrides (PostgreSQL has rich native types)
     def _coerce_boolean(self, value: Any) -> Any:
@@ -169,20 +181,19 @@ class AsyncpgDriver(
             # This should have gone to _execute_many, redirect it
             return await self._execute_many(sql, parameters, connection=connection, **kwargs)
 
-        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # TypeCoercionMixin handles parameter processing
-            # AsyncPG expects parameters as *args, not a single list
-            args_for_driver: list[Any] = []
-            if parameters:
-                # parameters might be a list or tuple already
-                args_for_driver = list(parameters) if isinstance(parameters, (list, tuple)) else [parameters]
+        # TypeCoercionMixin handles parameter processing
+        # AsyncPG expects parameters as *args, not a single list
+        args_for_driver: list[Any] = []
+        if parameters:
+            # parameters might be a list or tuple already
+            args_for_driver = list(parameters) if isinstance(parameters, (list, tuple)) else [parameters]
 
-            if self.returns_rows(statement.expression):
-                records = await txn_conn.fetch(sql, *args_for_driver)
-                return await self._build_select_result(statement, records)
+        if self.returns_rows(statement.expression):
+            records = await conn.fetch(sql, *args_for_driver)
+            return await self._build_select_result(statement, records)
 
-            status = await txn_conn.execute(sql, *args_for_driver)
-            return self._build_modify_result_async(statement, status)
+        status = await conn.execute(sql, *args_for_driver)
+        return self._build_modify_result_async(statement, status)
 
     async def _execute_many(
         self, sql: str, param_list: Any, connection: "Optional[AsyncpgConnection]" = None, **kwargs: Any
@@ -190,33 +201,32 @@ class AsyncpgDriver(
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
-        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # TypeCoercionMixin handles parameter processing
-            converted_param_list = param_list
+        # TypeCoercionMixin handles parameter processing
+        converted_param_list = param_list
 
-            params_list: list[tuple[Any, ...]] = []
-            rows_affected = 0
-            if converted_param_list:
-                for param_set in converted_param_list:
-                    if isinstance(param_set, (list, tuple)):
-                        params_list.append(tuple(param_set))
-                    elif param_set is None:
-                        params_list.append(())
-                    else:
-                        params_list.append((param_set,))
+        params_list: list[tuple[Any, ...]] = []
+        rows_affected = 0
+        if converted_param_list:
+            for param_set in converted_param_list:
+                if isinstance(param_set, (list, tuple)):
+                    params_list.append(tuple(param_set))
+                elif param_set is None:
+                    params_list.append(())
+                else:
+                    params_list.append((param_set,))
 
-                await txn_conn.executemany(sql, params_list)
-                # AsyncPG's executemany returns None, not a status string
-                # We need to use the number of parameter sets as the row count
-                rows_affected = len(params_list)
+            await conn.executemany(sql, params_list)
+            # AsyncPG's executemany returns None, not a status string
+            # We need to use the number of parameter sets as the row count
+            rows_affected = len(params_list)
 
-            return SQLResult(
-                statement=SQL(sql, _dialect=self.dialect),
-                data=[],
-                rows_affected=rows_affected,
-                operation_type="EXECUTE",
-                metadata={"status_message": "OK"},
-            )
+        return SQLResult(
+            statement=SQL(sql, _dialect=self.dialect),
+            data=[],
+            rows_affected=rows_affected,
+            operation_type="EXECUTE",
+            metadata={"status_message": "OK"},
+        )
 
     def _validate_statement(self, statement: str, **kwargs: Any) -> None:
         """Validate a single statement if warnings not suppressed."""
@@ -230,27 +240,26 @@ class AsyncpgDriver(
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
-        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # Split script into individual statements for validation
-            statements = self._split_script_statements(script)
-            executed_count = 0
-            total_rows = 0
-            last_status = None
-            for statement in statements:
-                if statement.strip():
-                    self._validate_statement(statement, **kwargs)
-                    status = await txn_conn.execute(statement)
-                    executed_count += 1
-                    last_status = status
-            return SQLResult(
-                statement=SQL(script, _dialect=self.dialect).as_script(),
-                data=[],
-                rows_affected=total_rows,
-                operation_type="SCRIPT",
-                metadata={"status_message": last_status or "SCRIPT EXECUTED"},
-                total_statements=executed_count,
-                successful_statements=executed_count,
-            )
+        # Split script into individual statements for validation
+        statements = self._split_script_statements(script)
+        executed_count = 0
+        total_rows = 0
+        last_status = None
+        for statement in statements:
+            if statement.strip():
+                self._validate_statement(statement, **kwargs)
+                status = await conn.execute(statement)
+                executed_count += 1
+                last_status = status
+        return SQLResult(
+            statement=SQL(script, _dialect=self.dialect).as_script(),
+            data=[],
+            rows_affected=total_rows,
+            operation_type="SCRIPT",
+            metadata={"status_message": last_status or "SCRIPT EXECUTED"},
+            total_statements=executed_count,
+            successful_statements=executed_count,
+        )
 
     async def _execute_pipeline_native(self, operations: "list[Any]", **options: Any) -> "list[SQLResult]":
         """Native pipeline execution using AsyncPG's efficient batch handling.

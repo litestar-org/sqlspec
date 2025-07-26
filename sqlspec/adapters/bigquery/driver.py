@@ -27,7 +27,6 @@ from google.cloud.bigquery import (
 from google.cloud.bigquery.table import Row as BigQueryRow
 
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
     SyncAdapterCacheMixin,
@@ -97,6 +96,32 @@ class BigQueryDriver(
     supports_native_arrow_export: ClassVar[bool] = True
     supports_native_csv_export: ClassVar[bool] = True
     supports_native_json_export: ClassVar[bool] = True
+
+    def begin(self) -> None:
+        """Begin a transaction.
+
+        BigQuery doesn't have traditional transactions, so this is a no-op.
+        All operations are automatically committed.
+        """
+        # BigQuery uses implicit transactions
+        pass
+
+    def commit(self) -> None:
+        """Commit the current transaction.
+
+        BigQuery doesn't have traditional transactions, so this is a no-op.
+        All operations are automatically committed.
+        """
+        # BigQuery operations are automatically committed
+        pass
+
+    def rollback(self) -> None:
+        """Rollback the current transaction.
+
+        BigQuery doesn't support rollback, so this is a no-op.
+        """
+        # BigQuery doesn't support rollback
+        pass
 
     def __init__(
         self,
@@ -383,27 +408,24 @@ class BigQueryDriver(
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
-        # BigQuery doesn't have traditional transactions, but we'll use the pattern for consistency
-        # The managed_transaction_sync will just pass through for BigQuery Client objects
-        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # TypeCoercionMixin handles parameter processing
-            param_dict: dict[str, Any] = {}
-            if parameters:
-                if isinstance(parameters, dict):
-                    param_dict = parameters
-                elif isinstance(parameters, (list, tuple)):
-                    param_dict = {f"param_{i}": val for i, val in enumerate(parameters)}
-                else:
-                    param_dict = {"param_0": parameters}
+        # TypeCoercionMixin handles parameter processing
+        param_dict: dict[str, Any] = {}
+        if parameters:
+            if isinstance(parameters, dict):
+                param_dict = parameters
+            elif isinstance(parameters, (list, tuple)):
+                param_dict = {f"param_{i}": val for i, val in enumerate(parameters)}
+            else:
+                param_dict = {"param_0": parameters}
 
-            bq_params = self._prepare_bq_query_parameters(param_dict)
+        bq_params = self._prepare_bq_query_parameters(param_dict)
 
-            query_job = self._run_query_job(sql, bq_params, connection=txn_conn)
+        query_job = self._run_query_job(sql, bq_params, connection=conn)
 
-            query_schema = getattr(query_job, "schema", None)
-            if query_job.statement_type == "SELECT" or (query_schema is not None and len(query_schema) > 0):
-                return self._handle_select_job(query_job, statement)
-            return self._handle_dml_job(query_job, statement)
+        query_schema = getattr(query_job, "schema", None)
+        if query_job.statement_type == "SELECT" or (query_schema is not None and len(query_schema) > 0):
+            return self._handle_select_job(query_job, statement)
+        return self._handle_dml_job(query_job, statement)
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: Optional[BigQueryConnection] = None, **kwargs: Any
@@ -411,90 +433,88 @@ class BigQueryDriver(
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
-        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # TypeCoercionMixin handles parameter processing
-            converted_param_list = param_list
+        # TypeCoercionMixin handles parameter processing
+        converted_param_list = param_list
 
-            # Use a multi-statement script for batch execution
-            script_parts = []
-            all_params: dict[str, Any] = {}
-            param_counter = 0
+        # Use a multi-statement script for batch execution
+        script_parts = []
+        all_params: dict[str, Any] = {}
+        param_counter = 0
 
-            for params in converted_param_list or []:
-                if isinstance(params, dict):
-                    param_dict = params
-                elif isinstance(params, (list, tuple)):
-                    param_dict = {f"param_{i}": val for i, val in enumerate(params)}
-                else:
-                    param_dict = {"param_0": params}
+        for params in converted_param_list or []:
+            if isinstance(params, dict):
+                param_dict = params
+            elif isinstance(params, (list, tuple)):
+                param_dict = {f"param_{i}": val for i, val in enumerate(params)}
+            else:
+                param_dict = {"param_0": params}
 
-                # Remap parameters to be unique across the entire script
-                param_mapping = {}
-                current_sql = sql
-                for key, value in param_dict.items():
-                    new_key = f"p_{param_counter}"
-                    param_counter += 1
-                    param_mapping[key] = new_key
-                    all_params[new_key] = value
+            # Remap parameters to be unique across the entire script
+            param_mapping = {}
+            current_sql = sql
+            for key, value in param_dict.items():
+                new_key = f"p_{param_counter}"
+                param_counter += 1
+                param_mapping[key] = new_key
+                all_params[new_key] = value
 
-                for old_key, new_key in param_mapping.items():
-                    current_sql = current_sql.replace(f"@{old_key}", f"@{new_key}")
+            for old_key, new_key in param_mapping.items():
+                current_sql = current_sql.replace(f"@{old_key}", f"@{new_key}")
 
-                script_parts.append(current_sql)
+            script_parts.append(current_sql)
 
-            # Execute as a single script
-            full_script = ";\n".join(script_parts)
-            bq_params = self._prepare_bq_query_parameters(all_params)
-            # Filter out kwargs that _run_query_job doesn't expect
-            query_kwargs = {k: v for k, v in kwargs.items() if k not in {"parameters", "is_many"}}
-            query_job = self._run_query_job(full_script, bq_params, connection=txn_conn, **query_kwargs)
+        # Execute as a single script
+        full_script = ";\n".join(script_parts)
+        bq_params = self._prepare_bq_query_parameters(all_params)
+        # Filter out kwargs that _run_query_job doesn't expect
+        query_kwargs = {k: v for k, v in kwargs.items() if k not in {"parameters", "is_many"}}
+        query_job = self._run_query_job(full_script, bq_params, connection=conn, **query_kwargs)
 
-            # Wait for the job to complete
-            query_job.result(timeout=kwargs.get("bq_job_timeout"))
-            total_rowcount = query_job.num_dml_affected_rows or 0
+        # Wait for the job to complete
+        query_job.result(timeout=kwargs.get("bq_job_timeout"))
+        total_rowcount = query_job.num_dml_affected_rows or 0
 
-            return SQLResult(
-                statement=SQL(sql, _dialect=self.dialect),
-                data=[],
-                rows_affected=total_rowcount,
-                operation_type="EXECUTE",
-                metadata={"status_message": f"OK - executed batch job {query_job.job_id}"},
-            )
+        return SQLResult(
+            statement=SQL(sql, _dialect=self.dialect),
+            data=[],
+            rows_affected=total_rowcount,
+            operation_type="EXECUTE",
+            metadata={"status_message": f"OK - executed batch job {query_job.job_id}"},
+        )
 
     def _execute_script(self, script: str, connection: Optional[BigQueryConnection] = None, **kwargs: Any) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
-        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # BigQuery does not support multi-statement scripts in a single job
-            statements = self._split_script_statements(script)
-            suppress_warnings = kwargs.get("_suppress_warnings", False)
-            successful = 0
-            total_rows = 0
+        # BigQuery does not support multi-statement scripts in a single job
+        statements = self._split_script_statements(script)
+        suppress_warnings = kwargs.get("_suppress_warnings", False)
+        successful = 0
+        total_rows = 0
 
-            for statement in statements:
-                if statement:
-                    # Validate each statement unless warnings suppressed
-                    if not suppress_warnings:
-                        # Run validation through pipeline
-                        temp_sql = SQL(statement, config=self.config)
-                        temp_sql._ensure_processed()
-                        # Validation errors are logged as warnings by default
+        for statement in statements:
+            if statement:
+                # Validate each statement unless warnings suppressed
+                if not suppress_warnings:
+                    # Run validation through pipeline
+                    temp_sql = SQL(statement, config=self.config)
+                    temp_sql._ensure_processed()
+                    # Validation errors are logged as warnings by default
 
-                    query_job = self._run_query_job(statement, [], connection=txn_conn)
-                    query_job.result(timeout=kwargs.get("bq_job_timeout"))
-                    successful += 1
-                    total_rows += query_job.num_dml_affected_rows or 0
+                query_job = self._run_query_job(statement, [], connection=conn)
+                query_job.result(timeout=kwargs.get("bq_job_timeout"))
+                successful += 1
+                total_rows += query_job.num_dml_affected_rows or 0
 
-            return SQLResult(
-                statement=SQL(script, _dialect=self.dialect).as_script(),
-                data=[],
-                rows_affected=total_rows,
-                operation_type="SCRIPT",
-                metadata={"status_message": "SCRIPT EXECUTED"},
-                total_statements=len(statements),
-                successful_statements=successful,
-            )
+        return SQLResult(
+            statement=SQL(script, _dialect=self.dialect).as_script(),
+            data=[],
+            rows_affected=total_rows,
+            operation_type="SCRIPT",
+            metadata={"status_message": "SCRIPT EXECUTED"},
+            total_statements=len(statements),
+            successful_statements=successful,
+        )
 
     # ============================================================================
     # BigQuery Native Export Support

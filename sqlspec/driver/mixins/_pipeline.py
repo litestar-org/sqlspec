@@ -18,10 +18,7 @@ from sqlspec.statement.filters import StatementFilter
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.type_guards import (
-    is_async_pipeline_capable_driver,
-    is_sync_pipeline_capable_driver,
-)
+from sqlspec.utils.type_guards import is_async_pipeline_capable_driver, is_sync_pipeline_capable_driver
 
 if TYPE_CHECKING:
     from typing import Literal

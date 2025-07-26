@@ -8,7 +8,6 @@ from sqlglot.dialects.dialect import DialectType
 
 from sqlspec import sql
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
-from sqlspec.driver.connection import managed_transaction_async, managed_transaction_sync
 from sqlspec.driver.mixins import (
     AsyncAdapterCacheMixin,
     AsyncPipelinedExecutionMixin,
@@ -98,6 +97,20 @@ class OracleSyncDriver(
     def __init__(self, connection: OracleSyncConnection, config: Optional[SQLConfig] = None) -> None:
         super().__init__(connection=connection, config=config)
 
+    def begin(self) -> None:
+        """Begin a transaction.
+
+        Oracle starts transactions automatically with the first command.
+        """
+
+    def commit(self) -> None:
+        """Commit the current transaction."""
+        self.connection.commit()
+
+    def rollback(self) -> None:
+        """Rollback the current transaction."""
+        self.connection.rollback()
+
     def _connection(self, connection: "Optional[ConnectionT]" = None) -> "OracleSyncConnection":
         """Get the connection to use for the operation."""
         return cast("OracleSyncConnection", connection or self.connection)
@@ -142,33 +155,32 @@ class OracleSyncDriver(
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
-        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # Oracle requires special parameter handling
-            processed_params = self._process_parameters(parameters) if parameters is not None else []
+        # Oracle requires special parameter handling
+        processed_params = self._process_parameters(parameters) if parameters is not None else []
 
-            with self._get_cursor(txn_conn) as cursor:
-                cursor.execute(sql, processed_params)
+        with self._get_cursor(conn) as cursor:
+            cursor.execute(sql, processed_params)
 
-                if self.returns_rows(statement.expression):
-                    fetched_data = cursor.fetchall()
-                    column_names = [col[0] for col in cursor.description or []]
-                    data = cast("list[dict[str, Any]]", [dict(zip(column_names, row)) for row in fetched_data])
-
-                    return SQLResult(
-                        statement=statement,
-                        data=data,
-                        column_names=column_names,
-                        rows_affected=cursor.rowcount,
-                        operation_type="SELECT",
-                    )
+            if self.returns_rows(statement.expression):
+                fetched_data = cursor.fetchall()
+                column_names = [col[0] for col in cursor.description or []]
+                data = cast("list[dict[str, Any]]", [dict(zip(column_names, row)) for row in fetched_data])
 
                 return SQLResult(
                     statement=statement,
-                    data=[],
+                    data=data,
+                    column_names=column_names,
                     rows_affected=cursor.rowcount,
-                    operation_type=self._determine_operation_type(statement),
-                    metadata={"status_message": "OK"},
+                    operation_type="SELECT",
                 )
+
+            return SQLResult(
+                statement=statement,
+                data=[],
+                rows_affected=cursor.rowcount,
+                operation_type=self._determine_operation_type(statement),
+                metadata={"status_message": "OK"},
+            )
 
     def _execute_many(
         self, sql: str, param_list: Any, connection: "Optional[ConnectionT]" = None, **kwargs: Any
@@ -176,66 +188,64 @@ class OracleSyncDriver(
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
-        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            # TypeCoercionMixin handles parameter processing
-            converted_param_list = param_list
+        # TypeCoercionMixin handles parameter processing
+        converted_param_list = param_list
 
-            # Process parameters for Oracle
-            if converted_param_list is None:
-                processed_param_list = []
-            elif converted_param_list and not isinstance(converted_param_list, list):
-                # Single parameter set, wrap it
-                processed_param_list = [converted_param_list]
-            elif converted_param_list and not isinstance(converted_param_list[0], (list, tuple, dict)):
-                # Already a flat list, likely from incorrect usage
-                processed_param_list = [converted_param_list]
-            else:
-                processed_param_list = converted_param_list
+        # Process parameters for Oracle
+        if converted_param_list is None:
+            processed_param_list = []
+        elif converted_param_list and not isinstance(converted_param_list, list):
+            # Single parameter set, wrap it
+            processed_param_list = [converted_param_list]
+        elif converted_param_list and not isinstance(converted_param_list[0], (list, tuple, dict)):
+            # Already a flat list, likely from incorrect usage
+            processed_param_list = [converted_param_list]
+        else:
+            processed_param_list = converted_param_list
 
-            # Parameters have already been processed in _execute_statement
-            with self._get_cursor(txn_conn) as cursor:
-                cursor.executemany(sql, processed_param_list or [])
-                return SQLResult(
-                    statement=SQL(sql, _dialect=self.dialect),
-                    data=[],
-                    rows_affected=cursor.rowcount,
-                    operation_type="EXECUTE",
-                    metadata={"status_message": "OK"},
-                )
+        # Parameters have already been processed in _execute_statement
+        with self._get_cursor(conn) as cursor:
+            cursor.executemany(sql, processed_param_list or [])
+            return SQLResult(
+                statement=SQL(sql, _dialect=self.dialect),
+                data=[],
+                rows_affected=cursor.rowcount,
+                operation_type="EXECUTE",
+                metadata={"status_message": "OK"},
+            )
 
     def _execute_script(self, script: str, connection: "Optional[ConnectionT]" = None, **kwargs: Any) -> SQLResult:
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
-        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            statements = self._split_script_statements(script, strip_trailing_semicolon=True)
-            suppress_warnings = kwargs.get("_suppress_warnings", False)
-            successful = 0
-            total_rows = 0
+        statements = self._split_script_statements(script, strip_trailing_semicolon=True)
+        suppress_warnings = kwargs.get("_suppress_warnings", False)
+        successful = 0
+        total_rows = 0
 
-            with self._get_cursor(txn_conn) as cursor:
-                for statement in statements:
-                    if statement and statement.strip():
-                        # Validate each statement unless warnings suppressed
-                        if not suppress_warnings:
-                            # Run validation through pipeline
-                            temp_sql = SQL(statement.strip(), config=self.config)
-                            temp_sql._ensure_processed()
-                            # Validation errors are logged as warnings by default
+        with self._get_cursor(conn) as cursor:
+            for statement in statements:
+                if statement and statement.strip():
+                    # Validate each statement unless warnings suppressed
+                    if not suppress_warnings:
+                        # Run validation through pipeline
+                        temp_sql = SQL(statement.strip(), config=self.config)
+                        temp_sql._ensure_processed()
+                        # Validation errors are logged as warnings by default
 
-                        cursor.execute(statement.strip())
-                        successful += 1
-                        total_rows += cursor.rowcount or 0
+                    cursor.execute(statement.strip())
+                    successful += 1
+                    total_rows += cursor.rowcount or 0
 
-            return SQLResult(
-                statement=SQL(script, _dialect=self.dialect).as_script(),
-                data=[],
-                rows_affected=total_rows,
-                operation_type="SCRIPT",
-                metadata={"status_message": "SCRIPT EXECUTED"},
-                total_statements=len(statements),
-                successful_statements=successful,
-            )
+        return SQLResult(
+            statement=SQL(script, _dialect=self.dialect).as_script(),
+            data=[],
+            rows_affected=total_rows,
+            operation_type="SCRIPT",
+            metadata={"status_message": "SCRIPT EXECUTED"},
+            total_statements=len(statements),
+            successful_statements=successful,
+        )
 
     def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
         self._ensure_pyarrow_installed()
@@ -247,9 +257,8 @@ class OracleSyncDriver(
         sql_str, params = sql.compile(placeholder_style=target_style)
         processed_params = self._process_parameters(params) if params is not None else []
 
-        # Use proper transaction management like other methods
-        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            oracle_df = txn_conn.fetch_df_all(sql_str, processed_params)
+        # Fetch dataframe using the connection directly
+        oracle_df = conn.fetch_df_all(sql_str, processed_params)
 
         from pyarrow.interchange.from_dataframe import from_dataframe
 
@@ -261,8 +270,8 @@ class OracleSyncDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(None)
 
-        # Use proper transaction management like other methods
-        with managed_transaction_sync(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
+        # Use connection directly with cursor
+        with self._get_cursor(conn) as cursor:
             if mode == "replace":
                 truncate_stmt = sql.truncate(table_name).build()
                 cursor.execute(truncate_stmt.sql)
@@ -305,6 +314,20 @@ class OracleAsyncDriver(
 
     def __init__(self, connection: OracleAsyncConnection, config: "Optional[SQLConfig]" = None) -> None:
         super().__init__(connection=connection, config=config)
+
+    async def begin(self) -> None:
+        """Begin a transaction.
+
+        Oracle starts transactions automatically with the first command.
+        """
+
+    async def commit(self) -> None:
+        """Commit the current transaction."""
+        await self.connection.commit()
+
+    async def rollback(self) -> None:
+        """Rollback the current transaction."""
+        await self.connection.rollback()
 
     def _connection(self, connection: "Optional[ConnectionT]" = None) -> "OracleAsyncConnection":
         """Get the connection to use for the operation."""
@@ -362,37 +385,36 @@ class OracleAsyncDriver(
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
-        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # Oracle requires special parameter handling
-            processed_params = self._process_parameters(parameters) if parameters is not None else []
+        # Oracle requires special parameter handling
+        processed_params = self._process_parameters(parameters) if parameters is not None else []
 
-            async with self._get_cursor(txn_conn) as cursor:
-                if parameters is None:
-                    await cursor.execute(sql)
-                else:
-                    await cursor.execute(sql, processed_params)
+        async with self._get_cursor(conn) as cursor:
+            if parameters is None:
+                await cursor.execute(sql)
+            else:
+                await cursor.execute(sql, processed_params)
 
-                # For SELECT statements, extract data while cursor is open
-                if self.returns_rows(statement.expression):
-                    fetched_data = await cursor.fetchall()
-                    column_names = [col[0] for col in cursor.description or []]
-                    data = cast("list[dict[str, Any]]", [dict(zip(column_names, row)) for row in fetched_data])
-
-                    return SQLResult(
-                        statement=statement,
-                        data=data,
-                        column_names=column_names,
-                        rows_affected=cursor.rowcount,
-                        operation_type="SELECT",
-                    )
+            # For SELECT statements, extract data while cursor is open
+            if self.returns_rows(statement.expression):
+                fetched_data = await cursor.fetchall()
+                column_names = [col[0] for col in cursor.description or []]
+                data = cast("list[dict[str, Any]]", [dict(zip(column_names, row)) for row in fetched_data])
 
                 return SQLResult(
                     statement=statement,
-                    data=[],
+                    data=data,
+                    column_names=column_names,
                     rows_affected=cursor.rowcount,
-                    operation_type=self._determine_operation_type(statement),
-                    metadata={"status_message": "OK"},
+                    operation_type="SELECT",
                 )
+
+            return SQLResult(
+                statement=statement,
+                data=[],
+                rows_affected=cursor.rowcount,
+                operation_type=self._determine_operation_type(statement),
+                metadata={"status_message": "OK"},
+            )
 
     async def _execute_many(
         self, sql: str, param_list: Any, connection: "Optional[ConnectionT]" = None, **kwargs: Any
@@ -400,32 +422,31 @@ class OracleAsyncDriver(
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
-        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # TypeCoercionMixin handles parameter processing
-            converted_param_list = param_list
+        # TypeCoercionMixin handles parameter processing
+        converted_param_list = param_list
 
-            # Process parameters for Oracle
-            if converted_param_list is None:
-                processed_param_list = []
-            elif converted_param_list and not isinstance(converted_param_list, list):
-                # Single parameter set, wrap it
-                processed_param_list = [converted_param_list]
-            elif converted_param_list and not isinstance(converted_param_list[0], (list, tuple, dict)):
-                # Already a flat list, likely from incorrect usage
-                processed_param_list = [converted_param_list]
-            else:
-                processed_param_list = converted_param_list
+        # Process parameters for Oracle
+        if converted_param_list is None:
+            processed_param_list = []
+        elif converted_param_list and not isinstance(converted_param_list, list):
+            # Single parameter set, wrap it
+            processed_param_list = [converted_param_list]
+        elif converted_param_list and not isinstance(converted_param_list[0], (list, tuple, dict)):
+            # Already a flat list, likely from incorrect usage
+            processed_param_list = [converted_param_list]
+        else:
+            processed_param_list = converted_param_list
 
-            # Parameters have already been processed in _execute_statement
-            async with self._get_cursor(txn_conn) as cursor:
-                await cursor.executemany(sql, processed_param_list or [])
-                return SQLResult(
-                    statement=SQL(sql, _dialect=self.dialect),
-                    data=[],
-                    rows_affected=cursor.rowcount,
-                    operation_type="EXECUTE",
-                    metadata={"status_message": "OK"},
-                )
+        # Parameters have already been processed in _execute_statement
+        async with self._get_cursor(conn) as cursor:
+            await cursor.executemany(sql, processed_param_list or [])
+            return SQLResult(
+                statement=SQL(sql, _dialect=self.dialect),
+                data=[],
+                rows_affected=cursor.rowcount,
+                operation_type="EXECUTE",
+                metadata={"status_message": "OK"},
+            )
 
     async def _execute_script(
         self, script: str, connection: "Optional[ConnectionT]" = None, **kwargs: Any
@@ -433,37 +454,36 @@ class OracleAsyncDriver(
         # Use provided connection or driver's default connection
         conn = self._connection(connection)
 
-        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # Oracle doesn't support multi-statement scripts in a single execute
-            # The splitter now handles PL/SQL blocks correctly when strip_trailing_semicolon=True
-            statements = self._split_script_statements(script, strip_trailing_semicolon=True)
-            suppress_warnings = kwargs.get("_suppress_warnings", False)
-            successful = 0
-            total_rows = 0
+        # Oracle doesn't support multi-statement scripts in a single execute
+        # The splitter now handles PL/SQL blocks correctly when strip_trailing_semicolon=True
+        statements = self._split_script_statements(script, strip_trailing_semicolon=True)
+        suppress_warnings = kwargs.get("_suppress_warnings", False)
+        successful = 0
+        total_rows = 0
 
-            async with self._get_cursor(txn_conn) as cursor:
-                for statement in statements:
-                    if statement and statement.strip():
-                        # Validate each statement unless warnings suppressed
-                        if not suppress_warnings:
-                            # Run validation through pipeline
-                            temp_sql = SQL(statement.strip(), config=self.config)
-                            temp_sql._ensure_processed()
-                            # Validation errors are logged as warnings by default
+        async with self._get_cursor(conn) as cursor:
+            for statement in statements:
+                if statement and statement.strip():
+                    # Validate each statement unless warnings suppressed
+                    if not suppress_warnings:
+                        # Run validation through pipeline
+                        temp_sql = SQL(statement.strip(), config=self.config)
+                        temp_sql._ensure_processed()
+                        # Validation errors are logged as warnings by default
 
-                        await cursor.execute(statement.strip())
-                        successful += 1
-                        total_rows += cursor.rowcount or 0
+                    await cursor.execute(statement.strip())
+                    successful += 1
+                    total_rows += cursor.rowcount or 0
 
-            return SQLResult(
-                statement=SQL(script, _dialect=self.dialect).as_script(),
-                data=[],
-                rows_affected=total_rows,
-                operation_type="SCRIPT",
-                metadata={"status_message": "SCRIPT EXECUTED"},
-                total_statements=len(statements),
-                successful_statements=successful,
-            )
+        return SQLResult(
+            statement=SQL(script, _dialect=self.dialect).as_script(),
+            data=[],
+            rows_affected=total_rows,
+            operation_type="SCRIPT",
+            metadata={"status_message": "SCRIPT EXECUTED"},
+            total_statements=len(statements),
+            successful_statements=successful,
+        )
 
     async def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "ArrowResult":
         self._ensure_pyarrow_installed()
@@ -486,8 +506,8 @@ class OracleAsyncDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(None)
 
-        # Use proper transaction management like other methods
-        async with managed_transaction_async(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
+        # Use connection directly with cursor
+        async with self._get_cursor(conn) as cursor:
             if mode == "replace":
                 truncate_stmt = sql.truncate(table_name).build()
                 await cursor.execute(truncate_stmt.sql)

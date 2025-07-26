@@ -314,8 +314,8 @@ def test_adbc_driver_fetch_arrow_table_fetch_error(adbc_driver: AdbcDriver, mock
 
     statement = SQL("SELECT * FROM users")
 
-    # The unified storage mixin uses wrap_exceptions, so the error will be wrapped in RepositoryError
-    with pytest.raises(RepositoryError, match="An error occurred during the operation"):
+    # The driver should raise the raw exception
+    with pytest.raises(Exception, match="Execute failed"):
         adbc_driver.fetch_arrow_table(statement)
 
 

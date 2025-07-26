@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from typing_extensions import TypeAlias
 
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
     SyncAdapterCacheMixin,
@@ -98,6 +97,17 @@ class SqliteDriver(  # pyright: ignore[reportIncompatibleVariableOverride]
             return to_json(list(value))
         return value
 
+    def begin(self) -> None:
+        """Begin a transaction. SQLite starts transactions automatically."""
+
+    def commit(self) -> None:
+        """Commit the current transaction."""
+        self.connection.commit()
+
+    def rollback(self) -> None:
+        """Rollback the current transaction."""
+        self.connection.rollback()
+
     @staticmethod
     @contextmanager
     def _get_cursor(connection: "SqliteConnection") -> "Iterator[sqlite3.Cursor]":
@@ -165,7 +175,7 @@ class SqliteDriver(  # pyright: ignore[reportIncompatibleVariableOverride]
     ) -> "SQLResult":
         """Execute a single statement with parameters."""
         conn = self._connection(connection)
-        with managed_transaction_sync(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
+        with self._get_cursor(conn) as cursor:
             cursor.execute(sql, parameters)
 
             if self.returns_rows(statement.expression):
@@ -205,7 +215,7 @@ class SqliteDriver(  # pyright: ignore[reportIncompatibleVariableOverride]
     ) -> "SQLResult":
         """Execute a statement many times with a list of parameter tuples."""
         conn = self._connection(connection)
-        with managed_transaction_sync(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
+        with self._get_cursor(conn) as cursor:
             cursor.executemany(sql, param_list)
 
             if statement is None:

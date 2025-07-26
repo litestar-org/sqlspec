@@ -170,9 +170,11 @@ def test_execute_select_statement(driver: DuckDBDriver, mock_connection: MagicMo
 
 def test_execute_dml_statement(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
     """Test executing a DML statement (INSERT/UPDATE/DELETE)."""
-    # Set up the cursor mock to return rowcount = 1 for DML operations
+    # Set up the cursor mock to return rowcount = -1 (DuckDB behavior)
+    # and fetchone() returns the actual count
     mock_cursor = mock_connection.cursor.return_value
-    mock_cursor.rowcount = 1
+    mock_cursor.rowcount = -1
+    mock_cursor.fetchone.return_value = (1,)  # DuckDB returns row count as a tuple
 
     statement = SQL("INSERT INTO users (name, email) VALUES (?, ?)", ["Alice", "alice@example.com"])
     result = driver._execute_statement(statement)

@@ -16,7 +16,6 @@ if TYPE_CHECKING:
 from adbc_driver_manager.dbapi import Connection, Cursor
 
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.driver.connection import managed_transaction_sync
 from sqlspec.driver.mixins import (
     SQLTranslatorMixin,
     SyncAdapterCacheMixin,
@@ -107,6 +106,21 @@ class AdbcDriver(
         self.default_parameter_style = default_style
         self.supported_parameter_styles = tuple(supported_styles)
 
+    def begin(self) -> None:
+        """Begin a transaction.
+
+        ADBC handles transactions differently based on the underlying database.
+        Most ADBC drivers start transactions automatically.
+        """
+
+    def commit(self) -> None:
+        """Commit the current transaction."""
+        self.connection.commit()
+
+    def rollback(self) -> None:
+        """Rollback the current transaction."""
+        self.connection.rollback()
+
     def _coerce_json(self, value: "Any") -> "Any":
         """ADBC JSON handling varies by underlying driver."""
         if self.dialect == "sqlite" and isinstance(value, (dict, list)):
@@ -181,20 +195,19 @@ class AdbcDriver(
     ) -> "SQLResult":
         conn = self._connection(connection)
 
-        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            cursor_params = self._prepare_cursor_parameters(parameters)
+        cursor_params = self._prepare_cursor_parameters(parameters)
 
-            with self._get_cursor(txn_conn) as cursor:
-                try:
-                    self._execute_with_params(cursor, sql, cursor_params)
-                except Exception as e:
-                    self._handle_postgres_rollback(cursor)
-                    raise e from e
+        with self._get_cursor(conn) as cursor:
+            try:
+                self._execute_with_params(cursor, sql, cursor_params)
+            except Exception as e:
+                self._handle_postgres_rollback(cursor)
+                raise e from e
 
-                if self.returns_rows(statement.expression):
-                    return self._build_select_result(cursor, statement)
+            if self.returns_rows(statement.expression):
+                return self._build_select_result(cursor, statement)
 
-                return self._build_modify_result(cursor, statement)
+            return self._build_modify_result(cursor, statement)
 
     def _execute_with_params(self, cursor: "Cursor", sql: str, params: "list[Any]") -> None:
         """Execute SQL with proper parameter handling."""
@@ -223,7 +236,7 @@ class AdbcDriver(
 
     def _build_modify_result(self, cursor: "Cursor", statement: "SQL") -> "SQLResult":
         """Build SQLResult for non-SELECT operations (INSERT, UPDATE, DELETE)."""
-        rows_affected = max(cursor.rowcount, 0)
+        rows_affected = cursor.rowcount if cursor.rowcount is not None else -1
         return SQLResult(
             statement=statement,
             data=[],
@@ -244,10 +257,8 @@ class AdbcDriver(
                 metadata={"status_message": "OK"},
             )
 
-        with (
-            managed_transaction_sync(self._connection(connection), auto_commit=True) as txn_conn,
-            self._get_cursor(txn_conn) as cursor,
-        ):
+        conn = self._connection(connection)
+        with self._get_cursor(conn) as cursor:
             try:
                 cursor.executemany(sql, param_list or [])
             except Exception as e:
@@ -257,37 +268,37 @@ class AdbcDriver(
             return SQLResult(
                 statement=SQL(sql, _dialect=self.dialect),
                 data=[],
-                rows_affected=cursor.rowcount,
+                rows_affected=cursor.rowcount if cursor.rowcount is not None else -1,
                 operation_type="EXECUTE",
                 metadata={"status_message": "OK"},
             )
 
     def _execute_script(self, script: str, connection: "Optional[ConnectionT]" = None, **kwargs: "Any") -> "SQLResult":
-        with managed_transaction_sync(self._connection(connection), auto_commit=True) as txn_conn:
-            statements = self._split_script_statements(script)
-            executed_count = 0
-            total_rows = 0
+        conn = self._connection(connection)
+        statements = self._split_script_statements(script)
+        executed_count = 0
+        total_rows = 0
 
-            with self._get_cursor(txn_conn) as cursor:
-                for statement in statements:
-                    if statement.strip():
-                        if not kwargs.get("_suppress_warnings"):
-                            temp_sql = SQL(statement, config=self.config)
-                            temp_sql._ensure_processed()
+        with self._get_cursor(conn) as cursor:
+            for statement in statements:
+                if statement.strip():
+                    if not kwargs.get("_suppress_warnings"):
+                        temp_sql = SQL(statement, config=self.config)
+                        temp_sql._ensure_processed()
 
-                        rows = self._execute_single_script_statement(cursor, statement)
-                        executed_count += 1
-                        total_rows += rows
+                    rows = self._execute_single_script_statement(cursor, statement)
+                    executed_count += 1
+                    total_rows += rows
 
-            return SQLResult(
-                statement=SQL(script, _dialect=self.dialect).as_script(),
-                data=[],
-                rows_affected=total_rows,
-                operation_type="SCRIPT",
-                metadata={"status_message": "SCRIPT EXECUTED"},
-                total_statements=executed_count,
-                successful_statements=executed_count,
-            )
+        return SQLResult(
+            statement=SQL(script, _dialect=self.dialect).as_script(),
+            data=[],
+            rows_affected=total_rows,
+            operation_type="SCRIPT",
+            metadata={"status_message": "SCRIPT EXECUTED"},
+            total_statements=executed_count,
+            successful_statements=executed_count,
+        )
 
     def _execute_single_script_statement(self, cursor: "Cursor", statement: str) -> int:
         """Execute a single statement from a script and handle errors."""
@@ -304,24 +315,23 @@ class AdbcDriver(
         self._ensure_pyarrow_installed()
         conn = self._connection(connection)
 
-        with managed_transaction_sync(conn, auto_commit=True) as txn_conn:
-            sql._ensure_processed()
-            compiled_sql, params = self._get_compiled_sql(sql, self.default_parameter_style)
-            params = self._process_parameters(params)
-            params = self._handle_postgres_empty_params(params)
-            cursor_params = self._prepare_cursor_parameters(params)
+        sql._ensure_processed()
+        compiled_sql, params = self._get_compiled_sql(sql, self.default_parameter_style)
+        params = self._process_parameters(params)
+        params = self._handle_postgres_empty_params(params)
+        cursor_params = self._prepare_cursor_parameters(params)
 
-            with self._get_cursor(txn_conn) as cursor:
-                self._execute_with_params(cursor, compiled_sql, cursor_params)
-                arrow_table = cursor.fetch_arrow_table()
-                return ArrowResult(statement=sql, data=arrow_table)
+        with self._get_cursor(conn) as cursor:
+            self._execute_with_params(cursor, compiled_sql, cursor_params)
+            arrow_table = cursor.fetch_arrow_table()
+            return ArrowResult(statement=sql, data=arrow_table)
 
     def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: "Any") -> int:
         """ADBC-optimized Arrow table ingestion using native bulk insert."""
         self._ensure_pyarrow_installed()
 
         conn = self._connection(None)
-        with managed_transaction_sync(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
+        with self._get_cursor(conn) as cursor:
             if mode == "replace":
                 truncate_stmt = Truncate().table(table_name).to_statement(config=self.config)
                 cursor.execute(truncate_stmt.to_sql(placeholder_style=ParameterStyle.STATIC))

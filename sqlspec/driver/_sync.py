@@ -56,6 +56,11 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, ABC):
         Ensures dialect is set and preserves existing state when rebuilding SQL objects.
         """
         _config = _config or self.config
+        
+        # Filter out driver-specific kwargs that shouldn't be passed to SQL
+        # These are handled by the driver, not part of SQL parameters
+        driver_kwargs = {"schema_type", "_suppress_warnings"}
+        sql_kwargs = {k: v for k, v in kwargs.items() if k not in driver_kwargs}
 
         if isinstance(statement, QueryBuilder):
             return statement.to_statement(config=_config)
@@ -73,7 +78,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, ABC):
                     "positional_params": statement._positional_params,
                     "named_params": statement._named_params,
                 }
-                return SQL(sql_source, *parameters, config=new_config, _existing_state=existing_state, **kwargs)
+                return SQL(sql_source, *parameters, config=new_config, _existing_state=existing_state, **sql_kwargs)
             if self.dialect and (not statement._config.dialect or statement._config.dialect != self.dialect):
                 new_config = statement._config.replace(dialect=self.dialect)
                 sql_source = statement._raw_sql or statement._statement
@@ -90,7 +95,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, ABC):
         new_config = _config
         if self.dialect and new_config and not new_config.dialect:
             new_config = new_config.replace(dialect=self.dialect)
-        return SQL(statement, *parameters, config=new_config, **kwargs)
+        return SQL(statement, *parameters, config=new_config, **sql_kwargs)
 
     @abstractmethod
     def _execute_statement(self, statement: "SQL", connection: Optional[Any] = None, **kwargs: Any) -> "SQLResult":
@@ -111,7 +116,13 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, ABC):
         **kwargs: Any,
     ) -> "SQLResult":
         sql_statement = self._build_statement(statement, *parameters, _config=_config or self.config, **kwargs)
-        return self._execute_statement(statement=sql_statement, connection=self._connection(_connection), **kwargs)
+        result = self._execute_statement(statement=sql_statement, connection=self._connection(_connection), **kwargs)
+
+        # Apply schema conversion if provided
+        if schema_type is not None and hasattr(self, "to_schema"):
+            result.data = self.to_schema(result.data, schema_type=schema_type)  # type: ignore[attr-defined]
+
+        return result
 
     def execute_many(
         self,
