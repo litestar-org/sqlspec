@@ -1,11 +1,10 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import re
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
-from sqlspec.statement.result import SQLResult
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -17,6 +16,7 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
     from typing_extensions import TypeAlias
 
+    from sqlspec.statement.result import SQLResult
     from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -81,48 +81,47 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             # asyncpg uses *args for parameters
             await cursor.execute(sql, *(prepared_params or []))
 
-    async def _build_result(self, cursor: "AsyncpgConnection", statement: "SQL") -> "SQLResult":
-        if self.returns_rows(statement.expression):
+    async def _extract_select_data(self, cursor: "AsyncpgConnection") -> "tuple[list[dict[str, Any]], list[str], int]":
+        """Extract data from cursor after SELECT execution.
+
+        Note: asyncpg requires a separate fetch() call after execute().
+        """
+        # For asyncpg, we need to fetch after execute
+        # The statement is already compiled and executed in _perform_execute
+        # We need to get the last executed SQL and params to fetch
+        # This is a limitation of asyncpg's API
+
+        # Workaround: Store the SQL/params during _perform_execute
+        # For now, we'll re-compile to get SQL and params
+        if hasattr(self, "_last_statement"):
+            statement = self._last_statement
             sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
             prepared_params = self._prepare_driver_parameters(params)
             records = await cursor.fetch(sql, *(prepared_params or []))
-            return self._build_asyncpg_select_result(statement, records)
-        # Get status from the last executed command
-        status = cursor._protocol.get_last_status() if hasattr(cursor, "_protocol") else "UNKNOWN 0"
-        return self._build_modify_result_async(statement, status)
+        else:
+            # Fallback - this shouldn't happen in normal flow
+            records = []
 
-    def _build_asyncpg_select_result(self, statement: "SQL", records: "list[Any]") -> "SQLResult":
-        """Build SQLResult for SELECT operations."""
         data = [dict(record) for record in records]
         column_names = list(records[0].keys()) if records else []
-        return SQLResult(
-            statement=statement,
-            data=cast("list[dict[str, Any]]", data),
-            column_names=column_names,
-            rows_affected=len(records),
-            operation_type="SELECT",
-        )
+        return data, column_names, len(records)
 
-    def _build_modify_result_async(self, statement: "SQL", status: str) -> "SQLResult":
-        """Build SQLResult for non-SELECT operations with AsyncPG status string.
+    def _extract_execute_rowcount(self, cursor: "AsyncpgConnection") -> int:
+        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
+        # Get status from the last executed command
+        status = cursor._protocol.get_last_status() if hasattr(cursor, "_protocol") else "UNKNOWN 0"
+        return self._parse_asyncpg_status(status)
 
-        Args:
-            statement: SQL statement object
-            status: AsyncPG status string like "INSERT 0 1", "UPDATE 3", etc.
-
-        Returns:
-            SQLResult object with operation metadata
-        """
-        rows_affected = self._parse_asyncpg_status(status)
-        operation_type = self._determine_operation_type(statement)
-
-        return SQLResult(
-            statement=statement,
-            data=cast("list[dict[str, Any]]", []),
-            rows_affected=rows_affected,
-            operation_type=operation_type,
-            metadata={"status_message": status},
-        )
+    async def _build_result(self, cursor: "AsyncpgConnection", statement: "SQL") -> "SQLResult":
+        """Build result - override to handle asyncpg's special needs."""
+        # Store statement for _extract_select_data
+        self._last_statement = statement
+        try:
+            return await super()._build_result(cursor, statement)
+        finally:
+            # Clean up
+            if hasattr(self, "_last_statement"):
+                delattr(self, "_last_statement")
 
     @staticmethod
     def _parse_asyncpg_status(status: str) -> int:
@@ -151,17 +150,14 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         return 0
 
-    async def begin(self, connection: "Optional[Any]" = None) -> None:
+    async def begin(self) -> None:
         """Begin transaction using asyncpg-specific method."""
-        conn = connection or self.connection
-        await conn.execute("BEGIN")
+        await self.connection.execute("BEGIN")
 
-    async def rollback(self, connection: "Optional[Any]" = None) -> None:
+    async def rollback(self) -> None:
         """Rollback transaction using asyncpg-specific method."""
-        conn = connection or self.connection
-        await conn.execute("ROLLBACK")
+        await self.connection.execute("ROLLBACK")
 
-    async def commit(self, connection: "Optional[Any]" = None) -> None:
+    async def commit(self) -> None:
         """Commit transaction using asyncpg-specific method."""
-        conn = connection or self.connection
-        await conn.execute("COMMIT")
+        await self.connection.execute("COMMIT")

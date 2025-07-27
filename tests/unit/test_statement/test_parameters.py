@@ -297,7 +297,7 @@ def test_merge_parameters(
     expected_result: "SQLParameterType",
 ) -> None:
     """Test parameter merging logic."""
-    result = converter.merge_parameters(parameters, args, kwargs)
+    result = converter.merge_parameters(parameters, list(args) if args else None, kwargs)
     assert result == expected_result
 
 

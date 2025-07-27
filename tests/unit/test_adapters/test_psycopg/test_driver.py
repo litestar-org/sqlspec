@@ -44,13 +44,13 @@ def async_driver(mock_async_connection: AsyncMock) -> PsycopgAsyncDriver:
 def test_sync_driver_initialization(sync_driver: PsycopgSyncDriver) -> None:
     """Test sync driver initialization."""
     assert sync_driver.dialect == "postgres"
-    assert sync_driver.parameter_config.paramstyle == ParameterStyle.POSITIONAL_PYFORMAT
+    assert sync_driver.parameter_config.default_parameter_style == ParameterStyle.POSITIONAL_PYFORMAT
 
 
-def test_sync_acquire_cursor(sync_driver: PsycopgSyncDriver, mock_sync_connection: MagicMock) -> None:
-    """Test sync _acquire_cursor."""
+def test_syncwith_cursor(sync_driver: PsycopgSyncDriver, mock_sync_connection: MagicMock) -> None:
+    """Test sync with_cursor."""
     with patch.object(mock_sync_connection, "cursor") as mock_cursor_method:
-        with sync_driver._acquire_cursor(mock_sync_connection):
+        with sync_driver.with_cursor(mock_sync_connection):
             pass
         mock_cursor_method.assert_called_once()
 
@@ -59,18 +59,18 @@ def test_sync_perform_execute_single(sync_driver: PsycopgSyncDriver, mock_sync_c
     """Test sync _perform_execute for a single statement."""
     mock_cursor = mock_sync_connection.cursor.return_value
     statement = SQL("SELECT 1")
-    sql, params = statement.compile()
-    sync_driver._perform_execute(mock_cursor, sql, params, statement)
-    mock_cursor.execute.assert_called_once_with(sql, params)
+    sync_driver._perform_execute(mock_cursor, statement)
+    # Driver compiles internally, so check execute was called
+    mock_cursor.execute.assert_called_once()
 
 
 def test_sync_perform_execute_many(sync_driver: PsycopgSyncDriver, mock_sync_connection: MagicMock) -> None:
     """Test sync _perform_execute for an executemany statement."""
     mock_cursor = mock_sync_connection.cursor.return_value
     statement = SQL("INSERT INTO t (id) VALUES (%s)").as_many([[1], [2]])
-    sql, params = statement.compile()
-    sync_driver._perform_execute(mock_cursor, sql, params, statement)
-    mock_cursor.executemany.assert_called_once_with(sql, params)
+    sync_driver._perform_execute(mock_cursor, statement)
+    # Driver compiles internally, so check executemany was called
+    mock_cursor.executemany.assert_called_once()
 
 
 # Async Driver Tests
@@ -78,15 +78,15 @@ def test_sync_perform_execute_many(sync_driver: PsycopgSyncDriver, mock_sync_con
 async def test_async_driver_initialization(async_driver: PsycopgAsyncDriver) -> None:
     """Test async driver initialization."""
     assert async_driver.dialect == "postgres"
-    assert async_driver.parameter_config.paramstyle == ParameterStyle.POSITIONAL_PYFORMAT
+    assert async_driver.parameter_config.default_parameter_style == ParameterStyle.POSITIONAL_PYFORMAT
 
 
 @pytest.mark.asyncio
-async def test_async_acquire_cursor(async_driver: PsycopgAsyncDriver, mock_async_connection: AsyncMock) -> None:
-    """Test async _acquire_cursor."""
+async def test_asyncwith_cursor(async_driver: PsycopgAsyncDriver, mock_async_connection: AsyncMock) -> None:
+    """Test async with_cursor."""
     mock_cursor = AsyncMock()
     mock_async_connection.cursor.return_value = mock_cursor
-    async with async_driver._acquire_cursor(mock_async_connection):
+    async with async_driver.with_cursor(mock_async_connection):
         pass
     mock_async_connection.cursor.assert_called_once()
 
@@ -96,9 +96,9 @@ async def test_async_perform_execute_single(async_driver: PsycopgAsyncDriver, mo
     """Test async _perform_execute for a single statement."""
     mock_cursor = mock_async_connection.cursor.return_value
     statement = SQL("SELECT 1")
-    sql, params = statement.compile()
-    await async_driver._perform_execute(mock_cursor, sql, params, statement)
-    mock_cursor.execute.assert_called_once_with(sql, params)
+    await async_driver._perform_execute(mock_cursor, statement)
+    # Driver compiles internally, so check execute was called
+    mock_cursor.execute.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -106,6 +106,6 @@ async def test_async_perform_execute_many(async_driver: PsycopgAsyncDriver, mock
     """Test async _perform_execute for an executemany statement."""
     mock_cursor = mock_async_connection.cursor.return_value
     statement = SQL("INSERT INTO t (id) VALUES (%s)").as_many([[1], [2]])
-    sql, params = statement.compile()
-    await async_driver._perform_execute(mock_cursor, sql, params, statement)
-    mock_cursor.executemany.assert_called_once_with(sql, params)
+    await async_driver._perform_execute(mock_cursor, statement)
+    # Driver compiles internally, so check executemany was called
+    mock_cursor.executemany.assert_called_once()

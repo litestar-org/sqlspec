@@ -12,15 +12,12 @@ if TYPE_CHECKING:
 
 __all__ = ("current_driver", "get_current_driver", "set_current_driver")
 
-# Context variable to hold the current driver adapter
-current_driver: ContextVar[Optional["CommonDriverAttributesMixin"]] = ContextVar(
-    "current_driver", default=None
-)
+current_driver: ContextVar[Optional["CommonDriverAttributesMixin"]] = ContextVar("current_driver", default=None)
 
 
 def get_current_driver() -> Optional["CommonDriverAttributesMixin"]:
     """Get the current driver adapter from context.
-    
+
     Returns:
         The current driver adapter or None if not set.
     """
@@ -29,7 +26,7 @@ def get_current_driver() -> Optional["CommonDriverAttributesMixin"]:
 
 def set_current_driver(driver: Optional["CommonDriverAttributesMixin"]) -> None:
     """Set the current driver adapter in context.
-    
+
     Args:
         driver: The driver adapter to set as current, or None to clear.
     """

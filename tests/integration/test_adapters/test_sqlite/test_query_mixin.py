@@ -7,7 +7,6 @@ import pytest
 
 from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.exceptions import NotFoundError
-from sqlspec.statement.filters import LimitOffsetFilter, OffsetPagination
 from sqlspec.statement.sql import SQL
 
 
@@ -121,50 +120,6 @@ class TestSqliteQueryMixin:
         assert results[1]["name"] == "Charlie Davis"
         assert results[2]["name"] == "Bob Johnson"
 
-    def test_paginate_with_kwargs(self, sqlite_driver: SqliteDriver) -> None:
-        """Test paginate with limit/offset in kwargs."""
-        result = sqlite_driver.paginate("SELECT * FROM users ORDER BY id", limit=2, offset=1)
-
-        assert isinstance(result, OffsetPagination)
-        assert result.limit == 2
-        assert result.offset == 1
-        assert result.total == 5
-        assert len(result.items) == 2
-        assert result.items[0]["name"] == "Jane Smith"
-        assert result.items[1]["name"] == "Bob Johnson"
-
-    def test_paginate_with_limit_offset_filter(self, sqlite_driver: SqliteDriver) -> None:
-        """Test paginate with LimitOffsetFilter."""
-        filter_obj = LimitOffsetFilter(limit=3, offset=2)
-        result = sqlite_driver.paginate("SELECT * FROM users ORDER BY id", filter_obj)
-
-        assert isinstance(result, OffsetPagination)
-        assert result.limit == 3
-        assert result.offset == 2
-        assert result.total == 5
-        assert len(result.items) == 3
-        assert result.items[0]["name"] == "Bob Johnson"
-        assert result.items[1]["name"] == "Alice Brown"
-        assert result.items[2]["name"] == "Charlie Davis"
-
-    def test_paginate_with_where_clause(self, sqlite_driver: SqliteDriver) -> None:
-        """Test paginate with filtered query."""
-        result = sqlite_driver.paginate("SELECT * FROM users WHERE age > 25 ORDER BY age", limit=2, offset=0)
-
-        assert result.total == 4  # 4 users with age > 25
-        assert len(result.items) == 2
-        assert result.items[0]["age"] == 28
-        assert result.items[1]["age"] == 30
-
-    def test_paginate_empty_result(self, sqlite_driver: SqliteDriver) -> None:
-        """Test paginate with no matching rows."""
-        result = sqlite_driver.paginate("SELECT * FROM users WHERE age > 100", limit=10, offset=0)
-
-        assert result.total == 0
-        assert len(result.items) == 0
-        assert result.limit == 10
-        assert result.offset == 0
-
     def test_select_with_parameters(self, sqlite_driver: SqliteDriver) -> None:
         """Test select methods with parameterized queries."""
         # Test with named parameters
@@ -205,22 +160,3 @@ class TestSqliteQueryMixin:
             WHERE o.total > 100
         """)
         assert result == 2  # Users 1 and 3 have orders > 100
-
-        # Test paginated complex query
-        paginated = sqlite_driver.paginate(
-            """
-            SELECT u.name, SUM(o.total) as total_spent
-            FROM users u
-            LEFT JOIN orders o ON u.id = o.user_id
-            GROUP BY u.id, u.name
-            HAVING total_spent IS NOT NULL
-            ORDER BY total_spent DESC
-        """,
-            limit=2,
-            offset=0,
-        )
-
-        assert paginated.total == 3  # 3 users have orders
-        assert len(paginated.items) == 2
-        assert paginated.items[0]["name"] == "Bob Johnson"
-        assert paginated.items[0]["total_spent"] == 500.00

@@ -3,19 +3,16 @@
 from __future__ import annotations
 
 import math
-import tempfile
 from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Literal
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
-from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 # Import the decorator
@@ -796,130 +793,6 @@ def test_advanced_types(adbc_postgresql_session: AdbcDriver) -> None:
 
     # Cleanup
     adbc_postgresql_session.execute_script("DROP TABLE advanced_types_test")
-
-
-@pytest.mark.xdist_group("postgres")
-def test_arrow_result_format(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test ADBC Arrow result format functionality."""
-    # Insert test data for Arrow testing
-    test_data = [("arrow_test1", 100), ("arrow_test2", 200), ("arrow_test3", 300)]
-    adbc_postgresql_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", test_data)
-
-    # Test getting results as Arrow if available
-    if hasattr(adbc_postgresql_session, "fetch_arrow_table"):
-        arrow_result = adbc_postgresql_session.fetch_arrow_table("SELECT name, value FROM test_table ORDER BY name")
-
-        assert isinstance(arrow_result, ArrowResult)
-        arrow_table = arrow_result.data
-        assert isinstance(arrow_table, pa.Table)
-        assert arrow_table.num_rows == 3
-        assert arrow_table.num_columns == 2
-        assert arrow_table.column_names == ["name", "value"]
-
-        # Verify data
-        names = arrow_table.column("name").to_pylist()
-        values = arrow_table.column("value").to_pylist()
-        assert names == ["arrow_test1", "arrow_test2", "arrow_test3"]
-        assert values == [100, 200, 300]
-    else:
-        pytest.skip("ADBC driver does not support Arrow result format")
-
-
-@pytest.mark.xdist_group("postgres")
-def test_fetch_arrow_table(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test PostgreSQL fetch_arrow_table functionality."""
-    # Insert test data
-    test_data = [("Alice", 25, 50000.0), ("Bob", 30, 60000.0), ("Charlie", 35, 70000.0)]
-
-    adbc_postgresql_session.execute_script("""
-        CREATE TABLE arrow_test (
-            name TEXT,
-            age INTEGER,
-            salary FLOAT
-        )
-    """)
-
-    adbc_postgresql_session.execute_many("INSERT INTO arrow_test (name, age, salary) VALUES ($1, $2, $3)", test_data)
-
-    # Test fetch_arrow_table
-    result = adbc_postgresql_session.fetch_arrow_table("SELECT * FROM arrow_test ORDER BY name")
-
-    assert isinstance(result, ArrowResult)
-    assert isinstance(result, ArrowResult)
-    assert result.num_rows == 3
-    assert result.data.num_columns == 3
-    assert result.column_names == ["name", "age", "salary"]
-
-    # Verify data content
-    names = result.data.column("name").to_pylist()
-    ages = result.data.column("age").to_pylist()
-    salaries = result.data.column("salary").to_pylist()
-
-    assert names == ["Alice", "Bob", "Charlie"]
-    assert ages == [25, 30, 35]
-    assert salaries == [50000.0, 60000.0, 70000.0]
-
-    # Cleanup
-    adbc_postgresql_session.execute_script("DROP TABLE arrow_test")
-
-
-@pytest.mark.xdist_group("postgres")
-def test_to_parquet(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test PostgreSQL to_parquet functionality."""
-    # Insert test data
-    adbc_postgresql_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("arrow1", 111))
-    adbc_postgresql_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("arrow2", 222))
-
-    statement = SQL("SELECT id, name, value FROM test_table ORDER BY id")
-
-    with tempfile.NamedTemporaryFile() as tmp:
-        adbc_postgresql_session.export_to_storage(statement, destination_uri=tmp.name)
-
-        # Read back the Parquet file - export_to_storage appends .parquet extension
-        table = pq.read_table(f"{tmp.name}.parquet")
-        assert table.num_rows == 2
-        assert set(table.column_names) >= {"id", "name", "value"}
-
-        # Verify data
-        data = table.to_pylist()
-        assert any(row["name"] == "arrow1" and row["value"] == 111 for row in data)
-        assert any(row["name"] == "arrow2" and row["value"] == 222 for row in data)
-
-
-@pytest.mark.xdist_group("postgres")
-def test_arrow_with_parameters(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test Arrow functionality with parameterized queries."""
-    # Insert test data
-    test_data = [("param_test1", 10), ("param_test2", 20), ("param_test3", 30)]
-    adbc_postgresql_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", test_data)
-
-    # Test fetch_arrow_table with parameters
-    result = adbc_postgresql_session.fetch_arrow_table(
-        "SELECT name, value FROM test_table WHERE value > $1 ORDER BY value", (15)
-    )
-
-    assert isinstance(result, ArrowResult)
-    assert result.num_rows == 2
-
-    names = result.data.column("name").to_pylist()
-    values = result.data.column("value").to_pylist()
-    assert names == ["param_test2", "param_test3"]
-    assert values == [20, 30]
-
-
-@pytest.mark.xdist_group("postgres")
-def test_arrow_empty_result(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test Arrow functionality with empty result set."""
-    # Query that returns no rows
-    result = adbc_postgresql_session.fetch_arrow_table(
-        "SELECT name, value FROM test_table WHERE name = $1", ("nonexistent",)
-    )
-
-    assert isinstance(result, ArrowResult)
-    assert isinstance(result, ArrowResult)
-    assert result.num_rows == 0
-    assert result.data.num_columns == 2
-    assert result.column_names == ["name", "value"]
 
 
 @pytest.mark.xdist_group("postgres")

@@ -44,7 +44,7 @@ def async_driver(mock_async_connection: AsyncMock) -> OracleAsyncDriver:
 def test_sync_driver_initialization(sync_driver: OracleSyncDriver) -> None:
     """Test sync driver initialization."""
     assert sync_driver.dialect == "oracle"
-    assert sync_driver.parameter_config.paramstyle == ParameterStyle.NAMED_COLON
+    assert sync_driver.parameter_config.default_parameter_style == ParameterStyle.NAMED_COLON
 
 
 def test_sync_with_cursor(sync_driver: OracleSyncDriver, mock_sync_connection: MagicMock) -> None:
@@ -84,7 +84,7 @@ def test_sync_perform_execute_many(sync_driver: OracleSyncDriver, mock_sync_conn
 async def test_async_driver_initialization(async_driver: OracleAsyncDriver) -> None:
     """Test async driver initialization."""
     assert async_driver.dialect == "oracle"
-    assert async_driver.parameter_config.paramstyle == ParameterStyle.NAMED_COLON
+    assert async_driver.parameter_config.default_parameter_style == ParameterStyle.NAMED_COLON
 
 
 @pytest.mark.asyncio

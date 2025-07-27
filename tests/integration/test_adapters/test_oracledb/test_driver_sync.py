@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 from pytest_databases.docker.oracle import OracleService
 
@@ -187,85 +185,6 @@ def test_sync_select_value(oracle_sync_session: OracleSyncConfig, params: Any, s
         assert value_result.column_names is not None
         value = value_result.data[0][value_result.column_names[0]]
         assert value == "test_value"
-        driver.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        )
-
-
-@pytest.mark.xdist_group("oracle")
-def test_sync_select_arrow(oracle_sync_session: OracleSyncConfig) -> None:
-    """Test synchronous select_arrow functionality."""
-    with oracle_sync_session.provide_session() as driver:
-        # Manual cleanup at start of test
-        driver.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        )
-        sql = """
-        CREATE TABLE test_table (
-            id NUMBER PRIMARY KEY,
-            name VARCHAR2(50)
-        )
-        """
-        driver.execute_script(sql)
-
-        # Insert test record using positional binds
-        insert_sql = "INSERT INTO test_table (id, name) VALUES (1, :1)"
-        insert_result = driver.execute(insert_sql, ("arrow_name"))
-        assert isinstance(insert_result, SQLResult)
-        assert insert_result.rows_affected == 1
-
-        # Select and verify with Arrow support if available
-        select_sql = "SELECT name, id FROM test_table WHERE name = :name"
-        if hasattr(driver, "fetch_arrow_table"):
-            arrow_result = driver.fetch_arrow_table(select_sql, {"name": "arrow_name"})
-            assert hasattr(arrow_result, "data")
-            arrow_table = arrow_result.data
-            assert isinstance(arrow_table, pa.Table)
-            assert arrow_table.num_rows == 1
-            assert arrow_table.num_columns == 2
-            # Oracle returns uppercase column names by default
-            assert arrow_table.column_names == ["NAME", "ID"]
-            assert arrow_table.column("NAME").to_pylist() == ["arrow_name"]
-            # Check ID exists and is a number (exact value depends on IDENTITY)
-            assert arrow_table.column("ID").to_pylist()[0] is not None
-            assert isinstance(
-                arrow_table.column("ID").to_pylist()[0], (int, float)
-            )  # Oracle NUMBER maps to float/Decimal
-        else:
-            pytest.skip("Oracle driver does not support Arrow operations")
-        driver.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        )
-
-
-@pytest.mark.xdist_group("oracle")
-def test_sync_to_parquet(oracle_sync_session: OracleSyncConfig) -> None:
-    """Integration test: to_parquet writes correct data to a Parquet file."""
-    with oracle_sync_session.provide_session() as driver:
-        # Manual cleanup at start of test
-        driver.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        )
-        sql = """
-        CREATE TABLE test_table (
-            id NUMBER PRIMARY KEY,
-            name VARCHAR2(50)
-        )
-        """
-        driver.execute_script(sql)
-        # Insert test records
-        driver.execute("INSERT INTO test_table (id, name) VALUES (:id, :name)", {"id": 1, "name": "pq1"})
-        driver.execute("INSERT INTO test_table (id, name) VALUES (:id, :name)", {"id": 2, "name": "pq2"})
-        statement = "SELECT name, id FROM test_table ORDER BY name"
-        import tempfile
-
-        with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
-            driver.export_to_storage(statement, destination_uri=tmp.name)  # type: ignore[attr-defined]
-            table = pq.read_table(tmp.name)
-            assert table.num_rows == 2
-            assert set(table.column_names) == {"NAME", "ID"}
-            names = table.column("NAME").to_pylist()
-            assert "pq1" in names and "pq2" in names
         driver.execute_script(
             "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
         )

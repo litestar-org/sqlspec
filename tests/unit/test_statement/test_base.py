@@ -208,7 +208,7 @@ def driver_attributes() -> CommonDriverAttributesMixin:
             self.connection = mock_connection
             self.config = None
             self.dialect = "sqlite"
-            super().__init__()
+            super().__init__(connection=mock_connection)
 
         def _get_placeholder_style(self) -> ParameterStyle:
             return ParameterStyle.NAMED_COLON

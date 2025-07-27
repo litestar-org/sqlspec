@@ -53,9 +53,6 @@ def test_aiosqlite_driver_initialization(mock_aiosqlite_connection: AsyncMock) -
     assert driver.connection is mock_aiosqlite_connection
     assert driver.config is config
     assert driver.dialect == "sqlite"
-    # AIOSQLite doesn't support native arrow operations
-    assert driver.supports_native_arrow_export is False
-    assert driver.supports_native_arrow_import is False
 
 
 def test_aiosqlite_driver_dialect_property(aiosqlite_driver: AiosqliteDriver) -> None:
@@ -63,16 +60,9 @@ def test_aiosqlite_driver_dialect_property(aiosqlite_driver: AiosqliteDriver) ->
     assert aiosqlite_driver.dialect == "sqlite"
 
 
-def test_aiosqlite_driver_supports_arrow(aiosqlite_driver: AiosqliteDriver) -> None:
-    """Test AIOSQLite driver Arrow support."""
-    # AIOSQLite doesn't support native arrow operations
-    assert aiosqlite_driver.supports_native_arrow_export is False
-    assert aiosqlite_driver.supports_native_arrow_import is False
-
-
 def test_aiosqlite_driver_placeholder_style(aiosqlite_driver: AiosqliteDriver) -> None:
     """Test AIOSQLite driver placeholder style detection."""
-    placeholder_style = aiosqlite_driver.default_parameter_style
+    placeholder_style = aiosqlite_driver.parameter_config.default_parameter_style
     assert placeholder_style == ParameterStyle.QMARK
 
 

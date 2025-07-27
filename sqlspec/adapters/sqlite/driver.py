@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
     from typing_extensions import TypeAlias
 
-    from sqlspec.statement.result import SQLResult
     from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 from sqlspec.utils.logging import get_logger
@@ -37,7 +36,7 @@ class SqliteDriver(SyncDriverAdapterBase):
     dialect: "DialectType" = "sqlite"
     default_parameter_style: "ClassVar[str]" = "qmark"
     parameter_config: ClassVar[DriverParameterConfig] = DriverParameterConfig(
-        supported_parameter_styles=[ParameterStyle.QMARK],  # Only supports ?
+        supported_parameter_styles=[ParameterStyle.QMARK],
         default_parameter_style=ParameterStyle.QMARK,
         type_coercion_map={
             bool: int,
@@ -78,22 +77,26 @@ class SqliteDriver(SyncDriverAdapterBase):
             prepared_params = self._prepare_driver_parameters(params)
             cursor.execute(sql, prepared_params or ())
 
-    def begin(self, connection: "Optional[Any]" = None) -> None:
+    def begin(self) -> None:
         """Begin a database transaction."""
-        conn = connection or self.connection
-        conn.execute("BEGIN")
+        self.connection.execute("BEGIN")
 
-    def rollback(self, connection: "Optional[Any]" = None) -> None:
+    def rollback(self) -> None:
         """Rollback the current transaction."""
-        conn = connection or self.connection
-        conn.rollback()
+        self.connection.rollback()
 
-    def commit(self, connection: "Optional[Any]" = None) -> None:
+    def commit(self) -> None:
         """Commit the current transaction."""
-        conn = connection or self.connection
-        conn.commit()
+        self.connection.commit()
 
-    def _build_result(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "SQLResult":
-        if self.returns_rows(statement.expression):
-            return self._build_select_result(cursor, statement)
-        return self._build_modify_result(cursor, statement)
+    def _extract_select_data(self, cursor: "sqlite3.Cursor") -> "tuple[list[dict[str, Any]], list[str], int]":
+        """Extract data from cursor after SELECT execution."""
+        fetched_data = cursor.fetchall()
+        column_names = [col[0] for col in cursor.description or []]
+        # Convert Row objects to dicts
+        data = [dict(zip(column_names, row)) for row in fetched_data]
+        return data, column_names, len(data)
+
+    def _extract_execute_rowcount(self, cursor: "sqlite3.Cursor") -> int:
+        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
+        return cursor.rowcount if cursor.rowcount is not None else 0

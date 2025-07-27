@@ -35,8 +35,8 @@ __all__ = (
     "ParameterStyleConversionState",
     "ParameterStyleInfo",
     "ParameterValidator",
-    "TypedParameter",
-    "process_execute_many_parameters",
     # Legacy
     "SQLParameterType",
+    "TypedParameter",
+    "process_execute_many_parameters",
 )

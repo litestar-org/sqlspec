@@ -1,5 +1,6 @@
 """Tests for SQLTranslatorMixin with config dialect support."""
 
+from contextlib import AbstractContextManager
 from typing import Any, ClassVar
 from unittest.mock import Mock, patch
 
@@ -37,6 +38,41 @@ class MockDriver(SyncDriverAdapterBase, SQLTranslatorMixin):
 
     def _get_placeholder_style(self) -> "ParameterStyle":
         return ParameterStyle.QMARK
+
+    def with_cursor(self, connection: "Any") -> "AbstractContextManager[Any]":
+        """Mock cursor context manager."""
+        from collections.abc import Iterator
+        from contextlib import contextmanager
+
+        @contextmanager
+        def mock_cursor() -> Iterator[Any]:
+            yield Mock(rowcount=0, description=None, fetchall=lambda: [], fetchone=lambda: None)
+
+        return mock_cursor()
+
+    def begin(self) -> None:
+        """Mock begin transaction."""
+        pass
+
+    def rollback(self) -> None:
+        """Mock rollback transaction."""
+        pass
+
+    def commit(self) -> None:
+        """Mock commit transaction."""
+        pass
+
+    def _perform_execute(self, cursor: "Any", statement: "SQL") -> None:
+        """Mock execute statement."""
+        cursor.rowcount = 0
+
+    def _extract_select_data(self, cursor: "Any") -> "tuple[list[dict[str, Any]], list[str], int]":
+        """Mock extract select data."""
+        return [], [], 0
+
+    def _extract_execute_rowcount(self, cursor: "Any") -> int:
+        """Mock extract execute rowcount."""
+        return 0
 
 
 class MockConfig(NoPoolSyncConfig[MockConnection, MockDriver]):

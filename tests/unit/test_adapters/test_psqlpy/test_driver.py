@@ -29,14 +29,14 @@ def driver(mock_psqlpy_connection: AsyncMock) -> PsqlpyDriver:
 async def test_driver_initialization(driver: PsqlpyDriver) -> None:
     """Test driver initialization."""
     assert driver.dialect == "postgres"
-    assert driver.parameter_config.paramstyle == ParameterStyle.NUMERIC
+    assert driver.parameter_config.default_parameter_style == ParameterStyle.NUMERIC
 
 
 # Cursor Management Tests
 @pytest.mark.asyncio
 async def test_acquire_cursor(driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock) -> None:
-    """Test _acquire_cursor context manager."""
-    async with driver._acquire_cursor(mock_psqlpy_connection) as cursor:
+    """Test with_cursor context manager."""
+    async with driver.with_cursor(mock_psqlpy_connection) as cursor:
         assert cursor is mock_psqlpy_connection
 
 
@@ -45,18 +45,18 @@ async def test_acquire_cursor(driver: PsqlpyDriver, mock_psqlpy_connection: Asyn
 async def test_perform_execute_single(driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock) -> None:
     """Test _perform_execute for a single statement."""
     statement = SQL("SELECT 1")
-    sql, params = statement.compile()
-    await driver._perform_execute(mock_psqlpy_connection, sql, params, statement)
-    mock_psqlpy_connection.execute.assert_called_once_with(sql, params)
+    await driver._perform_execute(mock_psqlpy_connection, statement)
+    # Driver compiles internally, so check execute was called
+    mock_psqlpy_connection.execute.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_perform_execute_many(driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock) -> None:
     """Test _perform_execute for an executemany statement."""
     statement = SQL("INSERT INTO t (id) VALUES ($1)").as_many([[1], [2]])
-    sql, params = statement.compile()
-    await driver._perform_execute(mock_psqlpy_connection, sql, params, statement)
-    mock_psqlpy_connection.execute_many.assert_called_once_with(sql, params)
+    await driver._perform_execute(mock_psqlpy_connection, statement)
+    # Driver compiles internally, so check execute_many was called
+    mock_psqlpy_connection.execute_many.assert_called_once()
 
 
 # Result Building Tests

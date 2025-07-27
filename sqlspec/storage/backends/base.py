@@ -16,6 +16,8 @@ __all__ = ("ObjectStoreBase",)
 class ObjectStoreBase(ABC):
     """Base class for instrumented storage backends."""
 
+    __slots__ = ()
+
     # Sync Operations
     @abstractmethod
     def read_bytes(self, path: str, **kwargs: Any) -> bytes:

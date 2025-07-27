@@ -7,7 +7,6 @@ from duckdb import DuckDBPyConnection
 
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
-from sqlspec.statement.result import SQLResult
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -36,8 +35,8 @@ class DuckDBDriver(SyncDriverAdapterBase):
     dialect: "DialectType" = "duckdb"
     parameter_config = DriverParameterConfig(
         supported_parameter_styles=[
-            ParameterStyle.QMARK,     # ?
-            ParameterStyle.NUMERIC,   # $1, $2
+            ParameterStyle.QMARK,  # ?
+            ParameterStyle.NUMERIC,  # $1, $2
         ],
         default_parameter_style=ParameterStyle.QMARK,
         type_coercion_map={},
@@ -66,58 +65,34 @@ class DuckDBDriver(SyncDriverAdapterBase):
             prepared_params = self._prepare_driver_parameters(params)
             cursor.execute(sql, prepared_params or [])
 
-    def _build_result(self, cursor: "DuckDBConnection", statement: "SQL") -> "SQLResult":
-        if self.returns_rows(statement.expression):
-            return self._build_select_result(cursor, statement)
-        return self._build_modify_result(cursor, statement)
-
-    def _build_select_result(self, result: "Any", statement: "SQL") -> "SQLResult":
-        """Build SQLResult for SELECT operations."""
-        fetched_data = result.fetchall()
-        column_names = [col[0] for col in result.description or []]
+    def _extract_select_data(self, cursor: "DuckDBConnection") -> "tuple[list[dict[str, Any]], list[str], int]":
+        """Extract data from cursor after SELECT execution."""
+        fetched_data = cursor.fetchall()
+        column_names = [col[0] for col in cursor.description or []]
 
         if fetched_data and isinstance(fetched_data[0], tuple):
             dict_data = [dict(zip(column_names, row)) for row in fetched_data]
         else:
             dict_data = fetched_data
 
-        return SQLResult(
-            statement=statement,
-            data=dict_data,
-            column_names=column_names,
-            rows_affected=len(dict_data),
-            operation_type="SELECT",
-        )
+        return dict_data, column_names, len(dict_data)
 
-    def _build_modify_result(self, cursor: "Any", statement: "SQL") -> "SQLResult":
-        """Build SQLResult for non-SELECT operations (INSERT, UPDATE, DELETE)."""
+    def _extract_execute_rowcount(self, cursor: "DuckDBConnection") -> int:
+        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
         try:
             result = cursor.fetchone()
-            rows_affected = int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0
+            return int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0
         except Exception:
-            rows_affected = max(cursor.rowcount, 0)
+            return max(cursor.rowcount, 0) if hasattr(cursor, "rowcount") else 0
 
-        operation_type = self._determine_operation_type(statement)
-
-        return SQLResult(
-            statement=statement,
-            data=[],
-            rows_affected=rows_affected,
-            operation_type=operation_type,
-            metadata={"status_message": "OK"},
-        )
-
-    def begin(self, connection: "Optional[Any]" = None) -> None:
+    def begin(self) -> None:
         """Begin a database transaction."""
-        conn = connection or self.connection
-        conn.execute("BEGIN TRANSACTION")
+        self.connection.execute("BEGIN TRANSACTION")
 
-    def rollback(self, connection: "Optional[Any]" = None) -> None:
+    def rollback(self) -> None:
         """Rollback the current transaction."""
-        conn = connection or self.connection
-        conn.rollback()
+        self.connection.rollback()
 
-    def commit(self, connection: "Optional[Any]" = None) -> None:
+    def commit(self) -> None:
         """Commit the current transaction."""
-        conn = connection or self.connection
-        conn.commit()
+        self.connection.commit()

@@ -24,6 +24,8 @@ class AdapterCacheMixin:
     Integrates transparently with existing adapter execution flow.
     """
 
+    __slots__ = ("_compiled_cache", "_prepared_counter", "_prepared_statements")
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize adapter with caching support."""
         super().__init__(*args, **kwargs)
@@ -107,6 +109,8 @@ class SyncAdapterCacheMixin(AdapterCacheMixin):
     It is used by synchronous adapters to manage SQL compilation and prepared statement names.
     """
 
+    __slots__ = ()
+
 
 @trait
 class AsyncAdapterCacheMixin(AdapterCacheMixin):
@@ -115,3 +119,5 @@ class AsyncAdapterCacheMixin(AdapterCacheMixin):
     Identical to AdapterCacheMixin since caching operations are synchronous.
     Provided for naming consistency with async adapters.
     """
+
+    __slots__ = ()

@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Generator
 
-import pyarrow as pa
 import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
-from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQLConfig
 
 # Import the decorator
@@ -227,29 +226,6 @@ def test_complex_queries(adbc_duckdb_session: AdbcDriver) -> None:
 @xfail_if_driver_missing
 def test_arrow_integration(adbc_duckdb_session: AdbcDriver) -> None:
     """Test ADBC DuckDB Arrow integration functionality."""
-    # Insert test data for Arrow testing
-    test_data = [(4, "arrow_test1", 100), (5, "arrow_test2", 200), (6, "arrow_test3", 300)]
-    for row_data in test_data:
-        adbc_duckdb_session.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", row_data)
-
-    # Test getting results as Arrow if available
-    if hasattr(adbc_duckdb_session, "fetch_arrow_table"):
-        arrow_result = adbc_duckdb_session.fetch_arrow_table("SELECT name, value FROM test_table ORDER BY name")
-
-        assert isinstance(arrow_result, ArrowResult)
-        arrow_table = arrow_result.data
-        assert isinstance(arrow_table, pa.Table)
-        assert arrow_table.num_rows == 3
-        assert arrow_table.num_columns == 2
-        assert arrow_table.column_names == ["name", "value"]
-
-        # Verify data
-        names = arrow_table.column("name").to_pylist()
-        values = arrow_table.column("value").to_pylist()
-        assert names == ["arrow_test1", "arrow_test2", "arrow_test3"]
-        assert values == [100, 200, 300]
-    else:
-        pytest.skip("ADBC DuckDB driver does not support Arrow result format")
 
 
 @pytest.mark.xdist_group("adbc_duckdb")

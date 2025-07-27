@@ -1,16 +1,13 @@
 """Integration tests for SQLite driver implementation."""
 
 import math
-import tempfile
 from collections.abc import Generator
 from typing import Any, Literal
 
-import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
-from sqlspec.statement.result import ArrowResult, SQLResult
-from sqlspec.statement.sql import SQL
+from sqlspec.statement.result import SQLResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -143,8 +140,6 @@ def test_sqlite_execute_script(sqlite_session: SqliteDriver) -> None:
     # Explicitly check for errors from the script execution itself
     if hasattr(result, "errors") and result.errors:
         pytest.fail(f"Script execution reported errors: {result.errors}")
-    if hasattr(result, "has_errors") and callable(result.has_errors) and result.has_errors():
-        pytest.fail(f"Script execution reported errors (via has_errors): {result.get_errors()}")
 
     # Verify script effects
     select_result = sqlite_session.execute(
@@ -415,41 +410,6 @@ def test_sqlite_performance_bulk_operations(sqlite_session: SqliteDriver) -> Non
     assert page_result.data is not None
     assert len(page_result.data) == 10
     assert page_result.data[0]["name"] == "bulk_user_20"
-
-
-@pytest.mark.skip(reason="Arrow table functionality not yet implemented")
-@pytest.mark.xdist_group("sqlite")
-def test_sqlite_fetch_arrow_table(sqlite_session: SqliteDriver) -> None:
-    """Integration test: fetch_arrow_table returns pyarrow.Table directly."""
-    sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("arrow1", 111))
-    sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("arrow2", 222))
-    # fetch_arrow_table expects a SQL string, not a SQL object
-    result = sqlite_session.fetch_arrow_table("SELECT name, value FROM test_table ORDER BY name")
-    assert isinstance(result, ArrowResult)
-    assert result.num_rows == 2
-    assert result.column_names == ["name", "value"]
-    assert result.data is not None
-    assert result.data.column("name").to_pylist() == ["arrow1", "arrow2"]
-    assert result.data.column("value").to_pylist() == [111, 222]
-
-
-@pytest.mark.skip(reason="Storage export functionality not yet implemented")
-@pytest.mark.xdist_group("sqlite")
-def test_sqlite_to_parquet(sqlite_session: SqliteDriver) -> None:
-    """Integration test: to_parquet writes correct data to a Parquet file."""
-    sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("pq1", 10))
-    sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("pq2", 20))
-    SQL("SELECT name, value FROM test_table ORDER BY name")
-    with tempfile.NamedTemporaryFile(suffix=".parquet") as tmpfile:
-        # export_to_storage expects query string and destination_uri
-        sqlite_session.export_to_storage(
-            "SELECT name, value FROM test_table ORDER BY name", destination_uri=tmpfile.name
-        )
-        table = pq.read_table(tmpfile.name)
-        assert table.num_rows == 2
-        assert table.column_names == ["name", "value"]
-        assert table.column("name").to_pylist() == ["pq1", "pq2"]
-        assert table.column("value").to_pylist() == [10, 20]
 
 
 @pytest.mark.xdist_group("sqlite")

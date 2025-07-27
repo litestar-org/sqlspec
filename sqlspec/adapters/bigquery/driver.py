@@ -3,11 +3,14 @@ import contextlib
 import datetime
 import logging
 from collections.abc import Iterator
+from contextlib import contextmanager
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
 if TYPE_CHECKING:
     from typing_extensions import TypeAlias
+
+    from sqlspec.statement.sql import SQL, SQLConfig
 
 from google.cloud.bigquery import ArrayQueryParameter, Client, QueryJob, QueryJobConfig, ScalarQueryParameter
 from google.cloud.bigquery.table import Row as BigQueryRow
@@ -16,7 +19,6 @@ from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
@@ -37,7 +39,6 @@ logger = logging.getLogger("sqlspec.adapters.bigquery")
 FULLY_QUALIFIED_PARTS = 3  # project.dataset.table
 DATASET_TABLE_PARTS = 2  # dataset.table
 TIMESTAMP_ERROR_MSG_LENGTH = 189  # Length check for timestamp parsing error
-
 
 
 class BigQueryDriver(SyncDriverAdapterBase):
@@ -209,56 +210,17 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """Convert BigQuery rows to dictionary format."""
         return [dict(row) for row in rows_iterator]
 
-    def _handle_select_job(self, query_job: QueryJob, statement: SQL) -> SQLResult:
-        """Handle a query job that is expected to return rows."""
-        job_result = query_job.result()
-        rows_list = self._rows_to_results(iter(job_result))
-        column_names = [field.name for field in query_job.schema] if query_job.schema else []
-
-        return SQLResult(
-            statement=statement,
-            data=rows_list,
-            column_names=column_names,
-            rows_affected=len(rows_list),
-            operation_type="SELECT",
-        )
-
-    def _handle_dml_job(self, query_job: QueryJob, statement: SQL) -> SQLResult:
-        """Handle a DML job."""
-        query_job.result()
-        num_affected = query_job.num_dml_affected_rows
-
-        if (
-            (num_affected is None or num_affected == 0)
-            and query_job.statement_type in {"INSERT", "UPDATE", "DELETE", "MERGE"}
-            and query_job.state == "DONE"
-            and not query_job.errors
-        ):
-            logger.warning(
-                "BigQuery emulator workaround: DML operation reported 0 rows but completed successfully. "
-                "Assuming 1 row affected. Consider using state-based verification in tests."
-            )
-            num_affected = 1
-
-        operation_type = self._determine_operation_type(statement)
-        return SQLResult(
-            statement=statement,
-            data=cast("list[dict[str, Any]]", []),
-            rows_affected=num_affected or 0,
-            operation_type=operation_type,
-            metadata={"status_message": f"OK - job_id: {query_job.job_id}"},
-        )
-
     @contextmanager
     def with_cursor(self, connection: "BigQueryConnection") -> "Iterator[Any]":
         """Context manager for BigQuery job (cursor equivalent)."""
+
         # BigQuery doesn't use traditional cursors, but we can return a mock object
         # The actual execution happens in _perform_execute
         class MockCursor:
             def __init__(self, connection: "BigQueryConnection") -> None:
                 self.connection = connection
                 self.job: Optional[QueryJob] = None
-        
+
         cursor = MockCursor(connection)
         try:
             yield cursor
@@ -266,34 +228,31 @@ class BigQueryDriver(SyncDriverAdapterBase):
             # No cleanup needed for BigQuery
             pass
 
-    def begin(self, connection: "Optional[Any]" = None) -> None:
+    def begin(self) -> None:
         """Begin transaction - BigQuery doesn't support transactions."""
         # BigQuery doesn't support transactions
-        pass
 
-    def rollback(self, connection: "Optional[Any]" = None) -> None:
+    def rollback(self) -> None:
         """Rollback transaction - BigQuery doesn't support transactions."""
         # BigQuery doesn't support transactions
-        pass
 
-    def commit(self, connection: "Optional[Any]" = None) -> None:
+    def commit(self) -> None:
         """Commit transaction - BigQuery doesn't support transactions."""
         # BigQuery doesn't support transactions
-        pass
 
     def _perform_execute(self, cursor: "Any", statement: "SQL") -> None:
         """Execute the SQL statement using BigQuery."""
         sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
-        
+
         if statement.is_many:
             # BigQuery doesn't support executemany directly, create script
             script_parts = []
             all_params: dict[str, Any] = {}
             param_counter = 0
-            
+
             # For execute_many, params is already a list of parameter sets
             param_list = self._prepare_driver_parameters_many(params) if params else []
-            
+
             for param_set in param_list:
                 if isinstance(param_set, dict):
                     param_dict = param_set
@@ -301,7 +260,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                     param_dict = {f"param_{i}": val for i, val in enumerate(param_set)}
                 else:
                     param_dict = {"param_0": param_set}
-                
+
                 param_mapping = {}
                 current_sql = sql
                 for key, value in param_dict.items():
@@ -309,12 +268,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
                     param_counter += 1
                     param_mapping[key] = new_key
                     all_params[new_key] = value
-                
+
                 for old_key, new_key in param_mapping.items():
                     current_sql = current_sql.replace(f"@{old_key}", f"@{new_key}")
-                
+
                 script_parts.append(current_sql)
-            
+
             full_script = ";\n".join(script_parts)
             bq_params = self._prepare_bq_query_parameters(all_params)
             cursor.job = self._run_query_job(full_script, bq_params, connection=cursor.connection)
@@ -332,22 +291,51 @@ class BigQueryDriver(SyncDriverAdapterBase):
         else:
             # Regular execute
             prepared_params = self._prepare_driver_parameters(params)
-            
-            param_dict: dict[str, Any] = {}
+
+            single_param_dict: dict[str, Any] = {}
             if prepared_params:
                 if isinstance(prepared_params, dict):
-                    param_dict = prepared_params
+                    single_param_dict = prepared_params
                 elif isinstance(prepared_params, (list, tuple)):
-                    param_dict = {f"param_{i}": val for i, val in enumerate(prepared_params)}
+                    single_param_dict = {f"param_{i}": val for i, val in enumerate(prepared_params)}
                 else:
-                    param_dict = {"param_0": prepared_params}
-            
-            bq_params = self._prepare_bq_query_parameters(param_dict)
+                    single_param_dict = {"param_0": prepared_params}
+
+            bq_params = self._prepare_bq_query_parameters(single_param_dict)
             cursor.job = self._run_query_job(sql, bq_params, connection=cursor.connection)
+
+    def _extract_select_data(self, cursor: "Any") -> "tuple[list[dict[str, Any]], list[str], int]":
+        """Extract data from cursor after SELECT execution."""
+        query_job = cursor.job
+        job_result = query_job.result()
+        rows_list = self._rows_to_results(iter(job_result))
+        column_names = [field.name for field in query_job.schema] if query_job.schema else []
+        return rows_list, column_names, len(rows_list)
+
+    def _extract_execute_rowcount(self, cursor: "Any") -> int:
+        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
+        query_job = cursor.job
+        query_job.result()
+        num_affected = query_job.num_dml_affected_rows
+
+        if (
+            (num_affected is None or num_affected == 0)
+            and query_job.statement_type in {"INSERT", "UPDATE", "DELETE", "MERGE"}
+            and query_job.state == "DONE"
+            and not query_job.errors
+        ):
+            logger.warning(
+                "BigQuery emulator workaround: DML operation reported 0 rows but completed successfully. "
+                "Assuming 1 row affected. Consider using state-based verification in tests."
+            )
+            num_affected = 1
+
+        return num_affected or 0
 
     def _build_result(self, cursor: "Any", statement: "SQL") -> "SQLResult":
         """Build and return the result of the SQL execution."""
-        if hasattr(cursor, 'jobs'):
+        # Handle special cases first
+        if hasattr(cursor, "jobs"):
             # Script execution
             successful = 0
             total_rows = 0
@@ -355,7 +343,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 job.result()
                 successful += 1
                 total_rows += job.num_dml_affected_rows or 0
-            
+
             return SQLResult(
                 statement=statement,
                 data=[],
@@ -365,13 +353,18 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 total_statements=len(cursor.jobs),
                 successful_statements=successful,
             )
-        
+
+        # Check if it's a SELECT query by looking at statement type
         query_job = cursor.job
         query_schema = getattr(query_job, "schema", None)
-        
+
         if query_job.statement_type == "SELECT" or (query_schema is not None and len(query_schema) > 0):
-            return self._handle_select_job(query_job, statement)
-        
+            # Override returns_rows check for BigQuery
+            data, column_names, row_count = self._extract_select_data(cursor)
+            return self._build_select_result_from_data(
+                statement=statement, data=data, column_names=column_names, row_count=row_count
+            )
+
         if statement.is_many:
             query_job.result()
             total_rowcount = query_job.num_dml_affected_rows or 0
@@ -382,6 +375,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 operation_type="EXECUTE",
                 metadata={"status_message": f"OK - executed batch job {query_job.job_id}"},
             )
-        
-        return self._handle_dml_job(query_job, statement)
 
+        # Use base class for regular DML
+        return super()._build_result(cursor, statement)

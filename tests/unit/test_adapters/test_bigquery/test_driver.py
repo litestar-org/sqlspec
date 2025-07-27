@@ -75,8 +75,8 @@ def test_driver_initialization() -> None:
     assert driver.connection is mock_conn
     assert driver.config is config
     assert driver.dialect == "bigquery"
-    assert driver.default_parameter_style == ParameterStyle.NAMED_AT
-    assert driver.supported_parameter_styles == (ParameterStyle.NAMED_AT,)
+    assert driver.parameter_config.default_parameter_style == ParameterStyle.NAMED_AT
+    assert driver.parameter_config.supported_parameter_styles == [ParameterStyle.NAMED_AT]
 
 
 def test_driver_initialization_with_callbacks() -> None:
@@ -107,15 +107,6 @@ def test_driver_initialization_with_job_config() -> None:
 
 
 # Arrow Support Tests
-def test_arrow_support_flags() -> None:
-    """Test driver Arrow support flags."""
-    mock_conn = MagicMock()
-    driver = BigQueryDriver(connection=mock_conn)
-
-    assert driver.supports_native_arrow_export is True
-    assert driver.supports_native_arrow_import is True
-    assert BigQueryDriver.supports_native_arrow_export is True
-    assert BigQueryDriver.supports_native_arrow_import is True
 
 
 # Parameter Type Detection Tests
@@ -262,7 +253,7 @@ def test_execute_statement_routing(
     statement._is_many = is_many
 
     with patch.object(BigQueryDriver, expected_method, return_value={"rows_affected": 0}) as mock_method:
-        driver._execute_sql(statement)
+        driver.execute(statement)
         mock_method.assert_called_once()
 
 
@@ -277,7 +268,7 @@ def test_execute_select_statement(driver: BigQueryDriver, mock_connection: Magic
     mock_job.result.return_value = iter([])
 
     statement = SQL("SELECT * FROM users")
-    result = driver._execute_sql(statement)
+    result = driver.execute(statement)
 
     assert result.data == []
     assert result.column_names == ["id"]
@@ -297,7 +288,7 @@ def test_execute_dml_statement(driver: BigQueryDriver, mock_connection: MagicMoc
     mock_job.statement_type = "INSERT"  # This is the key - identify it as a DML statement
 
     statement = SQL("INSERT INTO users (name) VALUES (@name)", name="Alice")
-    result = driver._execute_sql(statement)
+    result = driver.execute(statement)
 
     assert result.rows_affected == 1
     assert result.metadata["status_message"] == "OK - job_id: test-job-123"
@@ -327,7 +318,7 @@ def test_parameter_style_handling(
     mock_job.schema = []
     mock_job.num_dml_affected_rows = None
 
-    driver._execute_sql(statement)
+    driver.execute(statement)
 
     # Check that query was called with SQL containing expected parameter style
     mock_connection.query.assert_called_once()
@@ -347,7 +338,7 @@ def test_execute_many(driver: BigQueryDriver, mock_connection: MagicMock) -> Non
     sql = "INSERT INTO users (name) VALUES (@name)"
     params = [{"name": "Alice"}, {"name": "Bob"}, {"name": "Charlie"}]
 
-    result = driver._execute_many(sql, params)
+    result = driver.execute_many(sql, params)
 
     assert result.rows_affected == 3
     assert result.metadata["status_message"] == "OK - executed batch job batch-job-123"
@@ -366,7 +357,7 @@ def test_execute_many_with_non_dict_parameters(driver: BigQueryDriver, mock_conn
     mock_job.result.return_value = None
     mock_job.num_dml_affected_rows = 2
 
-    result = driver._execute_many(sql, params)
+    result = driver.execute_many(sql, params)
 
     # Verify the script was created with converted parameters
     assert mock_connection.query.called
@@ -392,7 +383,7 @@ def test_execute_script(driver: BigQueryDriver, mock_connection: MagicMock) -> N
     INSERT INTO test VALUES (2);
     """
 
-    result = driver._execute_script(script)
+    result = driver.execute_script(script)
 
     assert result.total_statements == 3
     assert result.metadata["status_message"] == "SCRIPT EXECUTED"
@@ -413,16 +404,6 @@ def test_connection_method(driver: BigQueryDriver, mock_connection: MagicMock) -
     # Test connection override
     override_connection = MagicMock()
     assert driver._connection(override_connection) is override_connection
-
-
-# Storage Mixin Tests
-def test_storage_methods_available(driver: BigQueryDriver) -> None:
-    """Test that driver has all storage methods from SyncStorageMixin."""
-    storage_methods = ["fetch_arrow_table", "ingest_arrow_table", "export_to_storage", "import_from_storage"]
-
-    for method in storage_methods:
-        assert hasattr(driver, method)
-        assert callable(getattr(driver, method))
 
 
 def test_translator_mixin_integration(driver: BigQueryDriver) -> None:
@@ -519,7 +500,7 @@ def test_execute_with_no_parameters(driver: BigQueryDriver, mock_connection: Mag
 
     config = SQLConfig(enable_validation=False)  # Allow DDL
     statement = SQL("CREATE TABLE test (id INTEGER)", config=config)
-    driver._execute_sql(statement)
+    driver.execute(statement)
 
     mock_connection.query.assert_called_once()
 
@@ -534,7 +515,7 @@ def test_execute_select_with_empty_result(driver: BigQueryDriver, mock_connectio
     mock_job.result.return_value = iter([])
 
     statement = SQL("SELECT * FROM users WHERE 1=0")
-    result = driver._execute_sql(statement)
+    result = driver.execute(statement)
 
     assert result.data == []
     assert result.column_names == ["id"]
@@ -568,34 +549,8 @@ def test_connection_override(driver: BigQueryDriver) -> None:
     statement = SQL("SELECT 1")
 
     # Should use override connection instead of driver's connection
-    driver._execute_sql(statement, connection=override_connection)
+    driver.execute(statement, connection=override_connection)
 
     override_connection.query.assert_called_once()
     # Original connection should not be called
     driver.connection.query.assert_not_called()  # pyright: ignore
-
-
-def test_fetch_arrow_table_native(driver: BigQueryDriver, mock_connection: MagicMock) -> None:
-    """Test BigQuery native Arrow table fetch."""
-    import pyarrow as pa
-
-    from sqlspec.statement.result import ArrowResult
-
-    # Setup mock arrow table for native fetch
-    mock_arrow_table = pa.table({"id": [1, 2, 3], "name": ["Alice", "Bob", "Charlie"]})
-    mock_job = mock_connection.query.return_value
-    mock_job.to_arrow.return_value = mock_arrow_table
-    mock_job.result.return_value = None
-
-    statement = SQL("SELECT * FROM users")
-    result = driver.fetch_arrow_table(statement)
-
-    assert isinstance(result, ArrowResult)
-    assert result.data is mock_arrow_table
-    assert result.data.num_rows == 3
-    assert result.data.column_names == ["id", "name"]
-
-    # Verify native to_arrow was called
-    mock_job.to_arrow.assert_called_once()
-    # Verify query job was waited on
-    mock_job.result.assert_called_once()

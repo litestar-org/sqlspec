@@ -8,7 +8,6 @@ from sqlglot.dialects.dialect import DialectType
 
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
-from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.utils.logging import get_logger
 
@@ -36,7 +35,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
     parameter_config = DriverParameterConfig(
         supported_parameter_styles=[
             ParameterStyle.POSITIONAL_COLON,  # :1, :2
-            ParameterStyle.NAMED_COLON,       # :name
+            ParameterStyle.NAMED_COLON,  # :name
         ],
         default_parameter_style=ParameterStyle.NAMED_COLON,
         type_coercion_map={
@@ -50,9 +49,8 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, config=config)
 
     @contextmanager
-    def with_cursor(self, connection: Optional[OracleSyncConnection] = None) -> Generator[Cursor, None, None]:
-        conn_to_use = connection or self.connection
-        cursor: Cursor = conn_to_use.cursor()
+    def with_cursor(self, connection: OracleSyncConnection) -> Generator[Cursor, None, None]:
+        cursor: Cursor = connection.cursor()
         try:
             yield cursor
         finally:
@@ -69,48 +67,30 @@ class OracleSyncDriver(SyncDriverAdapterBase):
             prepared_params = self._prepare_driver_parameters(params)
             cursor.execute(sql, prepared_params or {})
 
-    def _build_result(self, cursor: Cursor, statement: "SQL") -> "SQLResult":
-        if self.returns_rows(statement.expression):
-            return self._build_select_result(cursor, statement)
-        return self._build_modify_result(cursor, statement)
-
-    def _build_select_result(self, cursor: Cursor, statement: "SQL") -> "SQLResult":
+    def _extract_select_data(self, cursor: Cursor) -> "tuple[list[dict[str, Any]], list[str], int]":
+        """Extract data from cursor after SELECT execution."""
         fetched_data = cursor.fetchall()
         column_names = [col[0] for col in cursor.description or []]
         data = cast("list[dict[str, Any]]", [dict(zip(column_names, row)) for row in fetched_data])
+        return data, column_names, len(data)
 
-        return SQLResult(
-            statement=statement,
-            data=data,
-            column_names=column_names,
-            rows_affected=cursor.rowcount,
-            operation_type="SELECT",
-        )
+    def _extract_execute_rowcount(self, cursor: Cursor) -> int:
+        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
+        return cursor.rowcount if cursor.rowcount is not None else 0
 
-    def _build_modify_result(self, cursor: Cursor, statement: "SQL") -> "SQLResult":
-        return SQLResult(
-            statement=statement,
-            data=[],
-            rows_affected=cursor.rowcount,
-            operation_type=self._determine_operation_type(statement),
-            metadata={"status_message": "OK"},
-        )
-
-    def begin(self, connection: Optional[Any] = None) -> None:
+    def begin(self) -> None:
         """Begin a database transaction."""
         # Oracle uses implicit transactions, but we can use a savepoint
         # or explicit begin if the driver supports it
         # Oracle typically doesn't need explicit BEGIN, transactions start implicitly
 
-    def rollback(self, connection: Optional[Any] = None) -> None:
+    def rollback(self) -> None:
         """Rollback the current transaction."""
-        conn = connection or self.connection
-        conn.rollback()
+        self.connection.rollback()
 
-    def commit(self, connection: Optional[Any] = None) -> None:
+    def commit(self) -> None:
         """Commit the current transaction."""
-        conn = connection or self.connection
-        conn.commit()
+        self.connection.commit()
 
 
 class OracleAsyncDriver(AsyncDriverAdapterBase):
@@ -120,7 +100,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
     parameter_config = DriverParameterConfig(
         supported_parameter_styles=[
             ParameterStyle.POSITIONAL_COLON,  # :1, :2
-            ParameterStyle.NAMED_COLON,       # :name
+            ParameterStyle.NAMED_COLON,  # :name
         ],
         default_parameter_style=ParameterStyle.NAMED_COLON,
         type_coercion_map={
@@ -134,11 +114,8 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         super().__init__(connection=connection, config=config)
 
     @asynccontextmanager
-    async def with_cursor(
-        self, connection: Optional[OracleAsyncConnection] = None
-    ) -> AsyncGenerator[AsyncCursor, None]:
-        conn_to_use = connection or self.connection
-        cursor: AsyncCursor = conn_to_use.cursor()
+    async def with_cursor(self, connection: OracleAsyncConnection) -> AsyncGenerator[AsyncCursor, None]:
+        cursor: AsyncCursor = connection.cursor()
         try:
             yield cursor
         finally:
@@ -155,45 +132,27 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
             prepared_params = self._prepare_driver_parameters(params)
             await cursor.execute(sql, prepared_params or {})
 
-    async def _build_result(self, cursor: AsyncCursor, statement: "SQL") -> "SQLResult":
-        if self.returns_rows(statement.expression):
-            return await self._build_select_result(cursor, statement)
-        return self._build_modify_result(cursor, statement)
-
-    async def _build_select_result(self, cursor: AsyncCursor, statement: "SQL") -> "SQLResult":  # type: ignore[override]
+    async def _extract_select_data(self, cursor: AsyncCursor) -> "tuple[list[dict[str, Any]], list[str], int]":
+        """Extract data from cursor after SELECT execution."""
         fetched_data = await cursor.fetchall()
         column_names = [col[0] for col in cursor.description or []]
         data = cast("list[dict[str, Any]]", [dict(zip(column_names, row)) for row in fetched_data])
+        return data, column_names, len(data)
 
-        return SQLResult(
-            statement=statement,
-            data=data,
-            column_names=column_names,
-            rows_affected=cursor.rowcount,
-            operation_type="SELECT",
-        )
+    def _extract_execute_rowcount(self, cursor: AsyncCursor) -> int:
+        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
+        return cursor.rowcount if cursor.rowcount is not None else 0
 
-    def _build_modify_result(self, cursor: AsyncCursor, statement: "SQL") -> "SQLResult":
-        return SQLResult(
-            statement=statement,
-            data=[],
-            rows_affected=cursor.rowcount,
-            operation_type=self._determine_operation_type(statement),
-            metadata={"status_message": "OK"},
-        )
-
-    async def begin(self, connection: Optional[Any] = None) -> None:
+    async def begin(self) -> None:
         """Begin a database transaction."""
         # Oracle uses implicit transactions, but we can use a savepoint
         # or explicit begin if the driver supports it
         # Oracle typically doesn't need explicit BEGIN, transactions start implicitly
 
-    async def rollback(self, connection: Optional[Any] = None) -> None:
+    async def rollback(self) -> None:
         """Rollback the current transaction."""
-        conn = connection or self.connection
-        await conn.rollback()
+        await self.connection.rollback()
 
-    async def commit(self, connection: Optional[Any] = None) -> None:
+    async def commit(self) -> None:
         """Commit the current transaction."""
-        conn = connection or self.connection
-        await conn.commit()
+        await self.connection.commit()

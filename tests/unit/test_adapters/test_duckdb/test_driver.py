@@ -29,7 +29,7 @@ def driver(mock_connection: MagicMock) -> DuckDBDriver:
 def test_driver_initialization(driver: DuckDBDriver) -> None:
     """Test driver initialization with various parameters."""
     assert driver.dialect == "duckdb"
-    assert driver.parameter_config.paramstyle == ParameterStyle.QMARK
+    assert driver.parameter_config.default_parameter_style == ParameterStyle.QMARK
     assert driver.parameter_config.has_native_list_expansion is True
 
 

@@ -652,7 +652,9 @@ class StatementSplitter:
         return False
 
 
-def split_sql_script(script: str, dialect: str = "generic", strip_trailing_semicolon: bool = False) -> list[str]:
+def split_sql_script(
+    script: str, dialect: Optional[str] = "generic", strip_trailing_semicolon: bool = False
+) -> list[str]:
     """Split a SQL script into statements using the appropriate dialect.
 
     Args:
@@ -663,19 +665,18 @@ def split_sql_script(script: str, dialect: str = "generic", strip_trailing_semic
     Returns:
         List of individual SQL statements
     """
+    if dialect is None:
+        dialect = "generic"
     dialect_configs = {
-        # Standard dialects
         "generic": GenericDialectConfig(),
-        # Major databases
         "oracle": OracleDialectConfig(),
         "tsql": TSQLDialectConfig(),
-        "mssql": TSQLDialectConfig(),  # Alias for tsql
-        "sqlserver": TSQLDialectConfig(),  # Alias for tsql
+        "mssql": TSQLDialectConfig(),
+        "sqlserver": TSQLDialectConfig(),
         "postgresql": PostgreSQLDialectConfig(),
-        "postgres": PostgreSQLDialectConfig(),  # Common alias
+        "postgres": PostgreSQLDialectConfig(),
         "mysql": MySQLDialectConfig(),
         "sqlite": SQLiteDialectConfig(),
-        # Modern analytical databases
         "duckdb": DuckDBDialectConfig(),
         "bigquery": BigQueryDialectConfig(),
     }

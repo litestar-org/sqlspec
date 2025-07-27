@@ -1,6 +1,5 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import logging
-from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union
 
@@ -8,11 +7,11 @@ from asyncmy import Connection
 
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
-from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-# Type handlers removed - MySQL has good native type support
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
     from asyncmy.cursors import Cursor, DictCursor
     from sqlglot.dialects.dialect import DialectType
 
@@ -35,7 +34,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
     parameter_config = DriverParameterConfig(
         supported_parameter_styles=[
             ParameterStyle.POSITIONAL_PYFORMAT,  # %s
-            ParameterStyle.NAMED_PYFORMAT,       # %(name)s
+            ParameterStyle.NAMED_PYFORMAT,  # %(name)s
         ],
         default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
         type_coercion_map={
@@ -51,7 +50,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         # MySQL 5.7+ has native JSON support and handles most types well
         # Type handlers can be registered if the base class supports it
 
-    async def begin(self, connection: "Optional[Any]" = None) -> None:
+    async def begin(self) -> None:
         """Begin a transaction.
 
         MySQL/AsyncMy starts transactions automatically with the first command.
@@ -59,15 +58,13 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """
         # MySQL starts transactions automatically - no explicit action needed
 
-    async def commit(self, connection: "Optional[Any]" = None) -> None:
+    async def commit(self) -> None:
         """Commit the current transaction."""
-        conn = connection or self.connection
-        await conn.commit()
+        await self.connection.commit()
 
-    async def rollback(self, connection: "Optional[Any]" = None) -> None:
+    async def rollback(self) -> None:
         """Rollback the current transaction."""
-        conn = connection or self.connection
-        await conn.rollback()
+        await self.connection.rollback()
 
     def _connection(self, connection: "Optional[AsyncmyConnection]" = None) -> "AsyncmyConnection":
         """Get the connection to use for the operation."""
@@ -93,26 +90,21 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             prepared_params = self._prepare_driver_parameters(params)
             await cursor.execute(sql, prepared_params or None)
 
-    async def _build_result(self, cursor: "Union[Cursor, DictCursor]", statement: "SQL") -> "SQLResult":
-        """Build and return the result of the SQL execution."""
-        if self.returns_rows(statement.expression):
-            data = await cursor.fetchall()
-            column_names = [desc[0] for desc in cursor.description or []]
-            return SQLResult(
-                statement=statement,
-                data=data,
-                column_names=column_names,
-                rows_affected=len(data),
-                operation_type="SELECT",
-            )
+    async def _extract_select_data(
+        self, cursor: "Union[Cursor, DictCursor]"
+    ) -> "tuple[list[dict[str, Any]], list[str], int]":
+        """Extract data from cursor after SELECT execution."""
+        data = await cursor.fetchall()
+        column_names = [desc[0] for desc in cursor.description or []]
+        # Ensure data is list of dicts
+        if data and not isinstance(data[0], dict):
+            # Convert tuples to dicts
+            data = [dict(zip(column_names, row)) for row in data]
+        return data, column_names, len(data)
 
-        return SQLResult(
-            statement=statement,
-            data=[],
-            rows_affected=cursor.rowcount if cursor.rowcount is not None else -1,
-            operation_type=self._determine_operation_type(statement),
-            metadata={"status_message": "OK"},
-        )
+    def _extract_execute_rowcount(self, cursor: "Union[Cursor, DictCursor]") -> int:
+        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
+        return cursor.rowcount if cursor.rowcount is not None else -1
 
     def _prepare_driver_parameters(self, parameters: "Any") -> "Any":
         """Prepare parameters for the AsyncMy driver."""

@@ -10,7 +10,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
-from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 # Import the decorator
@@ -382,44 +382,6 @@ def test_blob_type(adbc_sqlite_session: AdbcDriver) -> None:
 
 
 @pytest.mark.xdist_group("adbc_sqlite")
-def test_fetch_arrow_table(adbc_sqlite_session: AdbcDriver) -> None:
-    """Test SQLite fetch_arrow_table functionality."""
-    # Insert test data
-    test_data = [("Alice", 25, 50000.0), ("Bob", 30, 60000.0), ("Charlie", 35, 70000.0)]
-
-    adbc_sqlite_session.execute_script("""
-        CREATE TABLE arrow_test (
-            name TEXT,
-            age INTEGER,
-            salary REAL
-        )
-    """)
-
-    adbc_sqlite_session.execute_many("INSERT INTO arrow_test (name, age, salary) VALUES (?, ?, ?)", test_data)
-
-    # Test fetch_arrow_table
-    result = adbc_sqlite_session.fetch_arrow_table("SELECT * FROM arrow_test ORDER BY name")
-
-    assert isinstance(result, ArrowResult)
-    assert isinstance(result, ArrowResult)
-    assert result.num_rows == 3
-    assert result.data.num_columns == 3
-    assert result.column_names == ["name", "age", "salary"]
-
-    # Verify data content
-    names = result.data.column("name").to_pylist()
-    ages = result.data.column("age").to_pylist()
-    salaries = result.data.column("salary").to_pylist()
-
-    assert names == ["Alice", "Bob", "Charlie"]
-    assert ages == [25, 30, 35]
-    assert salaries == [50000.0, 60000.0, 70000.0]
-
-    # Cleanup
-    adbc_sqlite_session.execute_script("DROP TABLE arrow_test")
-
-
-@pytest.mark.xdist_group("adbc_sqlite")
 def test_to_parquet(adbc_sqlite_session: AdbcDriver) -> None:
     """Test SQLite to_parquet functionality."""
     # Insert test data
@@ -473,7 +435,7 @@ def test_insert_returning(adbc_sqlite_session: AdbcDriver) -> None:
     assert isinstance(version_result, SQLResult)
     assert version_result.data is not None
     version_str = version_result.data[0]["version"]
-    major, minor, patch = map(int, version_str.split(".")[:3])
+    major, minor, _patch = map(int, version_str.split(".")[:3])
 
     if major < 3 or (major == 3 and minor < 35):
         pytest.skip(f"SQLite {version_str} does not support RETURNING clause (requires 3.35.0+)")

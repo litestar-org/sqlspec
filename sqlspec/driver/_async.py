@@ -6,10 +6,12 @@ from typing import TYPE_CHECKING, Any, Optional, Union, overload
 from mypy_extensions import mypyc_attr
 
 from sqlspec.driver._common import CommonDriverAttributesMixin
+from sqlspec.driver.context import set_current_driver
 from sqlspec.driver.mixins import AsyncAdapterCacheMixin, SQLTranslatorMixin, ToSchemaMixin
 from sqlspec.exceptions import NotFoundError
 from sqlspec.parameters import process_execute_many_parameters
 from sqlspec.statement.builder import QueryBuilder, Select
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig, Statement
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_dict_row, is_indexable_row
@@ -18,7 +20,6 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
     from sqlspec.statement.filters import StatementFilter
-    from sqlspec.statement.result import SQLResult
     from sqlspec.typing import ModelDTOT, StatementParameters
 
 logger = get_logger("sqlspec")
@@ -34,6 +35,77 @@ class AsyncDriverAdapterBase(
     CommonDriverAttributesMixin, SQLTranslatorMixin, ToSchemaMixin, AsyncAdapterCacheMixin, ABC
 ):
     __slots__ = ()
+
+    @abstractmethod
+    def with_cursor(self, connection: Any) -> "AbstractAsyncContextManager[Any]":
+        """Async context manager for cursor acquisition and cleanup."""
+
+    @abstractmethod
+    async def begin(self) -> None:
+        """Begin a database transaction on the current connection."""
+
+    @abstractmethod
+    async def rollback(self) -> None:
+        """Rollback the current transaction on the current connection."""
+
+    @abstractmethod
+    async def commit(self) -> None:
+        """Commit the current transaction on the current connection."""
+
+    @abstractmethod
+    async def _perform_execute(self, cursor: Any, statement: "SQL") -> None:
+        """Execute the SQL statement using the provided cursor."""
+
+    # New abstract methods for data extraction
+    @abstractmethod
+    async def _extract_select_data(self, cursor: Any) -> "tuple[list[dict[str, Any]], list[str], int]":
+        """Extract data from cursor after SELECT execution.
+
+        Returns:
+            Tuple of (data_rows, column_names, row_count)
+        """
+
+    @abstractmethod
+    def _extract_execute_rowcount(self, cursor: Any) -> int:
+        """Extract row count from cursor after INSERT/UPDATE/DELETE.
+
+        Returns:
+            Number of affected rows
+        """
+
+    async def _build_result(self, cursor: Any, statement: "SQL") -> "SQLResult":
+        """Build and return the result of the SQL execution.
+
+        This method is now implemented in the base class using the
+        abstract extraction methods.
+        """
+        if self.returns_rows(statement.expression):
+            data, column_names, row_count = await self._extract_select_data(cursor)
+            return self._build_select_result_from_data(
+                statement=statement, data=data, column_names=column_names, row_count=row_count
+            )
+        row_count = self._extract_execute_rowcount(cursor)
+        return self._build_execute_result_from_data(statement=statement, row_count=row_count)
+
+    def _build_select_result_from_data(
+        self, statement: "SQL", data: "list[dict[str, Any]]", column_names: "list[str]", row_count: int
+    ) -> "SQLResult":
+        """Build SQLResult for SELECT operations from extracted data."""
+        return SQLResult(
+            statement=statement, data=data, column_names=column_names, rows_affected=row_count, operation_type="SELECT"
+        )
+
+    def _build_execute_result_from_data(
+        self, statement: "SQL", row_count: int, metadata: "Optional[dict[str, Any]]" = None
+    ) -> "SQLResult":
+        """Build SQLResult for non-SELECT operations from extracted data."""
+        return SQLResult(
+            statement=statement,
+            data=[],
+            rows_affected=row_count,
+            operation_type=self._determine_operation_type(statement),
+            metadata=metadata or {"status_message": "OK"},
+        )
 
     def _prepare_sql(
         self,
@@ -131,7 +203,6 @@ class AsyncDriverAdapterBase(
         Returns:
             The result of the SQL execution.
         """
-        from sqlspec.driver.context import set_current_driver
 
         # Set current driver in context for SQL compilation
         set_current_driver(self)
@@ -275,7 +346,7 @@ class AsyncDriverAdapterBase(
         if len(data) > 1:
             msg = f"Expected at most one row, found {len(data)}"
             raise ValueError(msg)
-        return self.to_schema(data[0], schema_type=schema_type) if schema_type else data[0]
+        return self.to_schema(data[0], schema_type=schema_type)
 
     @overload
     async def select(
@@ -309,7 +380,7 @@ class AsyncDriverAdapterBase(
     ) -> "Union[list[dict[str,Any]], list[ModelDTOT]]":  # pyright: ignore
         """Execute a select statement and return all rows."""
         result = await self.execute(statement, *parameters, config=config, **kwargs)
-        return result.get_data()
+        return self.to_schema(result.get_data(), schema_type=schema_type)
 
     async def select_value(
         self,
@@ -369,36 +440,9 @@ class AsyncDriverAdapterBase(
                 return None
             return next(iter(row.values()))
         if isinstance(row, (tuple, list)):
-            # Tuple or list-like row
             return row[0]
-        # Try indexing - if it fails, we'll get a proper error
         try:
             return row[0]
         except (TypeError, IndexError) as e:
             msg = f"Cannot extract value from row type {type(row).__name__}: {e}"
             raise TypeError(msg) from e
-
-    # Abstract methods that must be implemented by concrete adapters
-    @abstractmethod
-    def with_cursor(self, connection: Any) -> "AbstractAsyncContextManager[Any]":
-        """Async context manager for cursor acquisition and cleanup."""
-
-    @abstractmethod
-    async def begin(self, connection: "Optional[Any]" = None) -> None:
-        """Begin a database transaction."""
-
-    @abstractmethod
-    async def rollback(self, connection: "Optional[Any]" = None) -> None:
-        """Rollback the current transaction."""
-
-    @abstractmethod
-    async def commit(self, connection: "Optional[Any]" = None) -> None:
-        """Commit the current transaction."""
-
-    @abstractmethod
-    async def _perform_execute(self, cursor: Any, statement: "SQL") -> None:
-        """Execute the SQL statement using the provided cursor."""
-
-    @abstractmethod
-    async def _build_result(self, cursor: Any, statement: "SQL") -> "SQLResult":
-        """Build and return the result of the SQL execution."""

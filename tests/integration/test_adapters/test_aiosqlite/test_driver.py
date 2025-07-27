@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import tempfile
 from collections.abc import AsyncGenerator
-from pathlib import Path
 from typing import Any, Literal
 
-import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
-from sqlspec.statement.result import ArrowResult, SQLResult
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.result import SQLResult
+from sqlspec.statement.sql import SQLConfig
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -384,16 +381,14 @@ async def test_aiosqlite_with_schema_type(aiosqlite_session: AiosqliteDriver) ->
     await aiosqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("schema_test", 456))
 
     # Query with schema type
-    result = await aiosqlite_session.execute(
-        "SELECT id, name, value FROM test_table WHERE name = ?", ("schema_test"), schema_type=TestRecord
+    result = await aiosqlite_session.select_one(
+        "SELECT id, name, value FROM test_table WHERE name = ?", ("schema_test",), schema_type=TestRecord
     )
 
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) == 1
-
-    # The data should be converted to the schema type by the ResultConverter
-    assert result.column_names == ["id", "name", "value"]
+    assert isinstance(result, TestRecord)
+    assert result.name == "schema_test"
+    assert result.value == 456
+    assert result.id is not None
 
 
 @pytest.mark.xdist_group("aiosqlite")
@@ -466,35 +461,3 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDr
     except Exception:
         # Database might be locked, which is fine for this test
         pass
-
-
-@pytest.mark.asyncio
-async def test_aiosqlite_fetch_arrow_table(aiosqlite_session: AiosqliteDriver) -> None:
-    """Integration test: fetch_arrow_table returns ArrowResult with correct pyarrow.Table."""
-    await aiosqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("arrow1", 111))
-    await aiosqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("arrow2", 222))
-    statement = SQL("SELECT name, value FROM test_table ORDER BY name")
-    result = await aiosqlite_session.fetch_arrow_table(statement)
-    assert isinstance(result, ArrowResult)
-    assert result.num_rows == 2
-    assert set(result.column_names) == {"name", "value"}
-    assert result.data is not None
-    table = result.data
-    names = table["name"].to_pylist()
-    assert "arrow1" in names and "arrow2" in names
-
-
-@pytest.mark.asyncio
-async def test_aiosqlite_to_parquet(aiosqlite_session: AiosqliteDriver) -> None:
-    """Integration test: to_parquet writes correct data to a Parquet file."""
-    await aiosqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("pq1", 123))
-    await aiosqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("pq2", 456))
-    statement = SQL("SELECT name, value FROM test_table ORDER BY name")
-    with tempfile.TemporaryDirectory() as tmpdir:
-        output_path = Path(tmpdir) / "partitioned_data"
-        await aiosqlite_session.export_to_storage(statement, destination_uri=str(output_path), format="parquet")
-        table = pq.read_table(f"{output_path}.parquet")
-        assert table.num_rows == 2
-        assert set(table.column_names) == {"name", "value"}
-        names = table.column("name").to_pylist()
-        assert "pq1" in names and "pq2" in names

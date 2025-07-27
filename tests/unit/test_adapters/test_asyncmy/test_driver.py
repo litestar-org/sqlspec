@@ -1,15 +1,12 @@
 """Unit tests for Asyncmy driver."""
 
-import tempfile
-from typing import Any
 from unittest.mock import AsyncMock
 
-import pyarrow as pa
 import pytest
 
 from sqlspec.adapters.asyncmy import AsyncmyConnection, AsyncmyDriver
 from sqlspec.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -46,8 +43,6 @@ def test_asyncmy_driver_initialization(mock_asyncmy_connection: AsyncMock) -> No
     assert driver.connection is mock_asyncmy_connection
     assert driver.config is config
     assert driver.dialect == "mysql"
-    assert driver.supports_native_arrow_export is False
-    assert driver.supports_native_arrow_import is False
 
 
 def test_asyncmy_driver_dialect_property(asyncmy_driver: AsyncmyDriver) -> None:
@@ -55,17 +50,9 @@ def test_asyncmy_driver_dialect_property(asyncmy_driver: AsyncmyDriver) -> None:
     assert asyncmy_driver.dialect == "mysql"
 
 
-def test_asyncmy_driver_supports_arrow(asyncmy_driver: AsyncmyDriver) -> None:
-    """Test Asyncmy driver Arrow support."""
-    assert asyncmy_driver.supports_native_arrow_export is False
-    assert asyncmy_driver.supports_native_arrow_import is False
-    assert AsyncmyDriver.supports_native_arrow_export is False
-    assert AsyncmyDriver.supports_native_arrow_import is False
-
-
 def test_asyncmy_driver_placeholder_style(asyncmy_driver: AsyncmyDriver) -> None:
     """Test Asyncmy driver placeholder style detection."""
-    placeholder_style = asyncmy_driver.default_parameter_style
+    placeholder_style = asyncmy_driver.parameter_config.default_parameter_style
     assert placeholder_style == ParameterStyle.POSITIONAL_PYFORMAT
 
 
@@ -82,11 +69,11 @@ async def test_asyncmy_config_dialect_property() -> None:
 
 @pytest.mark.asyncio
 async def test_asyncmy_driver_get_cursor(asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock) -> None:
-    """Test Asyncmy driver _get_cursor context manager."""
+    """Test Asyncmy driver with_cursor context manager."""
     # Get the mock cursor that the fixture set up
     mock_cursor = mock_asyncmy_connection.cursor()
 
-    async with asyncmy_driver._get_cursor(mock_asyncmy_connection) as cursor:
+    async with asyncmy_driver.with_cursor(mock_asyncmy_connection) as cursor:
         assert cursor is mock_cursor
         mock_cursor.close.assert_not_called()
 
@@ -98,7 +85,7 @@ async def test_asyncmy_driver_get_cursor(asyncmy_driver: AsyncmyDriver, mock_asy
 async def test_asyncmy_driver_execute_statement_select(
     asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock
 ) -> None:
-    """Test Asyncmy driver _execute_statement for SELECT statements."""
+    """Test Asyncmy driver execute for SELECT statements."""
     # Get the mock cursor from the fixture and configure it
     mock_cursor = mock_asyncmy_connection.cursor()
     mock_cursor.fetchall.return_value = [(1, "test", "test@example.com")]  # Match the 3 columns
@@ -108,13 +95,12 @@ async def test_asyncmy_driver_execute_statement_select(
     mock_asyncmy_connection.cursor.reset_mock()
 
     # Create SQL statement with parameters - use qmark style for unit test
-    result = await asyncmy_driver.fetch_arrow_table(
-        "SELECT * FROM users WHERE id = ?", [1], config=asyncmy_driver.config
-    )
+    statement = SQL("SELECT * FROM users WHERE id = ?", [1])
+    result = await asyncmy_driver.execute(statement)
 
     # Verify result
-    assert isinstance(result, ArrowResult)
-    # Note: Don't compare statement objects directly as they may be recreated
+    assert isinstance(result, SQLResult)
+    assert result.operation_type == "SELECT"
 
     # Verify cursor operations
     mock_asyncmy_connection.cursor.assert_called_once()
@@ -123,10 +109,10 @@ async def test_asyncmy_driver_execute_statement_select(
 
 
 @pytest.mark.asyncio
-async def test_asyncmy_driver_fetch_arrow_table_with_parameters(
+async def test_asyncmy_driver_execute_with_parameters(
     asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock
 ) -> None:
-    """Test Asyncmy driver fetch_arrow_table method with parameters."""
+    """Test Asyncmy driver execute method with parameters."""
     # Get the mock cursor from the fixture and configure it
     mock_cursor = mock_asyncmy_connection.cursor()
     mock_cursor.description = ["id", "name"]  # Match the SELECT query
@@ -136,13 +122,12 @@ async def test_asyncmy_driver_fetch_arrow_table_with_parameters(
     mock_asyncmy_connection.cursor.reset_mock()
 
     # Create SQL statement with parameters
-    # Use a SQL that can be parsed by sqlglot - the driver will convert to %s style
-    result = await asyncmy_driver.fetch_arrow_table(
-        "SELECT id, name FROM users WHERE id = ?", 42, config=asyncmy_driver.config
-    )
+    statement = SQL("SELECT id, name FROM users WHERE id = ?", 42)
+    result = await asyncmy_driver.execute(statement)
 
     # Verify result
-    assert isinstance(result, ArrowResult)
+    assert isinstance(result, SQLResult)
+    assert result.operation_type == "SELECT"
 
     # Verify cursor operations with parameters
     mock_asyncmy_connection.cursor.assert_called_once()
@@ -151,98 +136,18 @@ async def test_asyncmy_driver_fetch_arrow_table_with_parameters(
 
 
 @pytest.mark.asyncio
-async def test_asyncmy_driver_fetch_arrow_table_non_query_error(asyncmy_driver: AsyncmyDriver) -> None:
-    """Test Asyncmy driver fetch_arrow_table with non-query statement raises error."""
+async def test_asyncmy_driver_non_query_statement(
+    asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock
+) -> None:
+    """Test Asyncmy driver with non-query statement."""
+    # Setup mock cursor
+    mock_cursor = mock_asyncmy_connection.cursor()
+    mock_cursor.rowcount = 1
+
     # Create non-query statement
-    result = await asyncmy_driver.fetch_arrow_table("INSERT INTO users VALUES (1, 'test')")
+    statement = SQL("INSERT INTO users VALUES (1, 'test')")
+    result = await asyncmy_driver.execute(statement)
 
     # Verify result
-    assert isinstance(result, ArrowResult)
-    # Should create empty Arrow table
-    assert result.num_rows == 0
-
-
-@pytest.mark.asyncio
-async def test_asyncmy_driver_to_parquet(
-    asyncmy_driver: AsyncmyDriver, mock_asyncmy_connection: AsyncMock, monkeypatch: "pytest.MonkeyPatch"
-) -> None:
-    """Test to_parquet writes correct data to a Parquet file (async)."""
-    mock_cursor = AsyncMock()
-    mock_cursor.description = ["id", "name", "email"]
-    mock_cursor.fetchall.return_value = [(1, "Alice"), (2, "Bob")]
-
-    # cursor() in asyncmy is synchronous and returns the cursor directly
-    mock_asyncmy_connection.cursor.return_value = mock_cursor
-    statement = SQL("SELECT id, name FROM users")
-    called = {}
-
-    def patched_write_table(table: Any, path: Any, **kwargs: Any) -> None:
-        called["table"] = table
-        called["path"] = path
-
-    # Mock the storage backend's write_arrow_async method for async operations
-    async def mock_write_arrow_async(path: str, table: Any, **kwargs: Any) -> None:
-        called["table"] = table
-        called["path"] = path
-
-    # Mock the backend resolution to return a mock backend
-    from unittest.mock import AsyncMock as MockBackend
-
-    mock_backend = MockBackend()
-    mock_backend.write_arrow_async = mock_write_arrow_async
-
-    def mock_resolve_backend_and_path(uri: str) -> tuple[AsyncMock, str]:
-        return mock_backend, uri
-
-    # Mock at the class level since instance has __slots__
-    monkeypatch.setattr(
-        AsyncmyDriver, "_resolve_backend_and_path", lambda self, uri, **kwargs: mock_resolve_backend_and_path(uri)
-    )
-
-    # Mock the execute method for the unified storage mixin fallback
-
-    mock_result = SQLResult(
-        statement=statement, data=[{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}], column_names=["id", "name"]
-    )
-
-    async def mock_execute(sql_obj: SQL) -> SQLResult:
-        return mock_result
-
-    # Mock at the class level since instance has __slots__
-    monkeypatch.setattr(AsyncmyDriver, "execute", lambda self, sql_obj, **kwargs: mock_execute(sql_obj))
-
-    # Mock fetch_arrow_table for the async export path
-
-    from sqlspec.statement.result import ArrowResult
-
-    mock_arrow_table = pa.table({"id": [1, 2], "name": ["Alice", "Bob"]})
-    mock_arrow_result = ArrowResult(statement=statement, data=mock_arrow_table)
-
-    async def mock_fetch_arrow_table(query_str: str, **kwargs: Any) -> ArrowResult:
-        return mock_arrow_result
-
-    # Mock the execute method to handle _connection parameter
-    async def mock_execute_with_connection(sql: Any, **kwargs: Any) -> Any:
-        # Return a mock result with required attributes
-        class MockResult:
-            data = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
-            column_names = ["id", "name"]
-            rows_affected = 2
-
-        return MockResult()
-
-    # Create async wrapper functions for the mocks
-    async def _fetch_arrow_wrapper(self: AsyncmyDriver, stmt: Any, **kwargs: Any) -> Any:
-        return await mock_fetch_arrow_table(stmt, **kwargs)
-
-    async def _execute_wrapper(self: AsyncmyDriver, stmt: Any, **kwargs: Any) -> Any:
-        return await mock_execute_with_connection(stmt, **kwargs)
-
-    # Mock at the class level since instance has __slots__
-    monkeypatch.setattr(AsyncmyDriver, "fetch_arrow_table", _fetch_arrow_wrapper)
-    monkeypatch.setattr(AsyncmyDriver, "execute", _execute_wrapper)
-
-    with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
-        await asyncmy_driver.export_to_storage(statement, destination_uri=tmp.name)  # type: ignore[attr-defined]
-        assert "table" in called
-        assert called["path"] == tmp.name
+    assert isinstance(result, SQLResult)
+    assert result.rows_affected == 1

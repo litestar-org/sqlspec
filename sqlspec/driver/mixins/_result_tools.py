@@ -65,6 +65,8 @@ def _default_msgspec_deserializer(
 
 @trait
 class ToSchemaMixin:
+    __slots__ = ()
+
     def _determine_operation_type(self, statement: "Any") -> OperationType:
         """Determine operation type from SQL statement expression.
 
@@ -78,9 +80,9 @@ class ToSchemaMixin:
             OperationType literal value
         """
         # Check if it's a script first
-        if hasattr(statement, 'is_script') and statement.is_script:
+        if hasattr(statement, "is_script") and statement.is_script:
             return "SCRIPT"
-        
+
         try:
             expression = statement.expression
         except AttributeError:
@@ -177,13 +179,13 @@ class ToSchemaMixin:
                 return cast("ModelT", data)
             return cast("Sequence[ModelT]", data)
         if is_dataclass(schema_type):
-            # Check if this is a list of items first (before checking Sequence)
             if isinstance(data, list):
-                return cast("Sequence[ModelDTOT]", [schema_type(**dict(item) if hasattr(item, 'keys') else item) for item in data])  # type: ignore[operator]
-            # Handle single items (including sqlite3.Row objects)
-            if hasattr(data, 'keys'):
-                # sqlite3.Row and similar objects have keys() method
-                return cast("ModelDTOT", schema_type(**dict(data)))  # type: ignore[operator]
+                return cast(
+                    "Sequence[ModelDTOT]",
+                    [schema_type(**dict(item) if hasattr(item, "keys") else item) for item in data],  # type: ignore[operator,arg-type]
+                )
+            if hasattr(data, "keys"):
+                return cast("ModelDTOT", schema_type(**dict(data)))  # type: ignore[operator,arg-type]
             if isinstance(data, dict):
                 return cast("ModelDTOT", schema_type(**data))  # type: ignore[operator]
             # Fallback for other types
@@ -237,20 +239,12 @@ class ToSchemaMixin:
         Returns:
             A converted SQL object
         """
-
         if is_select_builder(statement):
-            # Select has its own parameters via build(), ignore external params
             safe_query = statement.build()
             return SQL(safe_query.sql, parameters=safe_query.parameters, config=config)
-
         if isinstance(statement, SQL):
-            # SQL object is already complete, ignore external params
             return statement
-
         if isinstance(statement, (str, exp.Expression)):
-            # Parameters will be processed by SQL compile with driver context
             return SQL(statement, parameters=params, config=config)
-
-        # Fallback for type safety
         msg = f"Unsupported statement type: {type(statement).__name__}"
         raise TypeError(msg)

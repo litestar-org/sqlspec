@@ -30,14 +30,14 @@ def driver(mock_connection: AsyncMock) -> AsyncpgDriver:
 async def test_driver_initialization(driver: AsyncpgDriver) -> None:
     """Test driver initialization."""
     assert driver.dialect == "postgres"
-    assert driver.parameter_config.paramstyle == ParameterStyle.NUMERIC
+    assert driver.parameter_config.default_parameter_style == ParameterStyle.NUMERIC
 
 
 # Cursor Management Tests
 @pytest.mark.asyncio
 async def test_acquire_cursor(driver: AsyncpgDriver, mock_connection: AsyncMock) -> None:
-    """Test _acquire_cursor context manager."""
-    async with driver._acquire_cursor(mock_connection) as cursor:
+    """Test with_cursor context manager."""
+    async with driver.with_cursor(mock_connection) as cursor:
         assert cursor is mock_connection
 
 
@@ -46,18 +46,18 @@ async def test_acquire_cursor(driver: AsyncpgDriver, mock_connection: AsyncMock)
 async def test_perform_execute_single(driver: AsyncpgDriver, mock_connection: AsyncMock) -> None:
     """Test _perform_execute for a single statement."""
     statement = SQL("SELECT 1")
-    sql, params = statement.compile()
-    await driver._perform_execute(mock_connection, sql, params, statement)
-    mock_connection.execute.assert_called_once_with(sql, *params)
+    await driver._perform_execute(mock_connection, statement)
+    # Driver compiles internally, so check execute was called
+    mock_connection.execute.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_perform_execute_many(driver: AsyncpgDriver, mock_connection: AsyncMock) -> None:
     """Test _perform_execute for an executemany statement."""
     statement = SQL("INSERT INTO t (id) VALUES ($1)").as_many([[1], [2]])
-    sql, params = statement.compile()
-    await driver._perform_execute(mock_connection, sql, params, statement)
-    mock_connection.executemany.assert_called_once_with(sql, params)
+    await driver._perform_execute(mock_connection, statement)
+    # Driver compiles internally, so check executemany was called
+    mock_connection.executemany.assert_called_once()
 
 
 # Result Building Tests

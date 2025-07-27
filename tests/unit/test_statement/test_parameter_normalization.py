@@ -13,7 +13,7 @@ class TestParameterconversion:
         params = ["john", 25]
 
         converter = ParameterConverter()
-        result = converter.convert_parameters(sql, params)
+        result = converter.convert_parameters(sql, params, args=None, kwargs=None)
 
         # Check that conversion occurred
         assert result.conversion_state.was_transformed is True
@@ -27,7 +27,7 @@ class TestParameterconversion:
         params = {"name": "john", "age": 25}
 
         converter = ParameterConverter()
-        result = converter.convert_parameters(sql, params)
+        result = converter.convert_parameters(sql, params, args=None, kwargs=None)
 
         assert result.conversion_state.was_transformed is True
         assert ":param_0" in result.transformed_sql
@@ -46,7 +46,7 @@ class TestParameterconversion:
 
         converter = ParameterConverter()
         for sql, params, expected_style in test_cases:
-            result = converter.convert_parameters(sql, params)
+            result = converter.convert_parameters(sql, params, args=None, kwargs=None)
             # Should not be converted
             assert result.conversion_state.was_transformed is False
             assert result.transformed_sql == sql
@@ -71,7 +71,7 @@ class TestParameterconversion:
         params = ["john", 42]
 
         converter = ParameterConverter()
-        result = converter.convert_parameters(sql, params)
+        result = converter.convert_parameters(sql, params, args=None, kwargs=None)
 
         assert result.conversion_state.was_transformed is True
 
@@ -90,10 +90,10 @@ class TestParameterconversion:
     def test_conversion_preserves_parameter_order(self) -> None:
         """Test that conversion preserves parameter order."""
         sql = "INSERT INTO users (name, age, email) VALUES (%s, %s, %s)"
-        params: SQLParameterType = ["john", 25, "john@example.com"]
+        params: SQLParameterType = ["john", 25, "john@example.com"]  # type: ignore[assignment]
 
         converter = ParameterConverter()
-        result = converter.convert_parameters(sql, params)
+        result = converter.convert_parameters(sql, params, args=None, kwargs=None)
         assert ":param_0" in result.transformed_sql
         assert ":param_1" in result.transformed_sql
         assert ":param_2" in result.transformed_sql
@@ -107,7 +107,7 @@ class TestParameterconversion:
         params = [42, "john"]
 
         converter = ParameterConverter()
-        result = converter.convert_parameters(sql, params)
+        result = converter.convert_parameters(sql, params, args=None, kwargs=None)
 
         # Oracle numeric is incompatible with SQLGlot, so it should be converted
         assert result.conversion_state.was_transformed is True

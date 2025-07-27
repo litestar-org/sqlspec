@@ -15,7 +15,6 @@ from adbc_driver_manager.dbapi import Connection, Cursor
 
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
-from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 # Type handlers removed - ADBC has good native type support
@@ -56,7 +55,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
     # Default parameter config - will be overridden in __init__ based on dialect
     parameter_config = DriverParameterConfig(
-        paramstyle=ParameterStyle.QMARK, type_coercion_map={}, has_native_list_expansion=True
+        default_parameter_style=ParameterStyle.QMARK, type_coercion_map={}, has_native_list_expansion=True
     )
 
     def __init__(self, connection: "AdbcConnection", config: "Optional[SQLConfig]" = None) -> None:
@@ -68,8 +67,6 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, config=config)
         self.dialect: DialectType = dialect
-
-        # Set up parameter configuration based on dialect
         default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
             self.dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
         )
@@ -135,9 +132,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         try:
             if statement.is_many:
-                # For execute_many, params is already a list of parameter sets
-                prepared_params = self._prepare_driver_parameters_many(params) if params else []
-                cursor.executemany(sql, prepared_params)
+                cursor.executemany(sql, params or [])
             else:
                 prepared_params = self._prepare_driver_parameters(params)
                 # Handle PostgreSQL empty params
@@ -155,8 +150,8 @@ class AdbcDriver(SyncDriverAdapterBase):
         else:
             cursor.execute(sql)
 
-    def _build_select_result(self, cursor: "Cursor", statement: "SQL") -> "SQLResult":
-        """Build result for SELECT operations."""
+    def _extract_select_data(self, cursor: "Cursor") -> "tuple[list[dict[str, Any]], list[str], int]":
+        """Extract data from cursor after SELECT execution."""
         fetched_data = cursor.fetchall()
         column_names = [col[0] for col in cursor.description or []]
 
@@ -165,50 +160,26 @@ class AdbcDriver(SyncDriverAdapterBase):
         else:
             dict_data = fetched_data  # type: ignore[assignment]
 
-        return SQLResult(
-            statement=statement,
-            data=cast("list[dict[str, Any]]", dict_data),
-            column_names=column_names,
-            rows_affected=len(dict_data),
-            operation_type="SELECT",
-        )
+        return cast("list[dict[str, Any]]", dict_data), column_names, len(dict_data)
 
-    def _build_modify_result(self, cursor: "Cursor", statement: "SQL") -> "SQLResult":
-        """Build result for modification operations."""
-        return SQLResult(
-            statement=statement,
-            data=[],
-            rows_affected=cursor.rowcount if cursor.rowcount is not None else -1,
-            operation_type=self._determine_operation_type(statement),
-            metadata={"status_message": "OK"},
-        )
+    def _extract_execute_rowcount(self, cursor: "Cursor") -> int:
+        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
+        return cursor.rowcount if cursor.rowcount is not None else -1
 
-    def _build_result(self, cursor: "Cursor", statement: "SQL") -> "SQLResult":
-        """Build and return the result of the SQL execution."""
-        if self.returns_rows(statement.expression):
-            return self._build_select_result(cursor, statement)
-        return self._build_modify_result(cursor, statement)
-
-    def begin(self, connection: "Optional[Any]" = None) -> None:
+    def begin(self) -> None:
         """Begin database transaction."""
-        conn = connection or self.connection
-        # ADBC transaction handling varies by backend
-        if hasattr(conn, "begin"):
-            conn.begin()
-        elif hasattr(conn, "autocommit"):
-            conn.autocommit = False
+        with self.with_cursor(self.connection) as cursor:
+            cursor.execute("BEGIN")
 
-    def rollback(self, connection: "Optional[Any]" = None) -> None:
+    def rollback(self) -> None:
         """Rollback database transaction."""
-        conn = connection or self.connection
-        if hasattr(conn, "rollback"):
-            conn.rollback()
+        with self.with_cursor(self.connection) as cursor:
+            cursor.execute("ROLLBACK")
 
-    def commit(self, connection: "Optional[Any]" = None) -> None:
+    def commit(self) -> None:
         """Commit database transaction."""
-        conn = connection or self.connection
-        if hasattr(conn, "commit"):
-            conn.commit()
+        with self.with_cursor(self.connection) as cursor:
+            cursor.execute("COMMIT")
 
     def _prepare_driver_parameters(self, parameters: "Any") -> "Any":
         """Prepare parameters for the ADBC driver."""

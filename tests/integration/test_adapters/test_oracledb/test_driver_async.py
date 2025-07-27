@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from pytest_databases.docker.oracle import OracleService
@@ -195,28 +194,6 @@ async def test_async_select_arrow(oracle_async_session: OracleAsyncConfig) -> No
         insert_result = await driver.execute(insert_sql, ("arrow_name"))
         assert isinstance(insert_result, SQLResult)
         assert insert_result.rows_affected == 1
-
-        # Test fetch_arrow_table using mixins
-        if hasattr(driver, "fetch_arrow_table"):
-            select_sql = "SELECT name, id FROM test_table WHERE name = ?"
-            arrow_result = await driver.fetch_arrow_table(select_sql, ("arrow_name"))
-
-            # ArrowResult stores the table in the 'data' attribute, not 'arrow_table'
-            assert hasattr(arrow_result, "data")
-            arrow_table = arrow_result.data
-            assert isinstance(arrow_table, pa.Table)
-            assert arrow_table.num_rows == 1
-            assert arrow_table.num_columns == 2
-            # Oracle returns uppercase column names by default
-            assert arrow_table.column_names == ["NAME", "ID"]
-            assert arrow_table.column("NAME").to_pylist() == ["arrow_name"]
-            # Check ID exists and is a number (exact value depends on IDENTITY)
-            assert arrow_table.column("ID").to_pylist()[0] is not None
-            assert isinstance(
-                arrow_table.column("ID").to_pylist()[0], (int, float)
-            )  # Oracle NUMBER maps to float/Decimal
-        else:
-            pytest.skip("Oracle driver does not support Arrow operations")
 
         await driver.execute_script(
             "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"

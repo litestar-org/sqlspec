@@ -88,6 +88,8 @@ class StorageCapabilities:
 class HasStorageCapabilities:
     """Mixin for storage backends that expose their capabilities."""
 
+    __slots__ = ()
+
     capabilities: ClassVar[StorageCapabilities]
 
     @classmethod

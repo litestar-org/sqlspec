@@ -2,13 +2,15 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 
 import logging
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
-    
+
     from typing_extensions import TypeAlias
 
+    from sqlspec.statement.result import SQLResult
     from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -16,7 +18,6 @@ from psqlpy import Connection
 
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
-from sqlspec.statement.result import SQLResult
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -29,8 +30,6 @@ else:
     # Direct assignment for mypyc runtime
     PsqlpyConnection = Connection
 logger = logging.getLogger("sqlspec")
-
-from contextlib import asynccontextmanager
 
 
 class PsqlpyDriver(AsyncDriverAdapterBase):
@@ -65,48 +64,50 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             prepared_params = self._prepare_driver_parameters(params)
             await cursor.execute(sql, prepared_params or [])
 
-    async def _build_result(self, cursor: PsqlpyConnection, statement: "SQL") -> "SQLResult":
-        if self.returns_rows(statement.expression):
-            return await self._build_select_result(cursor, statement)
-        return self._build_modify_result(cursor, statement)
+    async def _extract_select_data(self, cursor: PsqlpyConnection) -> "tuple[list[dict[str, Any]], list[str], int]":
+        """Extract data from cursor after SELECT execution.
 
-    async def _build_select_result(self, cursor: PsqlpyConnection, statement: "SQL") -> "SQLResult":
-        sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
-        prepared_params = self._prepare_driver_parameters(params)
-        query_result = await cursor.fetch(sql, prepared_params or [])
-        dict_rows: list[dict[str, Any]] = []
-        if query_result:
-            dict_rows = query_result.result()
+        Note: psqlpy requires a separate fetch() call after execute().
+        """
+        # Similar to asyncpg, we need to fetch after execute
+        if hasattr(self, "_last_statement"):
+            statement = self._last_statement
+            sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
+            prepared_params = self._prepare_driver_parameters(params)
+            query_result = await cursor.fetch(sql, prepared_params or [])
+            dict_rows: list[dict[str, Any]] = []
+            if query_result:
+                dict_rows = query_result.result()
+        else:
+            dict_rows = []
+
         column_names = list(dict_rows[0].keys()) if dict_rows else []
-        return SQLResult(
-            statement=statement,
-            data=dict_rows,
-            column_names=column_names,
-            rows_affected=len(dict_rows),
-            operation_type="SELECT",
-        )
+        return dict_rows, column_names, len(dict_rows)
 
-    def _build_modify_result(self, cursor: PsqlpyConnection, statement: "SQL") -> "SQLResult":
-        affected_count = -1
-        return SQLResult(
-            statement=statement,
-            data=[],
-            rows_affected=affected_count,
-            operation_type=self._determine_operation_type(statement),
-            metadata={"status_message": "OK"},
-        )
+    def _extract_execute_rowcount(self, cursor: PsqlpyConnection) -> int:
+        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
+        # psqlpy doesn't easily expose rowcount, so we return -1
+        return -1
 
-    async def begin(self, connection: "Optional[Any]" = None) -> None:
+    async def _build_result(self, cursor: PsqlpyConnection, statement: "SQL") -> "SQLResult":
+        """Build result - override to handle psqlpy's special needs."""
+        # Store statement for _extract_select_data
+        self._last_statement = statement
+        try:
+            return await super()._build_result(cursor, statement)
+        finally:
+            # Clean up
+            if hasattr(self, "_last_statement"):
+                delattr(self, "_last_statement")
+
+    async def begin(self) -> None:
         """Begin transaction using psqlpy-specific method."""
-        conn = connection or self.connection
-        await conn.execute("BEGIN")
+        await self.connection.execute("BEGIN")
 
-    async def rollback(self, connection: "Optional[Any]" = None) -> None:
+    async def rollback(self) -> None:
         """Rollback transaction using psqlpy-specific method."""
-        conn = connection or self.connection
-        await conn.execute("ROLLBACK")
+        await self.connection.execute("ROLLBACK")
 
-    async def commit(self, connection: "Optional[Any]" = None) -> None:
+    async def commit(self) -> None:
         """Commit transaction using psqlpy-specific method."""
-        conn = connection or self.connection
-        await conn.execute("COMMIT")
+        await self.connection.execute("COMMIT")

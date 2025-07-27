@@ -40,7 +40,8 @@ def test_wrap_parameters_with_types_dict() -> None:
     }
 
     param_info: list[ParameterInfo] = []  # Not used for dict params
-    wrapped = ParameterConverter.wrap_parameters_with_types(params, param_info)
+    converter = ParameterConverter()
+    wrapped = converter.wrap_parameters_with_types(params, param_info)
     assert isinstance(wrapped, dict)
     # Simple types should not be wrapped
     assert wrapped["name"] == "John"
@@ -90,7 +91,8 @@ def test_wrap_parameters_with_types_list() -> None:
         ParameterInfo(name=None, position=50, style=ParameterStyle.QMARK, ordinal=5, placeholder_text="?"),
     ]
 
-    wrapped = ParameterConverter.wrap_parameters_with_types(params, param_info)
+    converter = ParameterConverter()
+    wrapped = converter.wrap_parameters_with_types(params, param_info)
     assert isinstance(wrapped, list)
 
     # Simple types should not be wrapped
@@ -126,7 +128,8 @@ def test_wrap_parameters_with_types_already_wrapped() -> None:
     )
 
     params = {"param": tp}
-    wrapped = ParameterConverter.wrap_parameters_with_types(params, [])
+    converter = ParameterConverter()
+    wrapped = converter.wrap_parameters_with_types(params, [])
     assert isinstance(wrapped, dict)
 
     # Should be the same object
@@ -184,7 +187,8 @@ def test_typed_parameter_type_inference() -> None:
     ]
 
     for value, expected_hint, expected_type in test_cases:
-        wrapped = ParameterConverter.wrap_parameters_with_types({"param": value}, [])
+        converter = ParameterConverter()
+        wrapped = converter.wrap_parameters_with_types({"param": value}, [])
         assert isinstance(wrapped, dict)
 
         if (
@@ -206,7 +210,8 @@ def test_typed_parameter_performance_optimization() -> None:
     """Test that simple scalar types are not wrapped for performance."""
     params = {"string": "hello", "small_int": 100, "float": math.pi, "big_int": 9999999999, "bool": True}
 
-    wrapped = ParameterConverter.wrap_parameters_with_types(params, [])
+    converter = ParameterConverter()
+    wrapped = converter.wrap_parameters_with_types(params, [])
     assert isinstance(wrapped, dict)
 
     # Simple scalars should not be wrapped (except bigint and bool)

@@ -56,7 +56,7 @@ class ParameterProcessor:
             Tuple of (transformed_sql, transformed_params)
         """
         # Fast path: check cache
-        cache_key = f"{sql}:{hash(repr(params))}:{config.paramstyle}:{is_parsed}"
+        cache_key = f"{sql}:{hash(repr(params))}:{config.default_parameter_style}:{is_parsed}"
         if cache_key in self._cache:
             return self._cache[cache_key]
 
@@ -71,17 +71,17 @@ class ParameterProcessor:
 
             # 3. Convert parameter style
             # Convert enum to literal for method signature
-            style_literal = self._enum_to_paramstyle(config.paramstyle)
+            style_literal = self._enum_to_paramstyle(config.default_parameter_style)
             sql, params = self._convert_parameter_style(sql, params, style_literal)
         else:
             # Fallback: Regex-based conversion for unparsed SQL
             # This preserves the current behavior when parsing is disabled
             param_info = self._validator.extract_parameters(sql)
             if param_info:
-                style_literal = self._enum_to_paramstyle(config.paramstyle)
+                style_literal = self._enum_to_paramstyle(config.default_parameter_style)
                 if self._needs_style_conversion(param_info, style_literal):
                     # Use existing regex-based conversion
-                    sql = self._converter.convert_placeholders(sql, config.paramstyle, param_info)
+                    sql = self._converter.convert_placeholders(sql, config.default_parameter_style, param_info)
                     # Basic parameter format adjustment
                     params = self._adjust_params_for_style(params, param_info, style_literal)
 

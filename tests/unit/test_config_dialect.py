@@ -1,5 +1,6 @@
 """Comprehensive tests for config dialect property implementation."""
 
+from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from typing import Any, ClassVar, Optional
 from unittest.mock import Mock, patch
 
@@ -40,6 +41,41 @@ class MockDriver(SyncDriverAdapterBase):
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.QMARK
 
+    def with_cursor(self, connection: "Any") -> "AbstractContextManager[Any]":
+        """Mock cursor context manager."""
+        from collections.abc import Iterator
+        from contextlib import contextmanager
+
+        @contextmanager
+        def mock_cursor() -> Iterator[Any]:
+            yield Mock(rowcount=0, description=None, fetchall=lambda: [], fetchone=lambda: None)
+
+        return mock_cursor()
+
+    def begin(self) -> None:
+        """Mock begin transaction."""
+        pass
+
+    def rollback(self) -> None:
+        """Mock rollback transaction."""
+        pass
+
+    def commit(self) -> None:
+        """Mock commit transaction."""
+        pass
+
+    def _perform_execute(self, cursor: "Any", statement: "SQL") -> None:
+        """Mock execute statement."""
+        cursor.rowcount = 0
+
+    def _extract_select_data(self, cursor: "Any") -> "tuple[list[dict[str, Any]], list[str], int]":
+        """Mock extract select data."""
+        return [], [], 0
+
+    def _extract_execute_rowcount(self, cursor: "Any") -> int:
+        """Mock extract execute rowcount."""
+        return 0
+
 
 class MockAsyncDriver(AsyncDriverAdapterBase):
     """Mock async driver for testing."""
@@ -62,6 +98,41 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
 
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.NUMERIC
+
+    def with_cursor(self, connection: "Any") -> "AbstractAsyncContextManager[Any]":
+        """Mock async cursor context manager."""
+        from collections.abc import AsyncIterator
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def mock_cursor() -> AsyncIterator[Any]:
+            yield Mock(rowcount=0, description=None, fetchall=lambda: [], fetchone=lambda: None)
+
+        return mock_cursor()
+
+    async def begin(self) -> None:
+        """Mock begin transaction."""
+        pass
+
+    async def rollback(self) -> None:
+        """Mock rollback transaction."""
+        pass
+
+    async def commit(self) -> None:
+        """Mock commit transaction."""
+        pass
+
+    async def _perform_execute(self, cursor: "Any", statement: "SQL") -> None:
+        """Mock execute statement."""
+        cursor.rowcount = 0
+
+    async def _extract_select_data(self, cursor: "Any") -> "tuple[list[dict[str, Any]], list[str], int]":
+        """Mock extract select data."""
+        return [], [], 0
+
+    def _extract_execute_rowcount(self, cursor: "Any") -> int:
+        """Mock extract execute rowcount."""
+        return 0
 
 
 class TestSyncConfigDialect:
@@ -109,6 +180,41 @@ class TestSyncConfigDialect:
 
             def _get_placeholder_style(self) -> ParameterStyle:
                 return ParameterStyle.QMARK
+
+            def with_cursor(self, connection: "Any") -> "AbstractContextManager[Any]":
+                """Mock cursor context manager."""
+                from collections.abc import Iterator
+                from contextlib import contextmanager
+
+                @contextmanager
+                def mock_cursor() -> Iterator[Any]:
+                    yield Mock(rowcount=0, description=None, fetchall=lambda: [], fetchone=lambda: None)
+
+                return mock_cursor()
+
+            def begin(self) -> None:
+                """Mock begin transaction."""
+                pass
+
+            def rollback(self) -> None:
+                """Mock rollback transaction."""
+                pass
+
+            def commit(self) -> None:
+                """Mock commit transaction."""
+                pass
+
+            def _perform_execute(self, cursor: "Any", statement: "SQL") -> None:
+                """Mock execute statement."""
+                cursor.rowcount = 0
+
+            def _extract_select_data(self, cursor: "Any") -> "tuple[list[dict[str, Any]], list[str], int]":
+                """Mock extract select data."""
+                return [], [], 0
+
+            def _extract_execute_rowcount(self, cursor: "Any") -> int:
+                """Mock extract execute rowcount."""
+                return 0
 
         class BrokenNoPoolConfig(NoPoolSyncConfig[MockConnection, DriverWithoutDialect]):
             # Intentionally not setting driver_type
@@ -306,7 +412,7 @@ class TestDialectPropagation:
         driver = MockDriver(connection=MockConnection(), config=SQLConfig())
 
         # When driver builds a statement, it should pass its dialect
-        statement = driver._prepare_sql("SELECT * FROM users")
+        statement = driver._prepare_sql("SELECT * FROM users", config=SQLConfig())
         assert isinstance(statement, SQL)
         assert statement.dialect == "sqlite"
 
@@ -385,6 +491,41 @@ class TestDialectValidation:
 
             def _get_placeholder_style(self) -> ParameterStyle:
                 return ParameterStyle.QMARK
+
+            def with_cursor(self, connection: "Any") -> "AbstractContextManager[Any]":
+                """Mock cursor context manager."""
+                from collections.abc import Iterator
+                from contextlib import contextmanager
+
+                @contextmanager
+                def mock_cursor() -> Iterator[Any]:
+                    yield Mock(rowcount=0, description=None, fetchall=lambda: [], fetchone=lambda: None)
+
+                return mock_cursor()
+
+            def begin(self) -> None:
+                """Mock begin transaction."""
+                pass
+
+            def rollback(self) -> None:
+                """Mock rollback transaction."""
+                pass
+
+            def commit(self) -> None:
+                """Mock commit transaction."""
+                pass
+
+            def _perform_execute(self, cursor: "Any", statement: "SQL") -> None:
+                """Mock execute statement."""
+                cursor.rowcount = 0
+
+            def _extract_select_data(self, cursor: "Any") -> "tuple[list[dict[str, Any]], list[str], int]":
+                """Mock extract select data."""
+                return [], [], 0
+
+            def _extract_execute_rowcount(self, cursor: "Any") -> int:
+                """Mock extract execute rowcount."""
+                return 0
 
         class IncompleteConfig(NoPoolSyncConfig[MockConnection, DriverWithoutDialect]):
             # No driver_type attribute

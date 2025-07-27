@@ -6,10 +6,12 @@ from typing import TYPE_CHECKING, Any, Optional, Union, overload
 from mypy_extensions import mypyc_attr
 
 from sqlspec.driver._common import CommonDriverAttributesMixin
+from sqlspec.driver.context import set_current_driver
 from sqlspec.driver.mixins import SQLTranslatorMixin, SyncAdapterCacheMixin, ToSchemaMixin
 from sqlspec.exceptions import NotFoundError
 from sqlspec.parameters import process_execute_many_parameters
 from sqlspec.statement.builder import QueryBuilder, Select
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig, Statement
 from sqlspec.typing import ModelDTOT
 from sqlspec.utils.logging import get_logger
@@ -19,7 +21,6 @@ if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
     from sqlspec.statement.filters import StatementFilter
-    from sqlspec.statement.result import SQLResult
     from sqlspec.typing import StatementParameters
 
 logger = get_logger("sqlspec")
@@ -33,6 +34,107 @@ EMPTY_FILTERS: "list[StatementFilter]" = []
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToSchemaMixin, SyncAdapterCacheMixin, ABC):
     __slots__ = ()
+
+    def _dispatch_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
+        """Central execution dispatcher using the Template Method Pattern.
+
+        This method orchestrates the common execution flow, delegating
+        database-specific steps to abstract methods that concrete adapters
+        must implement.
+
+        The new pattern passes only (cursor, statement) to _perform_execute,
+        allowing the driver implementation to handle compilation internally.
+        This provides backward compatibility with drivers still using the
+        old (cursor, sql, params, statement) signature.
+
+        Args:
+            statement: The SQL statement to execute.
+            connection: The database connection to use.
+
+        Returns:
+            The result of the SQL execution.
+        """
+
+        # Set current driver in context for SQL compilation
+        set_current_driver(self)
+        try:
+            with self.with_cursor(connection) as cursor:
+                self._perform_execute(cursor, statement)
+                return self._build_result(cursor, statement)
+        finally:
+            # Clear driver context
+            set_current_driver(None)
+
+    @abstractmethod
+    def with_cursor(self, connection: Any) -> "AbstractContextManager[Any]":
+        """Context manager for cursor acquisition and cleanup."""
+
+    @abstractmethod
+    def begin(self) -> None:
+        """Begin a database transaction on the current connection."""
+
+    @abstractmethod
+    def rollback(self) -> None:
+        """Rollback the current transaction on the current connection."""
+
+    @abstractmethod
+    def commit(self) -> None:
+        """Commit the current transaction on the current connection."""
+
+    @abstractmethod
+    def _perform_execute(self, cursor: Any, statement: "SQL") -> None:
+        """Execute the SQL statement using the provided cursor."""
+
+    # New abstract methods for data extraction
+    @abstractmethod
+    def _extract_select_data(self, cursor: Any) -> "tuple[list[dict[str, Any]], list[str], int]":
+        """Extract data from cursor after SELECT execution.
+
+        Returns:
+            Tuple of (data_rows, column_names, row_count)
+        """
+
+    @abstractmethod
+    def _extract_execute_rowcount(self, cursor: Any) -> int:
+        """Extract row count from cursor after INSERT/UPDATE/DELETE.
+
+        Returns:
+            Number of affected rows
+        """
+
+    def _build_result(self, cursor: Any, statement: "SQL") -> "SQLResult":
+        """Build and return the result of the SQL execution.
+
+        This method is now implemented in the base class using the
+        abstract extraction methods.
+        """
+        if self.returns_rows(statement.expression):
+            data, column_names, row_count = self._extract_select_data(cursor)
+            return self._build_select_result_from_data(
+                statement=statement, data=data, column_names=column_names, row_count=row_count
+            )
+        row_count = self._extract_execute_rowcount(cursor)
+        return self._build_execute_result_from_data(statement=statement, row_count=row_count)
+
+    def _build_select_result_from_data(
+        self, statement: "SQL", data: "list[dict[str, Any]]", column_names: "list[str]", row_count: int
+    ) -> "SQLResult":
+        """Build SQLResult for SELECT operations from extracted data."""
+        return SQLResult(
+            statement=statement, data=data, column_names=column_names, rows_affected=row_count, operation_type="SELECT"
+        )
+
+    def _build_execute_result_from_data(
+        self, statement: "SQL", row_count: int, metadata: "Optional[dict[str, Any]]" = None
+    ) -> "SQLResult":
+        """Build SQLResult for non-SELECT operations from extracted data."""
+        return SQLResult(
+            statement=statement,
+            data=[],
+            rows_affected=row_count,
+            operation_type=self._determine_operation_type(statement),
+            metadata=metadata or {"status_message": "OK"},
+        )
 
     def _prepare_sql(
         self,
@@ -190,9 +292,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         """
         result = self.execute(statement, *parameters, config=config, **kwargs)
         data = result.get_data()
-        if not isinstance(data, list):
-            msg = "Expected list result from select operation"
-            raise TypeError(msg)
         if not data:
             msg = "No rows found"
             raise NotFoundError(msg)
@@ -239,16 +338,12 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         """
         result = self.execute(statement, *parameters, config=config, **kwargs)
         data = result.get_data()
-        # For select operations, data should be a list
-        if not isinstance(data, list):
-            msg = "Expected list result from select operation"
-            raise TypeError(msg)
         if not data:
             return None
         if len(data) > 1:
             msg = f"Expected at most one row, found {len(data)}"
             raise ValueError(msg)
-        return self.to_schema(data[0], schema_type=schema_type) if schema_type else data[0]
+        return self.to_schema(data[0], schema_type=schema_type)
 
     @overload
     def select(
@@ -353,59 +448,3 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         except (TypeError, IndexError) as e:
             msg = f"Cannot extract value from row type {type(row).__name__}: {e}"
             raise TypeError(msg) from e
-
-    def _dispatch_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
-        """Central execution dispatcher using the Template Method Pattern.
-
-        This method orchestrates the common execution flow, delegating
-        database-specific steps to abstract methods that concrete adapters
-        must implement.
-
-        The new pattern passes only (cursor, statement) to _perform_execute,
-        allowing the driver implementation to handle compilation internally.
-        This provides backward compatibility with drivers still using the
-        old (cursor, sql, params, statement) signature.
-
-        Args:
-            statement: The SQL statement to execute.
-            connection: The database connection to use.
-
-        Returns:
-            The result of the SQL execution.
-        """
-        from sqlspec.driver.context import set_current_driver
-        
-        # Set current driver in context for SQL compilation
-        set_current_driver(self)
-        try:
-            with self.with_cursor(connection) as cursor:
-                self._perform_execute(cursor, statement)
-                return self._build_result(cursor, statement)
-        finally:
-            # Clear driver context
-            set_current_driver(None)
-
-    # Abstract methods that must be implemented by concrete adapters
-    @abstractmethod
-    def with_cursor(self, connection: Any) -> "AbstractContextManager[Any]":
-        """Context manager for cursor acquisition and cleanup."""
-
-    @abstractmethod
-    def begin(self, connection: "Optional[Any]" = None) -> None:
-        """Begin a database transaction."""
-
-    @abstractmethod
-    def rollback(self, connection: "Optional[Any]" = None) -> None:
-        """Rollback the current transaction."""
-
-    @abstractmethod
-    def commit(self, connection: "Optional[Any]" = None) -> None:
-        """Commit the current transaction."""
-
-    @abstractmethod
-    def _perform_execute(self, cursor: Any, statement: "SQL") -> None:
-        """Execute the SQL statement using the provided cursor."""
-
-    @abstractmethod
-    def _build_result(self, cursor: Any, statement: "SQL") -> "SQLResult":
-        """Build and return the result of the SQL execution."""

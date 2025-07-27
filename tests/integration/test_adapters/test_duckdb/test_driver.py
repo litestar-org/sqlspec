@@ -7,12 +7,11 @@ from collections.abc import Generator
 from pathlib import Path
 from typing import Any, Literal
 
-import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
-from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL
 
 ParamStyle = Literal["tuple_binds", "dict_binds"]
@@ -153,45 +152,6 @@ def test_select_value(duckdb_session: DuckDBDriver, params: Any, style: ParamSty
     # Extract single value using column name
     value = value_result.data[0][value_result.column_names[0]]
     assert value == "test_name"
-
-    duckdb_session.execute_script("DELETE FROM test_table")
-
-
-@pytest.mark.parametrize(
-    ("params", "style"),
-    [
-        pytest.param(("arrow_name", 1), "tuple_binds", id="tuple_binds"),
-        pytest.param({"name": "arrow_name", "id": 1}, "dict_binds", id="dict_binds"),
-    ],
-)
-@pytest.mark.xdist_group("duckdb")
-def test_select_arrow(duckdb_session: DuckDBDriver, params: Any, style: ParamStyle) -> None:
-    """Test selecting data as an Arrow Table."""
-    # Insert test record
-    if style == "tuple_binds":
-        insert_sql = "INSERT INTO test_table (name, id) VALUES (?, ?)"
-    else:
-        insert_sql = "INSERT INTO test_table (name, id) VALUES (:name, :id)"
-
-    insert_result = duckdb_session.execute(insert_sql, params)
-    assert isinstance(insert_result, SQLResult)
-    assert insert_result.rows_affected == 1
-
-    # Test select_arrow using mixins
-    if hasattr(duckdb_session, "fetch_arrow_table"):
-        select_sql = "SELECT name, id FROM test_table WHERE id = 1"
-        arrow_result = duckdb_session.fetch_arrow_table(select_sql)
-
-        assert isinstance(arrow_result, ArrowResult)
-        arrow_table = arrow_result.data
-        assert isinstance(arrow_table, pa.Table)
-        assert arrow_table.num_rows == 1
-        assert arrow_table.num_columns == 2
-        assert arrow_table.column_names == ["name", "id"]
-        assert arrow_table.column("name").to_pylist() == ["arrow_name"]
-        assert arrow_table.column("id").to_pylist() == [1]
-    else:
-        pytest.skip("DuckDB driver does not support Arrow operations")
 
     duckdb_session.execute_script("DELETE FROM test_table")
 
@@ -504,70 +464,6 @@ def test_duckdb_performance_bulk_operations(duckdb_session: DuckDBDriver) -> Non
 
     # Clean up
     duckdb_session.execute_script("DROP TABLE bulk_test")
-
-
-@pytest.mark.xdist_group("duckdb")
-def test_duckdb_arrow_integration_comprehensive(duckdb_session: DuckDBDriver) -> None:
-    """Test comprehensive Arrow integration with DuckDB."""
-    if not hasattr(duckdb_session, "fetch_arrow_table"):
-        pytest.skip("DuckDB driver does not support Arrow operations")
-
-    # Create table with various data types for Arrow testing
-    duckdb_session.execute_script("""
-        CREATE TABLE arrow_test (
-            id INTEGER,
-            name TEXT,
-            value DOUBLE,
-            active BOOLEAN,
-            created_date DATE
-        );
-
-        INSERT INTO arrow_test VALUES
-            (1, 'Alice', 123.45, true, '2024-01-01'),
-            (2, 'Bob', 234.56, false, '2024-01-02'),
-            (3, 'Carol', 345.67, true, '2024-01-03'),
-            (4, 'Dave', 456.78, false, '2024-01-04'),
-            (5, 'Eve', 567.89, true, '2024-01-05');
-    """)
-
-    # Test Arrow result with filtering
-    arrow_result = duckdb_session.fetch_arrow_table(
-        "SELECT id, name, value FROM arrow_test WHERE active = ? ORDER BY id", parameters=[True]
-    )
-
-    assert isinstance(arrow_result, ArrowResult)
-    arrow_table = arrow_result.data
-    assert isinstance(arrow_table, pa.Table)
-    assert arrow_table.num_rows == 3  # 3 active records
-    assert arrow_table.num_columns == 3
-    assert arrow_table.column_names == ["id", "name", "value"]
-
-    # Verify Arrow data
-    ids = arrow_table.column("id").to_pylist()
-    names = arrow_table.column("name").to_pylist()
-    values = arrow_table.column("value").to_pylist()
-
-    assert ids == [1, 3, 5]
-    assert names == ["Alice", "Carol", "Eve"]
-    assert values == [123.45, 345.67, 567.89]
-
-    # Test Arrow with aggregation
-    agg_arrow_result = duckdb_session.fetch_arrow_table("""
-        SELECT
-            active,
-            COUNT(*) as count,
-            AVG(value) as avg_value
-        FROM arrow_test
-        GROUP BY active
-        ORDER BY active
-    """)
-
-    agg_table = agg_arrow_result.data
-    assert agg_table.num_rows == 2  # true and false groups
-    assert agg_table.num_columns == 3
-
-    # Clean up
-    duckdb_session.execute_script("DROP TABLE arrow_test")
 
 
 @pytest.mark.xdist_group("duckdb")

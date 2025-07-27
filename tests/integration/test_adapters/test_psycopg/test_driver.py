@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import tempfile
 from collections.abc import Generator
 from typing import Any, Literal
 
-import pyarrow.parquet as pq
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
-from sqlspec.statement.result import ArrowResult, SQLResult
-from sqlspec.statement.sql import SQL
+from sqlspec.statement.result import SQLResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -151,9 +148,7 @@ def test_psycopg_execute_many(psycopg_session: PsycopgSyncDriver) -> None:
     """Test execute_many functionality."""
     params_list = [("name1", 1), ("name2", 2), ("name3", 3)]
 
-    result = psycopg_session.execute_many(
-        "INSERT INTO test_table (name, value) VALUES (%s, %s)", parameters=params_list
-    )
+    result = psycopg_session.execute_many("INSERT INTO test_table (name, value) VALUES (%s, %s)", params_list)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == len(params_list)
 
@@ -204,8 +199,7 @@ def test_psycopg_result_methods(psycopg_session: PsycopgSyncDriver) -> None:
     """Test SelectResult and ExecuteResult methods."""
     # Insert test data
     psycopg_session.execute_many(
-        "INSERT INTO test_table (name, value) VALUES (%s, %s)",
-        parameters=[("result1", 10), ("result2", 20), ("result3", 30)],
+        "INSERT INTO test_table (name, value) VALUES (%s, %s)", [("result1", 10), ("result2", 20), ("result3", 30)]
     )
 
     # Test SelectResult methods
@@ -653,45 +647,3 @@ def test_psycopg_copy_csv_format(psycopg_session: PsycopgSyncDriver) -> None:
 
     # Clean up
     psycopg_session.execute_script("DROP TABLE copy_csv_sync")
-
-
-@pytest.mark.xdist_group("postgres")
-def test_psycopg_fetch_arrow_table(psycopg_session: PsycopgSyncDriver) -> None:
-    """Integration test: fetch_arrow_table returns ArrowResult with correct pyarrow.Table."""
-    psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", parameters=("arrow1", 111))
-    psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", parameters=("arrow2", 222))
-    statement = SQL("SELECT name, value FROM test_table ORDER BY name")
-    result = psycopg_session.fetch_arrow_table(statement)
-    assert isinstance(result, ArrowResult)
-    assert result.num_rows == 2
-    assert set(result.column_names) == {"name", "value"}
-    names = result.data["name"].to_pylist()
-    assert "arrow1" in names and "arrow2" in names
-
-
-@pytest.mark.xdist_group("postgres")
-def test_psycopg_to_parquet(psycopg_session: PsycopgSyncDriver) -> None:
-    """Integration test: to_parquet writes correct data to a Parquet file."""
-    # Insert fresh data for this test
-    psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", parameters=("pq1", 123))
-    psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", parameters=("pq2", 456))
-
-    # First verify data can be selected normally
-    normal_result = psycopg_session.execute("SELECT name, value FROM test_table ORDER BY name")
-    assert len(normal_result.data) >= 2, f"Expected at least 2 rows, got {len(normal_result.data)}"
-
-    # Use a simpler query without WHERE clause first
-    statement = "SELECT name, value FROM test_table ORDER BY name"
-    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
-        try:
-            rows_exported = psycopg_session.export_to_storage(statement, destination_uri=tmp.name, format="parquet")
-            assert rows_exported == 2
-            table = pq.read_table(tmp.name)
-            assert table.num_rows == 2
-            assert set(table.column_names) == {"name", "value"}
-            names = table.column("name").to_pylist()
-            assert "pq1" in names and "pq2" in names
-        finally:
-            import os
-
-            os.unlink(tmp.name)

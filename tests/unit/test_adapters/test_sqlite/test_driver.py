@@ -65,7 +65,7 @@ def test_driver_initialization() -> None:
     assert driver.connection is mock_conn
     assert driver.config is config
     assert driver.dialect == "sqlite"
-    assert driver.parameter_config.paramstyle == ParameterStyle.QMARK
+    assert driver.parameter_config.default_parameter_style == ParameterStyle.QMARK
     assert driver.parameter_config.has_native_list_expansion is False
 
 
@@ -136,7 +136,7 @@ def test_build_result_select(driver: SqliteDriver, mock_connection: MagicMock) -
     with patch.object(driver, "returns_rows", return_value=True):
         result = driver._build_result(mock_cursor, statement)
 
-    assert result.data == [(1, "Alice")]
+    assert result.data == [{"id": 1, "name": "Alice"}]
     assert result.column_names == ["id", "name"]
 
 

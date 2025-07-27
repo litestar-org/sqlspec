@@ -1402,6 +1402,7 @@ class SQL:
 
         # Get driver from context if available
         from sqlspec.driver.context import get_current_driver
+
         driver = get_current_driver()
 
         self._ensure_processed()
@@ -1418,13 +1419,11 @@ class SQL:
                 params = self._reorder_parameters(params, parameter_mapping)
 
         # Apply driver-aware parameter processing if driver is available
-        if driver and hasattr(driver, 'parameter_config') and driver.parameter_config:
-            sql, params = self._apply_driver_parameter_processing(
-                sql, params, placeholder_style, driver
-            )
+        if driver and driver.parameter_config:
+            sql, params = self._apply_driver_parameter_processing(sql, params, placeholder_style, driver)
         else:
             # Fallback to current behavior
-            # Handle deconversion if needed
+            # Handle conversion if needed
             if self._processing_context and self._processing_context.metadata.get("parameter_conversion"):
                 norm_state = self._processing_context.metadata["parameter_conversion"]
 
@@ -1456,77 +1455,69 @@ class SQL:
         return sql, params
 
     def _apply_driver_parameter_processing(
-        self, 
-        sql: str, 
-        params: Any, 
-        requested_style: "Optional[str]",
-        driver: Any
+        self, sql: str, params: Any, requested_style: "Optional[str]", driver: Any
     ) -> "tuple[str, Any]":
         """Apply driver-aware parameter processing.
-        
+
         This method uses the driver's parameter configuration to determine
         if and how to convert parameters. It only converts when:
         1. The detected style is not in supported styles OR
         2. Force conversion is enabled (e.g., psycopg) OR
         3. User explicitly requested a different style
-        
+
         Args:
             sql: The SQL string to process
             params: The parameters to process
             requested_style: The requested parameter style (if any)
             driver: The current driver with parameter config
-            
+
         Returns:
             Tuple of (processed_sql, processed_params)
         """
         from sqlspec.parameters import ParameterProcessor, ParameterValidator
-        from sqlspec.parameters.types import ParameterStyle
         from sqlspec.parameters.config import DriverParameterConfig
-        
+        from sqlspec.parameters.types import ParameterStyle
+
         config = driver.parameter_config
-        
+
         # Determine target style
-        if requested_style:
-            target_style = ParameterStyle(requested_style)
-        else:
-            # Use driver's default
-            target_style = config.default_parameter_style
-        
+        target_style = ParameterStyle(requested_style) if requested_style else config.default_parameter_style
+
         # Check if conversion is needed
         validator = ParameterValidator()
         param_info = validator.extract_parameters(sql)
         detected_styles = {p.style for p in param_info} if param_info else set()
-        
+
         # Only convert if:
         # 1. Detected style is not in supported styles OR
         # 2. Force conversion is enabled (e.g., psycopg) OR
         # 3. User explicitly requested a different style
         needs_conversion = (
-            (detected_styles and not any(s in config.supported_parameter_styles for s in detected_styles)) or
-            config.force_style_conversion or
-            (requested_style and ParameterStyle(requested_style) != config.default_parameter_style)
+            (detected_styles and not any(s in config.supported_parameter_styles for s in detected_styles))
+            or config.force_style_conversion
+            or (requested_style and ParameterStyle(requested_style) != config.default_parameter_style)
         )
-        
+
         if needs_conversion or config.type_coercion_map:
             # Use ParameterProcessor for conversion
             processor = ParameterProcessor()
-            
+
             # Create a temporary config for the processor
             temp_config = DriverParameterConfig(
                 supported_parameter_styles=[target_style],
                 default_parameter_style=target_style,
                 type_coercion_map=config.type_coercion_map,
                 has_native_list_expansion=config.has_native_list_expansion,
-                output_transformer=config.output_transformer
+                output_transformer=config.output_transformer,
             )
-            
+
             # Process with appropriate is_parsed flag
             is_parsed = not isinstance(self._statement, exp.Anonymous)
             sql, params = processor.process(sql, params, temp_config, is_parsed=is_parsed)
         else:
             # Just unwrap TypedParameters
             params = self._unwrap_typed_parameters(params)
-        
+
         return sql, params
 
     def _apply_placeholder_style(self, sql: "str", params: Any, placeholder_style: "str") -> "tuple[str, Any]":
@@ -2246,7 +2237,7 @@ class SQL:
     def param_list(self) -> "Optional[list[Any]]":
         """Get parameter list for execute_many operations."""
         if self._is_many and self._original_parameters is not None:
-            return self._original_parameters
+            return self._original_parameters  # type: ignore[no-any-return]
         return None
 
     @property

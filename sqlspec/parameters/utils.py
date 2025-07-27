@@ -2,8 +2,9 @@
 
 from typing import TYPE_CHECKING, Union
 
+from sqlspec.statement.filters import StatementFilter
+
 if TYPE_CHECKING:
-    from sqlspec.statement.filters import StatementFilter
     from sqlspec.typing import StatementParameters
 
 __all__ = ("process_execute_many_parameters",)
@@ -26,7 +27,6 @@ def process_execute_many_parameters(
         - filters: List of StatementFilter objects
         - param_sequence: List of regular parameter values
     """
-    from sqlspec.statement.filters import StatementFilter
 
     filters: list[StatementFilter] = []
     param_sequence: list[StatementParameters] = []

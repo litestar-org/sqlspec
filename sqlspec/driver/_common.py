@@ -136,17 +136,17 @@ class CommonDriverAttributesMixin(ABC):
         param_infos = validator.extract_parameters(sql_str)
 
         if not param_infos:
-            return self.parameter_config.paramstyle
+            return self.parameter_config.default_parameter_style
 
         detected_styles = {p.style for p in param_infos}
 
         # If mixed styles detected, use the driver's configured style
         if len(detected_styles) > 1:
-            return self.parameter_config.paramstyle
+            return self.parameter_config.default_parameter_style
 
         # Single style detected - return it if valid, otherwise use configured style
         detected_style = next(iter(detected_styles))
-        return detected_style or self.parameter_config.paramstyle
+        return detected_style or self.parameter_config.default_parameter_style
 
     @staticmethod
     def check_not_found(item_or_none: "Optional[T]" = None) -> "T":

@@ -7,7 +7,6 @@ from psycopg import AsyncConnection, Connection
 
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
-from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.utils.logging import get_logger
 
@@ -67,46 +66,28 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
             prepared_params = self._prepare_driver_parameters(params)
             cursor.execute(sql, prepared_params or ())
 
-    def _build_result(self, cursor: Any, statement: "SQL") -> "SQLResult":
-        if self.returns_rows(statement.expression):
-            return self._build_select_result(cursor, statement)
-        return self._build_modify_result(cursor, statement)
-
-    def _build_select_result(self, cursor: Any, statement: "SQL") -> "SQLResult":
+    def _extract_select_data(self, cursor: Any) -> "tuple[list[dict[str, Any]], list[str], int]":
+        """Extract data from cursor after SELECT execution."""
         fetched_data = cursor.fetchall()
         column_names = [col.name for col in cursor.description or []]
-        return SQLResult(
-            statement=statement,
-            data=fetched_data,
-            column_names=column_names,
-            rows_affected=len(fetched_data),
-            operation_type="SELECT",
-        )
+        # Data is already in dict format from DictRow
+        return fetched_data, column_names, len(fetched_data)
 
-    def _build_modify_result(self, cursor: Any, statement: "SQL") -> "SQLResult":
-        operation_type = self._determine_operation_type(statement)
-        return SQLResult(
-            statement=statement,
-            data=[],
-            rows_affected=cursor.rowcount or 0,
-            operation_type=operation_type,
-            metadata={"status_message": cursor.statusmessage or "OK"},
-        )
+    def _extract_execute_rowcount(self, cursor: Any) -> int:
+        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
+        return cursor.rowcount if cursor.rowcount is not None else 0
 
-    def begin(self, connection: "Optional[Any]" = None) -> None:
+    def begin(self) -> None:
         """Begin transaction using psycopg-specific method."""
-        conn = connection or self.connection
-        conn.execute("BEGIN")
+        self.connection.execute("BEGIN")
 
-    def rollback(self, connection: "Optional[Any]" = None) -> None:
+    def rollback(self) -> None:
         """Rollback transaction using psycopg-specific method."""
-        conn = connection or self.connection
-        conn.rollback()
+        self.connection.rollback()
 
-    def commit(self, connection: "Optional[Any]" = None) -> None:
+    def commit(self) -> None:
         """Commit transaction using psycopg-specific method."""
-        conn = connection or self.connection
-        conn.commit()
+        self.connection.commit()
 
 
 class PsycopgAsyncDriver(AsyncDriverAdapterBase):
@@ -130,11 +111,8 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
 
     @asynccontextmanager
     async def with_cursor(self, connection: PsycopgAsyncConnection) -> AsyncGenerator[Any, None]:
-        cursor = await connection.cursor()
-        try:
+        async with connection.cursor() as cursor:
             yield cursor
-        finally:
-            await cursor.close()
 
     async def _perform_execute(self, cursor: Any, statement: "SQL") -> None:
         sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
@@ -147,43 +125,25 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
             prepared_params = self._prepare_driver_parameters(params)
             await cursor.execute(sql, prepared_params or ())
 
-    async def _build_result(self, cursor: Any, statement: "SQL") -> "SQLResult":
-        if self.returns_rows(statement.expression):
-            return await self._build_select_result(cursor, statement)
-        return self._build_modify_result(cursor, statement)
-
-    async def _build_select_result(self, cursor: Any, statement: "SQL") -> "SQLResult":
+    async def _extract_select_data(self, cursor: Any) -> "tuple[list[dict[str, Any]], list[str], int]":
+        """Extract data from cursor after SELECT execution."""
         fetched_data = await cursor.fetchall()
         column_names = [col.name for col in cursor.description or []]
-        return SQLResult(
-            statement=statement,
-            data=fetched_data,
-            column_names=column_names,
-            rows_affected=len(fetched_data),
-            operation_type="SELECT",
-        )
+        # Data is already in dict format from DictRow
+        return fetched_data, column_names, len(fetched_data)
 
-    def _build_modify_result(self, cursor: Any, statement: "SQL") -> "SQLResult":
-        operation_type = self._determine_operation_type(statement)
-        return SQLResult(
-            statement=statement,
-            data=[],
-            rows_affected=cursor.rowcount or 0,
-            operation_type=operation_type,
-            metadata={"status_message": cursor.statusmessage or "OK"},
-        )
+    def _extract_execute_rowcount(self, cursor: Any) -> int:
+        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
+        return cursor.rowcount if cursor.rowcount is not None else 0
 
-    async def begin(self, connection: "Optional[Any]" = None) -> None:
+    async def begin(self) -> None:
         """Begin transaction using psycopg-specific method."""
-        conn = connection or self.connection
-        await conn.execute("BEGIN")
+        await self.connection.execute("BEGIN")
 
-    async def rollback(self, connection: "Optional[Any]" = None) -> None:
+    async def rollback(self) -> None:
         """Rollback transaction using psycopg-specific method."""
-        conn = connection or self.connection
-        await conn.rollback()
+        await self.connection.rollback()
 
-    async def commit(self, connection: "Optional[Any]" = None) -> None:
+    async def commit(self) -> None:
         """Commit transaction using psycopg-specific method."""
-        conn = connection or self.connection
-        await conn.commit()
+        await self.connection.commit()
