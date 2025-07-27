@@ -1,11 +1,6 @@
 """Tests for conditional parameter style conversion for SQLGlot compatibility."""
 
-from sqlspec.statement.parameters import (
-    SQLGLOT_INCOMPATIBLE_STYLES,
-    ParameterConverter,
-    ParameterStyle,
-    SQLParameterType,
-)
+from sqlspec.parameters import SQLGLOT_INCOMPATIBLE_STYLES, ParameterConverter, ParameterStyle, SQLParameterType
 from sqlspec.statement.sql import SQL
 
 

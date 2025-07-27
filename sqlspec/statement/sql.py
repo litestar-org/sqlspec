@@ -9,23 +9,21 @@ from sqlglot.errors import ParseError
 from typing_extensions import TypeAlias
 
 from sqlspec.exceptions import RiskLevel, SQLParsingError, SQLValidationError
-from sqlspec.statement.cache import ast_fragment_cache, base_statement_cache, sql_cache
-from sqlspec.statement.filters import StatementFilter
-from sqlspec.statement.parameters import (
+from sqlspec.parameters import (
     SQLGLOT_INCOMPATIBLE_STYLES,
     ParameterConverter,
     ParameterStyle,
+    ParameterStyleConversionState,
     ParameterValidator,
 )
+from sqlspec.statement.cache import ast_fragment_cache, base_statement_cache, sql_cache
+from sqlspec.statement.filters import StatementFilter
 from sqlspec.statement.pipeline import (
     SQLTransformContext,
     compose_pipeline,
-    normalize_step,
     optimize_step,
     parameterize_literals_step,
-    remove_comments_step,
     validate_dml_safety_step,
-    validate_parameter_style_step,
     validate_step,
 )
 from sqlspec.typing import Empty
@@ -47,8 +45,6 @@ from sqlspec.utils.type_guards import (
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
-
-    from sqlspec.statement.parameters import ParameterStyleConversionState
 
 __all__ = ("SQL", "SQLConfig", "Statement")
 
@@ -108,11 +104,13 @@ class _ProcessedState:
 
     def __hash__(self) -> int:
         """Hash based on processed SQL and expression."""
-        return hash((
-            self.processed_sql,
-            str(self.processed_expression),
-            len(self.validation_errors) if self.validation_errors else 0,
-        ))
+        return hash(
+            (
+                self.processed_sql,
+                str(self.processed_expression),
+                len(self.validation_errors) if self.validation_errors else 0,
+            )
+        )
 
     def __init__(
         self,
@@ -205,18 +203,20 @@ class SQLConfig:
 
     def __hash__(self) -> int:
         """Hash based on key configuration settings."""
-        return hash((
-            self.enable_parsing,
-            self.enable_validation,
-            self.enable_transformations,
-            self.enable_analysis,
-            self.enable_expression_simplification,
-            self.enable_parameter_type_wrapping,
-            self.enable_caching,
-            self.dialect,
-            self.default_parameter_style,
-            tuple(self.allowed_parameter_styles) if self.allowed_parameter_styles else None,
-        ))
+        return hash(
+            (
+                self.enable_parsing,
+                self.enable_validation,
+                self.enable_transformations,
+                self.enable_analysis,
+                self.enable_expression_simplification,
+                self.enable_parameter_type_wrapping,
+                self.enable_caching,
+                self.dialect,
+                self.default_parameter_style,
+                tuple(self.allowed_parameter_styles) if self.allowed_parameter_styles else None,
+            )
+        )
 
     def __init__(
         self,
@@ -320,12 +320,12 @@ class SQLConfig:
             steps.extend(self.custom_pipeline_steps)
 
         if self.enable_transformations:
-            steps.extend([remove_comments_step, normalize_step, parameterize_literals_step])
+            steps.append(parameterize_literals_step)
             if self.enable_expression_simplification:
                 steps.append(optimize_step)
 
         if self.enable_validation:
-            steps.extend([validate_dml_safety_step, validate_parameter_style_step, validate_step])
+            steps.extend([validate_dml_safety_step, validate_step])
 
         return steps
 
@@ -392,7 +392,7 @@ class SQL:
         self._raw_sql: str = ""
         self._original_parameters: Any = None
         self._original_sql: str = ""
-        self._placeholder_mapping: dict[str, Union[str, int]] = {}
+        self._placeholder_mapping: dict[str, Any] = {}
         self._parameter_conversion_state: Optional[ParameterStyleConversionState] = None
         self._is_many: bool = False
         self._is_script: bool = False
@@ -724,11 +724,11 @@ class SQL:
         target_styles = {p.style for p in param_info}
         if ParameterStyle.POSITIONAL_PYFORMAT in target_styles:
             processed_sql = self._config.parameter_converter._convert_sql_placeholders(
-                processed_sql, param_info, ParameterStyle.POSITIONAL_PYFORMAT
+                processed_sql, ParameterStyle.POSITIONAL_PYFORMAT, param_info
             )
         elif ParameterStyle.NAMED_PYFORMAT in target_styles:
             processed_sql = self._config.parameter_converter._convert_sql_placeholders(
-                processed_sql, param_info, ParameterStyle.NAMED_PYFORMAT
+                processed_sql, ParameterStyle.NAMED_PYFORMAT, param_info
             )
             if self._placeholder_mapping and context.parameters and is_dict(context.parameters):
                 # For mypyc: create new variable after type narrowing
@@ -740,7 +740,7 @@ class SQL:
 
             if not has_param_placeholders:
                 processed_sql = self._config.parameter_converter._convert_sql_placeholders(
-                    processed_sql, param_info, ParameterStyle.POSITIONAL_COLON
+                    processed_sql, ParameterStyle.POSITIONAL_COLON, param_info
                 )
             if self._placeholder_mapping and context.parameters and is_dict(context.parameters):
                 # For mypyc: create new variable after type narrowing
@@ -894,22 +894,24 @@ class SQL:
         needs_conversion = any(p.style in SQLGLOT_INCOMPATIBLE_STYLES for p in param_info)
 
         converted_sql = statement
-        placeholder_mapping: dict[str, Any] = {}
 
         if needs_conversion:
             converter = self._config.parameter_converter
-            converted_sql, placeholder_mapping = converter._transform_sql_for_parsing(statement, param_info)
+            converted_sql, param_info_mapping = converter._transform_sql_for_parsing(statement, param_info)
             self._original_sql = statement
-            self._placeholder_mapping = placeholder_mapping
+            self._placeholder_mapping = param_info_mapping
+
+            # Create placeholder map for conversion state (map param names to indices)
+            placeholder_map: dict[str, Union[str, int]] = {}
+            for param_name, p_info in param_info_mapping.items():
+                placeholder_map[param_name] = p_info.ordinal
 
             # Create conversion state
-            from sqlspec.statement.parameters import ParameterStyleConversionState
-
             self._parameter_conversion_state = ParameterStyleConversionState(
                 was_transformed=True,
                 original_styles=list({p.style for p in param_info}),
                 transformation_style=ParameterStyle.NAMED_COLON,
-                placeholder_map=placeholder_mapping,
+                placeholder_map=placeholder_map,
                 original_param_info=param_info,
             )
         else:
@@ -1344,7 +1346,7 @@ class SQL:
                 if should_denormalize and original_style in SQLGLOT_INCOMPATIBLE_STYLES:
                     # Denormalize SQL back to original style
                     sql = self._config.parameter_converter._convert_sql_placeholders(
-                        sql, norm_state.original_param_info, original_style
+                        sql, original_style, norm_state.original_param_info
                     )
 
         if placeholder_style:
@@ -1388,7 +1390,7 @@ class SQL:
         return enhanced_params
 
     def compile(self, placeholder_style: "Optional[str]" = None) -> "tuple[str, Any]":
-        """Compile to SQL and parameters."""
+        """Compile to SQL and parameters with driver awareness."""
         if self._is_script:
             return self.sql, None
 
@@ -1397,6 +1399,10 @@ class SQL:
 
         if not self._config.enable_parsing and self._raw_sql:
             return self._raw_sql, self._raw_parameters
+
+        # Get driver from context if available
+        from sqlspec.driver.context import get_current_driver
+        driver = get_current_driver()
 
         self._ensure_processed()
 
@@ -1411,35 +1417,116 @@ class SQL:
             if parameter_mapping:
                 params = self._reorder_parameters(params, parameter_mapping)
 
-        # Handle deconversion if needed
-        if self._processing_context and self._processing_context.metadata.get("parameter_conversion"):
-            norm_state = self._processing_context.metadata["parameter_conversion"]
+        # Apply driver-aware parameter processing if driver is available
+        if driver and hasattr(driver, 'parameter_config') and driver.parameter_config:
+            sql, params = self._apply_driver_parameter_processing(
+                sql, params, placeholder_style, driver
+            )
+        else:
+            # Fallback to current behavior
+            # Handle deconversion if needed
+            if self._processing_context and self._processing_context.metadata.get("parameter_conversion"):
+                norm_state = self._processing_context.metadata["parameter_conversion"]
 
-            # If original SQL had incompatible styles, denormalize back to the original style
-            # when no specific style requested OR when the requested style matches the original
-            if norm_state.was_transformed and norm_state.original_styles:
-                original_style = norm_state.original_styles[0]
-                should_denormalize = placeholder_style is None or (
-                    placeholder_style and ParameterStyle(placeholder_style) == original_style
-                )
-
-                if should_denormalize and original_style in SQLGLOT_INCOMPATIBLE_STYLES:
-                    # Denormalize SQL back to original style
-                    sql = self._config.parameter_converter._convert_sql_placeholders(
-                        sql, norm_state.original_param_info, original_style
+                # If original SQL had incompatible styles, denormalize back to the original style
+                # when no specific style requested OR when the requested style matches the original
+                if norm_state.was_transformed and norm_state.original_styles:
+                    original_style = norm_state.original_styles[0]
+                    should_denormalize = placeholder_style is None or (
+                        placeholder_style and ParameterStyle(placeholder_style) == original_style
                     )
-                    # Also deConvert parameters if needed
-                    if original_style == ParameterStyle.POSITIONAL_COLON and is_dict(params):
-                        params = self._denormalize_colon_params(params)
 
-        params = self._unwrap_typed_parameters(params)
+                    if should_denormalize and original_style in SQLGLOT_INCOMPATIBLE_STYLES:
+                        # Denormalize SQL back to original style
+                        sql = self._config.parameter_converter._convert_sql_placeholders(
+                            sql, original_style, norm_state.original_param_info
+                        )
+                        # Also deConvert parameters if needed
+                        if original_style == ParameterStyle.POSITIONAL_COLON and is_dict(params):
+                            params = self._denormalize_colon_params(params)
 
-        if placeholder_style is None:
-            return sql, params
+            params = self._unwrap_typed_parameters(params)
 
-        if placeholder_style:
-            sql, params = self._apply_placeholder_style(sql, params, placeholder_style)
+            if placeholder_style is None:
+                return sql, params
 
+            if placeholder_style:
+                sql, params = self._apply_placeholder_style(sql, params, placeholder_style)
+
+        return sql, params
+
+    def _apply_driver_parameter_processing(
+        self, 
+        sql: str, 
+        params: Any, 
+        requested_style: "Optional[str]",
+        driver: Any
+    ) -> "tuple[str, Any]":
+        """Apply driver-aware parameter processing.
+        
+        This method uses the driver's parameter configuration to determine
+        if and how to convert parameters. It only converts when:
+        1. The detected style is not in supported styles OR
+        2. Force conversion is enabled (e.g., psycopg) OR
+        3. User explicitly requested a different style
+        
+        Args:
+            sql: The SQL string to process
+            params: The parameters to process
+            requested_style: The requested parameter style (if any)
+            driver: The current driver with parameter config
+            
+        Returns:
+            Tuple of (processed_sql, processed_params)
+        """
+        from sqlspec.parameters import ParameterProcessor, ParameterValidator
+        from sqlspec.parameters.types import ParameterStyle
+        from sqlspec.parameters.config import DriverParameterConfig
+        
+        config = driver.parameter_config
+        
+        # Determine target style
+        if requested_style:
+            target_style = ParameterStyle(requested_style)
+        else:
+            # Use driver's default
+            target_style = config.default_parameter_style
+        
+        # Check if conversion is needed
+        validator = ParameterValidator()
+        param_info = validator.extract_parameters(sql)
+        detected_styles = {p.style for p in param_info} if param_info else set()
+        
+        # Only convert if:
+        # 1. Detected style is not in supported styles OR
+        # 2. Force conversion is enabled (e.g., psycopg) OR
+        # 3. User explicitly requested a different style
+        needs_conversion = (
+            (detected_styles and not any(s in config.supported_parameter_styles for s in detected_styles)) or
+            config.force_style_conversion or
+            (requested_style and ParameterStyle(requested_style) != config.default_parameter_style)
+        )
+        
+        if needs_conversion or config.type_coercion_map:
+            # Use ParameterProcessor for conversion
+            processor = ParameterProcessor()
+            
+            # Create a temporary config for the processor
+            temp_config = DriverParameterConfig(
+                supported_parameter_styles=[target_style],
+                default_parameter_style=target_style,
+                type_coercion_map=config.type_coercion_map,
+                has_native_list_expansion=config.has_native_list_expansion,
+                output_transformer=config.output_transformer
+            )
+            
+            # Process with appropriate is_parsed flag
+            is_parsed = not isinstance(self._statement, exp.Anonymous)
+            sql, params = processor.process(sql, params, temp_config, is_parsed=is_parsed)
+        else:
+            # Just unwrap TypedParameters
+            params = self._unwrap_typed_parameters(params)
+        
         return sql, params
 
     def _apply_placeholder_style(self, sql: "str", params: Any, placeholder_style: "str") -> "tuple[str, Any]":
@@ -2154,6 +2241,13 @@ class SQL:
     def _raw_parameters(self) -> Any:
         """Get raw parameters for compatibility."""
         return self._original_parameters
+
+    @property
+    def param_list(self) -> "Optional[list[Any]]":
+        """Get parameter list for execute_many operations."""
+        if self._is_many and self._original_parameters is not None:
+            return self._original_parameters
+        return None
 
     @property
     def _sql(self) -> str:

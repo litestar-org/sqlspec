@@ -317,19 +317,6 @@ def test_sql_result_script_execution() -> None:
     assert script_result.is_success() is False  # Not all statements succeeded
 
 
-def test_sql_result_script_errors() -> None:
-    """Test script error tracking."""
-    script_result = SQLResult(statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
-
-    # Add errors
-    script_result.add_error("Syntax error in statement 1")
-    script_result.add_error("Connection lost")
-
-    assert script_result.has_errors() is True
-    assert script_result.get_errors() == ["Syntax error in statement 1", "Connection lost"]
-    assert script_result.is_success() is False
-
-
 def test_sql_result_script_get_data() -> None:
     """Test get_data returns summary for script execution."""
     script_result = SQLResult(statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
@@ -341,7 +328,7 @@ def test_sql_result_script_get_data() -> None:
         )
         script_result.add_statement_result(stmt)
 
-    data = script_result.get_data()
+    data = script_result.get_data()[0]
     assert isinstance(data, dict)
     assert data["total_statements"] == 3
     assert data["successful_statements"] == 3
@@ -349,29 +336,6 @@ def test_sql_result_script_get_data() -> None:
     assert data["errors"] == []
     assert len(data["statement_results"]) == 3
     assert data["total_rows_affected"] == 6  # 1 + 2 + 3
-
-
-def test_sql_result_script_statement_access() -> None:
-    """Test accessing individual statement results."""
-    script_result = SQLResult(statement=SQL("SCRIPT"), data=[], operation_type="SCRIPT")
-
-    # Add statements
-    stmts = []
-    for i in range(3):
-        stmt = SQLResult(
-            statement=SQL(f"INSERT INTO stmt{i} VALUES (1)"), data=[], rows_affected=1, operation_type="INSERT"
-        )
-        stmts.append(stmt)
-        script_result.add_statement_result(stmt)
-
-    # Test valid access
-    assert script_result.get_statement_result(0) == stmts[0]
-    assert script_result.get_statement_result(1) == stmts[1]
-    assert script_result.get_statement_result(2) == stmts[2]
-
-    # Test invalid access
-    assert script_result.get_statement_result(-1) is None
-    assert script_result.get_statement_result(3) is None
 
 
 def test_sql_result_script_total_rows_affected() -> None:

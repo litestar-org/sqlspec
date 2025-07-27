@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 import pytest
 
 from sqlspec.exceptions import MissingParameterError, ParameterError, SQLValidationError
-from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
+from sqlspec.parameters import ParameterStyle, ParameterValidator
 from sqlspec.statement.sql import SQL, SQLConfig
 
 if TYPE_CHECKING:

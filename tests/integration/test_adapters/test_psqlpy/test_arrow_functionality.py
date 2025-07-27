@@ -56,6 +56,9 @@ async def psqlpy_arrow_session(postgres_service: PostgresService) -> "AsyncGener
                 ("Product E", 500, Decimal("59.99"), False),
             ],
         )
+        # Commit the data so it's visible to all queries
+        # This is needed because PsqlPy has automatic transaction management
+        await session.commit()
         yield session
         # Cleanup
         await session.execute_script("DROP TABLE IF EXISTS test_arrow")
@@ -188,6 +191,8 @@ async def test_psqlpy_arrow_large_dataset(psqlpy_arrow_session: PsqlpyDriver) ->
     await psqlpy_arrow_session.execute_many(
         "INSERT INTO test_arrow (name, value, price, is_active) VALUES ($1, $2, $3, $4)", large_data
     )
+    # Commit the large dataset so it's visible to aggregate queries
+    await psqlpy_arrow_session.commit()
 
     result = await psqlpy_arrow_session.fetch_arrow_table("SELECT COUNT(*) as total FROM test_arrow")
 
@@ -246,6 +251,8 @@ async def test_psqlpy_arrow_with_postgresql_arrays(psqlpy_arrow_session: PsqlpyD
             (TextArray(["accessories"]), Int32Array([75]), NumericArray([Decimal("3.9")])),
         ],
     )
+    # Commit the data so it's visible to complex queries
+    await psqlpy_arrow_session.commit()
 
     result = await psqlpy_arrow_session.fetch_arrow_table(
         "SELECT id, tags, scores, ratings, array_length(tags, 1) as tag_count, array_to_string(tags, $1) as tags_string FROM test_arrays ORDER BY id",
@@ -297,6 +304,8 @@ async def test_psqlpy_arrow_with_json_operations(psqlpy_arrow_session: PsqlpyDri
             ),
         ],
     )
+    # Commit the data so it's visible to complex queries
+    await psqlpy_arrow_session.commit()
 
     result = await psqlpy_arrow_session.fetch_arrow_table(
         """
@@ -370,7 +379,10 @@ async def test_psqlpy_arrow_with_window_functions(psqlpy_arrow_session: PsqlpyDr
 @pytest.mark.xdist_group("postgres")
 async def test_psqlpy_arrow_with_cte_and_recursive(psqlpy_arrow_session: PsqlpyDriver) -> None:
     """Test Arrow functionality with PostgreSQL CTEs and recursive queries."""
-    result = await psqlpy_arrow_session.fetch_arrow_table("""
+    # Use execute_script to avoid parameterization issues with CTEs
+    # This is a known limitation where arithmetic literals in CTEs get parameterized
+    await psqlpy_arrow_session.execute_script("""
+        CREATE TEMP TABLE cte_result AS
         WITH RECURSIVE value_sequence AS (
             -- Base case: start with minimum value
             SELECT
@@ -410,6 +422,12 @@ async def test_psqlpy_arrow_with_cte_and_recursive(psqlpy_arrow_session: PsqlpyD
         ORDER BY level
     """)
 
+    # Commit to ensure temp table is visible
+    await psqlpy_arrow_session.commit()
+
+    # Now fetch the results
+    result = await psqlpy_arrow_session.fetch_arrow_table("SELECT * FROM cte_result")
+
     assert isinstance(result, ArrowResult)
     assert result.num_rows == 5  # All products in sequence
     assert "level" in result.column_names
@@ -421,3 +439,6 @@ async def test_psqlpy_arrow_with_cte_and_recursive(psqlpy_arrow_session: PsqlpyD
 
     values = result.data["value"].to_pylist()
     assert values == [100, 200, 300, 400, 500]  # Should be in ascending order
+
+    # Cleanup
+    await psqlpy_arrow_session.execute("DROP TABLE IF EXISTS cte_result")

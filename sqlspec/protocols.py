@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, Protocol, Union, runt
 from typing_extensions import Self
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
     from pathlib import Path
 
     from sqlglot import exp
@@ -260,9 +260,9 @@ class AsyncTransactionStateConnectionProtocol(AsyncTransactionCapableConnectionP
 @runtime_checkable
 class SyncTransactionMixin(SyncTransactionStateConnectionProtocol, Protocol):
     """Explicit synchronous transaction management interface."""
-    
+
     @contextmanager
-    def transaction(self):
+    def transaction(self) -> "Generator[SyncTransactionMixin, None, None]":
         """Context manager for transaction handling."""
         self.begin()
         try:
@@ -276,9 +276,9 @@ class SyncTransactionMixin(SyncTransactionStateConnectionProtocol, Protocol):
 @runtime_checkable
 class AsyncTransactionMixin(AsyncTransactionStateConnectionProtocol, Protocol):
     """Explicit asynchronous transaction management interface."""
-    
+
     @asynccontextmanager
-    async def transaction(self):
+    async def transaction(self) -> "AsyncGenerator[AsyncTransactionMixin, None]":
         """Async context manager for transaction handling."""
         await self.begin()
         try:

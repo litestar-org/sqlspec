@@ -1,29 +1,23 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import re
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
 
 from sqlspec.driver import AsyncDriverAdapterBase
-from sqlspec.driver.mixins import (
-    AsyncAdapterCacheMixin,
-    AsyncPipelinedExecutionMixin,
-    AsyncQueryMixin,
-    AsyncStorageMixin,
-    SQLTranslatorMixin,
-    ToSchemaMixin,
-    TypeCoercionMixin,
-)
-from sqlspec.exceptions import PipelineExecutionError
-from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
     from asyncpg import Connection as AsyncpgNativeConnection
     from asyncpg import Record
     from asyncpg.pool import PoolConnectionProxy
     from sqlglot.dialects.dialect import DialectType
     from typing_extensions import TypeAlias
+
+    from sqlspec.statement.sql import SQL, SQLConfig
 
 
 __all__ = ("AsyncpgConnection", "AsyncpgDriver")
@@ -54,86 +48,50 @@ OPERATION_MAP: Final[dict[str, str]] = {
 }
 
 
-class AsyncpgDriver(
-    AsyncDriverAdapterBase,
-    SQLTranslatorMixin,
-    TypeCoercionMixin,
-    AsyncStorageMixin,
-    AsyncPipelinedExecutionMixin,
-    AsyncAdapterCacheMixin,
-    ToSchemaMixin,
-    AsyncQueryMixin,
-):
+class AsyncpgDriver(AsyncDriverAdapterBase):
     """AsyncPG PostgreSQL Driver Adapter. Modern protocol implementation."""
 
-    connection_type = type(AsyncpgConnection)
     dialect: "DialectType" = "postgres"
-    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.NUMERIC,)
-    default_parameter_style: ParameterStyle = ParameterStyle.NUMERIC
+    parameter_config = DriverParameterConfig(
+        supported_parameter_styles=[ParameterStyle.NUMERIC],  # Only supports $1, $2, etc.
+        default_parameter_style=ParameterStyle.NUMERIC,
+        type_coercion_map={
+            # AsyncPG has excellent native type support
+            # Most types are handled natively
+        },
+        has_native_list_expansion=True,  # AsyncPG handles lists natively
+    )
 
     def __init__(self, connection: "AsyncpgConnection", config: "Optional[SQLConfig]" = None) -> None:
         super().__init__(connection=connection, config=config)
 
-    def _connection(self, connection: "Optional[AsyncpgConnection]" = None) -> "AsyncpgConnection":
-        """Get connection to use for operation.
+    @asynccontextmanager
+    async def with_cursor(self, connection: "AsyncpgConnection") -> "AsyncGenerator[Any, None]":
+        yield connection
 
-        Args:
-            connection: Optional specific connection to use
-
-        Returns:
-            The connection to use (provided connection or driver's default)
-        """
-        return connection if connection is not None else self.connection  # pyright: ignore[reportReturnType]
-
-    async def begin(self) -> None:
-        """Begin a transaction. AsyncPG starts transactions automatically."""
-        # AsyncPG transactions start automatically with first SQL statement
-        pass
-
-    async def commit(self) -> None:
-        """Commit the current transaction."""
-        await self.connection.execute("COMMIT")
-
-    async def rollback(self) -> None:
-        """Rollback the current transaction."""
-        await self.connection.execute("ROLLBACK")
-
-    # AsyncPG-specific type coercion overrides (PostgreSQL has rich native types)
-    def _coerce_boolean(self, value: Any) -> Any:
-        """AsyncPG/PostgreSQL has native boolean support."""
-        return value
-
-    def _coerce_decimal(self, value: Any) -> Any:
-        """AsyncPG/PostgreSQL has native decimal/numeric support."""
-        return value
-
-    def _coerce_json(self, value: Any) -> Any:
-        """AsyncPG/PostgreSQL has native JSON/JSONB support."""
-        return value
-
-    def _coerce_array(self, value: Any) -> Any:
-        """AsyncPG/PostgreSQL has native array support."""
-        if isinstance(value, tuple):
-            return list(value)
-        return value
-
-    async def _execute_statement(  # type: ignore[override]
-        self, statement: "SQL", connection: "Optional[AsyncpgConnection]" = None, **kwargs: Any
-    ) -> "SQLResult":
-        if statement.is_script:
-            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
-            return await self._execute_script(sql, connection=connection, **kwargs)
-
-        target_style = self._select_parameter_style(statement)
+    async def _perform_execute(self, cursor: "AsyncpgConnection", statement: "SQL") -> None:
+        sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
 
         if statement.is_many:
-            sql, params = self._get_compiled_sql(statement, target_style)
-            return await self._execute_many(sql, params, connection=connection, **kwargs)
+            # For execute_many, params is already a list of parameter sets
+            prepared_params = self._prepare_driver_parameters_many(params) if params else []
+            await cursor.executemany(sql, prepared_params)
+        else:
+            prepared_params = self._prepare_driver_parameters(params)
+            # asyncpg uses *args for parameters
+            await cursor.execute(sql, *(prepared_params or []))
 
-        sql, params = self._get_compiled_sql(statement, target_style)
-        return await self._execute(sql, params, statement, connection=connection, **kwargs)
+    async def _build_result(self, cursor: "AsyncpgConnection", statement: "SQL") -> "SQLResult":
+        if self.returns_rows(statement.expression):
+            sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
+            prepared_params = self._prepare_driver_parameters(params)
+            records = await cursor.fetch(sql, *(prepared_params or []))
+            return self._build_asyncpg_select_result(statement, records)
+        # Get status from the last executed command
+        status = cursor._protocol.get_last_status() if hasattr(cursor, "_protocol") else "UNKNOWN 0"
+        return self._build_modify_result_async(statement, status)
 
-    async def _build_select_result(self, statement: "SQL", records: "list[Any]") -> "SQLResult":
+    def _build_asyncpg_select_result(self, statement: "SQL", records: "list[Any]") -> "SQLResult":
         """Build SQLResult for SELECT operations."""
         data = [dict(record) for record in records]
         column_names = list(records[0].keys()) if records else []
@@ -166,251 +124,6 @@ class AsyncpgDriver(
             metadata={"status_message": status},
         )
 
-    async def _execute(
-        self,
-        sql: str,
-        parameters: Any,
-        statement: "SQL",
-        connection: "Optional[AsyncpgConnection]" = None,
-        **kwargs: Any,
-    ) -> "SQLResult":
-        # Use provided connection or driver's default connection
-        conn = self._connection(connection)
-
-        if statement.is_many:
-            # This should have gone to _execute_many, redirect it
-            return await self._execute_many(sql, parameters, connection=connection, **kwargs)
-
-        # TypeCoercionMixin handles parameter processing
-        # AsyncPG expects parameters as *args, not a single list
-        args_for_driver: list[Any] = []
-        if parameters:
-            # parameters might be a list or tuple already
-            args_for_driver = list(parameters) if isinstance(parameters, (list, tuple)) else [parameters]
-
-        if self.returns_rows(statement.expression):
-            records = await conn.fetch(sql, *args_for_driver)
-            return await self._build_select_result(statement, records)
-
-        status = await conn.execute(sql, *args_for_driver)
-        return self._build_modify_result_async(statement, status)
-
-    async def _execute_many(
-        self, sql: str, param_list: Any, connection: "Optional[AsyncpgConnection]" = None, **kwargs: Any
-    ) -> "SQLResult":
-        # Use provided connection or driver's default connection
-        conn = self._connection(connection)
-
-        # TypeCoercionMixin handles parameter processing
-        converted_param_list = param_list
-
-        params_list: list[tuple[Any, ...]] = []
-        rows_affected = 0
-        if converted_param_list:
-            for param_set in converted_param_list:
-                if isinstance(param_set, (list, tuple)):
-                    params_list.append(tuple(param_set))
-                elif param_set is None:
-                    params_list.append(())
-                else:
-                    params_list.append((param_set,))
-
-            await conn.executemany(sql, params_list)
-            # AsyncPG's executemany returns None, not a status string
-            # We need to use the number of parameter sets as the row count
-            rows_affected = len(params_list)
-
-        return SQLResult(
-            statement=SQL(sql, _dialect=self.dialect),
-            data=[],
-            rows_affected=rows_affected,
-            operation_type="EXECUTE",
-            metadata={"status_message": "OK"},
-        )
-
-    def _validate_statement(self, statement: str, **kwargs: Any) -> None:
-        """Validate a single statement if warnings not suppressed."""
-        if not kwargs.get("_suppress_warnings") and statement.strip():
-            temp_sql = SQL(statement, config=self.config)
-            temp_sql._ensure_processed()
-
-    async def _execute_script(
-        self, script: str, connection: "Optional[AsyncpgConnection]" = None, **kwargs: Any
-    ) -> "SQLResult":
-        # Use provided connection or driver's default connection
-        conn = self._connection(connection)
-
-        # Split script into individual statements for validation
-        statements = self._split_script_statements(script)
-        executed_count = 0
-        total_rows = 0
-        last_status = None
-        for statement in statements:
-            if statement.strip():
-                self._validate_statement(statement, **kwargs)
-                status = await conn.execute(statement)
-                executed_count += 1
-                last_status = status
-        return SQLResult(
-            statement=SQL(script, _dialect=self.dialect).as_script(),
-            data=[],
-            rows_affected=total_rows,
-            operation_type="SCRIPT",
-            metadata={"status_message": last_status or "SCRIPT EXECUTED"},
-            total_statements=executed_count,
-            successful_statements=executed_count,
-        )
-
-    async def _execute_pipeline_native(self, operations: "list[Any]", **options: Any) -> "list[SQLResult]":
-        """Native pipeline execution using AsyncPG's efficient batch handling.
-
-        Note: AsyncPG doesn't have explicit pipeline support like Psycopg, but we can
-        achieve similar performance benefits through careful batching and transaction
-        management.
-
-        Args:
-            operations: List of PipelineOperation objects
-            **options: Pipeline configuration options
-
-        Returns:
-            List of SQLResult objects from all operations
-        """
-        results: list[Any] = []
-        connection = self._connection(None)
-        async with connection.transaction():
-            for i, op in enumerate(operations):
-                await self._execute_pipeline_operation(connection, i, op, options, results)
-
-        return results
-
-    async def _execute_pipeline_operation(
-        self, connection: Any, i: int, op: Any, options: "dict[str, Any]", results: "list[Any]"
-    ) -> None:
-        """Execute a single pipeline operation with error handling."""
-        try:
-            sql_str = op.sql.to_sql(placeholder_style=ParameterStyle.NUMERIC)
-            params = self._convert_to_positional_params(op.sql.parameters)
-
-            # Apply filters if any
-            if op.filters:
-                filtered_sql = op.sql
-                for filter_obj in op.filters:
-                    filtered_sql = filter_obj.append_to_statement(filtered_sql)
-                if filtered_sql != op.sql:
-                    sql_str = filtered_sql.to_sql(placeholder_style=ParameterStyle.NUMERIC)
-                    params = self._convert_to_positional_params(filtered_sql.parameters)
-
-            # Execute based on operation type
-            if op.operation_type == "execute_many":
-                # AsyncPG has native executemany support
-                status = await connection.executemany(sql_str, params)
-                # Parse row count from status (e.g., "INSERT 0 5")
-                rows_affected = self._parse_asyncpg_status(status)
-                result = SQLResult(
-                    statement=op.sql,
-                    data=cast("list[dict[str, Any]]", []),
-                    rows_affected=rows_affected,
-                    operation_type="EXECUTE",
-                    metadata={"status_message": status},
-                )
-            elif op.operation_type == "select":
-                # Use fetch for SELECT statements
-                rows = await connection.fetch(sql_str, *params)
-                data = [dict(record) for record in rows] if rows else []
-                result = SQLResult(
-                    statement=op.sql,
-                    data=cast("list[dict[str, Any]]", data),
-                    rows_affected=len(data),
-                    operation_type="SELECT",
-                    metadata={"column_names": list(rows[0].keys()) if rows else []},
-                )
-            elif op.operation_type == "execute_script":
-                # For scripts, split and execute each statement
-                script_statements = self._split_script_statements(op.sql.to_sql())
-                total_affected = 0
-                last_status = ""
-
-                for stmt in script_statements:
-                    if stmt.strip():
-                        status = await connection.execute(stmt)
-                        total_affected += self._parse_asyncpg_status(status)
-                        last_status = status
-
-                result = SQLResult(
-                    statement=op.sql,
-                    data=cast("list[dict[str, Any]]", []),
-                    rows_affected=total_affected,
-                    operation_type="SCRIPT",
-                    metadata={"status_message": last_status, "statements_executed": len(script_statements)},
-                )
-            else:
-                status = await connection.execute(sql_str, *params)
-                rows_affected = self._parse_asyncpg_status(status)
-                result = SQLResult(
-                    statement=op.sql,
-                    data=cast("list[dict[str, Any]]", []),
-                    rows_affected=rows_affected,
-                    operation_type="EXECUTE",
-                    metadata={"status_message": status},
-                )
-
-            result.operation_index = i
-            result.pipeline_sql = op.sql
-            results.append(result)
-
-        except Exception as e:
-            if options.get("continue_on_error"):
-                error_result = SQLResult(
-                    statement=op.sql, error=e, operation_index=i, parameters=op.original_params, data=[]
-                )
-                results.append(error_result)
-            else:
-                # Transaction will be rolled back automatically
-                msg = f"AsyncPG pipeline failed at operation {i}: {e}"
-                raise PipelineExecutionError(
-                    msg, operation_index=i, partial_results=results, failed_operation=op
-                ) from e
-
-    def _convert_to_positional_params(self, params: Any) -> "tuple[Any, ...]":
-        """Convert parameters to positional format for AsyncPG.
-
-        AsyncPG requires parameters as positional arguments for $1, $2, etc.
-
-        Args:
-            params: Parameters in various formats
-
-        Returns:
-            Tuple of positional parameters
-        """
-        if params is None:
-            return ()
-        if isinstance(params, dict):
-            if not params:
-                return ()
-            # This assumes the SQL was compiled with NUMERIC style
-            max_param = 0
-            for key in params:
-                if isinstance(key, str) and key.startswith("param_"):
-                    try:
-                        param_num = int(key[6:])  # Extract number from "param_N"
-                        max_param = max(max_param, param_num)
-                    except ValueError:
-                        continue
-
-            if max_param > 0:
-                # Rebuild positional args from param_0, param_1, etc.
-                positional = []
-                for i in range(max_param + 1):
-                    param_key = f"param_{i}"
-                    if param_key in params:
-                        positional.append(params[param_key])
-                return tuple(positional)
-            # Fall back to dict values in arbitrary order
-            return tuple(params.values())
-        if isinstance(params, (list, tuple)):
-            return tuple(params)
-        return (params,)
-
     @staticmethod
     def _parse_asyncpg_status(status: str) -> int:
         """Parse AsyncPG status string to extract row count.
@@ -437,3 +150,18 @@ class AsyncpgDriver(
                     pass
 
         return 0
+
+    async def begin(self, connection: "Optional[Any]" = None) -> None:
+        """Begin transaction using asyncpg-specific method."""
+        conn = connection or self.connection
+        await conn.execute("BEGIN")
+
+    async def rollback(self, connection: "Optional[Any]" = None) -> None:
+        """Rollback transaction using asyncpg-specific method."""
+        conn = connection or self.connection
+        await conn.execute("ROLLBACK")
+
+    async def commit(self, connection: "Optional[Any]" = None) -> None:
+        """Commit transaction using asyncpg-specific method."""
+        conn = connection or self.connection
+        await conn.execute("COMMIT")

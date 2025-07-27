@@ -21,7 +21,6 @@ def psycopg_sync_config(postgres_service: PostgresService) -> "Generator[Psycopg
             "user": postgres_service.user,
             "password": postgres_service.password,
             "dbname": postgres_service.database,
-            "autocommit": True,  # Enable autocommit for tests
         }
     )
     yield config
@@ -40,7 +39,6 @@ def psycopg_async_config(postgres_service: PostgresService) -> "Generator[Psycop
             "user": postgres_service.user,
             "password": postgres_service.password,
             "dbname": postgres_service.database,
-            "autocommit": True,  # Enable autocommit for tests
         }
     )
     yield config

@@ -194,21 +194,22 @@ class SQLResult(StatementResult):
 
         return False
 
-    def get_data(self) -> "Union[list[dict[str,Any]], dict[str, Any]]":
+    def get_data(self) -> "list[dict[str, Any]]":
         """Get the data from the result.
 
         For regular operations, returns the list of rows.
         For script operations, returns a summary dictionary.
         """
-        if self.operation_type.upper() == "SCRIPT" or self.statement_results:
-            return {
-                "total_statements": self.total_statements,
-                "successful_statements": self.successful_statements,
-                "failed_statements": self.total_statements - self.successful_statements,
-                "errors": self.errors,
-                "statement_results": self.statement_results,
-                "total_rows_affected": self.get_total_rows_affected(),
-            }
+        if self.operation_type.upper() == "SCRIPT":
+            return [
+                {
+                    "total_statements": self.total_statements,
+                    "successful_statements": self.successful_statements,
+                    "failed_statements": self.total_statements - self.successful_statements,
+                    "errors": self.errors,
+                    "statement_results": self.statement_results,
+                }
+            ]
         return self.data
 
     def add_statement_result(self, result: "SQLResult") -> None:
@@ -217,16 +218,6 @@ class SQLResult(StatementResult):
         self.total_statements += 1
         if result.is_success():
             self.successful_statements += 1
-
-    def add_error(self, error: str) -> None:
-        """Add an error message to the script execution errors."""
-        self.errors.append(error)
-
-    def get_statement_result(self, index: int) -> "Optional[SQLResult]":
-        """Get a statement result by index."""
-        if 0 <= index < len(self.statement_results):
-            return self.statement_results[index]
-        return None
 
     def get_total_rows_affected(self) -> int:
         """Get the total number of rows affected across all statements."""
@@ -244,14 +235,6 @@ class SQLResult(StatementResult):
     def num_columns(self) -> int:
         """Get the number of columns in the result data."""
         return len(self.column_names) if self.column_names else 0
-
-    def get_errors(self) -> "list[str]":
-        """Get all errors from script execution."""
-        return self.errors.copy()
-
-    def has_errors(self) -> bool:
-        """Check if there are any errors from script execution."""
-        return len(self.errors) > 0
 
     def get_first(self) -> "Optional[dict[str, Any]]":
         """Get the first row from the result, if any."""

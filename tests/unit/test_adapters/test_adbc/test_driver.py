@@ -10,9 +10,8 @@ from adbc_driver_manager.dbapi import Connection, Cursor
 from sqlglot import exp
 
 from sqlspec.adapters.adbc.driver import AdbcDriver
-from sqlspec.exceptions import RepositoryError
+from sqlspec.parameters import ParameterStyle
 from sqlspec.statement.builder import QueryBuilder
-from sqlspec.statement.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
@@ -240,7 +239,7 @@ def test_adbc_driver_execute_statement_select(adbc_driver: AdbcDriver, mock_curs
 
     # Use PostgreSQL-style placeholders since the mock connection is PostgreSQL
     statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[123])
-    result = adbc_driver._execute_statement(statement)
+    result = adbc_driver._execute_sql(statement)
 
     assert isinstance(result, SQLResult)
     assert len(result.data) == 1
@@ -393,7 +392,7 @@ def test_adbc_driver_instrumentation_logging(mock_adbc_connection: Mock, mock_cu
 
     statement = SQL("SELECT * FROM users WHERE id = $1", parameters=[123])
     # Parameters argument removed from _execute_statement call
-    result = driver._execute_statement(statement)
+    result = driver._execute_sql(statement)
 
     assert isinstance(result, SQLResult)
     assert result.operation_type == "SELECT"
@@ -437,20 +436,20 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
     sql_config = SQLConfig()
     # Test with SQL statement
     sql_stmt = SQL("SELECT * FROM users", config=sql_config)
-    result = adbc_driver._build_statement(sql_stmt, _config=sql_config)
+    result = adbc_driver._prepare_sql(sql_stmt, _config=sql_config)
     assert isinstance(result, SQL)
     assert result.sql == sql_stmt.sql
 
     # Test with QueryBuilder - use a real QueryBuilder subclass
     test_builder = MockQueryBuilder()
-    result = adbc_driver._build_statement(test_builder, _config=sql_config)
+    result = adbc_driver._prepare_sql(test_builder, _config=sql_config)
     assert isinstance(result, SQL)
     # The result should be a SQL statement created from the builder
     assert "SELECT" in result.sql
 
     # Test with plain string SQL input
     string_sql = "SELECT id FROM another_table"
-    built_stmt_from_string = adbc_driver._build_statement(string_sql, _config=sql_config)
+    built_stmt_from_string = adbc_driver._prepare_sql(string_sql, _config=sql_config)
     assert isinstance(built_stmt_from_string, SQL)
     assert built_stmt_from_string.sql == string_sql
     assert built_stmt_from_string.parameters == {}
@@ -458,7 +457,7 @@ def test_adbc_driver_build_statement_method(adbc_driver: AdbcDriver) -> None:
     # Test with plain string SQL and parameters
     string_sql_with_params = "SELECT id FROM yet_another_table WHERE id = ?"
     params_for_string = 1  # Pass as individual parameter, not tuple
-    built_stmt_with_params = adbc_driver._build_statement(string_sql_with_params, params_for_string, _config=sql_config)
+    built_stmt_with_params = adbc_driver._prepare_sql(string_sql_with_params, params_for_string, _config=sql_config)
     assert isinstance(built_stmt_with_params, SQL)
     assert built_stmt_with_params.sql == string_sql_with_params
     assert built_stmt_with_params.parameters == (1,)  # Parameters wrapped as tuple by SQL constructor

@@ -4,8 +4,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from mypy_extensions import trait
 
+from sqlspec.parameters import ParameterStyle
 from sqlspec.statement.cache import SQLCache
-from sqlspec.statement.parameters import ParameterStyle
 
 if TYPE_CHECKING:
     from sqlspec.statement.sql import SQL

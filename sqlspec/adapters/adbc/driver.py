@@ -2,34 +2,23 @@
 import contextlib
 import logging
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from pathlib import Path
 
     from sqlglot.dialects.dialect import DialectType
     from typing_extensions import TypeAlias
 
-    from sqlspec.typing import ConnectionT
 
 from adbc_driver_manager.dbapi import Connection, Cursor
 
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.driver.mixins import (
-    SQLTranslatorMixin,
-    SyncAdapterCacheMixin,
-    SyncPipelinedExecutionMixin,
-    SyncStorageMixin,
-    ToSchemaMixin,
-    TypeCoercionMixin,
-)
-from sqlspec.driver.mixins._query_tools import SyncQueryMixin
-from sqlspec.statement.builder._ddl import DropTable, Truncate
-from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.parameters import DriverParameterConfig, ParameterStyle
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.utils.serializers import to_json
+
+# Type handlers removed - ADBC has good native type support
 
 __all__ = ("AdbcConnection", "AdbcDriver")
 
@@ -62,34 +51,13 @@ DIALECT_PARAMETER_STYLES = {
 }
 
 
-class AdbcDriver(
-    SyncDriverAdapterBase,
-    SyncAdapterCacheMixin,
-    SQLTranslatorMixin,
-    TypeCoercionMixin,
-    SyncStorageMixin,
-    SyncPipelinedExecutionMixin,
-    ToSchemaMixin,
-    SyncQueryMixin,
-):
-    """ADBC Sync Driver Adapter with modern architecture.
+class AdbcDriver(SyncDriverAdapterBase):
+    """ADBC Sync Driver Adapter with modern architecture."""
 
-    ADBC (Arrow Database Connectivity) provides a universal interface for connecting
-    to multiple database systems with high-performance Arrow-native data transfer.
-
-    This driver provides:
-    - Universal connectivity across database backends (PostgreSQL, SQLite, DuckDB, etc.)
-    - High-performance Arrow data streaming and bulk operations
-    - Intelligent dialect detection and parameter style handling
-    - Seamless integration with cloud databases (BigQuery, Snowflake)
-    - Driver manager abstraction for easy multi-database support
-    """
-
-    connection_type = AdbcConnection
-    supports_native_arrow_import: "ClassVar[bool]" = True
-    supports_native_arrow_export: "ClassVar[bool]" = True
-    supports_native_parquet_export: "ClassVar[bool]" = False  # TODO: Implement native Parquet export
-    supports_native_parquet_import: "ClassVar[bool]" = True
+    # Default parameter config - will be overridden in __init__ based on dialect
+    parameter_config = DriverParameterConfig(
+        paramstyle=ParameterStyle.QMARK, type_coercion_map={}, has_native_list_expansion=True
+    )
 
     def __init__(self, connection: "AdbcConnection", config: "Optional[SQLConfig]" = None) -> None:
         dialect = self._get_dialect(connection)
@@ -100,38 +68,29 @@ class AdbcDriver(
 
         super().__init__(connection=connection, config=config)
         self.dialect: DialectType = dialect
+
+        # Set up parameter configuration based on dialect
         default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
             self.dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
         )
-        self.default_parameter_style = default_style
-        self.supported_parameter_styles = tuple(supported_styles)
 
-    def begin(self) -> None:
-        """Begin a transaction.
+        # Override the class parameter_config for this instance
+        object.__setattr__(
+            self,
+            "parameter_config",
+            DriverParameterConfig(
+                supported_parameter_styles=supported_styles,
+                default_parameter_style=default_style,
+                type_coercion_map={
+                    # ADBC has good native type support across dialects
+                    # Add any specific type mappings as needed
+                },
+                has_native_list_expansion=True,  # ADBC handles lists natively
+            ),
+        )
 
-        ADBC handles transactions differently based on the underlying database.
-        Most ADBC drivers start transactions automatically.
-        """
-
-    def commit(self) -> None:
-        """Commit the current transaction."""
-        self.connection.commit()
-
-    def rollback(self) -> None:
-        """Rollback the current transaction."""
-        self.connection.rollback()
-
-    def _coerce_json(self, value: "Any") -> "Any":
-        """ADBC JSON handling varies by underlying driver."""
-        if self.dialect == "sqlite" and isinstance(value, (dict, list)):
-            return to_json(value)
-        return value
-
-    def _coerce_array(self, value: "Any") -> "Any":
-        """ADBC array handling varies by underlying driver."""
-        if self.dialect == "sqlite" and isinstance(value, (list, tuple)):
-            return to_json(list(value))
-        return value
+        # Type handlers can be registered if the base class supports it
+        # ADBC has good native type support, so we don't need explicit type handlers
 
     @staticmethod
     def _get_dialect(connection: "AdbcConnection") -> str:
@@ -161,9 +120,8 @@ class AdbcDriver(
             return None
         return params
 
-    @staticmethod
     @contextmanager
-    def _get_cursor(connection: "AdbcConnection") -> "Iterator[Cursor]":
+    def with_cursor(self, connection: "AdbcConnection") -> "Iterator[Cursor]":
         cursor = connection.cursor()
         try:
             yield cursor
@@ -171,43 +129,24 @@ class AdbcDriver(
             with contextlib.suppress(Exception):
                 cursor.close()  # type: ignore[no-untyped-call]
 
-    def _execute_statement(
-        self, statement: "SQL", connection: "Optional[ConnectionT]" = None, **kwargs: "Any"
-    ) -> "SQLResult":
-        if statement.is_script:
-            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
-            return self._execute_script(sql, connection=connection, **kwargs)
+    def _perform_execute(self, cursor: "Cursor", statement: "SQL") -> None:
+        """Execute the SQL statement using the provided cursor."""
+        sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
 
-        # Determine target parameter style
-        target_style = self._select_parameter_style(statement)
-
-        statement._ensure_processed()
-        sql, params = self._get_compiled_sql(statement, target_style)
-
-        params = self._handle_postgres_empty_params(self._process_parameters(params))
-
-        if statement.is_many:
-            return self._execute_many(sql, params, connection=connection, **kwargs)
-        return self._execute(sql, params, statement, connection=connection, **kwargs)
-
-    def _execute(
-        self, sql: str, parameters: "Any", statement: "SQL", connection: "Optional[ConnectionT]" = None, **kwargs: "Any"
-    ) -> "SQLResult":
-        conn = self._connection(connection)
-
-        cursor_params = self._prepare_cursor_parameters(parameters)
-
-        with self._get_cursor(conn) as cursor:
-            try:
+        try:
+            if statement.is_many:
+                # For execute_many, params is already a list of parameter sets
+                prepared_params = self._prepare_driver_parameters_many(params) if params else []
+                cursor.executemany(sql, prepared_params)
+            else:
+                prepared_params = self._prepare_driver_parameters(params)
+                # Handle PostgreSQL empty params
+                prepared_params = self._handle_postgres_empty_params(prepared_params)
+                cursor_params = self._prepare_cursor_parameters(prepared_params)
                 self._execute_with_params(cursor, sql, cursor_params)
-            except Exception as e:
-                self._handle_postgres_rollback(cursor)
-                raise e from e
-
-            if self.returns_rows(statement.expression):
-                return self._build_select_result(cursor, statement)
-
-            return self._build_modify_result(cursor, statement)
+        except Exception as e:
+            self._handle_postgres_rollback(cursor)
+            raise e from e
 
     def _execute_with_params(self, cursor: "Cursor", sql: str, params: "list[Any]") -> None:
         """Execute SQL with proper parameter handling."""
@@ -235,110 +174,45 @@ class AdbcDriver(
         )
 
     def _build_modify_result(self, cursor: "Cursor", statement: "SQL") -> "SQLResult":
-        """Build SQLResult for non-SELECT operations (INSERT, UPDATE, DELETE)."""
-        rows_affected = cursor.rowcount if cursor.rowcount is not None else -1
+        """Build result for modification operations."""
         return SQLResult(
             statement=statement,
             data=[],
-            rows_affected=rows_affected,
-            operation_type="EXECUTE",
+            rows_affected=cursor.rowcount if cursor.rowcount is not None else -1,
+            operation_type=self._determine_operation_type(statement),
             metadata={"status_message": "OK"},
         )
 
-    def _execute_many(
-        self, sql: str, param_list: "Any", connection: "Optional[ConnectionT]" = None, **kwargs: "Any"
-    ) -> "SQLResult":
-        if not param_list and self.dialect == "postgres":
-            return SQLResult(
-                statement=SQL(sql, _dialect=self.dialect),
-                data=[],
-                rows_affected=0,
-                operation_type="EXECUTE",
-                metadata={"status_message": "OK"},
-            )
+    def _build_result(self, cursor: "Cursor", statement: "SQL") -> "SQLResult":
+        """Build and return the result of the SQL execution."""
+        if self.returns_rows(statement.expression):
+            return self._build_select_result(cursor, statement)
+        return self._build_modify_result(cursor, statement)
 
-        conn = self._connection(connection)
-        with self._get_cursor(conn) as cursor:
-            try:
-                cursor.executemany(sql, param_list or [])
-            except Exception as e:
-                self._handle_postgres_rollback(cursor)
-                raise e from e
+    def begin(self, connection: "Optional[Any]" = None) -> None:
+        """Begin database transaction."""
+        conn = connection or self.connection
+        # ADBC transaction handling varies by backend
+        if hasattr(conn, "begin"):
+            conn.begin()
+        elif hasattr(conn, "autocommit"):
+            conn.autocommit = False
 
-            return SQLResult(
-                statement=SQL(sql, _dialect=self.dialect),
-                data=[],
-                rows_affected=cursor.rowcount if cursor.rowcount is not None else -1,
-                operation_type="EXECUTE",
-                metadata={"status_message": "OK"},
-            )
+    def rollback(self, connection: "Optional[Any]" = None) -> None:
+        """Rollback database transaction."""
+        conn = connection or self.connection
+        if hasattr(conn, "rollback"):
+            conn.rollback()
 
-    def _execute_script(self, script: str, connection: "Optional[ConnectionT]" = None, **kwargs: "Any") -> "SQLResult":
-        conn = self._connection(connection)
-        statements = self._split_script_statements(script)
-        executed_count = 0
-        total_rows = 0
+    def commit(self, connection: "Optional[Any]" = None) -> None:
+        """Commit database transaction."""
+        conn = connection or self.connection
+        if hasattr(conn, "commit"):
+            conn.commit()
 
-        with self._get_cursor(conn) as cursor:
-            for statement in statements:
-                if statement.strip():
-                    if not kwargs.get("_suppress_warnings"):
-                        temp_sql = SQL(statement, config=self.config)
-                        temp_sql._ensure_processed()
-
-                    rows = self._execute_single_script_statement(cursor, statement)
-                    executed_count += 1
-                    total_rows += rows
-
-        return SQLResult(
-            statement=SQL(script, _dialect=self.dialect).as_script(),
-            data=[],
-            rows_affected=total_rows,
-            operation_type="SCRIPT",
-            metadata={"status_message": "SCRIPT EXECUTED"},
-            total_statements=executed_count,
-            successful_statements=executed_count,
-        )
-
-    def _execute_single_script_statement(self, cursor: "Cursor", statement: str) -> int:
-        """Execute a single statement from a script and handle errors."""
-        try:
-            cursor.execute(statement)
-        except Exception as e:
-            self._handle_postgres_rollback(cursor)
-            raise e from e
-        else:
-            return cursor.rowcount or 0
-
-    def _fetch_arrow_table(self, sql: "SQL", connection: "Optional[Any]" = None, **kwargs: "Any") -> "ArrowResult":
-        """ADBC native Arrow table fetching with zero-copy data transfer."""
-        self._ensure_pyarrow_installed()
-        conn = self._connection(connection)
-
-        sql._ensure_processed()
-        compiled_sql, params = self._get_compiled_sql(sql, self.default_parameter_style)
-        params = self._process_parameters(params)
-        params = self._handle_postgres_empty_params(params)
-        cursor_params = self._prepare_cursor_parameters(params)
-
-        with self._get_cursor(conn) as cursor:
-            self._execute_with_params(cursor, compiled_sql, cursor_params)
-            arrow_table = cursor.fetch_arrow_table()
-            return ArrowResult(statement=sql, data=arrow_table)
-
-    def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: "Any") -> int:
-        """ADBC-optimized Arrow table ingestion using native bulk insert."""
-        self._ensure_pyarrow_installed()
-
-        conn = self._connection(None)
-        with self._get_cursor(conn) as cursor:
-            if mode == "replace":
-                truncate_stmt = Truncate().table(table_name).to_statement(config=self.config)
-                cursor.execute(truncate_stmt.to_sql(placeholder_style=ParameterStyle.STATIC))
-            elif mode == "create":
-                msg = "'create' mode is not supported for ADBC ingestion"
-                raise NotImplementedError(msg)
-            return cursor.adbc_ingest(table_name, table, mode=mode, **options)  # type: ignore[arg-type]
+    def _prepare_driver_parameters(self, parameters: "Any") -> "Any":
+        """Prepare parameters for the ADBC driver."""
+        return parameters
 
     def _prepare_cursor_parameters(self, parameters: "Any") -> "list[Any]":
         """Convert parameters to the format expected by ADBC cursor."""
@@ -349,37 +223,3 @@ class AdbcDriver(
         if isinstance(parameters, dict) and not parameters:
             return []
         return [parameters]
-
-    def _import_from_storage(
-        self,
-        source_uri: "Union[str, Path]",
-        table_name: str,
-        format: "Optional[str]" = None,
-        mode: str = "create",
-        **options: "Any",
-    ) -> int:
-        """Import data from storage using ADBC's native capabilities."""
-        if format is None:
-            from pathlib import Path
-
-            path_obj = Path(source_uri)
-            format = path_obj.suffix.lstrip(".").lower()  # noqa: A001
-
-        if mode == "replace":
-            drop_stmt = DropTable(table_name).if_exists().to_statement(config=self.config)
-            self.execute(drop_stmt)
-
-        # Leverage native Arrow capabilities for Parquet
-        if format == "parquet" and self.supports_native_parquet_import:
-            import pyarrow.parquet as pq
-
-            arrow_table = pq.read_table(source_uri)
-            return self._ingest_arrow_table(
-                arrow_table, table_name, mode="append" if mode in {"append", "create"} else mode, **options
-            )
-
-        return super()._import_from_storage(source_uri, table_name, format, mode, **options)
-
-    def _connection(self, connection: "Optional[ConnectionT]" = None) -> "AdbcConnection":
-        """Get the connection to use for the operation."""
-        return cast("AdbcConnection", connection or self.connection)

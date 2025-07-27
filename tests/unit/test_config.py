@@ -44,9 +44,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
     def __init__(self, connection: "MockConnection", config: "Optional[SQLConfig]" = None) -> None:
         super().__init__(connection=connection, config=config)
 
-    def _execute_statement(
-        self, statement: "Any", connection: "Optional[MockConnection]" = None, **kwargs: "Any"
-    ) -> "Any":
+    def _execute_sql(self, statement: "Any", connection: "Optional[MockConnection]" = None, **kwargs: "Any") -> "Any":
         return {"rows": [], "rowcount": 0}
 
     def _execute(self, sql: "str", parameters: "Any", connection: "MockConnection", **kwargs: "Any") -> "Any":
@@ -75,7 +73,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
     def __init__(self, connection: "MockConnection", config: "Optional[SQLConfig]" = None) -> None:
         super().__init__(connection=connection, config=config)
 
-    async def _execute_statement(self, statement: "Any", connection: "Optional[Any]" = None, **kwargs: "Any") -> "Any":
+    async def _execute_sql(self, statement: "Any", connection: "Optional[Any]" = None, **kwargs: "Any") -> "Any":
         return {"rows": [], "rowcount": 0}
 
     async def _execute(self, sql: "str", parameters: "Any", connection: "MockConnection", **kwargs: "Any") -> "Any":

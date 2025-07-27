@@ -1,104 +1,90 @@
 """Unit tests for PSQLPy driver."""
 
-from unittest.mock import AsyncMock, MagicMock, Mock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from sqlspec.adapters.psqlpy import PsqlpyDriver
-from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
 @pytest.fixture
 def mock_psqlpy_connection() -> AsyncMock:
     """Create a mock PSQLPy connection."""
-    mock_connection = AsyncMock()  # Remove spec to avoid attribute errors
-
-    # Create mock execute result with rows_affected method
-    mock_execute_result = Mock()
-    mock_execute_result.rows_affected.return_value = 1
-    mock_connection.execute.return_value = mock_execute_result
-
-    mock_connection.execute_many.return_value = None
-    mock_connection.execute_script.return_value = None
-    mock_connection.fetch_row.return_value = None
-    mock_connection.fetch_all.return_value = []
-    return mock_connection
+    mock_conn = AsyncMock()
+    mock_cursor = AsyncMock()
+    mock_conn.cursor.return_value = mock_cursor
+    return mock_conn
 
 
 @pytest.fixture
-def psqlpy_driver(mock_psqlpy_connection: AsyncMock) -> PsqlpyDriver:
+def driver(mock_psqlpy_connection: AsyncMock) -> PsqlpyDriver:
     """Create a PSQLPy driver with mocked connection."""
-    config = SQLConfig()  # Disable strict mode for unit tests
-    return PsqlpyDriver(connection=mock_psqlpy_connection, config=config)
+    return PsqlpyDriver(connection=mock_psqlpy_connection, config=SQLConfig())
 
 
-def test_psqlpy_driver_initialization(mock_psqlpy_connection: AsyncMock) -> None:
-    """Test PSQLPy driver initialization."""
-    config = SQLConfig()
-    driver = PsqlpyDriver(connection=mock_psqlpy_connection, config=config)
-
-    # Test driver attributes are set correctly
-    assert driver.connection is mock_psqlpy_connection
-    assert driver.config is config
+# Initialization Tests
+@pytest.mark.asyncio
+async def test_driver_initialization(driver: PsqlpyDriver) -> None:
+    """Test driver initialization."""
     assert driver.dialect == "postgres"
-    assert driver.supports_native_arrow_export is False
-    assert driver.supports_native_arrow_import is False
+    assert driver.parameter_config.paramstyle == ParameterStyle.NUMERIC
 
 
-def test_psqlpy_driver_dialect_property(psqlpy_driver: PsqlpyDriver) -> None:
-    """Test PSQLPy driver dialect property."""
-    assert psqlpy_driver.dialect == "postgres"
+# Cursor Management Tests
+@pytest.mark.asyncio
+async def test_acquire_cursor(driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock) -> None:
+    """Test _acquire_cursor context manager."""
+    async with driver._acquire_cursor(mock_psqlpy_connection) as cursor:
+        assert cursor is mock_psqlpy_connection
 
 
-def test_psqlpy_driver_supports_arrow(psqlpy_driver: PsqlpyDriver) -> None:
-    """Test PSQLPy driver Arrow support."""
-    assert psqlpy_driver.supports_native_arrow_export is False
-    assert psqlpy_driver.supports_native_arrow_import is False
-    assert PsqlpyDriver.supports_native_arrow_export is False
-    assert PsqlpyDriver.supports_native_arrow_import is False
-
-
-def test_psqlpy_driver_placeholder_style(psqlpy_driver: PsqlpyDriver) -> None:
-    """Test PSQLPy driver placeholder style detection."""
-    placeholder_style = psqlpy_driver.default_parameter_style
-    assert placeholder_style == ParameterStyle.NUMERIC
+# Execution Logic Tests
+@pytest.mark.asyncio
+async def test_perform_execute_single(driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock) -> None:
+    """Test _perform_execute for a single statement."""
+    statement = SQL("SELECT 1")
+    sql, params = statement.compile()
+    await driver._perform_execute(mock_psqlpy_connection, sql, params, statement)
+    mock_psqlpy_connection.execute.assert_called_once_with(sql, params)
 
 
 @pytest.mark.asyncio
-async def test_psqlpy_driver_execute_statement_select(
-    psqlpy_driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock
-) -> None:
-    """Test PSQLPy driver _execute_statement for SELECT statements."""
-    # Setup mock connection - PSQLPy calls conn.fetch() which returns a QueryResult
-    mock_data = [{"id": 1, "name": "test"}]
-    # Create a mock QueryResult object with a result() method
-    mock_query_result = MagicMock()
-    mock_query_result.result.return_value = mock_data
-    mock_psqlpy_connection.fetch.return_value = mock_query_result
+async def test_perform_execute_many(driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock) -> None:
+    """Test _perform_execute for an executemany statement."""
+    statement = SQL("INSERT INTO t (id) VALUES ($1)").as_many([[1], [2]])
+    sql, params = statement.compile()
+    await driver._perform_execute(mock_psqlpy_connection, sql, params, statement)
+    mock_psqlpy_connection.execute_many.assert_called_once_with(sql, params)
 
-    # Create SQL statement with parameters
-    statement = SQL("SELECT * FROM users WHERE id = $1", [1])
-    result = await psqlpy_driver._execute_statement(statement)
 
-    # Verify result is SQLResult
-    assert isinstance(result, SQLResult)
-    assert result.data == mock_data
-    assert result.column_names == ["id", "name"]
-    assert result.operation_type == "SELECT"
-
-    # Verify connection operations
-    mock_psqlpy_connection.fetch.assert_called_once()
+# Result Building Tests
+@pytest.mark.asyncio
+async def test_build_result_select(driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock) -> None:
+    """Test _build_result for a SELECT statement."""
+    statement = SQL("SELECT * FROM users")
+    with patch.object(driver, "returns_rows", return_value=True):
+        with patch.object(driver, "_build_select_result") as mock_build_select:
+            await driver._build_result(mock_psqlpy_connection, statement)
+            mock_build_select.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_psqlpy_driver_fetch_arrow_table_non_query_error(psqlpy_driver: PsqlpyDriver) -> None:
-    """Test PSQLPy driver fetch_arrow_table with non-query statement raises error."""
-    # Create non-query statement
-    result = await psqlpy_driver.fetch_arrow_table("INSERT INTO users VALUES (1, 'test')")
+async def test_build_result_dml(driver: PsqlpyDriver, mock_psqlpy_connection: AsyncMock) -> None:
+    """Test _build_result for a DML statement."""
+    statement = SQL("INSERT INTO users (name) VALUES ('Alice')")
+    with patch.object(driver, "returns_rows", return_value=False):
+        with patch.object(driver, "_build_modify_result") as mock_build_modify:
+            await driver._build_result(mock_psqlpy_connection, statement)
+            mock_build_modify.assert_called_once()
 
-    # Verify result
-    assert isinstance(result, ArrowResult)
-    # Should create empty Arrow table
-    assert result.num_rows == 0
+
+# Dispatcher Integration Tests
+@pytest.mark.asyncio
+async def test_execute_uses_dispatcher(driver: PsqlpyDriver) -> None:
+    """Test that the public execute method correctly uses the dispatcher."""
+    statement = SQL("SELECT * FROM users")
+    with patch.object(driver, "_dispatch_execution", new_callable=AsyncMock) as mock_dispatch:
+        await driver.execute(statement)
+        mock_dispatch.assert_called_once()

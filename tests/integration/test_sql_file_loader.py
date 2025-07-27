@@ -588,7 +588,7 @@ def test_sql_loader_with_complex_parameter_types(complex_sql_files: Path) -> Non
     assert isinstance(analytics_sql, SQL)
     assert analytics_sql.parameters["start_period"] == "2024-01-01 00:00:00"
     # TypedParameter wraps None values with type information
-    from sqlspec.statement.parameters import TypedParameter
+    from sqlspec.parameters import TypedParameter
 
     category_filter = analytics_sql.parameters["category_filter"]
     if isinstance(category_filter, TypedParameter):

@@ -4,7 +4,7 @@ from typing import Any
 
 import sqlglot.expressions as exp
 
-from sqlspec.statement.parameters import TypedParameter
+from sqlspec.parameters import TypedParameter
 from sqlspec.statement.pipeline import SQLTransformContext
 from sqlspec.utils.logging import get_logger
 

@@ -8,7 +8,7 @@ import pyarrow as pa
 import pytest
 
 from sqlspec.adapters.asyncmy import AsyncmyConnection, AsyncmyDriver
-from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.parameters import ParameterStyle
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
@@ -109,7 +109,7 @@ async def test_asyncmy_driver_execute_statement_select(
 
     # Create SQL statement with parameters - use qmark style for unit test
     result = await asyncmy_driver.fetch_arrow_table(
-        "SELECT * FROM users WHERE id = ?", [1], _config=asyncmy_driver.config
+        "SELECT * FROM users WHERE id = ?", [1], config=asyncmy_driver.config
     )
 
     # Verify result
@@ -138,7 +138,7 @@ async def test_asyncmy_driver_fetch_arrow_table_with_parameters(
     # Create SQL statement with parameters
     # Use a SQL that can be parsed by sqlglot - the driver will convert to %s style
     result = await asyncmy_driver.fetch_arrow_table(
-        "SELECT id, name FROM users WHERE id = ?", 42, _config=asyncmy_driver.config
+        "SELECT id, name FROM users WHERE id = ?", 42, config=asyncmy_driver.config
     )
 
     # Verify result

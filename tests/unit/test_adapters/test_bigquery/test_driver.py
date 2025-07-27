@@ -21,7 +21,7 @@ import pytest
 
 from sqlspec.adapters.bigquery import BigQueryDriver
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 
 if TYPE_CHECKING:
@@ -262,7 +262,7 @@ def test_execute_statement_routing(
     statement._is_many = is_many
 
     with patch.object(BigQueryDriver, expected_method, return_value={"rows_affected": 0}) as mock_method:
-        driver._execute_statement(statement)
+        driver._execute_sql(statement)
         mock_method.assert_called_once()
 
 
@@ -277,7 +277,7 @@ def test_execute_select_statement(driver: BigQueryDriver, mock_connection: Magic
     mock_job.result.return_value = iter([])
 
     statement = SQL("SELECT * FROM users")
-    result = driver._execute_statement(statement)
+    result = driver._execute_sql(statement)
 
     assert result.data == []
     assert result.column_names == ["id"]
@@ -297,7 +297,7 @@ def test_execute_dml_statement(driver: BigQueryDriver, mock_connection: MagicMoc
     mock_job.statement_type = "INSERT"  # This is the key - identify it as a DML statement
 
     statement = SQL("INSERT INTO users (name) VALUES (@name)", name="Alice")
-    result = driver._execute_statement(statement)
+    result = driver._execute_sql(statement)
 
     assert result.rows_affected == 1
     assert result.metadata["status_message"] == "OK - job_id: test-job-123"
@@ -327,7 +327,7 @@ def test_parameter_style_handling(
     mock_job.schema = []
     mock_job.num_dml_affected_rows = None
 
-    driver._execute_statement(statement)
+    driver._execute_sql(statement)
 
     # Check that query was called with SQL containing expected parameter style
     mock_connection.query.assert_called_once()
@@ -519,7 +519,7 @@ def test_execute_with_no_parameters(driver: BigQueryDriver, mock_connection: Mag
 
     config = SQLConfig(enable_validation=False)  # Allow DDL
     statement = SQL("CREATE TABLE test (id INTEGER)", config=config)
-    driver._execute_statement(statement)
+    driver._execute_sql(statement)
 
     mock_connection.query.assert_called_once()
 
@@ -534,7 +534,7 @@ def test_execute_select_with_empty_result(driver: BigQueryDriver, mock_connectio
     mock_job.result.return_value = iter([])
 
     statement = SQL("SELECT * FROM users WHERE 1=0")
-    result = driver._execute_statement(statement)
+    result = driver._execute_sql(statement)
 
     assert result.data == []
     assert result.column_names == ["id"]
@@ -568,7 +568,7 @@ def test_connection_override(driver: BigQueryDriver) -> None:
     statement = SQL("SELECT 1")
 
     # Should use override connection instead of driver's connection
-    driver._execute_statement(statement, connection=override_connection)
+    driver._execute_sql(statement, connection=override_connection)
 
     override_connection.query.assert_called_once()
     # Original connection should not be called

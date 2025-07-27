@@ -29,14 +29,14 @@ def psycopg_session(postgres_service: PostgresService) -> Generator[PsycopgSyncD
             "user": postgres_service.user,
             "password": postgres_service.password,
             "dbname": postgres_service.database,
-            "autocommit": True,  # Enable autocommit for tests
         },
         statement_config=SQLConfig(enable_transformations=True, enable_validation=False, enable_parsing=True),
     )
 
     try:
         with config.provide_session() as session:
-            # Create test table
+            # Create test table outside of transaction
+            # PostgreSQL DDL operations are transactional, so we need to commit
             session.execute_script("""
                 CREATE TABLE IF NOT EXISTS test_table (
                     id SERIAL PRIMARY KEY,
@@ -45,14 +45,27 @@ def psycopg_session(postgres_service: PostgresService) -> Generator[PsycopgSyncD
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            # Commit the DDL operation
+            session.commit()
+
+            # Start a new transaction for test isolation
+            session.begin()
             yield session
-            # Cleanup - handle potential transaction errors
+            # Rollback test changes
+            try:
+                session.rollback()
+            except Exception:
+                pass  # May already be rolled back
+            # Cleanup - DDL operations
             try:
                 session.execute_script("DROP TABLE IF EXISTS test_table")
             except Exception:
-                # If the transaction is in an error state, rollback first
+                # If the transaction is in an error state, try direct connection
                 if hasattr(session.connection, "rollback"):
-                    session.connection.rollback()  # pyright: ignore[reportAttributeAccessIssue]
+                    try:
+                        session.connection.rollback()  # pyright: ignore[reportAttributeAccessIssue]
+                    except Exception:
+                        pass
                 # Try again after rollback
                 try:
                     session.execute_script("DROP TABLE IF EXISTS test_table")
@@ -224,6 +237,10 @@ def test_psycopg_error_handling(psycopg_session: PsycopgSyncDriver) -> None:
     with pytest.raises(Exception):  # psycopg.errors.SyntaxError
         psycopg_session.execute("INVALID SQL STATEMENT")
 
+    # After an error, we need to rollback the transaction
+    psycopg_session.rollback()
+    psycopg_session.begin()
+
     # Test constraint violation
     psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", parameters=("unique_test", 1))
 
@@ -236,6 +253,7 @@ def test_psycopg_error_handling(psycopg_session: PsycopgSyncDriver) -> None:
 def test_psycopg_data_types(psycopg_session: PsycopgSyncDriver) -> None:
     """Test PostgreSQL data type handling with psycopg."""
     # Create table with various PostgreSQL data types
+    # DDL operations may auto-commit, so we handle them separately
     psycopg_session.execute_script("""
         CREATE TABLE data_types_test (
             id SERIAL PRIMARY KEY,

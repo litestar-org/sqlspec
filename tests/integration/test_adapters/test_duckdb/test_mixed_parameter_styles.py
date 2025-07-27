@@ -96,7 +96,7 @@ def test_complex_mixed_styles(duckdb_session: DuckDBDriver) -> None:
 
 def test_parameter_info_detection(duckdb_session: DuckDBDriver) -> None:
     """Test that parameter_info correctly identifies mixed styles."""
-    from sqlspec.statement.parameters import ParameterStyle
+    from sqlspec.parameters import ParameterStyle
 
     # Create SQL with mixed styles
     sql = SQL("SELECT * FROM test_table WHERE id = ? AND name = $1", parameters=[1, "test1"])

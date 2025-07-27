@@ -515,9 +515,7 @@ def test_multi_format_export_workflow(analytics_database: SqliteDriver, temp_dir
         if compression:
             export_kwargs["compression"] = compression
 
-        analytics_database.export_to_storage(
-            base_query, destination_uri=str(output_file), _config=None, **export_kwargs
-        )
+        analytics_database.export_to_storage(base_query, destination_uri=str(output_file), config=None, **export_kwargs)
 
         if output_file.exists():
             file_size = output_file.stat().st_size

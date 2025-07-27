@@ -9,7 +9,9 @@ import operator
 from typing import TYPE_CHECKING, Any, Callable, Union
 
 import sqlglot.expressions as exp
+from sqlglot.optimizer.normalize import normalize
 
+from sqlspec.parameters import ParameterValidator
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -25,10 +27,7 @@ __all__ = (
     "normalize_step",
     "optimize_step",
     "parameterize_literals_step",
-    "remove_comments_step",
     "validate_dml_safety_step",
-    "validate_parameter_style_step",
-    "validate_security_step",
     "validate_step",
 )
 
@@ -74,7 +73,6 @@ class SQLTransformContext:
         if isinstance(self.parameters, dict) and self.dialect in {"mysql", "sqlite"}:
             # Convert to positional list ordered by parameter position in SQL
             # This ensures parameters are ordered as they appear in the SQL query
-            from sqlspec.statement.parameters import ParameterValidator
 
             # Parse SQL to get parameter order
             validator = ParameterValidator()
@@ -132,37 +130,15 @@ def create_pipeline_from_config(config: "SQLConfig", driver_adapter: "Any" = Non
         Composed pipeline function
     """
     steps: list[PipelineStep] = []
-
-    # Always normalize first
-    steps.append(normalize_step)
-
-    # Apply transformations if enabled (includes parameterization)
     if config.enable_transformations:
         steps.append(parameterize_literals_step)
-        # Apply expression simplification if enabled
         if config.enable_expression_simplification:
             steps.append(optimize_step)
-
-    # Security validation if enabled
     if config.enable_validation:
-        steps.extend((validate_step, validate_dml_safety_step, validate_parameter_style_step))
-
-    # Custom pipeline steps if provided
-    if hasattr(config, "custom_pipeline_steps") and config.custom_pipeline_steps:
+        steps.extend((validate_step, validate_dml_safety_step))
+    if config.custom_pipeline_steps:
         steps.extend(config.custom_pipeline_steps)
-
     return compose_pipeline(steps)
-
-
-def normalize_step(context: SQLTransformContext) -> SQLTransformContext:
-    """Normalize parameter styles for sqlglot compatibility.
-
-    Converts various parameter styles to a unified format that
-    can be processed by subsequent pipeline steps.
-    """
-    # For now, we handle normalization during compilation
-    # This step is a placeholder for future enhancements
-    return context
 
 
 def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformContext:
@@ -188,7 +164,7 @@ def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformCont
     for node in context.current_expression.walk():
         # Skip literals that shouldn't be parameterized
         if isinstance(node, exp.Literal) and not isinstance(
-            node.parent, (exp.Placeholder, exp.Parameter, exp.Limit, exp.Offset, exp.Fetch)
+            node.parent, (exp.Placeholder, exp.Parameter, exp.Limit, exp.Offset, exp.Fetch, exp.WindowSpec)
         ):
             # Skip literals that are direct aliases (like 'processed' as status)
             if isinstance(node.parent, exp.Alias) and node.parent.this == node:
@@ -228,7 +204,7 @@ def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformCont
     # Second pass: replace literals with placeholders
     def replace_literal(node: exp.Expression) -> exp.Expression:
         if isinstance(node, exp.Literal) and not isinstance(
-            node.parent, (exp.Placeholder, exp.Parameter, exp.Limit, exp.Offset, exp.Fetch)
+            node.parent, (exp.Placeholder, exp.Parameter, exp.Limit, exp.Offset, exp.Fetch, exp.WindowSpec)
         ):
             # Skip literals that are direct aliases (like 'processed' as status)
             if isinstance(node.parent, exp.Alias) and node.parent.this == node:
@@ -257,7 +233,6 @@ def optimize_step(context: SQLTransformContext) -> SQLTransformContext:
     from sqlglot.optimizer.simplify import simplify
 
     try:
-        # Apply simplification
         context.current_expression = simplify(context.current_expression)
         context.metadata["optimized"] = True
     except Exception as e:
@@ -331,14 +306,20 @@ def validate_step(context: SQLTransformContext) -> SQLTransformContext:
     return context
 
 
-def remove_comments_step(context: SQLTransformContext) -> SQLTransformContext:
-    """Remove comments and hints from SQL.
+def normalize_step(context: SQLTransformContext) -> SQLTransformContext:
+    """Normalize SQL expressions for consistent processing.
 
-    Strips SQL comments and optimizer hints for cleaner processing.
+    Applies SQLGlot's normalization to ensure consistent formatting
+    and structure of SQL expressions across different input styles.
     """
-    # For now, SQLGlot already handles comments during parsing
-    # This is a placeholder for future enhancements
-    context.metadata["comments_removed"] = True
+    try:
+        context.current_expression = normalize(context.current_expression)
+        context.metadata["normalized"] = True
+    except Exception as e:
+        logger.warning("Normalization failed: %s", e)
+        context.metadata["normalized"] = False
+        context.metadata["normalization_error"] = str(e)
+
     return context
 
 
@@ -351,39 +332,13 @@ def validate_dml_safety_step(context: SQLTransformContext) -> SQLTransformContex
     issues = context.metadata.get("validation_issues", [])
 
     for node in context.current_expression.walk():
-        # Check for UPDATE without WHERE
         if isinstance(node, exp.Update) and not node.args.get("where"):
             issues.append("UPDATE without WHERE clause detected")
-
-        # Check for DELETE without WHERE
         if isinstance(node, exp.Delete) and not node.args.get("where"):
             issues.append("DELETE without WHERE clause detected")
-
-        # Check for TRUNCATE
         if isinstance(node, exp.Command) and str(node).upper().startswith("TRUNCATE"):
             issues.append("TRUNCATE operation detected")
 
     context.metadata["validation_issues"] = issues
     context.metadata["dml_safety_validated"] = True
     return context
-
-
-def validate_parameter_style_step(context: SQLTransformContext) -> SQLTransformContext:
-    """Validate parameter styles are consistent.
-
-    Ensures all parameters use the same style and are properly formatted.
-    """
-    # This validation happens during compilation in the new architecture
-    # as parameter style conversion is handled at the SQL class level
-    context.metadata["parameter_style_validated"] = True
-    return context
-
-
-def validate_security_step(context: SQLTransformContext) -> SQLTransformContext:
-    """Extended security validation beyond the basic validate_step.
-
-    Performs additional security checks for injection patterns.
-    """
-    # The basic validate_step already handles security validation
-    # This is here for compatibility with the old architecture
-    return validate_step(context)

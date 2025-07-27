@@ -1,50 +1,25 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import contextlib
 import datetime
-import io
 import logging
-import uuid
 from collections.abc import Iterator
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, Union, cast
-
-from sqlglot import exp, parse_one
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
 
 if TYPE_CHECKING:
     from typing_extensions import TypeAlias
 
-from google.cloud.bigquery import (
-    ArrayQueryParameter,
-    Client,
-    ExtractJobConfig,
-    LoadJobConfig,
-    QueryJob,
-    QueryJobConfig,
-    ScalarQueryParameter,
-    SourceFormat,
-    WriteDisposition,
-)
+from google.cloud.bigquery import ArrayQueryParameter, Client, QueryJob, QueryJobConfig, ScalarQueryParameter
 from google.cloud.bigquery.table import Row as BigQueryRow
 
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.driver.mixins import (
-    SQLTranslatorMixin,
-    SyncAdapterCacheMixin,
-    SyncPipelinedExecutionMixin,
-    SyncStorageMixin,
-    ToSchemaMixin,
-    TypeCoercionMixin,
-)
-from sqlspec.driver.mixins._query_tools import SyncQueryMixin
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import ArrowResult, SQLResult
+from sqlspec.parameters import DriverParameterConfig, ParameterStyle
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from sqlglot.dialects.dialect import DialectType
 
 
@@ -64,64 +39,22 @@ DATASET_TABLE_PARTS = 2  # dataset.table
 TIMESTAMP_ERROR_MSG_LENGTH = 189  # Length check for timestamp parsing error
 
 
-class BigQueryDriver(
-    SyncDriverAdapterBase,
-    SyncAdapterCacheMixin,
-    SQLTranslatorMixin,
-    TypeCoercionMixin,
-    SyncStorageMixin,
-    SyncPipelinedExecutionMixin,
-    ToSchemaMixin,
-    SyncQueryMixin,
-):
-    """Advanced BigQuery Driver with comprehensive Google Cloud capabilities.
 
-    Protocol Implementation:
-    - execute() - Universal method for all SQL operations
-    - execute_many() - Batch operations with transaction safety
-    - execute_script() - Multi-statement scripts and DDL operations
-    """
-
-    # Type specification for mypyc
-    connection_type = BigQueryConnection
+class BigQueryDriver(SyncDriverAdapterBase):
+    """Advanced BigQuery Driver with comprehensive Google Cloud capabilities."""
 
     dialect: "DialectType" = "bigquery"
-    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.NAMED_AT,)
-    default_parameter_style: ParameterStyle = ParameterStyle.NAMED_AT
-    connection: BigQueryConnection
+    parameter_config = DriverParameterConfig(
+        supported_parameter_styles=[ParameterStyle.NAMED_AT],  # Only supports @name
+        default_parameter_style=ParameterStyle.NAMED_AT,
+        type_coercion_map={
+            # BigQuery has good native type support
+            # Type coercion is handled in _get_bq_param_type method
+        },
+        has_native_list_expansion=True,  # BigQuery handles arrays natively
+    )
+
     _default_query_job_config: Optional[QueryJobConfig]
-    supports_native_parquet_import: ClassVar[bool] = True
-    supports_native_parquet_export: ClassVar[bool] = True
-    supports_native_arrow_import: ClassVar[bool] = True
-    supports_native_arrow_export: ClassVar[bool] = True
-    supports_native_csv_export: ClassVar[bool] = True
-    supports_native_json_export: ClassVar[bool] = True
-
-    def begin(self) -> None:
-        """Begin a transaction.
-
-        BigQuery doesn't have traditional transactions, so this is a no-op.
-        All operations are automatically committed.
-        """
-        # BigQuery uses implicit transactions
-        pass
-
-    def commit(self) -> None:
-        """Commit the current transaction.
-
-        BigQuery doesn't have traditional transactions, so this is a no-op.
-        All operations are automatically committed.
-        """
-        # BigQuery operations are automatically committed
-        pass
-
-    def rollback(self) -> None:
-        """Rollback the current transaction.
-
-        BigQuery doesn't support rollback, so this is a no-op.
-        """
-        # BigQuery doesn't support rollback
-        pass
 
     def __init__(
         self,
@@ -131,16 +64,7 @@ class BigQueryDriver(
         on_job_start: Optional[Callable[[str], None]] = None,
         on_job_complete: Optional[Callable[[str, Any], None]] = None,
     ) -> None:
-        """Initialize BigQuery driver with comprehensive feature support.
-
-        Args:
-            connection: BigQuery Client instance
-            config: SQL statement configuration
-            default_query_job_config: Default job configuration
-            on_job_start: Callback executed when a BigQuery job starts
-            on_job_complete: Callback executed when a BigQuery job completes
-
-        """
+        """Initialize BigQuery driver with comprehensive feature support."""
         super().__init__(connection=connection, config=config)
         self.on_job_start = on_job_start
         self.on_job_complete = on_job_complete
@@ -169,22 +93,9 @@ class BigQueryDriver(
 
     @staticmethod
     def _get_bq_param_type(value: Any) -> tuple[Optional[str], Optional[str]]:
-        """Determine BigQuery parameter type from Python value.
-
-        Supports all BigQuery data types including arrays, structs, and geographic types.
-
-        Args:
-            value: Python value to convert.
-
-        Returns:
-            Tuple of (parameter_type, array_element_type).
-
-        Raises:
-            SQLSpecError: If value type is not supported.
-        """
+        """Determine BigQuery parameter type from Python value."""
         if value is None:
-            # BigQuery handles NULL values without explicit type
-            return ("STRING", None)  # Use STRING type for NULL values
+            return ("STRING", None)
 
         value_type = type(value)
         if value_type is datetime.datetime:
@@ -206,7 +117,7 @@ class BigQueryDriver(
 
         if isinstance(value, (list, tuple)):
             if not value:
-                msg = "Cannot determine BigQuery ARRAY type for empty sequence. Provide typed empty array or ensure context implies type."
+                msg = "Cannot determine BigQuery ARRAY type for empty sequence."
                 raise SQLSpecError(msg)
             element_type, _ = BigQueryDriver._get_bq_param_type(value[0])
             if element_type is None:
@@ -214,23 +125,12 @@ class BigQueryDriver(
                 raise SQLSpecError(msg)
             return "ARRAY", element_type
 
-        # Fallback for unhandled types
         return None, None
 
     def _prepare_bq_query_parameters(
         self, params_dict: dict[str, Any]
     ) -> list[Union[ScalarQueryParameter, ArrayQueryParameter]]:
-        """Convert parameter dictionary to BigQuery parameter objects.
-
-        Args:
-            params_dict: Dictionary of parameter names and values.
-
-        Returns:
-            List of BigQuery parameter objects.
-
-        Raises:
-            SQLSpecError: If parameter type is not supported.
-        """
+        """Convert parameter dictionary to BigQuery parameter objects."""
         bq_params: list[Union[ScalarQueryParameter, ArrayQueryParameter]] = []
 
         if params_dict:
@@ -269,17 +169,7 @@ class BigQueryDriver(
         connection: Optional[BigQueryConnection] = None,
         job_config: Optional[QueryJobConfig] = None,
     ) -> QueryJob:
-        """Execute a BigQuery job with comprehensive configuration support.
-
-        Args:
-            sql_str: SQL string to execute.
-            bq_query_parameters: BigQuery parameter objects.
-            connection: Optional connection override.
-            job_config: Optional job configuration override.
-
-        Returns:
-            QueryJob instance.
-        """
+        """Execute a BigQuery job with comprehensive configuration support."""
         conn = connection or self.connection
 
         final_job_config = QueryJobConfig()
@@ -292,7 +182,6 @@ class BigQueryDriver(
 
         final_job_config.query_parameters = bq_query_parameters or []
 
-        # Debug log the actual parameters being sent
         if final_job_config.query_parameters:
             for param in final_job_config.query_parameters:
                 param_type = getattr(param, "type_", None) or getattr(param, "array_type", "ARRAY")
@@ -317,14 +206,7 @@ class BigQueryDriver(
 
     @staticmethod
     def _rows_to_results(rows_iterator: Iterator[BigQueryRow]) -> list[dict[str, Any]]:
-        """Convert BigQuery rows to dictionary format.
-
-        Args:
-            rows_iterator: Iterator of BigQuery Row objects.
-
-        Returns:
-            List of dictionaries representing the rows.
-        """
+        """Convert BigQuery rows to dictionary format."""
         return [dict(row) for row in rows_iterator]
 
     def _handle_select_job(self, query_job: QueryJob, statement: SQL) -> SQLResult:
@@ -342,19 +224,10 @@ class BigQueryDriver(
         )
 
     def _handle_dml_job(self, query_job: QueryJob, statement: SQL) -> SQLResult:
-        """Handle a DML job.
-
-        Note: BigQuery emulators (e.g., goccy/bigquery-emulator) may report 0 rows affected
-        for successful DML operations. In production BigQuery, num_dml_affected_rows accurately
-        reflects the number of rows modified. For integration tests, consider using state-based
-        verification (SELECT COUNT(*) before/after) instead of relying on row counts.
-        """
-        query_job.result()  # Wait for the job to complete
+        """Handle a DML job."""
+        query_job.result()
         num_affected = query_job.num_dml_affected_rows
 
-        # EMULATOR WORKAROUND: BigQuery emulators may incorrectly report 0 rows for successful DML.
-        # This heuristic assumes at least 1 row was affected if the job completed without errors.
-        # TODO: Remove this workaround when emulator behavior is fixed or use state verification in tests.
         if (
             (num_affected is None or num_affected == 0)
             and query_job.statement_type in {"INSERT", "UPDATE", "DELETE", "MERGE"}
@@ -365,7 +238,7 @@ class BigQueryDriver(
                 "BigQuery emulator workaround: DML operation reported 0 rows but completed successfully. "
                 "Assuming 1 row affected. Consider using state-based verification in tests."
             )
-            num_affected = 1  # Assume at least one row was affected
+            num_affected = 1
 
         operation_type = self._determine_operation_type(statement)
         return SQLResult(
@@ -376,375 +249,139 @@ class BigQueryDriver(
             metadata={"status_message": f"OK - job_id: {query_job.job_id}"},
         )
 
-    def _compile_bigquery_compatible(self, statement: SQL, target_style: ParameterStyle) -> tuple[str, Any]:
-        """Compile SQL statement for BigQuery.
+    @contextmanager
+    def with_cursor(self, connection: "BigQueryConnection") -> "Iterator[Any]":
+        """Context manager for BigQuery job (cursor equivalent)."""
+        # BigQuery doesn't use traditional cursors, but we can return a mock object
+        # The actual execution happens in _perform_execute
+        class MockCursor:
+            def __init__(self, connection: "BigQueryConnection") -> None:
+                self.connection = connection
+                self.job: Optional[QueryJob] = None
+        
+        cursor = MockCursor(connection)
+        try:
+            yield cursor
+        finally:
+            # No cleanup needed for BigQuery
+            pass
 
-        This is now just a pass-through since the core parameter generation
-        has been fixed to generate BigQuery-compatible parameter names.
-        """
-        return self._get_compiled_sql(statement, target_style)
+    def begin(self, connection: "Optional[Any]" = None) -> None:
+        """Begin transaction - BigQuery doesn't support transactions."""
+        # BigQuery doesn't support transactions
+        pass
 
-    def _execute_statement(
-        self, statement: SQL, connection: Optional[BigQueryConnection] = None, **kwargs: Any
-    ) -> SQLResult:
-        if statement.is_script:
-            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
-            return self._execute_script(sql, connection=connection, **kwargs)
+    def rollback(self, connection: "Optional[Any]" = None) -> None:
+        """Rollback transaction - BigQuery doesn't support transactions."""
+        # BigQuery doesn't support transactions
+        pass
 
-        target_style = self._select_parameter_style(statement)
+    def commit(self, connection: "Optional[Any]" = None) -> None:
+        """Commit transaction - BigQuery doesn't support transactions."""
+        # BigQuery doesn't support transactions
+        pass
 
+    def _perform_execute(self, cursor: "Any", statement: "SQL") -> None:
+        """Execute the SQL statement using BigQuery."""
+        sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
+        
         if statement.is_many:
-            sql, params = self._compile_bigquery_compatible(statement, target_style)
-            params = self._process_parameters(params)
-            return self._execute_many(sql, params, connection=connection, **kwargs)
+            # BigQuery doesn't support executemany directly, create script
+            script_parts = []
+            all_params: dict[str, Any] = {}
+            param_counter = 0
+            
+            # For execute_many, params is already a list of parameter sets
+            param_list = self._prepare_driver_parameters_many(params) if params else []
+            
+            for param_set in param_list:
+                if isinstance(param_set, dict):
+                    param_dict = param_set
+                elif isinstance(param_set, (list, tuple)):
+                    param_dict = {f"param_{i}": val for i, val in enumerate(param_set)}
+                else:
+                    param_dict = {"param_0": param_set}
+                
+                param_mapping = {}
+                current_sql = sql
+                for key, value in param_dict.items():
+                    new_key = f"p_{param_counter}"
+                    param_counter += 1
+                    param_mapping[key] = new_key
+                    all_params[new_key] = value
+                
+                for old_key, new_key in param_mapping.items():
+                    current_sql = current_sql.replace(f"@{old_key}", f"@{new_key}")
+                
+                script_parts.append(current_sql)
+            
+            full_script = ";\n".join(script_parts)
+            bq_params = self._prepare_bq_query_parameters(all_params)
+            cursor.job = self._run_query_job(full_script, bq_params, connection=cursor.connection)
+        elif statement.is_script:
+            # Execute script
+            sql_no_params, _ = statement.compile(ParameterStyle.STATIC)
+            statements = self._split_script_statements(sql_no_params)
+            jobs = []
+            for stmt in statements:
+                if stmt:
+                    job = self._run_query_job(stmt, [], connection=cursor.connection)
+                    jobs.append(job)
+            # Store all jobs for result building
+            cursor.jobs = jobs
+        else:
+            # Regular execute
+            prepared_params = self._prepare_driver_parameters(params)
+            
+            param_dict: dict[str, Any] = {}
+            if prepared_params:
+                if isinstance(prepared_params, dict):
+                    param_dict = prepared_params
+                elif isinstance(prepared_params, (list, tuple)):
+                    param_dict = {f"param_{i}": val for i, val in enumerate(prepared_params)}
+                else:
+                    param_dict = {"param_0": prepared_params}
+            
+            bq_params = self._prepare_bq_query_parameters(param_dict)
+            cursor.job = self._run_query_job(sql, bq_params, connection=cursor.connection)
 
-        sql, params = self._compile_bigquery_compatible(statement, target_style)
-        params = self._process_parameters(params)
-        return self._execute(sql, params, statement, connection=connection, **kwargs)
-
-    def _execute(
-        self, sql: str, parameters: Any, statement: SQL, connection: Optional[BigQueryConnection] = None, **kwargs: Any
-    ) -> SQLResult:
-        # Use provided connection or driver's default connection
-        conn = self._connection(connection)
-
-        # TypeCoercionMixin handles parameter processing
-        param_dict: dict[str, Any] = {}
-        if parameters:
-            if isinstance(parameters, dict):
-                param_dict = parameters
-            elif isinstance(parameters, (list, tuple)):
-                param_dict = {f"param_{i}": val for i, val in enumerate(parameters)}
-            else:
-                param_dict = {"param_0": parameters}
-
-        bq_params = self._prepare_bq_query_parameters(param_dict)
-
-        query_job = self._run_query_job(sql, bq_params, connection=conn)
-
+    def _build_result(self, cursor: "Any", statement: "SQL") -> "SQLResult":
+        """Build and return the result of the SQL execution."""
+        if hasattr(cursor, 'jobs'):
+            # Script execution
+            successful = 0
+            total_rows = 0
+            for job in cursor.jobs:
+                job.result()
+                successful += 1
+                total_rows += job.num_dml_affected_rows or 0
+            
+            return SQLResult(
+                statement=statement,
+                data=[],
+                rows_affected=total_rows,
+                operation_type="SCRIPT",
+                metadata={"status_message": "SCRIPT EXECUTED"},
+                total_statements=len(cursor.jobs),
+                successful_statements=successful,
+            )
+        
+        query_job = cursor.job
         query_schema = getattr(query_job, "schema", None)
+        
         if query_job.statement_type == "SELECT" or (query_schema is not None and len(query_schema) > 0):
             return self._handle_select_job(query_job, statement)
+        
+        if statement.is_many:
+            query_job.result()
+            total_rowcount = query_job.num_dml_affected_rows or 0
+            return SQLResult(
+                statement=statement,
+                data=[],
+                rows_affected=total_rowcount,
+                operation_type="EXECUTE",
+                metadata={"status_message": f"OK - executed batch job {query_job.job_id}"},
+            )
+        
         return self._handle_dml_job(query_job, statement)
 
-    def _execute_many(
-        self, sql: str, param_list: Any, connection: Optional[BigQueryConnection] = None, **kwargs: Any
-    ) -> SQLResult:
-        # Use provided connection or driver's default connection
-        conn = self._connection(connection)
-
-        # TypeCoercionMixin handles parameter processing
-        converted_param_list = param_list
-
-        # Use a multi-statement script for batch execution
-        script_parts = []
-        all_params: dict[str, Any] = {}
-        param_counter = 0
-
-        for params in converted_param_list or []:
-            if isinstance(params, dict):
-                param_dict = params
-            elif isinstance(params, (list, tuple)):
-                param_dict = {f"param_{i}": val for i, val in enumerate(params)}
-            else:
-                param_dict = {"param_0": params}
-
-            # Remap parameters to be unique across the entire script
-            param_mapping = {}
-            current_sql = sql
-            for key, value in param_dict.items():
-                new_key = f"p_{param_counter}"
-                param_counter += 1
-                param_mapping[key] = new_key
-                all_params[new_key] = value
-
-            for old_key, new_key in param_mapping.items():
-                current_sql = current_sql.replace(f"@{old_key}", f"@{new_key}")
-
-            script_parts.append(current_sql)
-
-        # Execute as a single script
-        full_script = ";\n".join(script_parts)
-        bq_params = self._prepare_bq_query_parameters(all_params)
-        # Filter out kwargs that _run_query_job doesn't expect
-        query_kwargs = {k: v for k, v in kwargs.items() if k not in {"parameters", "is_many"}}
-        query_job = self._run_query_job(full_script, bq_params, connection=conn, **query_kwargs)
-
-        # Wait for the job to complete
-        query_job.result(timeout=kwargs.get("bq_job_timeout"))
-        total_rowcount = query_job.num_dml_affected_rows or 0
-
-        return SQLResult(
-            statement=SQL(sql, _dialect=self.dialect),
-            data=[],
-            rows_affected=total_rowcount,
-            operation_type="EXECUTE",
-            metadata={"status_message": f"OK - executed batch job {query_job.job_id}"},
-        )
-
-    def _execute_script(self, script: str, connection: Optional[BigQueryConnection] = None, **kwargs: Any) -> SQLResult:
-        # Use provided connection or driver's default connection
-        conn = self._connection(connection)
-
-        # BigQuery does not support multi-statement scripts in a single job
-        statements = self._split_script_statements(script)
-        suppress_warnings = kwargs.get("_suppress_warnings", False)
-        successful = 0
-        total_rows = 0
-
-        for statement in statements:
-            if statement:
-                # Validate each statement unless warnings suppressed
-                if not suppress_warnings:
-                    # Run validation through pipeline
-                    temp_sql = SQL(statement, config=self.config)
-                    temp_sql._ensure_processed()
-                    # Validation errors are logged as warnings by default
-
-                query_job = self._run_query_job(statement, [], connection=conn)
-                query_job.result(timeout=kwargs.get("bq_job_timeout"))
-                successful += 1
-                total_rows += query_job.num_dml_affected_rows or 0
-
-        return SQLResult(
-            statement=SQL(script, _dialect=self.dialect).as_script(),
-            data=[],
-            rows_affected=total_rows,
-            operation_type="SCRIPT",
-            metadata={"status_message": "SCRIPT EXECUTED"},
-            total_statements=len(statements),
-            successful_statements=successful,
-        )
-
-    # ============================================================================
-    # BigQuery Native Export Support
-    # ============================================================================
-
-    def _export_native(self, query: str, destination_uri: "Union[str, Path]", format: str, **options: Any) -> int:
-        """BigQuery native export implementation with automatic GCS staging.
-
-        For GCS URIs, uses direct export. For other locations, automatically stages
-        through a temporary GCS location and transfers to the final destination.
-
-        Args:
-            query: SQL query to execute
-            destination_uri: Destination URI (local file path, gs:// URI, or Path object)
-            format: Export format (parquet, csv, json, avro)
-            **options: Additional export options including 'gcs_staging_bucket'
-
-        Returns:
-            Number of rows exported
-
-        Raises:
-            NotImplementedError: If no staging bucket is configured for non-GCS destinations
-        """
-        destination_str = str(destination_uri)
-
-        # If it's already a GCS URI, use direct export
-        if destination_str.startswith("gs://"):
-            return self._export_to_gcs_native(query, destination_str, format, **options)
-
-        staging_bucket = options.get("gcs_staging_bucket") or getattr(self.config, "gcs_staging_bucket", None)
-        if not staging_bucket:
-            # Fall back to fetch + write for non-GCS destinations without staging
-            msg = "BigQuery native export requires GCS staging bucket for non-GCS destinations"
-            raise NotImplementedError(msg)
-
-        # Generate temporary GCS path
-        from datetime import timezone
-
-        timestamp = datetime.datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        temp_filename = f"bigquery_export_{timestamp}_{uuid.uuid4().hex[:8]}.{format}"
-        temp_gcs_uri = f"gs://{staging_bucket}/temp_exports/{temp_filename}"
-
-        try:
-            # Export to temporary GCS location
-            rows_exported = self._export_to_gcs_native(query, temp_gcs_uri, format, **options)
-
-            # Transfer from GCS to final destination using storage backend
-            backend, path = self._resolve_backend_and_path(destination_str)
-            gcs_backend = self._get_storage_backend(temp_gcs_uri)
-
-            # Download from GCS and upload to final destination
-            data = gcs_backend.read_bytes(temp_gcs_uri)
-            backend.write_bytes(path, data)
-
-            return rows_exported
-        finally:
-            # Clean up temporary file
-            try:
-                gcs_backend = self._get_storage_backend(temp_gcs_uri)
-                gcs_backend.delete(temp_gcs_uri)
-            except Exception as e:
-                logger.warning("Failed to clean up temporary GCS file %s: %s", temp_gcs_uri, e)
-
-    def _export_to_gcs_native(self, query: str, gcs_uri: str, format: str, **options: Any) -> int:
-        """Direct BigQuery export to GCS.
-
-        Args:
-            query: SQL query to execute
-            gcs_uri: GCS destination URI (must start with gs://)
-            format: Export format (parquet, csv, json, avro)
-            **options: Additional export options
-
-        Returns:
-            Number of rows exported
-        """
-        # First, run the query and store results in a temporary table
-
-        temp_table_id = f"temp_export_{uuid.uuid4().hex[:8]}"
-        dataset_id = getattr(self.connection, "default_dataset", None) or options.get("dataset", "temp")
-
-        # Use SQLglot builder instead of string concatenation
-        sqlglot_table_ref = exp.to_table(f"{dataset_id}.{temp_table_id}")
-        create_expr = exp.Create(
-            this=sqlglot_table_ref, expression=parse_one(query, dialect=self.dialect), kind="TABLE", replace=True
-        )
-        create_job = self._run_query_job(create_expr.sql(dialect=self.dialect), [])
-        create_job.result()
-
-        # Use SQLglot builder for count query
-        count_expr = exp.select(exp.alias_(exp.func("COUNT", exp.Star()), "cnt")).from_(sqlglot_table_ref)
-        count_job = self._run_query_job(count_expr.sql(dialect=self.dialect), [])
-        count_result = list(count_job.result())
-        row_count = count_result[0]["cnt"] if count_result else 0
-
-        try:
-            # Configure extract job
-            extract_config = ExtractJobConfig(**options)  # type: ignore[no-untyped-call]
-
-            format_mapping = {
-                "parquet": SourceFormat.PARQUET,
-                "csv": SourceFormat.CSV,
-                "json": SourceFormat.NEWLINE_DELIMITED_JSON,
-                "avro": SourceFormat.AVRO,
-            }
-            extract_config.destination_format = format_mapping.get(format, SourceFormat.PARQUET)
-
-            table_ref = self.connection.dataset(dataset_id).table(temp_table_id)
-            extract_job = self.connection.extract_table(table_ref, gcs_uri, job_config=extract_config)
-            extract_job.result()
-
-            return row_count
-        finally:
-            # Clean up temporary table
-            try:
-                # Use SQLglot builder for drop table
-                drop_expr = exp.Drop(this=sqlglot_table_ref, kind="TABLE", exists=True)
-                delete_job = self._run_query_job(drop_expr.sql(dialect=self.dialect), [])
-                delete_job.result()
-            except Exception as e:
-                logger.warning("Failed to clean up temporary table %s: %s", temp_table_id, e)
-
-    # ============================================================================
-    # BigQuery Native Arrow Support
-    # ============================================================================
-
-    def _fetch_arrow_table(self, sql: SQL, connection: "Optional[Any]" = None, **kwargs: Any) -> "Any":
-        """BigQuery native Arrow table fetching.
-
-        BigQuery has native Arrow support through QueryJob.to_arrow()
-        This provides efficient columnar data transfer for analytics workloads.
-
-        Args:
-            sql: Processed SQL object
-            connection: Optional connection override
-            **kwargs: Additional options (e.g., bq_job_timeout, use_bqstorage_api)
-
-        Returns:
-            ArrowResult with native Arrow table
-        """
-        # Execute the query directly with BigQuery to get the QueryJob
-        params = sql.get_parameters(style=self.default_parameter_style)
-        params_dict: dict[str, Any] = {}
-        if params is not None:
-            if isinstance(params, dict):
-                params_dict = params
-            elif isinstance(params, (list, tuple)):
-                for i, value in enumerate(params):
-                    # Skip None values
-                    if value is not None:
-                        params_dict[f"param_{i}"] = value
-            # Single parameter that's not None
-            elif params is not None:
-                params_dict["param_0"] = params
-
-        bq_params = self._prepare_bq_query_parameters(params_dict) if params_dict else []
-        query_job = self._run_query_job(
-            sql.to_sql(placeholder_style=self.default_parameter_style), bq_params, connection=connection
-        )
-        # Wait for the job to complete
-        timeout = kwargs.get("bq_job_timeout")
-        query_job.result(timeout=timeout)
-        arrow_table = query_job.to_arrow(create_bqstorage_client=kwargs.get("use_bqstorage_api", True))
-        return ArrowResult(statement=sql, data=arrow_table)
-
-    def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
-        """BigQuery-optimized Arrow table ingestion.
-
-        BigQuery can load Arrow tables directly via the load API for optimal performance.
-        This avoids the generic INSERT approach and uses BigQuery's native bulk loading.
-
-        Args:
-            table: Arrow table to ingest
-            table_name: Target BigQuery table name
-            mode: Ingestion mode ('append', 'replace', 'create')
-            **options: Additional BigQuery load job options
-
-        Returns:
-            Number of rows ingested
-        """
-        self._ensure_pyarrow_installed()
-        connection = self._connection(None)
-        if "." in table_name:
-            parts = table_name.split(".")
-            if len(parts) == DATASET_TABLE_PARTS:
-                dataset_id, table_id = parts
-                project_id = connection.project
-            elif len(parts) == FULLY_QUALIFIED_PARTS:
-                project_id, dataset_id, table_id = parts
-            else:
-                msg = f"Invalid BigQuery table name format: {table_name}"
-                raise ValueError(msg)
-        else:
-            # Assume default dataset
-            table_id = table_name
-            dataset_id_opt = getattr(connection, "default_dataset", None)
-            project_id = connection.project
-            if not dataset_id_opt:
-                msg = "Must specify dataset for BigQuery table or set default_dataset"
-                raise ValueError(msg)
-            dataset_id = dataset_id_opt
-
-        table_ref = connection.dataset(dataset_id, project=project_id).table(table_id)
-
-        # Configure load job based on mode
-        job_config = LoadJobConfig(**options)
-
-        if mode == "append":
-            job_config.write_disposition = WriteDisposition.WRITE_APPEND
-        elif mode == "replace":
-            job_config.write_disposition = WriteDisposition.WRITE_TRUNCATE
-        elif mode == "create":
-            job_config.write_disposition = WriteDisposition.WRITE_EMPTY
-            job_config.autodetect = True  # Auto-detect schema from Arrow table
-        else:
-            msg = f"Unsupported mode for BigQuery: {mode}"
-            raise ValueError(msg)
-
-        # Use BigQuery's native Arrow loading
-
-        import pyarrow.parquet as pq
-
-        buffer = io.BytesIO()
-        pq.write_table(table, buffer)
-        buffer.seek(0)
-
-        # Configure for Parquet loading
-        job_config.source_format = "PARQUET"
-        load_job = connection.load_table_from_file(buffer, table_ref, job_config=job_config)
-
-        # Wait for completion
-        load_job.result()
-
-        return int(table.num_rows)

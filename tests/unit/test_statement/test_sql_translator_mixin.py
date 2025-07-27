@@ -10,7 +10,7 @@ from sqlspec.config import NoPoolSyncConfig
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.driver.mixins._sql_translator import SQLTranslatorMixin
 from sqlspec.exceptions import SQLConversionError
-from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -26,7 +26,7 @@ class MockDriver(SyncDriverAdapterBase, SQLTranslatorMixin):
     dialect = "sqlite"  # Use a real dialect for testing
     parameter_style: "ParameterStyle" = ParameterStyle.QMARK
 
-    def _execute_statement(self, statement: Any, connection: Any = None, **kwargs: Any) -> Any:
+    def _execute_sql(self, statement: Any, connection: Any = None, **kwargs: Any) -> Any:
         return {"data": []}
 
     def _wrap_select_result(self, statement: Any, result: Any, schema_type: Any = None, **kwargs: Any) -> Any:

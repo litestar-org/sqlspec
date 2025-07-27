@@ -1,5 +1,6 @@
 """Tests for the single-pass pipeline architecture."""
 
+import sqlglot
 import sqlglot.expressions as exp
 
 from sqlspec.statement.pipeline import (
@@ -170,6 +171,26 @@ class TestParameterizeLiteralsStep:
         # No parameters should be added
         assert len(result.parameters) == 0
         assert result.metadata["parameter_count"] == 0
+
+    def test_parameterize_window_spec_literals(self) -> None:
+        """Test that literals in window function frame clauses are not parameterized."""
+        # Parse window function with ROWS BETWEEN clause
+        sql_str = "SELECT AVG(price) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM products"
+        expr = sqlglot.parse_one(sql_str)
+
+        context = SQLTransformContext(current_expression=expr, original_expression=expr, dialect="postgres")
+
+        result = parameterize_literals_step(context)
+
+        # Check that the literals in window spec were NOT parameterized
+        compiled_sql = result.current_expression.sql(dialect="postgres")
+        assert "1 PRECEDING" in compiled_sql
+        assert "1 FOLLOWING" in compiled_sql
+        # Make sure they weren't replaced with placeholders
+        assert "param_0 PRECEDING" not in compiled_sql
+        assert "param_1 FOLLOWING" not in compiled_sql
+        # No parameters should be created for window frame bounds
+        assert len(result.parameters) == 0
 
 
 class TestOptimizeStep:

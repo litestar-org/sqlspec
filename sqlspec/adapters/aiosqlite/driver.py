@@ -1,32 +1,25 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
+import contextlib
+import datetime
 import logging
-import re
-from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 import aiosqlite
 
-# TypeAlias removed for mypyc compatibility
 from sqlspec.driver import AsyncDriverAdapterBase
-from sqlspec.driver.mixins import (
-    AsyncAdapterCacheMixin,
-    AsyncPipelinedExecutionMixin,
-    AsyncStorageMixin,
-    SQLTranslatorMixin,
-    ToSchemaMixin,
-    TypeCoercionMixin,
-)
-from sqlspec.driver.mixins._query_tools import AsyncQueryMixin
-from sqlspec.statement.parameters import ParameterStyle
-from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
     from sqlglot.dialects.dialect import DialectType
     from typing_extensions import TypeAlias
+
+    from sqlspec.statement.result import SQLResult
+    from sqlspec.statement.sql import SQL, SQLConfig
 
 __all__ = ("AiosqliteConnection", "AiosqliteDriver")
 
@@ -39,207 +32,77 @@ else:
     AiosqliteConnection = aiosqlite.Connection
 
 
-class AiosqliteDriver(
-    AsyncDriverAdapterBase,
-    AsyncAdapterCacheMixin,
-    SQLTranslatorMixin,
-    TypeCoercionMixin,
-    AsyncStorageMixin,
-    AsyncPipelinedExecutionMixin,
-    ToSchemaMixin,
-    AsyncQueryMixin,
-):
-    """Aiosqlite SQLite Driver Adapter. Modern protocol implementation."""
-
-    # Type specification for mypyc
-    connection_type: "ClassVar[type[AiosqliteConnection]]" = AiosqliteConnection
+class AiosqliteDriver(AsyncDriverAdapterBase):
+    """Reference implementation for an asynchronous aiosqlite driver."""
 
     dialect: "DialectType" = "sqlite"
-    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.QMARK, ParameterStyle.NAMED_COLON)
-    default_parameter_style: "ParameterStyle" = ParameterStyle.QMARK
+    default_parameter_style: "ClassVar[str]" = "qmark"
+    parameter_config: ClassVar[DriverParameterConfig] = DriverParameterConfig(
+        supported_parameter_styles=[ParameterStyle.QMARK],  # Only supports ?
+        default_parameter_style=ParameterStyle.QMARK,
+        type_coercion_map={
+            bool: int,
+            datetime.datetime: lambda v: v.isoformat(),
+            Decimal: str,
+            dict: to_json,
+            list: to_json,
+            tuple: lambda v: to_json(list(v)),
+        },
+        has_native_list_expansion=False,
+    )
 
     def __init__(self, connection: "AiosqliteConnection", config: "Optional[SQLConfig]" = None) -> None:
         super().__init__(connection=connection, config=config)
 
-    # AIOSQLite-specific type coercion overrides (same as SQLite)
-    def _coerce_boolean(self, value: Any) -> Any:
-        """AIOSQLite/SQLite stores booleans as integers (0/1)."""
-        if isinstance(value, bool):
-            return 1 if value else 0
-        return value
-
-    def _coerce_decimal(self, value: Any) -> Any:
-        """AIOSQLite/SQLite stores decimals as strings to preserve precision."""
-        if isinstance(value, str):
-            return value
-        if isinstance(value, Decimal):
-            return str(value)
-        return value
-
-    def _coerce_json(self, value: Any) -> Any:
-        """AIOSQLite/SQLite stores JSON as strings (requires JSON1 extension)."""
-        if isinstance(value, (dict, list)):
-            return to_json(value)
-        return value
-
-    def _coerce_array(self, value: Any) -> Any:
-        """AIOSQLite/SQLite doesn't have native arrays - store as JSON strings."""
-        if isinstance(value, (list, tuple)):
-            return to_json(list(value))
-        return value
-
-    async def begin(self) -> None:
-        """Begin a transaction. Aiosqlite starts transactions automatically."""
-
-    async def commit(self) -> None:
-        """Commit the current transaction."""
-        await self.connection.commit()
-
-    async def rollback(self) -> None:
-        """Rollback the current transaction."""
-        await self.connection.rollback()
-
     @asynccontextmanager
-    async def _get_cursor(
+    async def with_cursor(
         self, connection: "Optional[AiosqliteConnection]" = None
     ) -> "AsyncGenerator[aiosqlite.Cursor, None]":
         conn_to_use = connection or self.connection
-        conn_to_use.row_factory = aiosqlite.Row  # pyright: ignore[reportAttributeAccessIssue]
-        cursor = await conn_to_use.cursor()  # pyright: ignore[reportAttributeAccessIssue]
+        conn_to_use.row_factory = aiosqlite.Row
+        cursor = await conn_to_use.cursor()
         try:
             yield cursor
         finally:
             await cursor.close()
 
-    async def _execute_statement(  # type: ignore[override]
-        self, statement: "SQL", connection: "Optional[AiosqliteConnection]" = None, **kwargs: "Any"
-    ) -> "SQLResult":
-        if statement.is_script:
-            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
-            return await self._execute_script(sql, connection=connection, **kwargs)
+    async def begin(self, connection: "Optional[Any]" = None) -> None:
+        """Begin a database transaction."""
+        conn = connection or self.connection
+        with contextlib.suppress(Exception):
+            # aiosqlite might already be in a transaction or handle transactions differently
+            await conn.execute("BEGIN")
 
-        target_style = self._select_parameter_style(statement)
+    async def rollback(self, connection: "Optional[Any]" = None) -> None:
+        """Rollback the current transaction."""
+        conn = connection or self.connection
+        await conn.rollback()
+
+    async def commit(self, connection: "Optional[Any]" = None) -> None:
+        """Commit the current transaction."""
+        conn = connection or self.connection
+        await conn.commit()
+
+    async def _perform_execute(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> None:
+        # Compile with driver's parameter style
+        sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
 
         if statement.is_many:
-            sql, params = self._get_compiled_sql(statement, target_style)
-
-            params = self._process_parameters(params)
-
-            return await self._execute_many(sql, params, connection=connection, **kwargs)
-
-        sql, params = self._get_compiled_sql(statement, target_style)
-
-        params = self._process_parameters(params)
-
-        return await self._execute(sql, params, statement, connection=connection, **kwargs)
-
-    async def _execute(
-        self,
-        sql: str,
-        parameters: "Any",
-        statement: "SQL",
-        connection: "Optional[AiosqliteConnection]" = None,
-        **kwargs: "Any",
-    ) -> "SQLResult":
-        conn = self._connection(connection)
-
-        actual_params = parameters
-
-        # AIOSQLite supports both QMARK (?) and NAMED_COLON (:name) styles
-        # Detect style from SQL: if it contains ':' followed by alphanumeric, it's named style
-        # This is more reliable than checking for specific patterns
-        has_named_params = bool(re.search(r":\w+", sql))
-
-        if has_named_params:
-            # SQL has named placeholders, ensure params are dict
-            converted_params = self._convert_parameters_to_driver_format(
-                sql, actual_params, target_style=ParameterStyle.NAMED_COLON
-            )
+            # For execute_many, params is already a list of parameter sets
+            prepared_params = self._prepare_driver_parameters_many(params) if params else []
+            await cursor.executemany(sql, prepared_params)
         else:
-            # SQL has positional placeholders (? style), ensure params are list/tuple
-            converted_params = self._convert_parameters_to_driver_format(
-                sql, actual_params, target_style=ParameterStyle.QMARK
-            )
+            # Prepare parameters for driver consumption
+            prepared_params = self._prepare_driver_parameters(params)
+            await cursor.execute(sql, prepared_params or ())
 
-        async with self._get_cursor(conn) as cursor:
-            await cursor.execute(sql, converted_params or ())
-            if self.returns_rows(statement.expression):
-                fetched_data = await cursor.fetchall()
-                column_names = [desc[0] for desc in cursor.description or []]
-                data_list: list[Any] = list(fetched_data) if fetched_data else []
-                return SQLResult(
-                    statement=statement,
-                    data=data_list,
-                    column_names=column_names,
-                    rows_affected=len(data_list),
-                    operation_type="SELECT",
-                )
-
-            return SQLResult(
-                statement=statement,
-                data=[],
-                rows_affected=cursor.rowcount,
-                operation_type=self._determine_operation_type(statement),
-                metadata={"status_message": "OK"},
-            )
-
-    async def _execute_many(
-        self, sql: str, param_list: "Any", connection: "Optional[AiosqliteConnection]" = None, **kwargs: "Any"
-    ) -> "SQLResult":
-        # Use provided connection or driver's default connection
-        conn = self._connection(connection)
-
-        # TypeCoercionMixin handles parameter processing
-        converted_param_list = param_list
-
-        params_list: list[tuple[Any, ...]] = []
-        if converted_param_list and isinstance(converted_param_list, Sequence):
-            for param_set in converted_param_list:
-                if isinstance(param_set, (list, tuple)):
-                    params_list.append(tuple(param_set))
-                elif param_set is None:
-                    params_list.append(())
-
-        async with self._get_cursor(conn) as cursor:
-            await cursor.executemany(sql, params_list)
-            return SQLResult(
-                statement=SQL(sql, _dialect=self.dialect),
-                data=[],
-                rows_affected=cursor.rowcount,
-                operation_type="EXECUTE",
-                metadata={"status_message": "OK"},
-            )
-
-    async def _execute_script(
-        self, script: str, connection: "Optional[AiosqliteConnection]" = None, **kwargs: "Any"
-    ) -> "SQLResult":
-        conn = self._connection(connection)
-        statements = self._split_script_statements(script)
-        suppress_warnings = kwargs.get("_suppress_warnings", False)
-
-        executed_count = 0
-        total_rows = 0
-        async with self._get_cursor(conn) as cursor:
-            for statement in statements:
-                if statement.strip():
-                    if not suppress_warnings:
-                        temp_sql = SQL(statement, config=self.config)
-                        temp_sql._ensure_processed()
-
-                    await cursor.execute(statement)
-                    executed_count += 1
-                    total_rows += cursor.rowcount or 0
-
-        return SQLResult(
-            statement=SQL(script, _dialect=self.dialect).as_script(),
-            data=[],
-            rows_affected=total_rows,
-            operation_type="SCRIPT",
-            metadata={"status_message": "SCRIPT EXECUTED"},
-            total_statements=executed_count,
-            successful_statements=executed_count,
-        )
-
-    def _connection(self, connection: "Optional[AiosqliteConnection]" = None) -> "AiosqliteConnection":
-        """Get the connection to use for the operation."""
-        return connection or self.connection  # pyright: ignore[reportReturnType]
+    async def _build_result(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "SQLResult":
+        if self.returns_rows(statement.expression):
+            # Fetch data asynchronously before calling base method
+            fetched_data = await cursor.fetchall()
+            # Create a mock cursor object that has the data and description
+            mock_cursor = type(
+                "MockCursor", (), {"fetchall": lambda _: fetched_data, "description": cursor.description}
+            )()
+            return self._build_select_result(mock_cursor, statement)
+        return self._build_modify_result(cursor, statement)

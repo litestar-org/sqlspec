@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConnection, AiosqliteDriver
-from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
@@ -80,7 +80,7 @@ def test_aiosqlite_driver_placeholder_style(aiosqlite_driver: AiosqliteDriver) -
 async def test_aiosqlite_driver_execute_statement_select(
     aiosqlite_driver: AiosqliteDriver, mock_aiosqlite_connection: AsyncMock
 ) -> None:
-    """Test AIOSQLite driver _execute_statement for SELECT statements."""
+    """Test AIOSQLite driver execute for SELECT statements."""
     # Setup mock cursor
     mock_cursor = AsyncMock()
     mock_cursor.fetchall.return_value = [(1, "test")]
@@ -94,8 +94,8 @@ async def test_aiosqlite_driver_execute_statement_select(
     # Create SQL statement with parameters
     statement = SQL("SELECT * FROM users WHERE id = ?", 1)
 
-    # Call execute_statement which will handle the mock setup
-    result = await aiosqlite_driver._execute_statement(statement)
+    # Call execute which will handle the mock setup
+    result = await aiosqlite_driver.execute(statement)
 
     # Verify connection operations
     mock_cursor.execute.assert_called_once()
@@ -113,7 +113,7 @@ async def test_aiosqlite_driver_execute_statement_select(
 async def test_aiosqlite_driver_fetch_arrow_table_with_parameters(
     aiosqlite_driver: AiosqliteDriver, mock_aiosqlite_connection: AsyncMock
 ) -> None:
-    """Test AIOSQLite driver fetch_arrow_table method with parameters."""
+    """Test AIOSQLite driver execute method with parameters."""
     # Setup mock cursor and result data
     mock_cursor = AsyncMock()
     mock_cursor.description = ["id", "name", "email"]
@@ -127,8 +127,8 @@ async def test_aiosqlite_driver_fetch_arrow_table_with_parameters(
     # Create SQL statement with parameters
     statement = SQL("SELECT id, name FROM users WHERE id = ?", 42)
 
-    # Call execute_statement which will handle the mock setup
-    result = await aiosqlite_driver._execute_statement(statement)
+    # Call execute which will handle the mock setup
+    result = await aiosqlite_driver.execute(statement)
 
     # Verify connection operations with parameters
     mock_cursor.execute.assert_called_once()
@@ -159,7 +159,7 @@ async def test_aiosqlite_driver_non_query_statement(
 
     # Create non-query statement
     statement = SQL("INSERT INTO users VALUES (1, 'test')")
-    result = await aiosqlite_driver._execute_statement(statement)
+    result = await aiosqlite_driver.execute(statement)
 
     # Verify cursor operations
     mock_cursor.execute.assert_called_once()
@@ -186,7 +186,13 @@ async def test_aiosqlite_driver_execute_with_connection_override(aiosqlite_drive
 
     # Create SQL statement
     statement = SQL("SELECT id FROM users")
-    result = await aiosqlite_driver._execute_statement(statement, connection=override_connection)
+    # Override the connection on the driver
+    original_connection = aiosqlite_driver.connection
+    aiosqlite_driver.connection = override_connection
+    try:
+        result = await aiosqlite_driver.execute(statement)
+    finally:
+        aiosqlite_driver.connection = original_connection
 
     # Verify cursor operations
     mock_cursor.execute.assert_called_once()

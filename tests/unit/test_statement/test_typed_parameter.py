@@ -4,7 +4,7 @@ import math
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlspec.statement.parameters import ParameterConverter, ParameterInfo, ParameterStyle, TypedParameter
+from sqlspec.parameters import ParameterConverter, ParameterInfo, ParameterStyle, TypedParameter
 from sqlspec.statement.sql import SQL, SQLConfig
 
 

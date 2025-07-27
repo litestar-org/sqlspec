@@ -8,7 +8,7 @@ from sqlglot.dialects.dialect import Dialect
 
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
-from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -28,7 +28,7 @@ class MockDriver(SyncDriverAdapterBase):
         """Get the connection to use for the operation."""
         return connection or self.connection
 
-    def _execute_statement(self, statement: Any, connection: "Optional[Any]" = None, **kwargs: Any) -> Any:  # type: ignore[override]
+    def _execute_sql(self, statement: Any, connection: "Optional[Any]" = None, **kwargs: Any) -> Any:  # type: ignore[override]
         return {"data": [], "column_names": []}
 
     def _wrap_select_result(self, statement: Any, result: Any, schema_type: Any = None, **kwargs: Any) -> Any:
@@ -51,7 +51,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         """Get the connection to use for the operation."""
         return connection or self.connection
 
-    async def _execute_statement(self, statement: Any, connection: "Optional[Any]" = None, **kwargs: Any) -> Any:  # type: ignore[override]
+    async def _execute_sql(self, statement: Any, connection: "Optional[Any]" = None, **kwargs: Any) -> Any:  # type: ignore[override]
         return {"data": [], "column_names": []}
 
     async def _wrap_select_result(self, statement: Any, result: Any, schema_type: Any = None, **kwargs: Any) -> Any:
@@ -98,9 +98,7 @@ class TestSyncConfigDialect:
             # No dialect attribute
             parameter_style = ParameterStyle.QMARK
 
-            def _execute_statement(
-                self, statement: Any, connection: Optional[MockConnection] = None, **kwargs: Any
-            ) -> Any:
+            def _execute_sql(self, statement: Any, connection: Optional[MockConnection] = None, **kwargs: Any) -> Any:
                 return {"data": []}
 
             def _wrap_select_result(self, statement: Any, result: Any, schema_type: Any = None, **kwargs: Any) -> Any:
@@ -308,7 +306,7 @@ class TestDialectPropagation:
         driver = MockDriver(connection=MockConnection(), config=SQLConfig())
 
         # When driver builds a statement, it should pass its dialect
-        statement = driver._build_statement("SELECT * FROM users")
+        statement = driver._prepare_sql("SELECT * FROM users")
         assert isinstance(statement, SQL)
         assert statement.dialect == "sqlite"
 
@@ -376,9 +374,7 @@ class TestDialectValidation:
             # No dialect attribute
             parameter_style = ParameterStyle.QMARK
 
-            def _execute_statement(
-                self, statement: Any, connection: Optional[MockConnection] = None, **kwargs: Any
-            ) -> Any:
+            def _execute_sql(self, statement: Any, connection: Optional[MockConnection] = None, **kwargs: Any) -> Any:
                 return {"data": []}
 
             def _wrap_select_result(self, statement: Any, result: Any, schema_type: Any = None, **kwargs: Any) -> Any:

@@ -9,7 +9,7 @@ import pytest
 from sqlglot import exp
 
 from sqlspec.driver import AsyncDriverAdapterBase, CommonDriverAttributesMixin, SyncDriverAdapterBase
-from sqlspec.statement.parameters import ParameterStyle
+from sqlspec.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
@@ -73,7 +73,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.NAMED_COLON
 
-    def _execute_statement(self, statement: SQL, connection: Any | None = None, **kwargs: Any) -> SQLResult:
+    def _execute_sql(self, statement: SQL, connection: Any | None = None, **kwargs: Any) -> SQLResult:
         conn = connection or self.connection
         if statement.is_script:
             return SQLResult(
@@ -131,7 +131,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.NAMED_COLON
 
-    async def _execute_statement(self, statement: SQL, connection: Any | None = None, **kwargs: Any) -> SQLResult:
+    async def _execute_sql(self, statement: SQL, connection: Any | None = None, **kwargs: Any) -> SQLResult:
         conn = connection or self.connection
         if statement.is_script:
             return SQLResult(
@@ -306,7 +306,7 @@ def test_sync_driver_build_statement() -> None:
 
     # Test with SQL string
     sql_string = "SELECT * FROM users"
-    statement = driver._build_statement(sql_string, None, None)
+    statement = driver._prepare_sql(sql_string, None, None)
     assert isinstance(statement, SQL)
     assert statement.sql == sql_string
 
@@ -317,7 +317,7 @@ def test_sync_driver_build_statement_with_sql_object() -> None:
     driver = MockSyncDriver(connection)
 
     sql_obj = SQL("SELECT * FROM users WHERE id = :id", id=1)
-    statement = driver._build_statement(sql_obj)
+    statement = driver._prepare_sql(sql_obj)
     # SQL objects are immutable, so a new instance is created
     assert isinstance(statement, SQL)
     assert statement._raw_sql == sql_obj._raw_sql
@@ -350,7 +350,7 @@ def test_sync_driver_build_statement_with_filters() -> None:
     test_filter.append_to_statement = Mock(side_effect=original_append)
 
     sql_string = "SELECT * FROM users"
-    statement = driver._build_statement(sql_string, test_filter)
+    statement = driver._prepare_sql(sql_string, test_filter)
 
     # Access a property to trigger processing
     _ = statement.to_sql()
@@ -486,7 +486,7 @@ async def test_async_driver_build_statement() -> None:
 
     # Test with SQL string
     sql_string = "SELECT * FROM users"
-    statement = driver._build_statement(sql_string, None, None)
+    statement = driver._prepare_sql(sql_string, None, None)
     assert isinstance(statement, SQL)
     assert statement.sql == sql_string
 
@@ -551,7 +551,7 @@ async def test_async_driver_execute_many() -> None:
 
         # Use a non-strict config to avoid validation issues
         config = SQLConfig()
-        result = await driver.execute_many("INSERT INTO users (name) VALUES (:name)", parameters, _config=config)
+        result = await driver.execute_many("INSERT INTO users (name) VALUES (:name)", parameters, config=config)
 
         mock_execute.assert_called_once()
         assert result == mock_result
