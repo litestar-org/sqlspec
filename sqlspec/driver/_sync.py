@@ -1,15 +1,12 @@
 """Synchronous driver protocol implementation."""
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Optional, Union, overload
-
-from mypy_extensions import mypyc_attr
 
 from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.driver.context import set_current_driver
 from sqlspec.driver.mixins import SQLTranslatorMixin, SyncAdapterCacheMixin, ToSchemaMixin
 from sqlspec.exceptions import NotFoundError
-from sqlspec.parameters import process_execute_many_parameters
 from sqlspec.statement.builder import QueryBuilder, Select
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig, Statement
@@ -18,8 +15,6 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_dict_row, is_indexable_row
 
 if TYPE_CHECKING:
-    from contextlib import AbstractContextManager
-
     from sqlspec.statement.filters import StatementFilter
     from sqlspec.typing import StatementParameters
 
@@ -31,8 +26,7 @@ __all__ = ("SyncDriverAdapterBase",)
 EMPTY_FILTERS: "list[StatementFilter]" = []
 
 
-@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
-class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToSchemaMixin, SyncAdapterCacheMixin, ABC):
+class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToSchemaMixin, SyncAdapterCacheMixin):
     __slots__ = ()
 
     def _dispatch_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
@@ -66,8 +60,13 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
             set_current_driver(None)
 
     @abstractmethod
-    def with_cursor(self, connection: Any) -> "AbstractContextManager[Any]":
-        """Context manager for cursor acquisition and cleanup."""
+    def with_cursor(self, connection: Any) -> Any:
+        """Create and return a context manager for cursor acquisition and cleanup.
+
+        This method should return a context manager that yields a cursor.
+        For sync drivers, this is typically implemented using @contextmanager
+        or a custom context manager class.
+        """
 
     @abstractmethod
     def begin(self) -> None:
@@ -154,48 +153,18 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
                 new_config = config
                 if self.dialect and new_config and not new_config.dialect:
                     new_config = new_config.replace(dialect=self.dialect)
-                return SQL(
-                    statement.statement,
-                    *parameters,
+                return statement.copy(
+                    parameters=(*statement._positional_params, *parameters)
+                    if parameters
+                    else statement._positional_params,
                     config=new_config,
-                    _existing_state={
-                        "is_many": statement._is_many,
-                        "is_script": statement._is_script,
-                        "original_parameters": statement._original_parameters,
-                        "filters": statement._filters,
-                        "positional_params": statement._positional_params,
-                        "named_params": statement._named_params,
-                    },
                     **kwargs,
                 )
             if self.dialect and (not statement._config.dialect or statement._config.dialect != self.dialect):
                 new_config = statement._config.replace(dialect=self.dialect)
                 if statement.parameters:
-                    return SQL(
-                        statement.statement,
-                        parameters=statement.parameters,
-                        config=new_config,
-                        _existing_state={
-                            "is_many": statement._is_many,
-                            "is_script": statement._is_script,
-                            "original_parameters": statement._original_parameters,
-                            "filters": statement._filters,
-                            "positional_params": statement._positional_params,
-                            "named_params": statement._named_params,
-                        },
-                    )
-                return SQL(
-                    statement.statement,
-                    config=new_config,
-                    _existing_state={
-                        "is_many": statement._is_many,
-                        "is_script": statement._is_script,
-                        "original_parameters": statement._original_parameters,
-                        "filters": statement._filters,
-                        "positional_params": statement._positional_params,
-                        "named_params": statement._named_params,
-                    },
-                )
+                    return statement.copy(config=new_config)
+                return statement.copy(config=new_config)
             return statement
         if self.dialect and config and not config.dialect:
             config = config.replace(dialect=self.dialect)
@@ -224,16 +193,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
     ) -> "SQLResult":
         """Execute statement multiple times with different parameters.
 
-        Passes first parameter set through pipeline to enable literal extraction
-        and consistent parameter processing.
+        Parameters passed will be used as the batch execution sequence.
         """
-        filters, param_sequence = process_execute_many_parameters(parameters)
-
-        bind_parameters = param_sequence[0] if param_sequence else None
-
-        sql_statement = self._prepare_sql(statement, bind_parameters, *filters, config=config or self.config, **kwargs)
-
-        return self._dispatch_execution(statement=sql_statement.as_many(param_sequence), connection=self.connection)
+        sql_statement = self._prepare_sql(statement, *parameters, config=config or self.config, **kwargs)
+        return self._dispatch_execution(statement=sql_statement.as_many(), connection=self.connection)
 
     def execute_script(
         self,

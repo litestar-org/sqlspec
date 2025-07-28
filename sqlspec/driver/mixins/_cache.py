@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 __all__ = ("AsyncAdapterCacheMixin", "SyncAdapterCacheMixin")
 
 
+@trait
 class AdapterCacheMixin:
     """Mixin for adapter-level SQL compilation caching.
 

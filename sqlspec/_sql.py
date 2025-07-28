@@ -15,7 +15,7 @@ from sqlglot.errors import ParseError as SQLGlotParseError
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.builder import Column, Delete, Insert, Merge, Select, Truncate, Update
 
-__all__ = ("SQLFactory",)
+__all__ = ("Case", "Column", "Delete", "Insert", "Merge", "SQLFactory", "Select", "Truncate", "Update")
 
 logger = logging.getLogger("sqlspec")
 
@@ -886,13 +886,13 @@ class SQLFactory:
     # ===================
 
     @staticmethod
-    def case() -> "CaseExpressionBuilder":
+    def case() -> "Case":
         """Create a CASE expression builder.
 
         Returns:
             CaseExpressionBuilder for building CASE expressions.
         """
-        return CaseExpressionBuilder()
+        return Case()
 
     # ===================
     # Window Functions
@@ -987,7 +987,7 @@ class SQLFactory:
         return exp.Window(this=func_expr, **over_args)
 
 
-class CaseExpressionBuilder:
+class Case:
     """Builder for CASE expressions using the SQL factory.
 
     Example:
@@ -1009,9 +1009,7 @@ class CaseExpressionBuilder:
         self._conditions: list[exp.When] = []
         self._default: Optional[exp.Expression] = None
 
-    def when(
-        self, condition: Union[str, exp.Expression], value: Union[str, exp.Expression, Any]
-    ) -> "CaseExpressionBuilder":
+    def when(self, condition: Union[str, exp.Expression], value: Union[str, exp.Expression, Any]) -> "Case":
         """Add a WHEN clause.
 
         Args:
@@ -1036,7 +1034,7 @@ class CaseExpressionBuilder:
         self._conditions.append(when_clause)
         return self
 
-    def else_(self, value: Union[str, exp.Expression, Any]) -> "CaseExpressionBuilder":
+    def else_(self, value: Union[str, exp.Expression, Any]) -> "Case":
         """Add an ELSE clause.
 
         Args:

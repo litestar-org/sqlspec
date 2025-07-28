@@ -9,6 +9,7 @@ This module provides a flexible, lazy-loading storage registry that supports:
 """
 
 import logging
+import re
 from pathlib import Path
 from typing import Any, Final, Optional, TypeVar, Union, cast
 
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 BackendT = TypeVar("BackendT", bound=ObjectStoreProtocol)
 
 
+SCHEME_REGEX: Final = re.compile(r"([a-zA-Z0-9+.-]+)://")
 FILE_PROTOCOL: Final[str] = "file"
 S3_PROTOCOL: Final[str] = "s3"
 GCS_PROTOCOL: Final[str] = "gs"
@@ -133,7 +135,18 @@ class StorageRegistry:
         if cache_key in self._instances:
             return self._instances[cache_key]
 
-        if "://" in uri_or_alias:
+        scheme = self._get_scheme(uri_or_alias)
+        if not scheme and (
+            Path(uri_or_alias).exists()
+            or Path(uri_or_alias).is_absolute()
+            or uri_or_alias.startswith(("~", "."))
+            or ":\\" in uri_or_alias
+            or "/" in uri_or_alias
+        ):
+            scheme = "file"
+            uri_or_alias = f"file://{uri_or_alias}"
+
+        if scheme:
             instance = self._resolve_from_uri(uri_or_alias, **kwargs)
         elif uri_or_alias in self._alias_configs:
             backend_cls, stored_uri, config = self._alias_configs[uri_or_alias]
@@ -149,24 +162,15 @@ class StorageRegistry:
     def _resolve_from_uri(self, uri: str, **kwargs: Any) -> ObjectStoreProtocol:
         """Resolve backend from URI, trying ObStore first, then FSSpec."""
         scheme = self._get_scheme(uri)
-        last_exc: Optional[Exception] = None
 
         if scheme not in FSSPEC_ONLY_SCHEMES and OBSTORE_INSTALLED:
-            try:
-                return self._create_backend("obstore", uri, **kwargs)
-            except (ImportError, ValueError) as e:
-                logger.debug("ObStore backend failed for %s: %s", uri, e)
-                last_exc = e
-
+            return self._create_backend("obstore", uri, **kwargs)
         if FSSPEC_INSTALLED:
-            try:
-                return self._create_backend("fsspec", uri, **kwargs)
-            except (ImportError, ValueError) as e:
-                logger.debug("FSSpec backend failed for %s: %s", uri, e)
-                last_exc = e
+            return self._create_backend("fsspec", uri, **kwargs)
 
-        msg = f"No storage backend available for URI '{uri}'. Install 'obstore' or 'fsspec' and required dependencies."
-        raise MissingDependencyError(msg) from last_exc
+        # Neither backend is available
+        msg = f"No storage backend available for scheme '{scheme}'. Install obstore or fsspec."
+        raise MissingDependencyError(msg)
 
     def _determine_backend_class(self, uri: str) -> type[ObjectStoreProtocol]:
         """Determine the best backend class for a URI based on availability and capabilities.
@@ -225,11 +229,19 @@ class StorageRegistry:
         backend_cls = self._get_backend_class(backend_type)
         return backend_cls(uri, **kwargs)
 
-    def _get_scheme(self, uri: str) -> str:
-        """Extract scheme from URI."""
-        if not uri or "://" not in uri:
-            return "file"
-        return uri.split("://", maxsplit=1)[0].lower()
+    def _get_scheme(self, uri: str) -> Optional[str]:
+        """Extract the scheme from a URI using regex.
+
+        Args:
+            uri: The URI to parse.
+
+        Returns:
+            The scheme if found, otherwise None.
+        """
+        if not uri:
+            return None
+        match = SCHEME_REGEX.match(uri)
+        return match.group(1).lower() if match else None
 
     # Utility methods
     def is_alias_registered(self, alias: str) -> bool:

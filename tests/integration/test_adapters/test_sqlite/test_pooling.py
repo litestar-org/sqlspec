@@ -38,18 +38,37 @@ def test_shared_memory_pooling() -> None:
 
 
 @pytest.mark.xdist_group("sqlite")
-def test_regular_memory_pooling_disabled() -> None:
-    """Test that regular memory databases have pooling disabled."""
+def test_regular_memory_auto_conversion() -> None:
+    """Test that regular memory databases are auto-converted to shared memory with pooling enabled."""
     # Create config with regular memory database
-    config = SqliteConfig(
-        connection_config={"database": ":memory:"},
-        min_pool_size=5,  # Try to set pool size
-        max_pool_size=10,
-    )
+    config = SqliteConfig(connection_config={"database": ":memory:"}, min_pool_size=5, max_pool_size=10)
 
-    # Verify pooling is disabled (forced to 1)
-    assert config.min_pool_size == 1
-    assert config.max_pool_size == 1
+    # Verify pooling is enabled with requested sizes
+    assert config.min_pool_size == 5
+    assert config.max_pool_size == 10
+
+    # Verify database was auto-converted to shared memory
+    assert config.connection_config["database"] == "file::memory:?cache=shared"
+    assert config.connection_config["uri"] is True
+
+    # Test that multiple connections can access the same data (like shared memory test)
+    with config.provide_session() as session1:
+        # Create table in first session
+        session1.execute_script("""
+            CREATE TABLE auto_shared_test (
+                id INTEGER PRIMARY KEY,
+                value TEXT
+            );
+            INSERT INTO auto_shared_test (value) VALUES ('auto_converted_data');
+        """)
+        session1.commit()  # Commit to release locks
+
+    # Get data from another session in the pool
+    with config.provide_session() as session2:
+        result = session2.execute("SELECT value FROM auto_shared_test WHERE id = 1")
+        data = result.get_data()
+        assert len(data) == 1
+        assert data[0]["value"] == "auto_converted_data"
 
 
 @pytest.mark.xdist_group("sqlite")

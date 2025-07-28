@@ -485,14 +485,18 @@ def test_is_memory_database() -> None:
     """Test memory database detection logic."""
     config = DuckDBConfig()
 
-    # Test standard :memory: database
+    # Test standard :memory: database (needs conversion)
     assert config._is_memory_database(":memory:") is True
 
-    # Test empty string
+    # Test empty string (needs conversion)
     assert config._is_memory_database("") is True
 
-    # Test None (though shouldn't happen in practice)
+    # Test None (though shouldn't happen in practice, needs conversion)
     assert config._is_memory_database(None) is True  # type: ignore[arg-type]
+
+    # Test named memory databases (don't need conversion)
+    assert config._is_memory_database(":memory:shared_db") is False
+    assert config._is_memory_database(":memory:custom_name") is False
 
     # Test regular file databases
     assert config._is_memory_database("test.db") is False
@@ -500,40 +504,82 @@ def test_is_memory_database() -> None:
     assert config._is_memory_database("file:test.db") is False
 
 
+def test_memory_database_auto_conversion() -> None:
+    """Test that memory databases are auto-converted to shared memory with pooling enabled."""
+    # Create config with regular memory database
+    config = DuckDBConfig(connection_config={"database": ":memory:"}, min_pool=5, max_pool=10)
+
+    # Verify pooling is not disabled (no more warnings or pool size overrides)
+    assert config.min_pool == 5
+    assert config.max_pool == 10
+
+    # Verify database was auto-converted to shared memory
+    assert config.connection_config["database"] == ":memory:shared_db"
+
+
+def test_named_memory_database_no_conversion() -> None:
+    """Test that named memory databases don't get converted."""
+    config = DuckDBConfig(connection_config={"database": ":memory:custom_db"}, min_pool=3, max_pool=8)
+
+    # Verify pooling works normally
+    assert config.min_pool == 3
+    assert config.max_pool == 8
+
+    # Verify database was NOT converted (already supports sharing)
+    assert config.connection_config["database"] == ":memory:custom_db"
+
+
+def test_file_database_no_conversion() -> None:
+    """Test that file databases are not affected."""
+    config = DuckDBConfig(connection_config={"database": "test.db"}, min_pool=4, max_pool=12)
+
+    # Verify pooling works normally
+    assert config.min_pool == 4
+    assert config.max_pool == 12
+
+    # Verify database was not changed
+    assert config.connection_config["database"] == "test.db"
+
+
 @pytest.mark.parametrize(
-    "database,expected_min,expected_max,should_warn",
-    [(":memory:", 1, 1, True), ("", 1, 1, True), ("test.db", 5, 20, False), ("/tmp/test.db", 3, 10, False)],
-    ids=["memory", "empty", "file", "absolute_path"],
+    "database,expected_database",
+    [
+        (":memory:", ":memory:shared_db"),
+        ("", ":memory:shared_db"),  # Empty string defaults to :memory: then gets converted
+        (":memory:existing_name", ":memory:existing_name"),  # Named memory DB - no conversion
+        ("test.db", "test.db"),  # File DB - no conversion
+        ("/tmp/test.db", "/tmp/test.db"),  # Absolute path - no conversion
+    ],
+    ids=["memory", "empty", "named_memory", "file", "absolute_path"],
 )
-def test_memory_database_pooling_override(
-    database: str, expected_min: int, expected_max: int, should_warn: bool, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Test that memory databases override pool sizes."""
-    import logging
-
+def test_memory_database_conversion_behavior(database: str, expected_database: str) -> None:
+    """Test the conversion behavior for different database types."""
     connection_config = {"database": database} if database else {}
+    config = DuckDBConfig(connection_config=connection_config)
 
-    # Clear any previous log records
-    caplog.clear()
-    caplog.set_level(logging.WARNING)
+    # Check the final database configuration
+    assert config.connection_config["database"] == expected_database
 
-    # Create config with explicit pool sizes
-    config = DuckDBConfig(
-        connection_config=connection_config,
-        min_pool=expected_min if not should_warn else 5,
-        max_pool=expected_max if not should_warn else 20,
-    )
 
-    # Check pool sizes
-    assert config.min_pool == expected_min
-    assert config.max_pool == expected_max
+def test_convert_to_shared_memory_function() -> None:
+    """Test the _convert_to_shared_memory method directly."""
+    # Test conversion of :memory:
+    config = DuckDBConfig(connection_config={"database": "test.db"})  # Start with file DB
+    config.connection_config["database"] = ":memory:"  # Manually set to test conversion
+    config._convert_to_shared_memory()
+    assert config.connection_config["database"] == ":memory:shared_db"
 
-    # Check warning
-    if should_warn:
-        assert "In-memory DuckDB database detected" in caplog.text
-        assert "Disabling connection pooling" in caplog.text
-    else:
-        assert "In-memory DuckDB database detected" not in caplog.text
+    # Test that named memory databases are not changed
+    config.connection_config["database"] = ":memory:custom_name"
+    config._convert_to_shared_memory()
+    assert config.connection_config["database"] == ":memory:custom_name"  # No change
+
+
+def test_default_memory_conversion() -> None:
+    """Test that default empty config creates shared memory database."""
+    config = DuckDBConfig()
+    # Default should be converted to shared memory
+    assert config.connection_config["database"] == ":memory:shared_db"
 
 
 def test_connection_health_check() -> None:

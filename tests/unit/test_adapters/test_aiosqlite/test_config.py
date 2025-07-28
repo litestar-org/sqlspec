@@ -159,26 +159,27 @@ def test_is_memory_database() -> None:
 
 
 @pytest.mark.parametrize(
-    "database,uri,expected_min,expected_max,should_warn",
+    "database,uri,expected_min,expected_max,expected_database,expected_uri",
     [
-        (":memory:", None, 1, 1, True),
-        ("", None, 1, 1, True),
-        ("file::memory:", True, 1, 1, True),
-        ("file::memory:?cache=shared", True, 5, 20, False),
-        ("test.db", None, 5, 20, False),
-        ("/tmp/test.db", None, 3, 10, False),
+        (":memory:", None, 5, 20, "file::memory:?cache=shared", True),
+        ("", None, 5, 20, "file::memory:?cache=shared", True),
+        ("file::memory:", True, 5, 20, "file::memory:?cache=shared", True),
+        ("file::memory:?cache=shared", True, 5, 20, "file::memory:?cache=shared", True),
+        ("test.db", None, 5, 20, "test.db", None),
+        ("/tmp/test.db", None, 3, 10, "/tmp/test.db", None),
     ],
     ids=["memory", "empty", "uri_memory", "shared_memory", "file", "absolute_path"],
 )
-def test_memory_database_pooling_override(
+def test_memory_database_auto_conversion(
     database: str,
     uri: "bool | None",
     expected_min: int,
     expected_max: int,
-    should_warn: bool,
+    expected_database: str,
+    expected_uri: "bool | None",
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Test that memory databases override pool sizes."""
+    """Test that memory databases are auto-converted to shared memory."""
     connection_config = {"database": database}
     if uri is not None:
         connection_config["uri"] = uri  # type: ignore[assignment]
@@ -188,22 +189,24 @@ def test_memory_database_pooling_override(
     caplog.set_level(logging.WARNING)
 
     # Create config with explicit pool sizes
-    config = AiosqliteConfig(
-        connection_config=connection_config,
-        min_pool=expected_min if not should_warn else 5,
-        max_pool=expected_max if not should_warn else 20,
-    )
+    config = AiosqliteConfig(connection_config=connection_config, min_pool=expected_min, max_pool=expected_max)
 
-    # Check pool sizes
+    # Check pool sizes (should not be overridden anymore)
     assert config.min_pool == expected_min
     assert config.max_pool == expected_max
 
-    # Check warning
-    if should_warn:
-        assert "In-memory SQLite database detected" in caplog.text
-        assert "Disabling connection pooling" in caplog.text
+    # Check database conversion
+    assert config.connection_config["database"] == expected_database
+    if expected_uri is not None:
+        assert config.connection_config["uri"] == expected_uri
     else:
-        assert "In-memory SQLite database detected" not in caplog.text
+        # For regular files, uri should not be set or should remain as originally specified
+        original_uri = connection_config.get("uri")
+        assert config.connection_config.get("uri") == original_uri
+
+    # Check that no warnings are logged anymore (auto-conversion eliminates the need)
+    assert "In-memory SQLite database detected" not in caplog.text
+    assert "Disabling connection pooling" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -225,3 +228,93 @@ async def test_connection_health_check() -> None:
     # Test unhealthy connection (execute fails)
     mock_connection.execute = AsyncMock(side_effect=Exception("Connection error"))
     assert await pool._is_connection_alive(mock_connection) is False
+
+
+# Auto-Conversion Tests
+def test_convert_to_shared_memory_function() -> None:
+    """Test the _convert_to_shared_memory method directly."""
+    config = AiosqliteConfig()
+
+    # Test :memory: conversion
+    config.connection_config = {"database": ":memory:"}
+    config._convert_to_shared_memory()
+    assert config.connection_config["database"] == "file::memory:?cache=shared"
+    assert config.connection_config["uri"] is True
+
+    # Test file::memory: conversion
+    config.connection_config = {"database": "file::memory:", "uri": True}
+    config._convert_to_shared_memory()
+    assert config.connection_config["database"] == "file::memory:?cache=shared"
+    assert config.connection_config["uri"] is True
+
+    # Test file::memory: with existing params
+    config.connection_config = {"database": "file::memory:?mode=memory", "uri": True}
+    config._convert_to_shared_memory()
+    assert config.connection_config["database"] == "file::memory:?mode=memory&cache=shared"
+    assert config.connection_config["uri"] is True
+
+    # Test already shared (should not change)
+    config.connection_config = {"database": "file::memory:?cache=shared", "uri": True}
+    original_database = config.connection_config["database"]
+    config._convert_to_shared_memory()
+    assert config.connection_config["database"] == original_database
+
+
+@pytest.mark.parametrize(
+    "original_database,expected_database,expected_uri",
+    [
+        (":memory:", "file::memory:?cache=shared", True),
+        ("file::memory:", "file::memory:?cache=shared", True),
+        ("file::memory:?mode=memory", "file::memory:?mode=memory&cache=shared", True),
+        ("file::memory:?cache=shared", "file::memory:?cache=shared", True),
+        ("file::memory:?mode=memory&cache=shared", "file::memory:?mode=memory&cache=shared", True),
+        ("test.db", "test.db", None),  # Regular file should not change
+    ],
+    ids=[
+        "memory",
+        "file_memory",
+        "file_memory_with_params",
+        "already_shared",
+        "already_shared_with_params",
+        "regular_file",
+    ],
+)
+def test_auto_conversion_scenarios(original_database: str, expected_database: str, expected_uri: "bool | None") -> None:
+    """Test various auto-conversion scenarios."""
+    connection_config = {"database": original_database}
+    config = AiosqliteConfig(connection_config=connection_config)
+
+    assert config.connection_config["database"] == expected_database
+    if expected_uri is not None:
+        assert config.connection_config["uri"] == expected_uri
+    else:
+        # For regular files, uri should not be set or should remain as originally specified
+        assert config.connection_config.get("uri") is None
+
+
+def test_no_warnings_with_auto_conversion(caplog: pytest.LogCaptureFixture) -> None:
+    """Test that no warnings are logged when auto-conversion happens."""
+    caplog.clear()
+
+    # Test various memory database types
+    test_configs = [
+        {"database": ":memory:"},
+        {"database": ""},
+        {"database": "file::memory:"},
+        {"database": "file::memory:?mode=memory"},
+    ]
+
+    for connection_config in test_configs:
+        caplog.clear()
+        config = AiosqliteConfig(connection_config=connection_config)
+
+        # Verify conversion happened
+        if connection_config["database"] in (":memory:", "", "file::memory:"):
+            assert config.connection_config["database"] == "file::memory:?cache=shared"
+        else:
+            assert "cache=shared" in config.connection_config["database"]
+        assert config.connection_config["uri"] is True
+
+        # Verify no warnings
+        assert "In-memory SQLite database detected" not in caplog.text
+        assert "Disabling connection pooling" not in caplog.text

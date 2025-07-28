@@ -13,7 +13,7 @@ from sqlspec.statement.sql import SQL, SQLConfig
 TEST_CONFIG = SQLConfig()
 
 if TYPE_CHECKING:
-    from sqlspec.typing import SQLParameterType
+    from sqlspec.typing import StatementParameters
 
 
 # Test SQLConfig
@@ -71,7 +71,7 @@ def test_sql_initialization_with_parameters() -> None:
         ("SELECT * FROM users WHERE id = $1", (1), "SELECT * FROM users WHERE id = $1"),
     ],
 )
-def test_sql_with_different_parameter_styles(sql: str, params: "SQLParameterType", expected_sql: str) -> None:
+def test_sql_with_different_parameter_styles(sql: str, params: "StatementParameters", expected_sql: str) -> None:
     """Test SQL handles different parameter styles."""
     if isinstance(params, dict):
         stmt = SQL(sql, **params)
@@ -292,9 +292,8 @@ def test_sql_with_literal_parameterization() -> None:
     # The extracted parameters are returned as a list
     assert isinstance(params, list)
     assert len(params) == 1
-    # TypedParameter objects have a value attribute
-    assert hasattr(params[0], "value")
-    assert params[0].value == 1
+    # Parameters are unwrapped to their actual values
+    assert params[0] == 1
 
 
 def test_sql_comment_removal() -> None:

@@ -411,7 +411,7 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
         self._param_names: list[str] = []
         if self.values:
             for i, _ in enumerate(self.values):
-                self._param_names.append(f"{self.field_name}_notany_{i}")
+                self._param_names.append(f"{self.field_name}_not_any_{i}")
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
@@ -636,6 +636,8 @@ class SearchFilter(StatementFilter):
 
 class NotInSearchFilter(SearchFilter):
     """Data required to construct a ``WHERE field_name NOT LIKE '%' || :value || '%'`` clause."""
+
+    __slots__ = ()
 
     def __init__(self, field_name: Union[str, set[str]], value: str, ignore_case: Optional[bool] = False) -> None:
         """Initialize the NotInSearchFilter.

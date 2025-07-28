@@ -116,12 +116,12 @@ def test_perform_execute_many(driver: SqliteDriver, mock_connection: MagicMock) 
     mock_cursor = mock_connection.cursor.return_value
     statement = SQL("INSERT INTO users (name) VALUES (?)").as_many([["Alice"], ["Bob"]])
 
-    with patch.object(driver, "_prepare_driver_parameters", return_value=[["Alice"], ["Bob"]]) as mock_prepare:
+    with patch.object(driver, "_prepare_driver_parameters_many", return_value=[["Alice"], ["Bob"]]) as mock_prepare:
         driver._perform_execute(mock_cursor, statement)
 
     # Verify parameters were prepared
-    mock_prepare.assert_called_once()
-    mock_cursor.executemany.assert_called_once()
+    mock_prepare.assert_called_once_with([["Alice"], ["Bob"]])
+    mock_cursor.executemany.assert_called_once_with("INSERT INTO users (name) VALUES (?)", [["Alice"], ["Bob"]])
     mock_cursor.execute.assert_not_called()
 
 

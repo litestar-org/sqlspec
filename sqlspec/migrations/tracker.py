@@ -4,7 +4,7 @@ This module provides functionality to track applied migrations in the database.
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from sqlspec.migrations.base import BaseMigrationTracker
 
@@ -47,7 +47,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             List of migration records.
         """
         result = driver.execute(self._get_applied_migrations_sql())
-        return result.data
+        return cast("list[dict[str, Any]]", result.data)
 
     def record_migration(
         self, driver: "SyncDriverAdapterBase", version: str, description: str, execution_time_ms: int, checksum: str
@@ -112,7 +112,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             List of migration records.
         """
         result = await driver.execute(self._get_applied_migrations_sql())
-        return result.data
+        return cast("list[dict[str, Any]]", result.data)
 
     async def record_migration(
         self, driver: "AsyncDriverAdapterBase", version: str, description: str, execution_time_ms: int, checksum: str

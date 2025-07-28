@@ -1,6 +1,4 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
-from collections.abc import AsyncGenerator, Generator
-from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
@@ -28,44 +26,66 @@ else:
 logger = get_logger("adapters.oracledb")
 
 
+class _OracleCursorManager:
+    """Context manager for Oracle cursor management."""
+
+    def __init__(self, connection: OracleSyncConnection) -> None:
+        self.connection = connection
+        self.cursor: Optional[Cursor] = None
+
+    def __enter__(self) -> Cursor:
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if self.cursor is not None:
+            self.cursor.close()
+
+
 class OracleSyncDriver(SyncDriverAdapterBase):
     """Oracle Sync Driver Adapter. Refactored for new protocol."""
 
     dialect: "DialectType" = "oracle"
-    parameter_config = DriverParameterConfig(
-        supported_parameter_styles=[
-            ParameterStyle.POSITIONAL_COLON,  # :1, :2
-            ParameterStyle.NAMED_COLON,  # :name
-        ],
-        default_parameter_style=ParameterStyle.NAMED_COLON,
-        type_coercion_map={
-            # Oracle has good native type support
-            # Add any specific type mappings as needed
-        },
-        has_native_list_expansion=False,  # Oracle doesn't handle lists natively
-    )
+    parameter_config: DriverParameterConfig
 
     def __init__(self, connection: OracleSyncConnection, config: Optional[SQLConfig] = None) -> None:
         super().__init__(connection=connection, config=config)
+        self.parameter_config = DriverParameterConfig(
+            supported_parameter_styles=[
+                ParameterStyle.POSITIONAL_COLON,  # :1, :2
+                ParameterStyle.NAMED_COLON,  # :name
+            ],
+            default_parameter_style=ParameterStyle.NAMED_COLON,
+            type_coercion_map={
+                # Oracle has good native type support
+                # Add any specific type mappings as needed
+            },
+            has_native_list_expansion=False,  # Oracle doesn't handle lists natively
+        )
 
-    @contextmanager
-    def with_cursor(self, connection: OracleSyncConnection) -> Generator[Cursor, None, None]:
-        cursor: Cursor = connection.cursor()
-        try:
-            yield cursor
-        finally:
-            cursor.close()
+    def with_cursor(self, connection: OracleSyncConnection) -> _OracleCursorManager:
+        return _OracleCursorManager(connection)
 
     def _perform_execute(self, cursor: Cursor, statement: "SQL") -> None:
-        sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
-
-        if statement.is_many:
-            # For execute_many, params is already a list of parameter sets
-            prepared_params = self._prepare_driver_parameters_many(params) if params else []
-            cursor.executemany(sql, prepared_params)
+        if statement.is_script:
+            # Scripts use STATIC compilation to transpile parameters automatically
+            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            # Oracle doesn't have executescript - execute statements one by one
+            statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
+            for stmt in statements:
+                if stmt.strip():  # Skip empty statements
+                    cursor.execute(stmt)
         else:
-            prepared_params = self._prepare_driver_parameters(params)
-            cursor.execute(sql, prepared_params or {})
+            # Enable intelligent parameter conversion - Oracle supports both POSITIONAL_COLON and NAMED_COLON
+            sql, params = statement.compile()
+
+            if statement.is_many:
+                # For execute_many, params is already a list of parameter sets
+                prepared_params = self._prepare_driver_parameters_many(params) if params else []
+                cursor.executemany(sql, prepared_params)
+            else:
+                prepared_params = self._prepare_driver_parameters(params)
+                cursor.execute(sql, prepared_params or {})
 
     def _extract_select_data(self, cursor: Cursor) -> "tuple[list[dict[str, Any]], list[str], int]":
         """Extract data from cursor after SELECT execution."""
@@ -93,44 +113,64 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         self.connection.commit()
 
 
+class _AsyncOracleCursorManager:
+    def __init__(self, connection: "OracleAsyncConnection") -> None:
+        self.connection = connection
+        self.cursor: Optional[AsyncCursor] = None
+
+    async def __aenter__(self) -> AsyncCursor:
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if self.cursor:
+            self.cursor.close()  # oracledb's AsyncCursor.close() is not async
+
+
 class OracleAsyncDriver(AsyncDriverAdapterBase):
     """Oracle Async Driver Adapter. Refactored for new protocol."""
 
     dialect: DialectType = "oracle"
-    parameter_config = DriverParameterConfig(
-        supported_parameter_styles=[
-            ParameterStyle.POSITIONAL_COLON,  # :1, :2
-            ParameterStyle.NAMED_COLON,  # :name
-        ],
-        default_parameter_style=ParameterStyle.NAMED_COLON,
-        type_coercion_map={
-            # Oracle has good native type support
-            # Add any specific type mappings as needed
-        },
-        has_native_list_expansion=False,  # Oracle doesn't handle lists natively
-    )
+    parameter_config: DriverParameterConfig
 
     def __init__(self, connection: OracleAsyncConnection, config: "Optional[SQLConfig]" = None) -> None:
         super().__init__(connection=connection, config=config)
+        self.parameter_config = DriverParameterConfig(
+            supported_parameter_styles=[
+                ParameterStyle.POSITIONAL_COLON,  # :1, :2
+                ParameterStyle.NAMED_COLON,  # :name
+            ],
+            default_parameter_style=ParameterStyle.NAMED_COLON,
+            type_coercion_map={
+                # Oracle has good native type support
+                # Add any specific type mappings as needed
+            },
+            has_native_list_expansion=False,  # Oracle doesn't handle lists natively
+        )
 
-    @asynccontextmanager
-    async def with_cursor(self, connection: OracleAsyncConnection) -> AsyncGenerator[AsyncCursor, None]:
-        cursor: AsyncCursor = connection.cursor()
-        try:
-            yield cursor
-        finally:
-            cursor.close()
+    def with_cursor(self, connection: "OracleAsyncConnection") -> "_AsyncOracleCursorManager":
+        return _AsyncOracleCursorManager(connection)
 
     async def _perform_execute(self, cursor: AsyncCursor, statement: "SQL") -> None:
-        sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
-
-        if statement.is_many:
-            # For execute_many, params is already a list of parameter sets
-            prepared_params = self._prepare_driver_parameters_many(params) if params else []
-            await cursor.executemany(sql, prepared_params)
+        if statement.is_script:
+            # Scripts use STATIC compilation to transpile parameters automatically
+            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            # Oracle doesn't have executescript - execute statements one by one
+            statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
+            for stmt in statements:
+                if stmt.strip():  # Skip empty statements
+                    await cursor.execute(stmt)
         else:
-            prepared_params = self._prepare_driver_parameters(params)
-            await cursor.execute(sql, prepared_params or {})
+            # Enable intelligent parameter conversion - Oracle supports both POSITIONAL_COLON and NAMED_COLON
+            sql, params = statement.compile()
+
+            if statement.is_many:
+                # For execute_many, params is already a list of parameter sets
+                prepared_params = self._prepare_driver_parameters_many(params) if params else []
+                await cursor.executemany(sql, prepared_params)
+            else:
+                prepared_params = self._prepare_driver_parameters(params)
+                await cursor.execute(sql, prepared_params or {})
 
     async def _extract_select_data(self, cursor: AsyncCursor) -> "tuple[list[dict[str, Any]], list[str], int]":
         """Extract data from cursor after SELECT execution."""

@@ -5,7 +5,8 @@ from typing import Any
 
 from rich.panel import Panel
 
-from sqlspec.parameters import ParameterStyle, TypedParameter
+from sqlspec.parameters import ParameterStyle
+from sqlspec.parameters.types import TypedParameter
 from sqlspec.statement.sql import SQL
 from tools.benchmark.core.metrics import BenchmarkMetrics, TimingResult
 from tools.benchmark.suites.base import BaseBenchmarkSuite

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Final, Optional
 from sqlspec.parameters.types import ParameterInfo, ParameterStyle
 
 if TYPE_CHECKING:
-    from sqlspec.typing import SQLParameterType
+    from sqlspec.typing import StatementParameters
 
 __all__ = ("ParameterValidator",)
 
@@ -250,7 +250,7 @@ class ParameterValidator:
         return list
 
     def validate_parameters(
-        self, param_info: list[ParameterInfo], provided_params: "SQLParameterType", sql: str
+        self, param_info: list[ParameterInfo], provided_params: "StatementParameters", sql: str
     ) -> None:
         """Validate that provided parameters match the SQL parameters.
 

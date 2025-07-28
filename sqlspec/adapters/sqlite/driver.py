@@ -2,15 +2,12 @@
 import contextlib
 import datetime
 import sqlite3
-from contextlib import contextmanager
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 from sqlspec.driver import SyncDriverAdapterBase
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from sqlglot.dialects.dialect import DialectType
     from typing_extensions import TypeAlias
 
@@ -30,52 +27,67 @@ else:
     SqliteConnection = sqlite3.Connection
 
 
+class _SqliteCursorManager:
+    """Context manager for SQLite cursor management."""
+
+    def __init__(self, connection: "SqliteConnection") -> None:
+        self.connection = connection
+        self.cursor: Optional[sqlite3.Cursor] = None
+
+    def __enter__(self) -> "sqlite3.Cursor":
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if self.cursor is not None:
+            with contextlib.suppress(Exception):
+                self.cursor.close()
+
+
 class SqliteDriver(SyncDriverAdapterBase):
     """Reference implementation for a synchronous SQLite driver."""
 
     dialect: "DialectType" = "sqlite"
     default_parameter_style: "ClassVar[str]" = "qmark"
-    parameter_config: ClassVar[DriverParameterConfig] = DriverParameterConfig(
-        supported_parameter_styles=[ParameterStyle.QMARK],
-        default_parameter_style=ParameterStyle.QMARK,
-        type_coercion_map={
-            bool: int,
-            datetime.datetime: lambda v: v.isoformat(),
-            Decimal: str,
-            dict: to_json,
-            list: to_json,
-            tuple: lambda v: to_json(list(v)),
-        },
-        has_native_list_expansion=False,
-    )
+    parameter_config: DriverParameterConfig
 
     def __init__(self, connection: "SqliteConnection", config: "Optional[SQLConfig]" = None) -> None:
         super().__init__(connection=connection, config=config)
+        self.parameter_config = DriverParameterConfig(
+            supported_parameter_styles=[ParameterStyle.QMARK],
+            default_parameter_style=ParameterStyle.QMARK,
+            type_coercion_map={
+                bool: int,
+                datetime.datetime: lambda v: v.isoformat(),
+                Decimal: str,
+                dict: to_json,
+                list: to_json,
+                tuple: lambda v: to_json(list(v)),
+            },
+            has_native_list_expansion=False,
+        )
 
-    @contextmanager
-    def with_cursor(self, connection: "SqliteConnection") -> "Iterator[sqlite3.Cursor]":
-        cursor = connection.cursor()
-        try:
-            yield cursor
-        finally:
-            with contextlib.suppress(Exception):
-                cursor.close()
+    def with_cursor(self, connection: "SqliteConnection") -> "_SqliteCursorManager":
+        return _SqliteCursorManager(connection)
 
     def _perform_execute(self, cursor: "sqlite3.Cursor", statement: "SQL") -> None:
-        # Compile with driver's parameter style
-        sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
-
         if statement.is_script:
-            # Scripts don't support parameters
+            # Scripts use STATIC compilation to transpile parameters automatically
+            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             cursor.executescript(sql)
-        elif statement.is_many:
-            # For execute_many, params is already a list of parameter sets
-            prepared_params = self._prepare_driver_parameters_many(params) if params else []
-            cursor.executemany(sql, prepared_params)
         else:
-            # Prepare parameters for driver consumption
-            prepared_params = self._prepare_driver_parameters(params)
-            cursor.execute(sql, prepared_params or ())
+            # Regular execution - let intelligent conversion handle parameter style
+            # Since SQLite only supports QMARK, conversion will happen automatically when needed
+            sql, params = statement.compile()
+
+            if statement.is_many:
+                # For execute_many, params is already a list of parameter sets
+                prepared_params = self._prepare_driver_parameters_many(params) if params else []
+                cursor.executemany(sql, prepared_params)
+            else:
+                # Prepare parameters for driver consumption
+                prepared_params = self._prepare_driver_parameters(params)
+                cursor.execute(sql, prepared_params or ())
 
     def begin(self) -> None:
         """Begin a database transaction."""
@@ -93,7 +105,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         """Extract data from cursor after SELECT execution."""
         fetched_data = cursor.fetchall()
         column_names = [col[0] for col in cursor.description or []]
-        # Convert Row objects to dicts
         data = [dict(zip(column_names, row)) for row in fetched_data]
         return data, column_names, len(data)
 

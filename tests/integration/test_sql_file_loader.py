@@ -415,9 +415,9 @@ SELECT 'URI test' as message;
 """.strip()
     )
 
-    # For now, use local path instead of file:// URI
-    # TODO: Fix file:// URI handling in storage backend
-    loader.load_sql(test_file)
+    # Test loading with file:// URI
+    file_uri = f"file://{test_file}"
+    loader.load_sql(file_uri)
 
     # Should be able to get the query
     sql_obj = loader.get_sql("test_query")
@@ -447,9 +447,9 @@ SELECT '1.0.0' as version;
 """.strip()
     )
 
-    # For now, use local path instead of file:// URI
-    # TODO: Fix file:// URI handling in storage backend
-    loader.load_sql(uri_file)
+    # Test loading with file:// URI
+    uri_file_uri = f"file://{uri_file}"
+    loader.load_sql(uri_file_uri)
 
     # Should have queries from both sources
     queries = loader.list_queries()
@@ -588,7 +588,7 @@ def test_sql_loader_with_complex_parameter_types(complex_sql_files: Path) -> Non
     assert isinstance(analytics_sql, SQL)
     assert analytics_sql.parameters["start_period"] == "2024-01-01 00:00:00"
     # TypedParameter wraps None values with type information
-    from sqlspec.parameters import TypedParameter
+    from sqlspec.parameters.types import TypedParameter
 
     category_filter = analytics_sql.parameters["category_filter"]
     if isinstance(category_filter, TypedParameter):

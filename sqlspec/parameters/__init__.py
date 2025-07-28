@@ -15,13 +15,8 @@ from sqlspec.parameters.types import (
     ParameterStyle,
     ParameterStyleConversionState,
     ParameterStyleInfo,
-    TypedParameter,
 )
-from sqlspec.parameters.utils import process_execute_many_parameters
 from sqlspec.parameters.validator import ParameterValidator
-
-# Legacy import for backward compatibility
-SQLParameterType = TypedParameter
 
 __all__ = (
     "MAX_32BIT_INT",
@@ -35,8 +30,4 @@ __all__ = (
     "ParameterStyleConversionState",
     "ParameterStyleInfo",
     "ParameterValidator",
-    # Legacy
-    "SQLParameterType",
-    "TypedParameter",
-    "process_execute_many_parameters",
 )

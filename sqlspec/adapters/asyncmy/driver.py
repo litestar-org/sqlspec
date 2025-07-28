@@ -1,18 +1,15 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import logging
-from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from asyncmy import Connection
+from asyncmy.cursors import Cursor, DictCursor
 
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
-
-    from asyncmy.cursors import Cursor, DictCursor
     from sqlglot.dialects.dialect import DialectType
 
 __all__ = ("AsyncmyConnection", "AsyncmyDriver")
@@ -27,25 +24,40 @@ else:
     AsyncmyConnection = Connection
 
 
+class _AsyncmyCursorManager:
+    def __init__(self, connection: "AsyncmyConnection") -> None:
+        self.connection = connection
+        self.cursor: Optional[Union[Cursor, DictCursor]] = None
+
+    async def __aenter__(self) -> Union[Cursor, DictCursor]:
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if self.cursor:
+            await self.cursor.close()
+
+
 class AsyncmyDriver(AsyncDriverAdapterBase):
     """Asyncmy MySQL/MariaDB Driver Adapter. Modern protocol implementation."""
 
     dialect: "DialectType" = "mysql"
-    parameter_config = DriverParameterConfig(
-        supported_parameter_styles=[
-            ParameterStyle.POSITIONAL_PYFORMAT,  # %s
-            ParameterStyle.NAMED_PYFORMAT,  # %(name)s
-        ],
-        default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        type_coercion_map={
-            # MySQL has good native type support
-            # Add any specific type mappings as needed
-        },
-        has_native_list_expansion=False,  # MySQL doesn't handle arrays natively
-    )
+    parameter_config: DriverParameterConfig
 
     def __init__(self, connection: AsyncmyConnection, config: Optional[SQLConfig] = None) -> None:
         super().__init__(connection=connection, config=config)
+        self.parameter_config = DriverParameterConfig(
+            supported_parameter_styles=[
+                ParameterStyle.POSITIONAL_PYFORMAT,  # %s
+                ParameterStyle.NAMED_PYFORMAT,  # %(name)s
+            ],
+            default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
+            type_coercion_map={
+                # MySQL has good native type support
+                # Add any specific type mappings as needed
+            },
+            has_native_list_expansion=False,  # MySQL doesn't handle arrays natively
+        )
         # MySQL type conversions
         # MySQL 5.7+ has native JSON support and handles most types well
         # Type handlers can be registered if the base class supports it
@@ -70,25 +82,30 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """Get the connection to use for the operation."""
         return connection or self.connection
 
-    @asynccontextmanager
-    async def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncGenerator[Union[Cursor, DictCursor], None]":
-        cursor = connection.cursor()
-        try:
-            yield cursor
-        finally:
-            await cursor.close()
+    def with_cursor(self, connection: "AsyncmyConnection") -> "_AsyncmyCursorManager":
+        return _AsyncmyCursorManager(connection)
 
     async def _perform_execute(self, cursor: "Union[Cursor, DictCursor]", statement: "SQL") -> None:
         """Execute the SQL statement using the provided cursor."""
-        sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
-
-        if statement.is_many:
-            # For execute_many, params is already a list of parameter sets
-            prepared_params = self._prepare_driver_parameters_many(params) if params else []
-            await cursor.executemany(sql, prepared_params)
+        if statement.is_script:
+            # Scripts use STATIC compilation to transpile parameters automatically
+            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            # MySQL doesn't have executescript - execute statements one by one
+            statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
+            for stmt in statements:
+                if stmt.strip():  # Skip empty statements
+                    await cursor.execute(stmt)
         else:
-            prepared_params = self._prepare_driver_parameters(params)
-            await cursor.execute(sql, prepared_params or None)
+            # Enable intelligent parameter conversion - MySQL supports both POSITIONAL_PYFORMAT and NAMED_PYFORMAT
+            sql, params = statement.compile()
+
+            if statement.is_many:
+                # For execute_many, params is already a list of parameter sets
+                prepared_params = self._prepare_driver_parameters_many(params) if params else []
+                await cursor.executemany(sql, prepared_params)
+            else:
+                prepared_params = self._prepare_driver_parameters(params)
+                await cursor.execute(sql, prepared_params or None)
 
     async def _extract_select_data(
         self, cursor: "Union[Cursor, DictCursor]"

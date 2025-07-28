@@ -1,16 +1,16 @@
 """Common driver attributes and utilities."""
 
 import contextlib
-from abc import ABC
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import sqlglot
-from mypy_extensions import mypyc_attr
+from mypy_extensions import trait
 from sqlglot import exp
 from sqlglot.tokens import TokenType
 
 from sqlspec.exceptions import NotFoundError
-from sqlspec.parameters import DriverParameterConfig, ParameterStyle, ParameterValidator, TypedParameter
+from sqlspec.parameters import DriverParameterConfig, ParameterStyle, ParameterValidator
+from sqlspec.parameters.types import TypedParameter
 from sqlspec.statement.cache import anonymous_returns_rows_cache
 from sqlspec.statement.pipeline import SQLTransformContext, create_pipeline_from_config
 from sqlspec.statement.splitter import split_sql_script
@@ -39,16 +39,17 @@ ROW_RETURNING_TOKENS = {
 }
 
 
-@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
-class CommonDriverAttributesMixin(ABC):
+@trait
+class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
     __slots__ = ("config", "connection")
 
     dialect: "DialectType"
     """The SQL dialect supported by the underlying database driver."""
-    parameter_config: "ClassVar[DriverParameterConfig]"
-    """The parameter configuration for this driver."""
+
+    parameter_config: "DriverParameterConfig"
+    """Driver parameter configuration."""
 
     def __init__(self, connection: "Any", config: "Optional[SQLConfig]" = None) -> None:
         """Initialize async driver adapter.
@@ -199,10 +200,16 @@ class CommonDriverAttributesMixin(ABC):
         if not parameters:
             return []
 
-        if not isinstance(parameters, (list, tuple)):
-            return [parameters.value if isinstance(parameters, TypedParameter) else parameters]
+        # Handle dict parameters (e.g., NUMERIC style {'1': val, '2': val})
+        if isinstance(parameters, dict):
+            return {k: (v.value if isinstance(v, TypedParameter) else v) for k, v in parameters.items()}
 
-        return [p.value if isinstance(p, TypedParameter) else p for p in parameters]
+        # Handle list/tuple parameters (e.g., QMARK style [val1, val2])
+        if isinstance(parameters, (list, tuple)):
+            return [p.value if isinstance(p, TypedParameter) else p for p in parameters]
+
+        # Handle scalar parameters (single value)
+        return [parameters.value if isinstance(parameters, TypedParameter) else parameters]
 
     def _prepare_driver_parameters_many(self, parameters: Any) -> "list[Any]":
         """Prepare parameter sequences for executemany operations.
@@ -219,6 +226,24 @@ class CommonDriverAttributesMixin(ABC):
         if not parameters:
             return []
         return [self._prepare_driver_parameters(param_set) for param_set in parameters]
+
+    def _prepare_script_sql(self, statement: "SQL") -> str:
+        """Prepare SQL script for execution by embedding parameters as static values.
+
+        Since most database drivers don't support parameters in executescript
+        methods, this method compiles the SQL with ParameterStyle.STATIC to
+        embed parameter values directly in the SQL string.
+
+        Args:
+            statement: SQL statement marked as a script
+
+        Returns:
+            SQL string with parameters embedded as static values
+        """
+
+        # Compile with STATIC style to embed parameters
+        sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+        return sql
 
     def _apply_pipeline_transformations(
         self, expression: "exp.Expression", parameters: Any = None, config: "Optional[SQLConfig]" = None

@@ -1,17 +1,20 @@
 """SQL statement handling with centralized parameter management."""
 
 import operator
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Final, Optional, Union, cast
 
 import sqlglot
 import sqlglot.expressions as exp
+from mypy_extensions import mypyc_attr
 from sqlglot.errors import ParseError
 from typing_extensions import TypeAlias
 
 from sqlspec.exceptions import RiskLevel, SQLParsingError, SQLValidationError
 from sqlspec.parameters import (
     SQLGLOT_INCOMPATIBLE_STYLES,
+    DriverParameterConfig,
     ParameterConverter,
+    ParameterProcessor,
     ParameterStyle,
     ParameterStyleConversionState,
     ParameterValidator,
@@ -53,17 +56,17 @@ logger = get_logger("sqlspec.statement")
 Statement: TypeAlias = Union[str, exp.Expression, "SQL"]
 
 # Parameter naming constants
-PARAM_PREFIX = "param_"
-POS_PARAM_PREFIX = "pos_param_"
-KW_POS_PARAM_PREFIX = "kw_pos_param_"
-ARG_PREFIX = "arg_"
+PARAM_PREFIX: Final[str] = "param_"
+POS_PARAM_PREFIX: Final[str] = "pos_param_"
+KW_POS_PARAM_PREFIX: Final[str] = "kw_pos_param_"
+ARG_PREFIX: Final[str] = "arg_"
 
 # Cache and limit constants
-DEFAULT_CACHE_SIZE = 1000
+DEFAULT_CACHE_SIZE: Final[int] = 1000
 
 # Oracle/Colon style parameter constants
-COLON_PARAM_ONE = "1"
-COLON_PARAM_MIN_INDEX = 1
+COLON_PARAM_ONE: Final[str] = "1"
+COLON_PARAM_MIN_INDEX: Final[int] = 1
 PROCESSED_STATE_SLOTS = (
     "analysis_results",
     "merged_parameters",
@@ -166,6 +169,7 @@ class _ProcessedState:
         )
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SQLConfig:
     """Configuration for SQL statement behavior.
 
@@ -335,6 +339,7 @@ def default_analysis_handler(analysis: Any) -> None:
     logger.debug("SQL Analysis: %s", analysis)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SQL:
     """Immutable SQL statement with centralized parameter management.
 
@@ -374,7 +379,6 @@ class SQL:
         _dialect: "DialectType" = None,
         _config: "Optional[SQLConfig]" = None,
         _builder_result_type: "Optional[type]" = None,
-        _existing_state: "Optional[dict[str, Any]]" = None,
         **kwargs: Any,
     ) -> None:
         """Initialize SQL with centralized parameter management."""
@@ -403,10 +407,7 @@ class SQL:
         else:
             self._init_from_str_or_expression(statement)
 
-        if _existing_state:
-            self._load_from_existing_state(_existing_state)
-
-        if not isinstance(statement, SQL) and not _existing_state:
+        if not isinstance(statement, SQL):
             self._set_original_parameters(*parameters)
 
         self._process_parameters(*parameters, **kwargs)
@@ -451,22 +452,6 @@ class SQL:
         else:
             self._raw_sql = statement.sql(dialect=self._dialect)
             self._statement = statement
-
-    def _load_from_existing_state(self, existing_state: "dict[str, Any]") -> None:
-        """Load state from a dictionary (used by copy)."""
-        self._positional_params = list(existing_state.get("positional_params", self._positional_params))
-        self._named_params = dict(existing_state.get("named_params", self._named_params))
-        self._filters = list(existing_state.get("filters", self._filters))
-        self._is_many = existing_state.get("is_many", self._is_many)
-        self._is_script = existing_state.get("is_script", self._is_script)
-        self._raw_sql = existing_state.get("raw_sql", self._raw_sql)
-        self._original_parameters = existing_state.get("original_parameters", self._original_parameters)
-        self._parameter_conversion_state = existing_state.get(
-            "parameter_conversion_state", self._parameter_conversion_state
-        )
-        self._placeholder_mapping = existing_state.get("placeholder_mapping", self._placeholder_mapping)
-        self._original_sql = existing_state.get("original_sql", self._original_sql)
-        self._processing_context = existing_state.get("processing_context", self._processing_context)
 
     def _set_original_parameters(self, *parameters: Any) -> None:
         """Set the original parameters."""
@@ -978,6 +963,57 @@ class SQL:
             return filter_obj.extract_parameters()
         return [], {}
 
+    def _copy_with(self, **overrides: Any) -> "SQL":
+        """Create a new SQL instance with all state copied and specified overrides.
+
+        This is an internal method used to maintain immutability.
+        """
+        # Create new instance bypassing __init__
+        new_sql = SQL.__new__(SQL)
+
+        # Hardcode all attributes for mypyc compatibility (__slots__ not available at runtime)
+        attrs_to_copy = [
+            "_base_statement_key",
+            "_builder_result_type",
+            "_config",
+            "_dialect",
+            "_filters",
+            "_is_many",
+            "_is_script",
+            "_named_params",
+            "_original_parameters",
+            "_original_sql",
+            "_parameter_conversion_state",
+            "_placeholder_mapping",
+            "_positional_params",
+            "_processed_state",
+            "_processing_context",
+            "_raw_sql",
+            "_statement",
+        ]
+
+        # Copy all attributes
+        for attr in attrs_to_copy:
+            if attr in overrides:
+                # Use override value
+                value = overrides[attr]
+            else:
+                # Copy from self
+                value = getattr(self, attr)
+                # Deep copy mutable attributes
+                if attr == "_positional_params" and isinstance(value, list):
+                    value = list(value)
+                elif attr == "_named_params" and isinstance(value, dict):
+                    value = dict(value)
+                elif attr == "_filters" and isinstance(value, list):
+                    value = list(value)
+                elif attr == "_placeholder_mapping" and isinstance(value, dict):
+                    value = dict(value)
+
+            setattr(new_sql, attr, value)
+
+        return new_sql
+
     def copy(
         self,
         statement: "Optional[Union[str, exp.Expression]]" = None,
@@ -990,51 +1026,47 @@ class SQL:
 
         This is the primary method for creating modified SQL objects.
         """
-        existing_state = {
-            "positional_params": list(self._positional_params),
-            "named_params": dict(self._named_params),
-            "filters": list(self._filters),
-            "is_many": self._is_many,
-            "is_script": self._is_script,
-            "raw_sql": self._raw_sql,
-        }
-        existing_state["original_parameters"] = self._original_parameters
-        existing_state["parameter_conversion_state"] = self._parameter_conversion_state
-        existing_state["placeholder_mapping"] = self._placeholder_mapping
-        existing_state["original_sql"] = self._original_sql
-        existing_state["processing_context"] = self._processing_context
-
-        new_statement = statement if statement is not None else self._statement
-        new_dialect = dialect if dialect is not None else self._dialect
-        new_config = config if config is not None else self._config
-
-        if parameters is not None:
-            existing_state["positional_params"] = []
-            existing_state["named_params"] = {}
+        # If we have a new statement, we need to create a fresh SQL object
+        if statement is not None and statement != self._statement:
             return SQL(
-                new_statement,
-                parameters,
-                _dialect=new_dialect,
-                _config=new_config,
+                statement,
+                parameters if parameters is not None else (self._positional_params, self._named_params),
+                _dialect=dialect if dialect is not None else self._dialect,
+                _config=config if config is not None else self._config,
                 _builder_result_type=self._builder_result_type,
-                _existing_state=None,
                 **kwargs,
             )
 
-        return SQL(
-            new_statement,
-            _dialect=new_dialect,
-            _config=new_config,
-            _builder_result_type=self._builder_result_type,
-            _existing_state=existing_state,
-            **kwargs,
-        )
+        overrides: dict[str, Any] = {}
+
+        if dialect is not None:
+            overrides["_dialect"] = dialect
+        if config is not None:
+            overrides["_config"] = config
+
+        # Handle parameters if provided
+        if parameters is not None:
+            overrides["_positional_params"] = []
+            overrides["_named_params"] = {}
+            overrides["_original_parameters"] = parameters
+            # Process the new parameters
+            if isinstance(parameters, (list, tuple)):
+                overrides["_positional_params"] = list(parameters)
+            elif isinstance(parameters, dict):
+                overrides["_named_params"] = dict(parameters)
+            else:
+                overrides["_positional_params"] = [parameters]
+
+        # Apply any additional keyword arguments as overrides
+        overrides.update({key: value for key, value in kwargs.items() if key.startswith("_") and hasattr(self, key)})
+
+        return self._copy_with(**overrides)
 
     def add_named_parameter(self, name: "str", value: Any) -> "SQL":
         """Add a named parameter and return a new SQL instance."""
-        new_obj = self.copy()
-        new_obj._named_params[name] = value
-        return new_obj
+        new_params = dict(self._named_params)
+        new_params[name] = value
+        return self._copy_with(_named_params=new_params)
 
     def get_unique_parameter_name(
         self, base_name: "str", namespace: "Optional[str]" = None, preserve_original: bool = False
@@ -1079,28 +1111,44 @@ class SQL:
 
     def filter(self, filter_obj: StatementFilter) -> "SQL":
         """Apply a filter and return a new SQL instance."""
-        new_obj = self.copy()
-        new_obj._filters.append(filter_obj)
+        # Extract filter parameters
         pos_params, named_params = self._extract_filter_parameters(filter_obj)
-        new_obj._positional_params.extend(pos_params)
-        new_obj._named_params.update(named_params)
-        return new_obj
+
+        # Create new collections with updates
+        new_filters = list(self._filters)
+        new_filters.append(filter_obj)
+
+        new_positional = list(self._positional_params)
+        new_positional.extend(pos_params)
+
+        new_named = dict(self._named_params)
+        new_named.update(named_params)
+
+        return self._copy_with(_filters=new_filters, _positional_params=new_positional, _named_params=new_named)
 
     def as_many(self, parameters: "Optional[list[Any]]" = None) -> "SQL":
-        """Mark for executemany with optional parameters."""
-        new_obj = self.copy()
-        new_obj._is_many = True
+        """Mark for executemany with optional parameters.
+
+        If no parameters are provided, uses the existing positional parameters
+        as the batch execution sequence.
+        """
+        overrides: dict[str, Any] = {"_is_many": True}
+
         if parameters is not None:
-            new_obj._positional_params = []
-            new_obj._named_params = {}
-            new_obj._original_parameters = parameters
-        return new_obj
+            # Explicit parameters provided - use them
+            overrides["_positional_params"] = []
+            overrides["_named_params"] = {}
+            overrides["_original_parameters"] = parameters
+        else:
+            # No parameters provided - use existing positional params as the sequence
+            # This allows: sql.as_many() to use whatever parameters are already there
+            overrides["_original_parameters"] = self._positional_params
+
+        return self._copy_with(**overrides)
 
     def as_script(self) -> "SQL":
         """Mark as script for execution."""
-        new_obj = self.copy()
-        new_obj._is_script = True
-        return new_obj
+        return self._copy_with(_is_script=True)
 
     def _build_final_state(self) -> tuple[exp.Expression, Any]:
         """Build final expression and parameters after applying filters."""
@@ -1203,6 +1251,11 @@ class SQL:
             msg = "Failed to process SQL statement"
             raise RuntimeError(msg)
         return cast("_ProcessedState", self._processed_state).processed_expression
+
+    @property
+    def filters(self) -> "list[StatementFilter]":
+        """Get the list of filters applied to this statement."""
+        return list(self._filters)
 
     @property
     def parameters(self) -> Any:
@@ -1331,7 +1384,7 @@ class SQL:
                         enhanced_params.append((param_set, *literals))
                 param_sets = enhanced_params
 
-        # Handle deconversion if needed (same logic as in compile())
+        # Handle conversion if needed (same logic as in compile())
         if self._processing_context and self._processing_context.metadata.get("parameter_conversion"):
             norm_state = self._processing_context.metadata["parameter_conversion"]
 
@@ -1474,9 +1527,6 @@ class SQL:
         Returns:
             Tuple of (processed_sql, processed_params)
         """
-        from sqlspec.parameters import ParameterProcessor, ParameterValidator
-        from sqlspec.parameters.config import DriverParameterConfig
-        from sqlspec.parameters.types import ParameterStyle
 
         config = driver.parameter_config
 

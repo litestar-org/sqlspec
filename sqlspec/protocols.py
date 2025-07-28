@@ -365,6 +365,8 @@ class ObjectStoreProtocol(Protocol):
     # Class-level capability descriptor
     capabilities: ClassVar["StorageCapabilities"]
 
+    protocol: str
+
     def __init__(self, uri: str, **kwargs: Any) -> None:
         return
 

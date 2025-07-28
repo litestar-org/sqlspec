@@ -272,16 +272,10 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
         if "extra" in self.connection_config:
             extras = self.connection_config.pop("extra")
             self.connection_config.update(extras)
+        # Check if this is an in-memory database and auto-convert to shared memory
         database = self.connection_config.get("database", ":memory:")
-        is_memory_db = self._is_memory_database(database)
-        if is_memory_db:
-            logger.warning(
-                "In-memory SQLite database detected. Disabling connection pooling to ensure data consistency. "
-                "Each pooled connection creates a separate in-memory database. Use a file-based database or "
-                "'file::memory:?cache=shared' with uri=True for shared memory access."
-            )
-            min_pool = 1
-            max_pool = 1
+        if self._is_memory_database(database):
+            self._convert_to_shared_memory()
 
         self.statement_config = statement_config or SQLConfig()
         self.min_pool = min_pool
@@ -333,6 +327,23 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
 
         # Check for URI-style memory database but NOT shared cache
         return "file::memory:" in database and "cache=shared" not in database
+
+    def _convert_to_shared_memory(self) -> None:
+        """Convert in-memory database to shared memory for connection pooling.
+
+        Automatically converts :memory: and file::memory: databases to
+        file::memory:?cache=shared format to enable safe connection pooling.
+        """
+        database = self.connection_config.get("database", ":memory:")
+
+        if database in {":memory:", ""}:
+            self.connection_config["database"] = "file::memory:?cache=shared"
+            self.connection_config["uri"] = True
+        elif "file::memory:" in database and "cache=shared" not in database:
+            # Add cache=shared to existing file::memory: URI
+            separator = "&" if "?" in database else "?"
+            self.connection_config["database"] = f"{database}{separator}cache=shared"
+            self.connection_config["uri"] = True
 
     async def _close_pool(self) -> None:
         """Close the connection pool."""

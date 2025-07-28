@@ -4,7 +4,7 @@ import copy
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 import sqlglot
 import sqlglot.expressions as exp
@@ -37,10 +37,10 @@ __all__ = (
 )
 
 
-DEFAULT_CACHE_MAX_SIZE = 1000
-DEFAULT_FRAGMENT_CACHE_SIZE = 5000
-DEFAULT_BASE_STATEMENT_CACHE_SIZE = 2000
-DEFAULT_FILTER_CACHE_SIZE = 1000
+DEFAULT_CACHE_MAX_SIZE: Final[int] = 1000
+DEFAULT_FRAGMENT_CACHE_SIZE: Final[int] = 5000
+DEFAULT_BASE_STATEMENT_CACHE_SIZE: Final[int] = 2000
+DEFAULT_FILTER_CACHE_SIZE: Final[int] = 1000
 
 
 @dataclass
@@ -197,6 +197,8 @@ _cache_stats = CacheStats()
 
 class SQLCache:
     """A thread-safe LRU cache for processed SQL states."""
+
+    __slots__ = ("_eviction_count", "_max_size", "cache", "cache_name", "lock")
 
     def __init__(self, max_size: int = DEFAULT_CACHE_MAX_SIZE, cache_name: str = "sql") -> None:
         self.cache: OrderedDict[str, Any] = OrderedDict()

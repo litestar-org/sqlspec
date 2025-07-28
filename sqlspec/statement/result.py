@@ -1,7 +1,7 @@
 """SQL statement result classes for handling different types of SQL operations."""
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union, cast
 
 from typing_extensions import TypeVar
 
@@ -25,7 +25,7 @@ class StatementResult(ABC):
 
     Args:
         statement: The original SQL statement that was executed.
-        data: The result data from the operation.
+        data: The result data from the operation (type varies by subclass).
         rows_affected: Number of rows affected by the operation (if applicable).
         last_inserted_id: Last inserted ID (if applicable).
         execution_time: Time taken to execute the statement in seconds.
@@ -37,7 +37,7 @@ class StatementResult(ABC):
     def __init__(
         self,
         statement: "SQL",
-        data: "Any",
+        data: Any = None,
         rows_affected: int = 0,
         last_inserted_id: Optional[Union[int, str]] = None,
         execution_time: Optional[float] = None,
@@ -103,8 +103,6 @@ class SQLResult(StatementResult):
 
     For script execution, this class also tracks multiple statement results and errors.
     """
-
-    data: list[dict[str, Any]]
 
     __slots__ = (
         "column_names",
@@ -210,7 +208,7 @@ class SQLResult(StatementResult):
                     "statement_results": self.statement_results,
                 }
             ]
-        return self.data
+        return cast("list[dict[str, Any]]", self.data)
 
     def add_statement_result(self, result: "SQLResult") -> None:
         """Add a statement result to the script execution results."""
@@ -281,7 +279,7 @@ class SQLResult(StatementResult):
         Returns:
             The row at the specified index
         """
-        return self.data[index]
+        return cast("dict[str, Any]", self.data[index])
 
     def all(self) -> list[dict[str, Any]]:
         """Return all rows as a list.
@@ -306,7 +304,7 @@ class SQLResult(StatementResult):
         if len(self.data) > 1:
             msg = f"Multiple results found ({len(self.data)}), exactly one row expected"
             raise ValueError(msg)
-        return self.data[0]
+        return cast("dict[str, Any]", self.data[0])
 
     def one_or_none(self) -> "Optional[dict[str, Any]]":
         """Return at most one row.
@@ -322,7 +320,7 @@ class SQLResult(StatementResult):
         if len(self.data) > 1:
             msg = f"Multiple results found ({len(self.data)}), at most one row expected"
             raise ValueError(msg)
-        return self.data[0]
+        return cast("Optional[dict[str, Any]]", self.data[0])
 
     def scalar(self) -> Any:
         """Return the first column of the first row.
@@ -421,7 +419,7 @@ class ArrowResult(StatementResult):
             msg = "No Arrow table available"
             raise ValueError(msg)
 
-        return self.data.column_names  # type: ignore[no-any-return]
+        return cast("list[str]", self.data.column_names)
 
     @property
     def num_rows(self) -> int:
@@ -437,7 +435,7 @@ class ArrowResult(StatementResult):
             msg = "No Arrow table available"
             raise ValueError(msg)
 
-        return self.data.num_rows  # type: ignore[no-any-return]
+        return cast("int", self.data.num_rows)
 
     @property
     def num_columns(self) -> int:
@@ -453,4 +451,4 @@ class ArrowResult(StatementResult):
             msg = "No Arrow table available"
             raise ValueError(msg)
 
-        return self.data.num_columns  # type: ignore[no-any-return]
+        return cast("int", self.data.num_columns)

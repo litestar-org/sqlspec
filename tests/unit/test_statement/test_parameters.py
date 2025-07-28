@@ -9,7 +9,7 @@ from sqlspec.exceptions import ExtraParameterError, MissingParameterError, Param
 from sqlspec.parameters import ParameterConverter, ParameterInfo, ParameterStyle, ParameterValidator
 
 if TYPE_CHECKING:
-    from sqlspec.typing import SQLParameterType
+    from sqlspec.typing import StatementParameters
 
 
 # Test ParameterStyle enum
@@ -239,7 +239,7 @@ def test_determine_parameter_input_type(validator: ParameterValidator, sql: str,
     ],
 )
 def test_validate_parameters(
-    validator: ParameterValidator, sql: str, provided_params: "SQLParameterType", should_pass: bool
+    validator: ParameterValidator, sql: str, provided_params: "StatementParameters", should_pass: bool
 ) -> None:
     """Test parameter validation."""
     params = validator.extract_parameters(sql)
@@ -291,10 +291,10 @@ def converter() -> ParameterConverter:
 )
 def test_merge_parameters(
     converter: ParameterConverter,
-    parameters: "SQLParameterType",
+    parameters: "StatementParameters",
     args: "Optional[Sequence[Any]]",
     kwargs: "Optional[dict[str, Any]]",
-    expected_result: "SQLParameterType",
+    expected_result: "StatementParameters",
 ) -> None:
     """Test parameter merging logic."""
     result = converter.merge_parameters(parameters, list(args) if args else None, kwargs)
@@ -328,8 +328,8 @@ def test_merge_parameters(
 def test_convert_parameters(
     converter: ParameterConverter,
     sql: str,
-    parameters: "SQLParameterType",
-    args: "SQLParameterType",
+    parameters: "StatementParameters",
+    args: "StatementParameters",
     kwargs: "dict[str, Any]",
     validate: bool,
     should_succeed: bool,
@@ -425,7 +425,7 @@ def test_parameter_conversion_error_handling(converter: ParameterConverter) -> N
 @pytest.mark.parametrize(
     "sql,params", [("SELECT * FROM users WHERE id = ?", []), ("SELECT * FROM users WHERE name = :name", {})]
 )
-def test_missing_parameter_errors(validator: ParameterValidator, sql: str, params: "SQLParameterType") -> None:
+def test_missing_parameter_errors(validator: ParameterValidator, sql: str, params: "StatementParameters") -> None:
     """Test missing parameter error conditions."""
     param_info = validator.extract_parameters(sql)
     with pytest.raises(MissingParameterError):

@@ -3,7 +3,6 @@ import contextlib
 import datetime
 import logging
 from collections.abc import Iterator
-from contextlib import contextmanager
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
@@ -41,19 +40,33 @@ DATASET_TABLE_PARTS = 2  # dataset.table
 TIMESTAMP_ERROR_MSG_LENGTH = 189  # Length check for timestamp parsing error
 
 
+class MockCursor:
+    def __init__(self, connection: "BigQueryConnection") -> None:
+        self.connection = connection
+        self.job: Optional[QueryJob] = None
+
+
+class _BigQueryCursorManager:
+    """Context manager for BigQuery cursor management."""
+
+    def __init__(self, connection: "BigQueryConnection") -> None:
+        self.connection = connection
+        self.cursor: Optional[MockCursor] = None
+
+    def __enter__(self) -> MockCursor:
+        self.cursor = MockCursor(self.connection)
+        return self.cursor
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        # BigQuery doesn't need cleanup for cursors
+        pass
+
+
 class BigQueryDriver(SyncDriverAdapterBase):
     """Advanced BigQuery Driver with comprehensive Google Cloud capabilities."""
 
     dialect: "DialectType" = "bigquery"
-    parameter_config = DriverParameterConfig(
-        supported_parameter_styles=[ParameterStyle.NAMED_AT],  # Only supports @name
-        default_parameter_style=ParameterStyle.NAMED_AT,
-        type_coercion_map={
-            # BigQuery has good native type support
-            # Type coercion is handled in _get_bq_param_type method
-        },
-        has_native_list_expansion=True,  # BigQuery handles arrays natively
-    )
+    parameter_config: DriverParameterConfig
 
     _default_query_job_config: Optional[QueryJobConfig]
 
@@ -67,6 +80,15 @@ class BigQueryDriver(SyncDriverAdapterBase):
     ) -> None:
         """Initialize BigQuery driver with comprehensive feature support."""
         super().__init__(connection=connection, config=config)
+        self.parameter_config = DriverParameterConfig(
+            supported_parameter_styles=[ParameterStyle.NAMED_AT],  # Only supports @name
+            default_parameter_style=ParameterStyle.NAMED_AT,
+            type_coercion_map={
+                # BigQuery has good native type support
+                # Type coercion is handled in _get_bq_param_type method
+            },
+            has_native_list_expansion=True,  # BigQuery handles arrays natively
+        )
         self.on_job_start = on_job_start
         self.on_job_complete = on_job_complete
         conn_default_config = getattr(connection, "default_query_job_config", None)
@@ -210,23 +232,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """Convert BigQuery rows to dictionary format."""
         return [dict(row) for row in rows_iterator]
 
-    @contextmanager
-    def with_cursor(self, connection: "BigQueryConnection") -> "Iterator[Any]":
-        """Context manager for BigQuery job (cursor equivalent)."""
-
-        # BigQuery doesn't use traditional cursors, but we can return a mock object
-        # The actual execution happens in _perform_execute
-        class MockCursor:
-            def __init__(self, connection: "BigQueryConnection") -> None:
-                self.connection = connection
-                self.job: Optional[QueryJob] = None
-
-        cursor = MockCursor(connection)
-        try:
-            yield cursor
-        finally:
-            # No cleanup needed for BigQuery
-            pass
+    def with_cursor(self, connection: "BigQueryConnection") -> "_BigQueryCursorManager":
+        """Create and return a context manager for cursor acquisition and cleanup."""
+        return _BigQueryCursorManager(connection)
 
     def begin(self) -> None:
         """Begin transaction - BigQuery doesn't support transactions."""
@@ -278,13 +286,17 @@ class BigQueryDriver(SyncDriverAdapterBase):
             bq_params = self._prepare_bq_query_parameters(all_params)
             cursor.job = self._run_query_job(full_script, bq_params, connection=cursor.connection)
         elif statement.is_script:
-            # Execute script
-            sql_no_params, _ = statement.compile(ParameterStyle.STATIC)
-            statements = self._split_script_statements(sql_no_params)
+            # Execute script - BigQuery can handle parameters in scripts
+            prepared_params = self._prepare_driver_parameters(params)
+            statements = self._split_script_statements(sql)
             jobs = []
+
+            # Convert params to BigQuery format
+            bq_params = self._prepare_bq_query_parameters(self._convert_params_to_dict(prepared_params))
+
             for stmt in statements:
                 if stmt:
-                    job = self._run_query_job(stmt, [], connection=cursor.connection)
+                    job = self._run_query_job(stmt, bq_params, connection=cursor.connection)
                     jobs.append(job)
             # Store all jobs for result building
             cursor.jobs = jobs
@@ -292,16 +304,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             # Regular execute
             prepared_params = self._prepare_driver_parameters(params)
 
-            single_param_dict: dict[str, Any] = {}
-            if prepared_params:
-                if isinstance(prepared_params, dict):
-                    single_param_dict = prepared_params
-                elif isinstance(prepared_params, (list, tuple)):
-                    single_param_dict = {f"param_{i}": val for i, val in enumerate(prepared_params)}
-                else:
-                    single_param_dict = {"param_0": prepared_params}
-
-            bq_params = self._prepare_bq_query_parameters(single_param_dict)
+            bq_params = self._prepare_bq_query_parameters(self._convert_params_to_dict(prepared_params))
             cursor.job = self._run_query_job(sql, bq_params, connection=cursor.connection)
 
     def _extract_select_data(self, cursor: "Any") -> "tuple[list[dict[str, Any]], list[str], int]":
@@ -331,6 +334,16 @@ class BigQueryDriver(SyncDriverAdapterBase):
             num_affected = 1
 
         return num_affected or 0
+
+    def _convert_params_to_dict(self, prepared_params: "Any") -> dict[str, Any]:
+        """Convert prepared parameters to a dictionary format for BigQuery."""
+        if not prepared_params:
+            return {}
+        if isinstance(prepared_params, dict):
+            return prepared_params
+        if isinstance(prepared_params, (list, tuple)):
+            return {f"param_{i}": val for i, val in enumerate(prepared_params)}
+        return {"param_0": prepared_params}
 
     def _build_result(self, cursor: "Any", statement: "SQL") -> "SQLResult":
         """Build and return the result of the SQL execution."""

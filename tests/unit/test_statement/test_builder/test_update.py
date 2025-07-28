@@ -279,9 +279,6 @@ def test_update_without_set_raises_error() -> None:
         builder.build()
 
 
-# These tests were for internal methods that don't exist, removed
-
-
 # Test complex scenarios
 def test_update_complex_query() -> None:
     """Test complex UPDATE with multiple features."""

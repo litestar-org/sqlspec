@@ -2,7 +2,6 @@
 import contextlib
 import datetime
 import logging
-from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
@@ -14,8 +13,6 @@ from sqlspec.statement.splitter import split_sql_script
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
-
     from sqlglot.dialects.dialect import DialectType
     from typing_extensions import TypeAlias
 
@@ -32,39 +29,47 @@ else:
     AiosqliteConnection = aiosqlite.Connection
 
 
+class _AsyncAiosqliteCursorManager:
+    def __init__(self, connection: "AiosqliteConnection") -> None:
+        self.connection = connection
+        self.cursor: Optional[aiosqlite.Cursor] = None
+
+    async def __aenter__(self) -> aiosqlite.Cursor:
+        self.connection.row_factory = aiosqlite.Row
+        self.cursor = await self.connection.cursor()
+        return self.cursor
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if self.cursor:
+            await self.cursor.close()
+
+
 class AiosqliteDriver(AsyncDriverAdapterBase):
     """Reference implementation for an asynchronous aiosqlite driver."""
 
     dialect: "DialectType" = "sqlite"
     default_parameter_style: "ClassVar[str]" = "qmark"
-    parameter_config: ClassVar[DriverParameterConfig] = DriverParameterConfig(
-        supported_parameter_styles=[ParameterStyle.QMARK],  # Only supports ?
-        default_parameter_style=ParameterStyle.QMARK,
-        type_coercion_map={
-            bool: int,
-            datetime.datetime: lambda v: v.isoformat(),
-            Decimal: str,
-            dict: to_json,
-            list: to_json,
-            tuple: lambda v: to_json(list(v)),
-        },
-        has_native_list_expansion=False,
-    )
+    parameter_config: DriverParameterConfig
 
     def __init__(self, connection: "AiosqliteConnection", config: "Optional[SQLConfig]" = None) -> None:
         super().__init__(connection=connection, config=config)
+        self.parameter_config = DriverParameterConfig(
+            supported_parameter_styles=[ParameterStyle.QMARK],  # Only supports ?
+            default_parameter_style=ParameterStyle.QMARK,
+            type_coercion_map={
+                bool: int,
+                datetime.datetime: lambda v: v.isoformat(),
+                Decimal: str,
+                dict: to_json,
+                list: to_json,
+                tuple: lambda v: to_json(list(v)),
+            },
+            has_native_list_expansion=False,
+        )
 
-    @asynccontextmanager
-    async def with_cursor(
-        self, connection: "Optional[AiosqliteConnection]" = None
-    ) -> "AsyncGenerator[aiosqlite.Cursor, None]":
+    def with_cursor(self, connection: "Optional[AiosqliteConnection]" = None) -> "_AsyncAiosqliteCursorManager":
         conn_to_use = connection or self.connection
-        conn_to_use.row_factory = aiosqlite.Row
-        cursor = await conn_to_use.cursor()
-        try:
-            yield cursor
-        finally:
-            await cursor.close()
+        return _AsyncAiosqliteCursorManager(conn_to_use)
 
     async def begin(self) -> None:
         """Begin a database transaction."""
@@ -86,11 +91,12 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
         if statement.is_script:
             # aiosqlite doesn't support executescript, so we need to execute statements one by one
-            # Use the proper script splitter to handle complex cases
+            # But we can still use parameters since we're using regular execute()
+            prepared_params = self._prepare_driver_parameters(params)
             statements = split_sql_script(sql, dialect=str(self.dialect) if self.dialect else None)
             for stmt in statements:
                 if stmt.strip():  # Skip empty statements
-                    await cursor.execute(stmt)
+                    await cursor.execute(stmt, prepared_params or ())
         elif statement.is_many:
             # For execute_many, params is already a list of parameter sets
             prepared_params = self._prepare_driver_parameters_many(params) if params else []

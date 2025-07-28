@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pytest import LogCaptureFixture
 
-from sqlspec.exceptions import MissingDependencyError
+from sqlspec.exceptions import MissingDependencyError, StorageOperationFailedError
 from sqlspec.storage.backends.fsspec import FSSpecBackend
 
 if TYPE_CHECKING:
@@ -127,7 +127,7 @@ def test_read_bytes_error(backend_with_mock_fs: FSSpecBackend, mock_fs: MagicMoc
     backend = backend_with_mock_fs
     mock_fs.cat.side_effect = Exception("Read failed")
 
-    with pytest.raises(Exception, match="Read failed"):
+    with pytest.raises(Exception, match="Failed to read"):
         backend.read_bytes("test.txt")
 
 
@@ -174,7 +174,7 @@ def test_write_bytes_error(backend_with_mock_fs: FSSpecBackend, mock_fs: MagicMo
     backend = backend_with_mock_fs
     mock_fs.open.side_effect = Exception("Write failed")
 
-    with pytest.raises(Exception, match="Write failed"):
+    with pytest.raises(Exception, match="Failed to write bytes to output.txt"):
         backend.write_bytes("output.txt", b"test data")
 
 
@@ -192,19 +192,19 @@ def test_write_text(backend_with_mock_fs: FSSpecBackend) -> None:
 def test_list_objects_recursive(backend_with_mock_fs: FSSpecBackend, mock_fs: MagicMock) -> None:
     """Test listing objects recursively."""
     backend = backend_with_mock_fs
-    mock_fs.glob.return_value = ["/base/dir/file1.txt", "/base/file2.csv"]
+    mock_fs.find.return_value = ["/base/dir/file1.txt", "/base/file2.csv"]
     mock_fs.isdir.return_value = False
 
     result = backend.list_objects("dir", recursive=True)
 
     assert result == ["/base/dir/file1.txt", "/base/file2.csv"]
-    mock_fs.glob.assert_called_once_with("/base/dir/**")
+    mock_fs.find.assert_called_once_with("/base/dir")
 
 
 def test_list_objects_non_recursive(backend_with_mock_fs: FSSpecBackend, mock_fs: MagicMock) -> None:
     """Test listing objects non-recursively."""
     backend = backend_with_mock_fs
-    mock_fs.glob.return_value = ["/base/dir/file1.txt", "/base/dir/subdir/"]
+    mock_fs.ls.return_value = ["/base/dir/file1.txt", "/base/dir/subdir/"]
 
     # Mock isdir to return True for directories
     def is_dir(path: str) -> bool:
@@ -214,8 +214,8 @@ def test_list_objects_non_recursive(backend_with_mock_fs: FSSpecBackend, mock_fs
 
     result = backend.list_objects("dir", recursive=False)
 
-    assert result == ["/base/dir/file1.txt"]  # Directories filtered out
-    mock_fs.glob.assert_called_once_with("/base/dir/*")
+    assert result == ["/base/dir/file1.txt", "/base/dir/subdir/"]
+    mock_fs.ls.assert_called_once_with("/base/dir", detail=False)
 
 
 @pytest.mark.parametrize(
@@ -286,7 +286,7 @@ def test_get_metadata_dict(backend_with_mock_fs: FSSpecBackend, mock_fs: MagicMo
 
     assert metadata["size"] == 2048
     assert metadata["type"] == "file"
-    assert metadata["mtime"] == 1234567890
+    assert metadata["last_modified"] == 1234567890
     mock_fs.info.assert_called_once_with("/base/file.txt")
 
 
@@ -576,7 +576,7 @@ def test_error_propagation(
 
     mock_method.side_effect = Exception(error_msg)  # pyright: ignore
 
-    with pytest.raises(Exception, match=error_msg):
+    with pytest.raises(StorageOperationFailedError, match=f"Failed to {method_name.replace('_', ' ')}"):
         getattr(backend, method_name)(*args)
 
 
@@ -701,7 +701,8 @@ def test_get_metadata_with_pathlike(backend_with_mock_fs: FSSpecBackend, mock_fs
     path_obj = Path("test.txt")
     result = backend.get_metadata(path_obj)
 
-    assert result == {"size": 1024, "type": "file"}
+    assert result["size"] == 1024
+    assert result["type"] == "file"
     mock_fs.info.assert_called_once_with("/base/test.txt")
 
 

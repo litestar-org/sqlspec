@@ -103,8 +103,6 @@ Represents:
 - :type:`tuple[Any, ...]`
 - :type:`None`
 """
-# Backward compatibility alias
-SQLParameterType: TypeAlias = StatementParameters
 ModelDTOT = TypeVar("ModelDTOT", bound="SupportedSchemaModel")
 """Type variable for model DTOs.
 
@@ -210,7 +208,6 @@ __all__ = (
     "PoolT_co",
     "PydanticOrMsgspecT",
     "RowT",
-    "SQLParameterType",
     "Span",
     "StatementParameters",
     "Status",

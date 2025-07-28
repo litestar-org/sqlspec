@@ -1,12 +1,9 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import contextlib
 import logging
-from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from sqlglot.dialects.dialect import DialectType
     from typing_extensions import TypeAlias
 
@@ -27,6 +24,23 @@ if TYPE_CHECKING:
     AdbcConnection: TypeAlias = Connection
 else:
     AdbcConnection = Connection
+
+
+class _AdbcCursorManager:
+    """Context manager for ADBC cursor management."""
+
+    def __init__(self, connection: "AdbcConnection") -> None:
+        self.connection = connection
+        self.cursor: Optional[Cursor] = None
+
+    def __enter__(self) -> "Cursor":
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if self.cursor is not None:
+            with contextlib.suppress(Exception):
+                self.cursor.close()  # type: ignore[no-untyped-call]
 
 
 DIALECT_PATTERNS = {
@@ -54,9 +68,7 @@ class AdbcDriver(SyncDriverAdapterBase):
     """ADBC Sync Driver Adapter with modern architecture."""
 
     # Default parameter config - will be overridden in __init__ based on dialect
-    parameter_config = DriverParameterConfig(
-        default_parameter_style=ParameterStyle.QMARK, type_coercion_map={}, has_native_list_expansion=True
-    )
+    parameter_config: DriverParameterConfig
 
     def __init__(self, connection: "AdbcConnection", config: "Optional[SQLConfig]" = None) -> None:
         dialect = self._get_dialect(connection)
@@ -72,18 +84,14 @@ class AdbcDriver(SyncDriverAdapterBase):
         )
 
         # Override the class parameter_config for this instance
-        object.__setattr__(
-            self,
-            "parameter_config",
-            DriverParameterConfig(
-                supported_parameter_styles=supported_styles,
-                default_parameter_style=default_style,
-                type_coercion_map={
-                    # ADBC has good native type support across dialects
-                    # Add any specific type mappings as needed
-                },
-                has_native_list_expansion=True,  # ADBC handles lists natively
-            ),
+        self.parameter_config = DriverParameterConfig(
+            supported_parameter_styles=supported_styles,
+            default_parameter_style=default_style,
+            type_coercion_map={
+                # ADBC has good native type support across dialects
+                # Add any specific type mappings as needed
+            },
+            has_native_list_expansion=True,  # ADBC handles lists natively
         )
 
         # Type handlers can be registered if the base class supports it
@@ -117,38 +125,30 @@ class AdbcDriver(SyncDriverAdapterBase):
             return None
         return params
 
-    @contextmanager
-    def with_cursor(self, connection: "AdbcConnection") -> "Iterator[Cursor]":
-        cursor = connection.cursor()
-        try:
-            yield cursor
-        finally:
-            with contextlib.suppress(Exception):
-                cursor.close()  # type: ignore[no-untyped-call]
+    def with_cursor(self, connection: "AdbcConnection") -> "_AdbcCursorManager":
+        return _AdbcCursorManager(connection)
 
     def _perform_execute(self, cursor: "Cursor", statement: "SQL") -> None:
         """Execute the SQL statement using the provided cursor."""
-        sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
-
         try:
-            if statement.is_many:
-                cursor.executemany(sql, params or [])
+            sql, parameters = statement.compile()
+            if statement.is_script:
+                statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
+                for stmt in statements:
+                    if stmt.strip():
+                        cursor.execute(
+                            stmt,
+                            parameters=self._prepare_cursor_parameters(self._handle_postgres_empty_params(parameters)),
+                        )
+            elif statement.is_many:
+                cursor.executemany(sql, parameters or [])
             else:
-                prepared_params = self._prepare_driver_parameters(params)
-                # Handle PostgreSQL empty params
-                prepared_params = self._handle_postgres_empty_params(prepared_params)
-                cursor_params = self._prepare_cursor_parameters(prepared_params)
-                self._execute_with_params(cursor, sql, cursor_params)
+                cursor.execute(
+                    sql, parameters=self._prepare_cursor_parameters(self._handle_postgres_empty_params(parameters))
+                )
         except Exception as e:
             self._handle_postgres_rollback(cursor)
             raise e from e
-
-    def _execute_with_params(self, cursor: "Cursor", sql: str, params: "list[Any]") -> None:
-        """Execute SQL with proper parameter handling."""
-        if params:
-            cursor.execute(sql, params)
-        else:
-            cursor.execute(sql)
 
     def _extract_select_data(self, cursor: "Cursor") -> "tuple[list[dict[str, Any]], list[str], int]":
         """Extract data from cursor after SELECT execution."""
@@ -180,10 +180,6 @@ class AdbcDriver(SyncDriverAdapterBase):
         """Commit database transaction."""
         with self.with_cursor(self.connection) as cursor:
             cursor.execute("COMMIT")
-
-    def _prepare_driver_parameters(self, parameters: "Any") -> "Any":
-        """Prepare parameters for the ADBC driver."""
-        return parameters
 
     def _prepare_cursor_parameters(self, parameters: "Any") -> "list[Any]":
         """Convert parameters to the format expected by ADBC cursor."""

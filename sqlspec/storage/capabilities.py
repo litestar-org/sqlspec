@@ -6,6 +6,8 @@ This module provides a centralized way to track and query storage backend capabi
 from dataclasses import dataclass
 from typing import ClassVar
 
+from mypy_extensions import mypyc_attr
+
 __all__ = ("HasStorageCapabilities", "StorageCapabilities")
 
 
@@ -85,6 +87,7 @@ class StorageCapabilities:
         )
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class HasStorageCapabilities:
     """Mixin for storage backends that expose their capabilities."""
 

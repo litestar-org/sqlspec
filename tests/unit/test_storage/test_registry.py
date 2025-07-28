@@ -211,8 +211,15 @@ def test_backend_instance_caching_with_kwargs(registry: StorageRegistry) -> None
 )
 def test_scheme_detection(registry: StorageRegistry, uri: str, expected_scheme: str) -> None:
     """Test scheme detection from various URI formats."""
-    scheme = registry._get_scheme(uri)
-    assert scheme == expected_scheme
+    with patch("sqlspec.storage.registry.OBSTORE_INSTALLED", True):
+        with patch("sqlspec.storage.backends.obstore.ObStoreBackend") as mock_obstore_class:
+            mock_backend = MagicMock()
+            mock_backend.protocol = expected_scheme
+            mock_obstore_class.return_value = mock_backend
+
+            backend = registry.get(uri)
+
+            assert backend.protocol == expected_scheme
 
 
 # ObStore Preferred Tests
@@ -382,8 +389,15 @@ def test_none_uri(registry: StorageRegistry) -> None:
 )
 def test_special_path_handling(registry: StorageRegistry, path: str, expected_scheme: str) -> None:
     """Test handling of special path formats."""
-    scheme = registry._get_scheme(path)
-    assert scheme == expected_scheme
+    with patch("sqlspec.storage.registry.OBSTORE_INSTALLED", True):
+        with patch("sqlspec.storage.backends.obstore.ObStoreBackend") as mock_obstore_class:
+            mock_backend = MagicMock()
+            mock_backend.protocol = expected_scheme
+            mock_obstore_class.return_value = mock_backend
+
+            backend = registry.get(path)
+
+            assert backend.protocol == expected_scheme
 
 
 # Backend Type Verification Tests

@@ -33,12 +33,18 @@ def mock_store() -> MagicMock:
 
     # Mock basic operations
     get_result = MagicMock()
-    get_result.bytes.return_value = b"test data"
+    # Mock the obstore Bytes object with to_bytes() method
+    bytes_obj = MagicMock()
+    bytes_obj.to_bytes.return_value = b"test data"
+    get_result.bytes.return_value = bytes_obj
     store.get.return_value = get_result
 
     # Mock async operations
     async_result = MagicMock()
-    async_result.bytes = MagicMock(return_value=b"async test data")
+    # Mock the obstore Bytes object for async operations
+    async_bytes_obj = MagicMock()
+    async_bytes_obj.to_bytes.return_value = b"async test data"
+    async_result.bytes_async = AsyncMock(return_value=async_bytes_obj)
     store.get_async = AsyncMock(return_value=async_result)
     store.put_async = AsyncMock()
     store.list_async = AsyncMock()
@@ -215,7 +221,10 @@ def test_write_text(backend_with_mock_store: ObStoreBackend) -> None:
 def test_read_text_with_encoding(backend_with_mock_store: ObStoreBackend) -> None:
     """Test reading text with custom encoding."""
     backend = backend_with_mock_store
-    backend.store.get.return_value.bytes.return_value = "データ".encode("utf-16")
+    # Mock the obstore Bytes object with to_bytes() method
+    bytes_obj = MagicMock()
+    bytes_obj.to_bytes.return_value = "データ".encode("utf-16")
+    backend.store.get.return_value.bytes.return_value = bytes_obj
 
     result = backend.read_text("test.txt", encoding="utf-16")
 
@@ -393,7 +402,7 @@ def test_glob_simple_pattern(backend_with_mock_store: ObStoreBackend) -> None:
     # Set base_path to empty to avoid path resolution issues
     backend.base_path = ""
     # Mock list_objects to return the files
-    with patch.object(backend, "list_objects", return_value=["file1.txt", "file2.csv", "file3.txt"]):
+    with patch.object(backend.store, "list", return_value=["file1.txt", "file2.csv", "file3.txt"]):
         result = backend.glob("*.txt")
 
     assert result == ["file1.txt", "file3.txt"]
@@ -405,7 +414,7 @@ def test_glob_double_star_pattern(backend_with_mock_store: ObStoreBackend) -> No
     # Set base_path to empty to avoid path resolution issues
     backend.base_path = ""
     # Mock list_objects to return the files
-    with patch.object(backend, "list_objects", return_value=["file.txt", "dir/file.txt", "dir/subdir/file.txt"]):
+    with patch.object(backend.store, "list", return_value=["file.txt", "dir/file.txt", "dir/subdir/file.txt"]):
         result = backend.glob("**/*.txt")
 
     assert set(result) == {"file.txt", "dir/file.txt", "dir/subdir/file.txt"}
@@ -464,15 +473,15 @@ def test_get_metadata_not_exists(backend_with_mock_store: ObStoreBackend) -> Non
 def test_get_metadata_partial_attributes(backend_with_mock_store: ObStoreBackend) -> None:
     """Test getting metadata when some attributes are missing."""
     backend = backend_with_mock_store
-    metadata = MagicMock(spec=["size"])  # Only has size attribute
+    metadata = MagicMock(spec=["size"])
     metadata.size = 1024
     backend.store.head.return_value = metadata
 
     result = backend.get_metadata("test.txt")
 
     assert result["size"] == 1024
-    assert "last_modified" not in result
-    assert "e_tag" not in result
+    assert result["last_modified"] is None
+    assert result["e_tag"] is None
 
 
 # Type Check Operations Tests
@@ -520,7 +529,7 @@ def test_is_path_with_objects(backend_with_mock_store: ObStoreBackend) -> None:
     backend = backend_with_mock_store
     backend.store.list.return_value = [MagicMock(path="dir/file.txt")]
 
-    with patch.object(backend, "list_objects", return_value=["dir/file.txt"]):
+    with patch.object(backend.store, "list", return_value=["dir/file.txt"]):
         result = backend.is_path("dir")
 
     assert result is True
@@ -530,7 +539,7 @@ def test_is_path_no_objects(backend_with_mock_store: ObStoreBackend) -> None:
     """Test checking if path is a directory with no objects."""
     backend = backend_with_mock_store
 
-    with patch.object(backend, "list_objects", return_value=[]):
+    with patch.object(backend.store, "list", return_value=[]):
         result = backend.is_path("dir")
 
     assert result is False
@@ -556,7 +565,9 @@ def test_read_arrow_fallback(backend_with_mock_store: ObStoreBackend) -> None:
     delattr(backend.store, "read_arrow")
 
     # Mock read_bytes return value
-    backend.store.get.return_value.bytes.return_value = b"parquet data"
+    bytes_obj = MagicMock()
+    bytes_obj.to_bytes.return_value = b"parquet data"
+    backend.store.get.return_value.bytes.return_value = bytes_obj
 
     with patch("pyarrow.parquet.read_table") as mock_read_table:
         with patch("io.BytesIO") as mock_bytesio:
@@ -1127,7 +1138,7 @@ def test_is_path_with_pathlike(backend_with_mock_store: ObStoreBackend) -> None:
     backend = backend_with_mock_store
 
     # Path normalizes away trailing slash, so we need to mock list_objects
-    with patch.object(backend, "list_objects", return_value=["dir/file.txt"]):
+    with patch.object(backend.store, "list", return_value=["dir/file.txt"]):
         path_obj = Path("dir")
         result = backend.is_path(path_obj)
 

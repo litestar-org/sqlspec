@@ -96,7 +96,7 @@ class SetOperationMixin:
     """Mixin providing set operations (UNION, INTERSECT, EXCEPT) for SELECT builders."""
 
     _expression: Any = None
-    _parameters: dict[str, Any] = {}
+    _parameters: dict[str, Any]
     dialect: Any = None
 
     def union(self, other: Any, all_: bool = False) -> Self:

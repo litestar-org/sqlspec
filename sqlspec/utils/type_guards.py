@@ -8,7 +8,7 @@ imports where necessary. This module is imported by core sqlspec modules,
 so imports that would create cycles are deferred.
 """
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
@@ -768,15 +768,15 @@ def extract_dataclass_fields(
         msg = f"Fields {common} are both included and excluded."
         raise ValueError(msg)
 
-    dataclass_fields: Iterable[Field[Any]] = fields(obj)
+    dataclass_fields: list[Field[Any]] = list(fields(obj))
     if exclude_none:
-        dataclass_fields = (field for field in dataclass_fields if getattr(obj, field.name) is not None)
+        dataclass_fields = [field for field in dataclass_fields if getattr(obj, field.name) is not None]
     if exclude_empty:
-        dataclass_fields = (field for field in dataclass_fields if getattr(obj, field.name) is not Empty)
+        dataclass_fields = [field for field in dataclass_fields if getattr(obj, field.name) is not Empty]
     if include:
-        dataclass_fields = (field for field in dataclass_fields if field.name in include)
+        dataclass_fields = [field for field in dataclass_fields if field.name in include]
     if exclude:
-        dataclass_fields = (field for field in dataclass_fields if field.name not in exclude)
+        dataclass_fields = [field for field in dataclass_fields if field.name not in exclude]
 
     return tuple(dataclass_fields)
 

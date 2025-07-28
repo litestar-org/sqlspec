@@ -5,6 +5,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
+from mypy_extensions import mypyc_attr
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
 
@@ -13,6 +15,7 @@ if TYPE_CHECKING:
 __all__ = ("ObjectStoreBase",)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class ObjectStoreBase(ABC):
     """Base class for instrumented storage backends."""
 

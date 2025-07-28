@@ -1,6 +1,6 @@
 """Tests for conditional parameter style conversion for SQLGlot compatibility."""
 
-from sqlspec.parameters import SQLGLOT_INCOMPATIBLE_STYLES, ParameterConverter, ParameterStyle, SQLParameterType
+from sqlspec.parameters import SQLGLOT_INCOMPATIBLE_STYLES, ParameterConverter, ParameterStyle
 from sqlspec.statement.sql import SQL
 
 
@@ -90,7 +90,7 @@ class TestParameterconversion:
     def test_conversion_preserves_parameter_order(self) -> None:
         """Test that conversion preserves parameter order."""
         sql = "INSERT INTO users (name, age, email) VALUES (%s, %s, %s)"
-        params: SQLParameterType = ["john", 25, "john@example.com"]  # type: ignore[assignment]
+        params = ["john", 25, "john@example.com"]  # type: ignore[assignment]
 
         converter = ParameterConverter()
         result = converter.convert_parameters(sql, params, args=None, kwargs=None)

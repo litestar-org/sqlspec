@@ -272,19 +272,10 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         extras = self.connection_config.pop("extra", {})
         self.connection_config.update(extras)
 
-        # Check if this is an in-memory database
+        # Check if this is an in-memory database and auto-convert to shared memory
         database = self.connection_config.get("database", ":memory:")
-        is_memory_db = self._is_memory_database(database)
-
-        # Override pool sizes for in-memory databases
-        if is_memory_db:
-            logger.warning(
-                "In-memory SQLite database detected. Disabling connection pooling to ensure data consistency. "
-                "Each pooled connection creates a separate in-memory database. Use a file-based database or "
-                "'file::memory:?cache=shared' with uri=True for shared memory access."
-            )
-            min_pool_size = 1
-            max_pool_size = 1
+        if self._is_memory_database(database):
+            self._convert_to_shared_memory()
 
         self.statement_config = statement_config or SQLConfig()
         self.min_pool_size = min_pool_size
@@ -298,6 +289,24 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             enable_adapter_cache=enable_adapter_cache,
             adapter_cache_size=adapter_cache_size,
         )
+
+    def _convert_to_shared_memory(self) -> None:
+        """Convert in-memory database to shared memory for connection pooling.
+
+        Automatically converts :memory: and file::memory: databases to
+        file::memory:?cache=shared format to enable safe connection pooling.
+        """
+        database = self.connection_config.get("database", ":memory:")
+
+        if database == ":memory:":
+            # Convert :memory: to shared memory
+            self.connection_config["database"] = "file::memory:?cache=shared"
+            self.connection_config["uri"] = True
+        elif "file::memory:" in database and "cache=shared" not in database:
+            # Add cache=shared to existing file::memory: URI
+            separator = "&" if "?" in database else "?"
+            self.connection_config["database"] = f"{database}{separator}cache=shared"
+            self.connection_config["uri"] = True
 
     def _get_connection_config_dict(self) -> "dict[str, Any]":
         """Get connection configuration as plain dict for pool creation."""

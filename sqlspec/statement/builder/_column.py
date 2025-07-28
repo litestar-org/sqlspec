@@ -17,6 +17,8 @@ __all__ = ("Column", "ColumnExpression", "FunctionColumn")
 class ColumnExpression:
     """Base class for column expressions that can be combined with operators."""
 
+    __slots__ = ("_expression",)
+
     def __init__(self, expression: exp.Expression) -> None:
         self._expression = expression
 
@@ -53,6 +55,8 @@ class ColumnExpression:
 
 class Column:
     """Represents a database column with Python operator support."""
+
+    __slots__ = ("_expression", "name", "table")
 
     def __init__(self, name: str, table: Optional[str] = None) -> None:
         self.name = name
@@ -246,6 +250,8 @@ class Column:
 
 class FunctionColumn:
     """Represents the result of a SQL function call on a column."""
+
+    __slots__ = ("_expression",)
 
     def __init__(self, expression: exp.Expression) -> None:
         self._expression = expression

@@ -1,6 +1,4 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
-from collections.abc import AsyncGenerator, Generator
-from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional
 
 from psycopg import AsyncConnection, Connection
@@ -28,37 +26,61 @@ else:
     PsycopgAsyncConnection = AsyncConnection
 
 
+class _PsycopgCursorManager:
+    """Context manager for Psycopg cursor management."""
+
+    def __init__(self, connection: PsycopgSyncConnection) -> None:
+        self.connection = connection
+        self.cursor: Optional[Any] = None
+
+    def __enter__(self) -> Any:
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if self.cursor is not None:
+            self.cursor.close()
+
+
 class PsycopgSyncDriver(SyncDriverAdapterBase):
     """Psycopg Sync Driver Adapter. Refactored for new protocol."""
 
     dialect: "DialectType" = "postgres"
-    parameter_config = DriverParameterConfig(
-        supported_parameter_styles=[
-            ParameterStyle.POSITIONAL_PYFORMAT,  # %s
-            ParameterStyle.NAMED_PYFORMAT,  # %(name)s
-            ParameterStyle.NUMERIC,  # $1 (also supported!)
-        ],
-        default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        type_coercion_map={
-            # Psycopg handles most types natively
-            # Add any specific type mappings as needed
-        },
-        has_native_list_expansion=True,  # Psycopg handles lists/tuples natively
-        force_style_conversion=True,  # SQLGlot doesn't generate pyformat
-    )
+    parameter_config: DriverParameterConfig
 
     def __init__(self, connection: PsycopgSyncConnection, config: "Optional[SQLConfig]" = None) -> None:
         super().__init__(connection=connection, config=config)
+        self.parameter_config = DriverParameterConfig(
+            supported_parameter_styles=[
+                ParameterStyle.POSITIONAL_PYFORMAT,  # %s
+                ParameterStyle.NAMED_PYFORMAT,  # %(name)s
+                ParameterStyle.NUMERIC,  # $1 (also supported!)
+            ],
+            default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
+            type_coercion_map={
+                # Psycopg handles most types natively
+                # Add any specific type mappings as needed
+            },
+            has_native_list_expansion=True,  # Psycopg handles lists/tuples natively
+            force_style_conversion=True,  # SQLGlot doesn't generate pyformat
+        )
 
-    @contextmanager
-    def with_cursor(self, connection: PsycopgSyncConnection) -> Generator[Any, None, None]:
-        with connection.cursor() as cursor:
-            yield cursor
+    def with_cursor(self, connection: PsycopgSyncConnection) -> _PsycopgCursorManager:
+        return _PsycopgCursorManager(connection)
 
     def _perform_execute(self, cursor: Any, statement: "SQL") -> None:
         sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
 
-        if statement.is_many:
+        if statement.is_script:
+            # Psycopg doesn't have executescript - execute statements one by one
+            # But we can still use parameters since we're using regular execute()
+            prepared_params = self._prepare_driver_parameters(params)
+            # Use the proper script splitter to handle complex cases
+            statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
+            for stmt in statements:
+                if stmt.strip():  # Skip empty statements
+                    cursor.execute(stmt, prepared_params or ())
+        elif statement.is_many:
             # For execute_many, params is already a list of parameter sets
             prepared_params = self._prepare_driver_parameters_many(params) if params else []
             cursor.executemany(sql, prepared_params)
@@ -90,34 +112,56 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         self.connection.commit()
 
 
+class _AsyncPsycopgCursorManager:
+    def __init__(self, connection: "PsycopgAsyncConnection") -> None:
+        self.connection = connection
+        self.cursor: Optional[Any] = None
+
+    async def __aenter__(self) -> Any:
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if self.cursor:
+            await self.cursor.close()
+
+
 class PsycopgAsyncDriver(AsyncDriverAdapterBase):
     """Psycopg Async Driver Adapter. Refactored for new protocol."""
 
     dialect: "DialectType" = "postgres"
-    parameter_config = DriverParameterConfig(
-        supported_parameter_styles=[
-            ParameterStyle.POSITIONAL_PYFORMAT,
-            ParameterStyle.NAMED_PYFORMAT,
-            ParameterStyle.NUMERIC,
-        ],
-        default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        type_coercion_map={},
-        has_native_list_expansion=True,
-        force_style_conversion=True,
-    )
+    parameter_config: DriverParameterConfig
 
     def __init__(self, connection: PsycopgAsyncConnection, config: Optional[SQLConfig] = None) -> None:
         super().__init__(connection=connection, config=config)
+        self.parameter_config = DriverParameterConfig(
+            supported_parameter_styles=[
+                ParameterStyle.POSITIONAL_PYFORMAT,
+                ParameterStyle.NAMED_PYFORMAT,
+                ParameterStyle.NUMERIC,
+            ],
+            default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
+            type_coercion_map={},
+            has_native_list_expansion=True,
+            force_style_conversion=True,
+        )
 
-    @asynccontextmanager
-    async def with_cursor(self, connection: PsycopgAsyncConnection) -> AsyncGenerator[Any, None]:
-        async with connection.cursor() as cursor:
-            yield cursor
+    def with_cursor(self, connection: "PsycopgAsyncConnection") -> "_AsyncPsycopgCursorManager":
+        return _AsyncPsycopgCursorManager(connection)
 
     async def _perform_execute(self, cursor: Any, statement: "SQL") -> None:
         sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
 
-        if statement.is_many:
+        if statement.is_script:
+            # Psycopg doesn't have executescript - execute statements one by one
+            # But we can still use parameters since we're using regular execute()
+            prepared_params = self._prepare_driver_parameters(params)
+            # Use the proper script splitter to handle complex cases
+            statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
+            for stmt in statements:
+                if stmt.strip():  # Skip empty statements
+                    await cursor.execute(stmt, prepared_params or ())
+        elif statement.is_many:
             # For execute_many, params is already a list of parameter sets
             prepared_params = self._prepare_driver_parameters_many(params) if params else []
             await cursor.executemany(sql, prepared_params)
