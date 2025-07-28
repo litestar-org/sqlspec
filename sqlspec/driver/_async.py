@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.driver.context import set_current_driver
-from sqlspec.driver.mixins import AsyncAdapterCacheMixin, SQLTranslatorMixin, ToSchemaMixin
+from sqlspec.driver.mixins import SQLTranslatorMixin, ToSchemaMixin
 from sqlspec.exceptions import NotFoundError
 from sqlspec.statement.builder import QueryBuilder
 from sqlspec.statement.result import SQLResult
@@ -25,8 +25,8 @@ __all__ = ("AsyncDriverAdapterBase",)
 EMPTY_FILTERS: "list[StatementFilter]" = []
 
 
-class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToSchemaMixin, AsyncAdapterCacheMixin):
-    __slots__ = ("_compiled_cache", "_prepared_counter", "_prepared_statements", "config", "connection")
+class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToSchemaMixin):
+    __slots__ = ()
 
     @abstractmethod
     def with_cursor(self, connection: Any) -> Any:
@@ -263,7 +263,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         Raises an exception if no rows or more than one row is returned.
         """
         result = await self.execute(statement, *parameters, config=config, **kwargs)
-        data = cast("list[dict[str, Any]]", result.get_data())
+        data = result.get_data()
         if not data:
             msg = "No rows found"
             raise NotFoundError(msg)
@@ -312,7 +312,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         Raises an exception if more than one row is returned.
         """
         result = await self.execute(statement, *parameters, config=config, **kwargs)
-        data = cast("list[dict[str, Any]]", result.get_data())
+        data = result.get_data()
         if not data:
             return None
         if len(data) > 1:
@@ -371,7 +371,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         Raises an exception if no rows or more than one row/column is returned.
         """
         result = await self.execute(statement, *parameters, config=config, **kwargs)
-        row = cast("dict[str, Any]", result.one())
+        row = result.one()
         if not row:
             msg = "No rows found"
             raise NotFoundError(msg)
@@ -403,7 +403,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         Raises an exception if more than one row is returned.
         """
         result = await self.execute(statement, *parameters, config=config, **kwargs)
-        data = cast("list[dict[str, Any]]", result.get_data())
+        data = result.get_data()
         if not data:
             return None
         if len(data) > 1:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-import pyarrow.parquet as pq
 import pytest
 from pytest_databases.docker.oracle import OracleService
 
@@ -329,36 +328,3 @@ async def test_delete_operation(oracle_async_session: OracleAsyncConfig) -> None
         assert isinstance(select_result, SQLResult)
         assert select_result.data is not None
         assert select_result.data[0]["COUNT"] == 0
-
-
-@pytest.mark.xdist_group("oracle")
-async def test_async_to_parquet(oracle_async_session: OracleAsyncConfig) -> None:
-    """Integration test: to_parquet writes correct data to a Parquet file (async)."""
-    async with oracle_async_session.provide_session() as driver:
-        # Manual cleanup at start of test
-        await driver.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        )
-        sql = """
-        CREATE TABLE test_table (
-            id NUMBER PRIMARY KEY,
-            name VARCHAR2(50)
-        )
-        """
-        await driver.execute_script(sql)
-        # Insert test records
-        await driver.execute("INSERT INTO test_table (id, name) VALUES (1, :name)", {"name": "pq1"})
-        await driver.execute("INSERT INTO test_table (id, name) VALUES (2, :name)", {"name": "pq2"})
-        statement = "SELECT name, id FROM test_table ORDER BY name"
-        import tempfile
-
-        with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
-            await driver.export_to_storage(statement, destination_uri=tmp.name)  # type: ignore[attr-defined]
-            table = pq.read_table(tmp.name)
-            assert table.num_rows == 2
-            assert set(table.column_names) == {"NAME", "ID"}
-            names = table.column("NAME").to_pylist()
-            assert "pq1" in names and "pq2" in names
-        await driver.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        )

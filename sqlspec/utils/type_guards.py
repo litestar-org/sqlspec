@@ -95,6 +95,7 @@ __all__ = (
     "is_async_pipeline_capable_driver",
     "is_async_transaction_capable",
     "is_async_transaction_state_capable",
+    "is_copy_statement",
     "is_dataclass",
     "is_dataclass_instance",
     "is_dataclass_with_field",
@@ -1213,3 +1214,29 @@ def get_param_style_and_name(param: Any) -> "tuple[Optional[str], Optional[str]]
     except AttributeError:
         return None, None
     return style, name
+
+
+def is_copy_statement(expression: Any) -> "TypeGuard[exp.Expression]":
+    """Check if the SQL expression is a PostgreSQL COPY statement.
+
+    Args:
+        expression: The SQL expression to check
+
+    Returns:
+        True if this is a COPY statement, False otherwise
+    """
+    from sqlglot import exp
+
+    if expression is None:
+        return False
+
+    # Check for explicit COPY expressions if SQLGlot supports them
+    if has_attr(exp, "Copy") and isinstance(expression, getattr(exp, "Copy", type(None))):
+        return True
+
+    # Check for COPY statements parsed as Command or Anonymous expressions
+    if isinstance(expression, (exp.Command, exp.Anonymous)):
+        sql_text = str(expression).strip().upper()
+        return sql_text.startswith("COPY ")
+
+    return False

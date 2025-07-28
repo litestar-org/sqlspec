@@ -1,10 +1,10 @@
 """Unit tests for Asyncmy driver."""
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from sqlspec.adapters.asyncmy import AsyncmyConnection, AsyncmyDriver
+from sqlspec.adapters.asyncmy import AsyncmyDriver
 from sqlspec.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -13,15 +13,17 @@ from sqlspec.statement.sql import SQL, SQLConfig
 @pytest.fixture
 def mock_asyncmy_connection() -> AsyncMock:
     """Create a mock Asyncmy connection."""
-    mock_connection = AsyncMock(spec=AsyncmyConnection)
+    mock_connection = AsyncMock()
     mock_cursor = AsyncMock()
 
-    # cursor() in asyncmy returns cursor directly, not a coroutine
-    mock_connection.cursor.return_value = mock_cursor
-    mock_cursor.close.return_value = None
-    mock_cursor.execute.return_value = None
-    mock_cursor.executemany.return_value = None
-    mock_cursor.fetchall.return_value = []
+    # cursor() in asyncmy returns cursor directly (sync), not a coroutine
+    mock_connection.cursor = Mock(return_value=mock_cursor)  # Use regular Mock for sync method
+
+    # But cursor methods are async
+    mock_cursor.close = AsyncMock(return_value=None)
+    mock_cursor.execute = AsyncMock(return_value=None)
+    mock_cursor.executemany = AsyncMock(return_value=None)
+    mock_cursor.fetchall = AsyncMock(return_value=[])
     mock_cursor.description = None
     mock_cursor.rowcount = 0
     return mock_connection

@@ -56,7 +56,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             type_coercion_map={},
             has_native_list_expansion=True,
         )
-        self._execution_state = {"executemany_count": None}
+        self._execution_state: dict[str, Optional[int]] = {"executemany_count": None}
 
     def with_cursor(self, connection: "DuckDBConnection") -> "_DuckDBCursorManager":
         return _DuckDBCursorManager(connection)

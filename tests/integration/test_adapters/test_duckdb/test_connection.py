@@ -180,6 +180,7 @@ def test_connection_read_only_mode() -> None:
     # For testing, we'll create a temporary database first
     import os
     import tempfile
+    import time
 
     # Create a temporary file path but don't create the file yet - let DuckDB create it
     temp_fd, temp_db_path = tempfile.mkstemp(suffix=".duckdb")
@@ -196,6 +197,14 @@ def test_connection_read_only_mode() -> None:
                 INSERT INTO test_readonly VALUES (1, 'test_data');
             """)
 
+        # Explicitly close any remaining connections and clear pool
+        if hasattr(setup_config, "pool_instance") and setup_config.pool_instance:
+            setup_config.pool_instance.close()
+            setup_config.pool_instance = None  # type: ignore[assignment]
+
+        # Give DuckDB time to release the file lock
+        time.sleep(0.1)
+
         # Now test read-only access
         readonly_config = create_permissive_config(database=temp_db_path, read_only=True)
 
@@ -208,6 +217,11 @@ def test_connection_read_only_mode() -> None:
 
             # Should not be able to write (this would raise an exception in real read-only mode)
             # For now, we'll just verify the read operation worked
+
+        # Clean up readonly config connections
+        if hasattr(readonly_config, "pool_instance") and readonly_config.pool_instance:
+            readonly_config.pool_instance.close()
+            readonly_config.pool_instance = None  # type: ignore[assignment]
 
     finally:
         # Clean up the temporary file

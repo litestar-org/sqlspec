@@ -5,6 +5,8 @@ database adapters, especially when SQLGlot generates a different parameter
 style than what the driver expects.
 """
 
+from typing import Any
+
 from sqlspec.adapters.duckdb.driver import DuckDBDriver
 from sqlspec.adapters.psycopg.driver import PsycopgSyncDriver
 from sqlspec.driver.context import set_current_driver
@@ -14,7 +16,7 @@ from sqlspec.statement.sql import SQL
 class TestParameterConversionRegression:
     """Test parameter conversion to prevent regression of style conversion issues."""
 
-    def test_psycopg_pyformat_conversion(self, mock_psycopg_connection):
+    def test_psycopg_pyformat_conversion(self, mock_psycopg_connection: Any) -> None:
         """Test that pyformat (%s) parameters are correctly handled for psycopg.
 
         Regression test for issue where SQL was corrupted:
@@ -43,7 +45,7 @@ class TestParameterConversionRegression:
         finally:
             set_current_driver(None)
 
-    def test_duckdb_qmark_no_conversion(self, mock_duckdb_connection):
+    def test_duckdb_qmark_no_conversion(self, mock_duckdb_connection: Any) -> None:
         """Test that qmark (?) parameters remain as lists for DuckDB.
 
         Regression test for issue where qmark parameters were incorrectly
@@ -68,11 +70,10 @@ class TestParameterConversionRegression:
             # Ensure parameters remain as list, not converted to dict
             assert isinstance(compiled_params, list)
             assert compiled_params == params
-            assert compiled_params != {"param_0": 150}
         finally:
             set_current_driver(None)
 
-    def test_mixed_parameter_preservation(self, mock_psycopg_connection):
+    def test_mixed_parameter_preservation(self, mock_psycopg_connection: Any) -> None:
         """Test that mixed parameter styles are handled correctly."""
         driver = PsycopgSyncDriver(mock_psycopg_connection)
 
@@ -102,7 +103,7 @@ class TestParameterConversionRegression:
         finally:
             set_current_driver(None)
 
-    def test_parameter_order_preservation(self, mock_duckdb_connection):
+    def test_parameter_order_preservation(self, mock_duckdb_connection: Any) -> None:
         """Test that parameter order is preserved during conversion."""
         driver = DuckDBDriver(mock_duckdb_connection)
 
@@ -126,7 +127,7 @@ class TestParameterConversionRegression:
         finally:
             set_current_driver(None)
 
-    def test_no_driver_context_fallback(self):
+    def test_no_driver_context_fallback(self) -> None:
         """Test that parameters work without driver context."""
         # Test without any driver context
         sql = "SELECT * FROM test WHERE id = ?"

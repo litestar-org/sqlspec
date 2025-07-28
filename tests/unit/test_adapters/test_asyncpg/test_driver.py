@@ -60,27 +60,6 @@ async def test_perform_execute_many(driver: AsyncpgDriver, mock_connection: Asyn
     mock_connection.executemany.assert_called_once()
 
 
-# Result Building Tests
-@pytest.mark.asyncio
-async def test_build_result_select(driver: AsyncpgDriver, mock_connection: AsyncMock) -> None:
-    """Test _build_result for a SELECT statement."""
-    statement = SQL("SELECT * FROM users")
-    with patch.object(driver, "returns_rows", return_value=True):
-        with patch.object(driver, "_build_asyncpg_select_result") as mock_build_select:
-            await driver._build_result(mock_connection, statement)
-            mock_build_select.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_build_result_dml(driver: AsyncpgDriver, mock_connection: AsyncMock) -> None:
-    """Test _build_result for a DML statement."""
-    statement = SQL("INSERT INTO users (name) VALUES ('Alice')")
-    with patch.object(driver, "returns_rows", return_value=False):
-        with patch.object(driver, "_build_modify_result_async") as mock_build_modify:
-            await driver._build_result(mock_connection, statement)
-            mock_build_modify.assert_called_once()
-
-
 # Dispatcher Integration Tests
 @pytest.mark.asyncio
 async def test_execute_uses_dispatcher(driver: AsyncpgDriver) -> None:

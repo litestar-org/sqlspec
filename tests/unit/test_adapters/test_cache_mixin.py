@@ -1,10 +1,10 @@
 """Tests for adapter-level caching functionality."""
 
-from typing import Optional
+from typing import Any, Optional
 
-from sqlspec.driver.mixins._cache import AsyncAdapterCacheMixin, SyncAdapterCacheMixin
+from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.parameters import ParameterStyle
-from sqlspec.statement.sql import SQL
+from sqlspec.statement.sql import SQL, DriverParameterConfig, SQLConfig
 
 
 class MockConfig:
@@ -15,20 +15,57 @@ class MockConfig:
         self.adapter_cache_size = cache_size
 
 
-class MockAdapter(SyncAdapterCacheMixin):
-    """Mock adapter for testing cache mixin."""
+class MockSQLConfig(SQLConfig):
+    """Mock SQLConfig with cache attributes for testing."""
 
-    def __init__(self, config: Optional[MockConfig] = None) -> None:
-        self.config = config
-        super().__init__()
+    def __init__(self, enable_cache: bool = True, cache_size: int = 500, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.enable_adapter_cache = enable_cache
+        self.adapter_cache_size = cache_size
 
 
-class MockAsyncAdapter(AsyncAdapterCacheMixin):
-    """Mock async adapter for testing cache mixin."""
+class MockAdapter(CommonDriverAttributesMixin):
+    """Mock adapter for testing cache functionality."""
 
-    def __init__(self, config: Optional[MockConfig] = None) -> None:
-        self.config = config
-        super().__init__()
+    def __init__(self, config: Optional[MockConfig] = None, connection: Any = None) -> None:
+        # Set required attributes for CommonDriverAttributesMixin
+        self.dialect = "sqlite"
+        self.parameter_config = DriverParameterConfig(
+            supported_parameter_styles=[ParameterStyle.QMARK, ParameterStyle.NAMED_COLON],
+            default_parameter_style=ParameterStyle.QMARK,
+            type_coercion_map={},
+            has_native_list_expansion=True,
+        )
+
+        # Create SQLConfig with cache settings
+        if config:
+            sql_config = MockSQLConfig(enable_cache=config.enable_adapter_cache, cache_size=config.adapter_cache_size)
+        else:
+            sql_config = MockSQLConfig()
+
+        super().__init__(connection=connection or "mock_connection", config=sql_config)
+
+
+class MockAsyncAdapter(CommonDriverAttributesMixin):
+    """Mock async adapter for testing cache functionality."""
+
+    def __init__(self, config: Optional[MockConfig] = None, connection: Any = None) -> None:
+        # Set required attributes for CommonDriverAttributesMixin
+        self.dialect = "sqlite"
+        self.parameter_config = DriverParameterConfig(
+            supported_parameter_styles=[ParameterStyle.QMARK, ParameterStyle.NAMED_COLON],
+            default_parameter_style=ParameterStyle.QMARK,
+            type_coercion_map={},
+            has_native_list_expansion=True,
+        )
+
+        # Create SQLConfig with cache settings
+        if config:
+            sql_config = MockSQLConfig(enable_cache=config.enable_adapter_cache, cache_size=config.adapter_cache_size)
+        else:
+            sql_config = MockSQLConfig()
+
+        super().__init__(connection=connection or "mock_connection", config=sql_config)
 
 
 class TestAdapterCacheMixin:

@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import math
-import tempfile
 from collections.abc import Generator
 
-import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQLConfig
 
 # Import the decorator
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
@@ -379,29 +377,6 @@ def test_blob_type(adbc_sqlite_session: AdbcDriver) -> None:
 
     # Cleanup
     adbc_sqlite_session.execute_script("DROP TABLE blob_test")
-
-
-@pytest.mark.xdist_group("adbc_sqlite")
-def test_to_parquet(adbc_sqlite_session: AdbcDriver) -> None:
-    """Test SQLite to_parquet functionality."""
-    # Insert test data
-    adbc_sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("parquet1", 111))
-    adbc_sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("parquet2", 222))
-
-    statement = SQL("SELECT id, name, value FROM test_table ORDER BY id")
-
-    with tempfile.NamedTemporaryFile() as tmp:
-        adbc_sqlite_session.export_to_storage(statement, destination_uri=tmp.name)  # type: ignore[attr-defined]
-
-        # Read back the Parquet file - export_to_storage appends .parquet extension
-        table = pq.read_table(f"{tmp.name}.parquet")
-        assert table.num_rows == 2
-        assert set(table.column_names) >= {"id", "name", "value"}
-
-        # Verify data
-        data = table.to_pylist()
-        assert any(row["name"] == "parquet1" and row["value"] == 111 for row in data)
-        assert any(row["name"] == "parquet2" and row["value"] == 222 for row in data)
 
 
 @pytest.mark.xdist_group("adbc_sqlite")

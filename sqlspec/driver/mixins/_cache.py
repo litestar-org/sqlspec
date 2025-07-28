@@ -10,7 +10,7 @@ from sqlspec.statement.cache import SQLCache
 if TYPE_CHECKING:
     from sqlspec.statement.sql import SQL
 
-__all__ = ("AsyncAdapterCacheMixin", "SyncAdapterCacheMixin")
+__all__ = ("AdapterCacheMixin",)
 
 
 @trait
@@ -25,18 +25,13 @@ class AdapterCacheMixin:
     Integrates transparently with existing adapter execution flow.
     """
 
-    __slots__ = ()
-
-    # Declare attributes for type checking - actual storage in concrete classes
+    __slots__ = ("_compiled_cache", "_prepared_counter", "_prepared_statements")
     _compiled_cache: Optional[SQLCache]
     _prepared_statements: dict[str, str]
     _prepared_counter: int
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize adapter with caching support."""
-        super().__init__(*args, **kwargs)
-
-        # Get cache configuration from config or use defaults
         config = getattr(self, "config", None)
         cache_size = getattr(config, "adapter_cache_size", 500) if config else 500
         enable_cache = getattr(config, "enable_adapter_cache", True) if config else True
@@ -105,25 +100,3 @@ class AdapterCacheMixin:
             self._compiled_cache.clear()
         self._prepared_statements.clear()
         self._prepared_counter = 0
-
-
-@trait
-class SyncAdapterCacheMixin(AdapterCacheMixin):
-    """Sync version of AdapterCacheMixin.
-
-    This mixin provides synchronous caching for compiled SQL and prepared statements.
-    It is used by synchronous adapters to manage SQL compilation and prepared statement names.
-    """
-
-    __slots__ = ()
-
-
-@trait
-class AsyncAdapterCacheMixin(AdapterCacheMixin):
-    """Async version of AdapterCacheMixin.
-
-    Identical to AdapterCacheMixin since caching operations are synchronous.
-    Provided for naming consistency with async adapters.
-    """
-
-    __slots__ = ()

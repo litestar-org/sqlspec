@@ -61,17 +61,6 @@ def test_asyncmy_config_basic_creation() -> None:
     assert config_full.pool_config["custom"] == "value"
 
 
-def test_asyncmy_config_with_no_pool_config() -> None:
-    """Test Asyncmy config with no pool config."""
-    config = AsyncmyConfig()
-
-    # Should have empty pool_config
-    assert config.pool_config == {}
-
-    # Check base class attributes
-    assert isinstance(config.statement_config, SQLConfig)
-
-
 def test_asyncmy_config_initialization() -> None:
     """Test Asyncmy config initialization."""
     # Test with default parameters

@@ -107,14 +107,14 @@ class TestSqliteQueryMixin:
 
     def test_select_returns_all_rows(self, sqlite_driver: SqliteDriver) -> None:
         """Test select returns all matching rows."""
-        results = sqlite_driver.select("SELECT * FROM users ORDER BY id")
+        results: list[dict[str, Any]] = sqlite_driver.select("SELECT * FROM users ORDER BY id")
         assert len(results) == 5
         assert results[0]["name"] == "John Doe"
         assert results[4]["name"] == "Charlie Davis"
 
     def test_select_with_filter(self, sqlite_driver: SqliteDriver) -> None:
         """Test select with WHERE clause."""
-        results = sqlite_driver.select("SELECT * FROM users WHERE age >= 30 ORDER BY age")
+        results: list[dict[str, Any]] = sqlite_driver.select("SELECT * FROM users WHERE age >= 30 ORDER BY age")
         assert len(results) == 3
         assert results[0]["name"] == "John Doe"
         assert results[1]["name"] == "Charlie Davis"
@@ -129,7 +129,7 @@ class TestSqliteQueryMixin:
         assert result["name"] == "Bob Johnson"
 
         # Test with positional parameters
-        results = sqlite_driver.select(SQL("SELECT * FROM users WHERE age > ? ORDER BY age", 30))
+        results: list[dict[str, Any]] = sqlite_driver.select(SQL("SELECT * FROM users WHERE age > ? ORDER BY age", 30))
         assert len(results) == 2
         assert results[0]["age"] == 32
         assert results[1]["age"] == 35

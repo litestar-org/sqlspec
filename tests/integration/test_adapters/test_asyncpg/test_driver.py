@@ -408,16 +408,14 @@ async def test_asyncpg_with_schema_type(asyncpg_session: AsyncpgDriver) -> None:
     # Insert test data
     await asyncpg_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("schema_test", 456))
     # Query with schema type
-    result = await asyncpg_session.execute(
+    result = await asyncpg_session.select_one(
         "SELECT id, name, value FROM test_table WHERE name = $1", ("schema_test"), schema_type=TestRecord
     )
 
-    assert isinstance(result, SQLResult)
-    assert result is not None
-    assert len(result) == 1
+    assert isinstance(result, TestRecord)
 
     # The data should be converted to the schema type by the ResultConverter
-    assert result.column_names == ["id", "name", "value"]
+    assert result.__dict__.keys() == {"id", "name", "value"}
 
 
 @pytest.mark.xdist_group("postgres")

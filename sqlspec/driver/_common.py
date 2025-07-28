@@ -11,7 +11,7 @@ from sqlglot.tokens import TokenType
 from sqlspec.exceptions import NotFoundError
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle, ParameterValidator
 from sqlspec.parameters.types import TypedParameter
-from sqlspec.statement.cache import anonymous_returns_rows_cache
+from sqlspec.statement.cache import SQLCache, anonymous_returns_rows_cache
 from sqlspec.statement.pipeline import SQLTransformContext, create_pipeline_from_config
 from sqlspec.statement.splitter import split_sql_script
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -43,15 +43,23 @@ ROW_RETURNING_TOKENS = {
 class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
-    __slots__ = ()
+    __slots__ = ("_compiled_cache", "_prepared_counter", "_prepared_statements", "config", "connection")
 
+    # Core attributes
     connection: "Any"
     config: "SQLConfig"
     dialect: "DialectType"
     parameter_config: "DriverParameterConfig"
+    _compiled_cache: "Optional[SQLCache]"
+    _prepared_statements: "dict[str, str]"
+    _prepared_counter: int
+
+    # ================================================================================
+    # Initialization
+    # ================================================================================
 
     def __init__(self, connection: "Any", config: "Optional[SQLConfig]" = None) -> None:
-        """Initialize async driver adapter.
+        """Initialize driver adapter with connection and caching support.
 
         Args:
             connection: Database connection instance
@@ -59,7 +67,15 @@ class CommonDriverAttributesMixin:
         """
         self.connection = connection
         self.config = config or SQLConfig()
+        self._compiled_cache = SQLCache() if self.config.enable_caching else None
+        self._prepared_statements = {}
+        self._prepared_counter = 0
+
         super().__init__()
+
+    # ================================================================================
+    # SQL Analysis & Detection Methods
+    # ================================================================================
 
     def returns_rows(self, expression: "Optional[exp.Expression]") -> bool:
         """Check if the SQL expression is expected to return rows.
@@ -128,10 +144,7 @@ class CommonDriverAttributesMixin:
         Returns:
             The selected parameter style to use for this statement
         """
-
-        # Extract raw SQL for analysis
         sql_str = statement.to_sql(placeholder_style=None) if isinstance(statement, SQL) else str(statement)
-
         validator = ParameterValidator()
         param_infos = validator.extract_parameters(sql_str)
 
@@ -139,12 +152,8 @@ class CommonDriverAttributesMixin:
             return self.parameter_config.default_parameter_style
 
         detected_styles = {p.style for p in param_infos}
-
-        # If mixed styles detected, use the driver's configured style
         if len(detected_styles) > 1:
             return self.parameter_config.default_parameter_style
-
-        # Single style detected - return it if valid, otherwise use configured style
         detected_style = next(iter(detected_styles))
         return detected_style or self.parameter_config.default_parameter_style
 
@@ -198,16 +207,10 @@ class CommonDriverAttributesMixin:
         """
         if not parameters:
             return []
-
-        # Handle dict parameters (e.g., NUMERIC style {'1': val, '2': val})
         if isinstance(parameters, dict):
             return {k: (v.value if isinstance(v, TypedParameter) else v) for k, v in parameters.items()}
-
-        # Handle list/tuple parameters (e.g., QMARK style [val1, val2])
         if isinstance(parameters, (list, tuple)):
             return [p.value if isinstance(p, TypedParameter) else p for p in parameters]
-
-        # Handle scalar parameters (single value)
         return [parameters.value if isinstance(parameters, TypedParameter) else parameters]
 
     def _prepare_driver_parameters_many(self, parameters: Any) -> "list[Any]":
@@ -239,8 +242,6 @@ class CommonDriverAttributesMixin:
         Returns:
             SQL string with parameters embedded as static values
         """
-
-        # Compile with STATIC style to embed parameters
         sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
         return sql
 
@@ -273,3 +274,67 @@ class CommonDriverAttributesMixin:
         )
         result_context = pipeline(context)
         return result_context.current_expression, result_context.merged_parameters
+
+    # ================================================================================
+    # Caching Methods
+    # ================================================================================
+
+    def _get_compiled_sql(self, statement: "SQL", target_style: ParameterStyle) -> tuple[str, Any]:
+        """Get compiled SQL with caching.
+
+        Args:
+            statement: SQL statement to compile
+            target_style: Target parameter style for compilation
+
+        Returns:
+            Tuple of (compiled_sql, parameters)
+        """
+        if self._compiled_cache is None:
+            return statement.compile(placeholder_style=target_style)
+        cache_key = self._adapter_cache_key(statement, target_style)
+        cached = self._compiled_cache.get(cache_key)
+        if cached is not None:
+            return cached  # type: ignore[no-any-return]
+        result = statement.compile(placeholder_style=target_style)
+        self._compiled_cache.set(cache_key, result)
+        return result
+
+    def _adapter_cache_key(self, statement: "SQL", style: ParameterStyle) -> str:
+        """Generate adapter-specific cache key.
+
+        Args:
+            statement: SQL statement
+            style: Parameter style
+
+        Returns:
+            Cache key string
+        """
+        # Use statement's internal cache key which includes SQL hash, params, and dialect
+        base_key = statement._cache_key()
+        # Add adapter-specific context
+        return f"{self.__class__.__name__}:{style.value}:{base_key}"
+
+    def _get_or_create_prepared_statement_name(self, sql_hash: str) -> str:
+        """Get or create a prepared statement name for the given SQL.
+
+        Used by PostgreSQL and other databases that support prepared statements.
+
+        Args:
+            sql_hash: Hash of the SQL statement
+
+        Returns:
+            Prepared statement name
+        """
+        if sql_hash in self._prepared_statements:
+            return self._prepared_statements[sql_hash]
+        self._prepared_counter += 1
+        stmt_name = f"sqlspec_ps_{self._prepared_counter}"
+        self._prepared_statements[sql_hash] = stmt_name
+        return stmt_name
+
+    def _clear_adapter_cache(self) -> None:
+        """Clear all adapter-level caches."""
+        if self._compiled_cache is not None:
+            self._compiled_cache.clear()
+        self._prepared_statements.clear()
+        self._prepared_counter = 0

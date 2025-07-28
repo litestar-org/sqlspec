@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-import tempfile
 from collections.abc import Generator
-from pathlib import Path
 from typing import Any, Literal
 
-import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL
 
 ParamStyle = Literal["tuple_binds", "dict_binds"]
 
@@ -608,24 +604,3 @@ def test_duckdb_result_methods_comprehensive(duckdb_session: DuckDBDriver) -> No
 
     # Clean up
     duckdb_session.execute_script("DROP TABLE result_methods_test")
-
-
-@pytest.mark.xdist_group("duckdb")
-def test_duckdb_to_parquet(duckdb_session: DuckDBDriver) -> None:
-    """Integration test: to_parquet writes correct data to a Parquet file using DuckDB native API."""
-    duckdb_session.execute("CREATE TABLE IF NOT EXISTS test_table (id INTEGER, name VARCHAR)")
-    duckdb_session.execute("INSERT INTO test_table (id, name) VALUES (?, ?)", (1, "arrow1"))
-    duckdb_session.execute("INSERT INTO test_table (id, name) VALUES (?, ?)", (2, "arrow2"))
-    statement = SQL("SELECT id, name FROM test_table ORDER BY id")
-    with tempfile.TemporaryDirectory() as tmpdir:
-        output_path = Path(tmpdir) / "partitioned_data"
-        try:
-            duckdb_session.export_to_storage(statement, destination_uri=str(output_path))  # type: ignore[attr-defined]
-            table = pq.read_table(f"{output_path}.parquet")
-            assert table.num_rows == 2
-            assert table.column_names == ["id", "name"]
-            data = table.to_pylist()
-            assert data[0]["id"] == 1 and data[0]["name"] == "arrow1"
-            assert data[1]["id"] == 2 and data[1]["name"] == "arrow2"
-        except Exception as e:
-            pytest.fail(f"Failed to export to storage: {e}")

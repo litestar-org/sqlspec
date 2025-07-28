@@ -11,6 +11,7 @@ from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncpg.driver import AsyncpgConnection, AsyncpgDriver
+from sqlspec.adapters.asyncpg.pipeline_steps import postgres_copy_pipeline_step
 from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.utils.serializers import from_json, to_json
@@ -176,6 +177,10 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                     allowed_parameter_styles=self.supported_parameter_styles,
                     default_parameter_style=self.default_parameter_style,
                 )
+            custom_pipeline_steps = [postgres_copy_pipeline_step]
+            if statement_config.custom_pipeline_steps:
+                custom_pipeline_steps.extend(statement_config.custom_pipeline_steps)
+            statement_config = statement_config.replace(custom_pipeline_steps=custom_pipeline_steps)
             yield self.driver_type(connection=connection, config=statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool[Record]":

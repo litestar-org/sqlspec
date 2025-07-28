@@ -5,8 +5,6 @@ from typing import TYPE_CHECKING, Any, Literal, Optional, Union, cast
 
 from typing_extensions import TypeVar
 
-from sqlspec.typing import RowT
-
 if TYPE_CHECKING:
     from sqlspec.statement.sql import SQL
 
@@ -131,7 +129,7 @@ class SQLResult:
     def __init__(
         self,
         statement: "SQL",
-        data: Optional[list[RowT]] = None,
+        data: Optional[list[dict[str, Any]]] = None,
         rows_affected: int = 0,
         last_inserted_id: Optional[Union[int, str]] = None,
         execution_time: Optional[float] = None,
@@ -219,26 +217,23 @@ class SQLResult:
 
         return False
 
-    def get_data(self) -> "list[RowT]":  # pyright: ignore
+    def get_data(self) -> "list[dict[str,Any]]":
         """Get the data from the result.
 
         For regular operations, returns the list of rows.
         For script operations, returns a summary dictionary.
         """
         if self.operation_type.upper() == "SCRIPT":
-            return cast(
-                "list[RowT]",
-                [
-                    {
-                        "total_statements": self.total_statements,
-                        "successful_statements": self.successful_statements,
-                        "failed_statements": self.total_statements - self.successful_statements,
-                        "errors": self.errors,
-                        "statement_results": self.statement_results,
-                    }
-                ],
-            )
-        return cast("list[RowT]", self.data)
+            return [
+                {
+                    "total_statements": self.total_statements,
+                    "successful_statements": self.successful_statements,
+                    "failed_statements": self.total_statements - self.successful_statements,
+                    "errors": self.errors,
+                    "statement_results": self.statement_results,
+                }
+            ]
+        return self.data or []
 
     def add_statement_result(self, result: "SQLResult") -> None:
         """Add a statement result to the script execution results."""
@@ -264,9 +259,9 @@ class SQLResult:
         """Get the number of columns in the result data."""
         return len(self.column_names) if self.column_names else 0
 
-    def get_first(self) -> "Optional[RowT]":  # pyright: ignore
+    def get_first(self) -> "Optional[dict[str, Any]]":
         """Get the first row from the result, if any."""
-        return cast("Optional[RowT]", self.data[0] if self.data else None)
+        return self.data[0] if self.data else None
 
     def get_count(self) -> int:
         """Get the number of rows in the current result set (e.g., a page of data)."""
@@ -300,7 +295,7 @@ class SQLResult:
         """
         return len(self.data)
 
-    def __getitem__(self, index: int) -> "RowT":  # pyright: ignore
+    def __getitem__(self, index: int) -> "dict[str, Any]":
         """Get a row by index.
 
         Args:
@@ -309,17 +304,17 @@ class SQLResult:
         Returns:
             The row at the specified index
         """
-        return cast("RowT", self.data[index])
+        return self.data[index]
 
-    def all(self) -> list[RowT]:  # pyright: ignore
+    def all(self) -> list[dict[str, Any]]:
         """Return all rows as a list.
 
         Returns:
             List of all rows in the result
         """
-        return cast("list[RowT]", self.data or [])
+        return self.data or []
 
-    def one(self) -> "RowT":  # pyright: ignore
+    def one(self) -> "dict[str, Any]":
         """Return exactly one row.
 
         Returns:
@@ -334,9 +329,9 @@ class SQLResult:
         if len(self.data) > 1:
             msg = f"Multiple results found ({len(self.data)}), exactly one row expected"
             raise ValueError(msg)
-        return cast("RowT", self.data[0])
+        return self.data[0]
 
-    def one_or_none(self) -> "Optional[RowT]":  # pyright: ignore
+    def one_or_none(self) -> "Optional[dict[str, Any]]":
         """Return at most one row.
 
         Returns:
@@ -350,7 +345,7 @@ class SQLResult:
         if len(self.data) > 1:
             msg = f"Multiple results found ({len(self.data)}), at most one row expected"
             raise ValueError(msg)
-        return cast("Optional[RowT]", self.data[0])
+        return self.data[0]
 
     def scalar(self) -> Any:
         """Return the first column of the first row.

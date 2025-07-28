@@ -15,7 +15,7 @@ from sqlspec.adapters.psycopg.driver import (
     PsycopgSyncConnection,
     PsycopgSyncDriver,
 )
-from sqlspec.adapters.psycopg.pipeline_steps import psycopg_copy_transform_step
+from sqlspec.adapters.psycopg.pipeline_steps import postgres_copy_pipeline_step
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
 
@@ -93,8 +93,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             enable_adapter_cache: Enable SQL compilation caching
             adapter_cache_size: Max cached SQL statements
 
-        Raises:
-            ImproperConfigurationError: If neither pool_config nor pool_instance is provided
         """
         # Store the pool config as a dict and extract/merge extras
         self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
@@ -234,7 +232,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 )
 
             # Add the COPY pipeline step
-            custom_pipeline_steps = [psycopg_copy_transform_step]
+            custom_pipeline_steps = [postgres_copy_pipeline_step]
 
             # If user has custom steps, append them after psycopg step
             if statement_config.custom_pipeline_steps:
@@ -425,7 +423,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
                 )
 
             # Add the COPY pipeline step
-            custom_pipeline_steps = [psycopg_copy_transform_step]
+            custom_pipeline_steps = [postgres_copy_pipeline_step]
 
             # If user has custom steps, append them after psycopg step
             if statement_config.custom_pipeline_steps:

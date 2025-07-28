@@ -200,11 +200,11 @@ def test_adbc_driver_get_placeholder_style_snowflake(mock_adbc_connection: Mock)
 
 
 def test_adbc_driver_get_cursor_context_manager(adbc_driver: AdbcDriver, mock_cursor: Mock) -> None:
-    """Test AdbcDriver._get_cursor context manager."""
+    """Test AdbcDriver.with_cursor context manager."""
     mock_connection = adbc_driver.connection
     mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
 
-    with AdbcDriver._get_cursor(mock_connection) as cursor:  # pyright: ignore
+    with adbc_driver.with_cursor(mock_connection) as cursor:
         assert cursor == mock_cursor
 
     # Cursor should be closed after context exit
@@ -212,14 +212,14 @@ def test_adbc_driver_get_cursor_context_manager(adbc_driver: AdbcDriver, mock_cu
 
 
 def test_adbc_driver_get_cursor_exception_handling(adbc_driver: AdbcDriver) -> None:
-    """Test AdbcDriver._get_cursor handles cursor close exceptions."""
+    """Test AdbcDriver.with_cursor handles cursor close exceptions."""
     mock_connection = adbc_driver.connection
     mock_cursor = Mock(spec=Cursor)
     mock_cursor.close.side_effect = Exception("Close error")
     mock_connection.cursor.return_value = mock_cursor  # pyright: ignore
 
     # Should not raise exception even if cursor.close() fails
-    with AdbcDriver._get_cursor(mock_connection) as cursor:  # pyright: ignore
+    with adbc_driver.with_cursor(mock_connection) as cursor:
         assert cursor == mock_cursor
 
 
@@ -243,7 +243,7 @@ def test_adbc_driver_execute_statement_select(adbc_driver: AdbcDriver, mock_curs
     assert result.operation_type == "SELECT"
 
     # Verify execute and fetchall were called
-    mock_cursor.execute.assert_called_once_with("SELECT * FROM users WHERE id = $1", [123])
+    mock_cursor.execute.assert_called_once_with("SELECT * FROM users WHERE id = $1", parameters=[123])
     mock_cursor.fetchall.assert_called_once()
 
 

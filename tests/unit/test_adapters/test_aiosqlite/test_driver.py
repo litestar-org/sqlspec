@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from sqlspec.adapters.aiosqlite import AiosqliteConnection, AiosqliteDriver
+from sqlspec.adapters.aiosqlite import AiosqliteDriver
 from sqlspec.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -14,7 +14,7 @@ from sqlspec.statement.sql import SQL, SQLConfig
 @pytest.fixture
 def mock_aiosqlite_connection() -> AsyncMock:
     """Create a mock AIOSQLite connection with async context manager support."""
-    mock_connection = AsyncMock(spec=AiosqliteConnection)
+    mock_connection = AsyncMock()
     mock_connection.__aenter__.return_value = mock_connection
     mock_connection.__aexit__.return_value = None
     mock_cursor = AsyncMock()
@@ -73,8 +73,30 @@ async def test_aiosqlite_driver_execute_statement_select(
     """Test AIOSQLite driver execute for SELECT statements."""
     # Setup mock cursor
     mock_cursor = AsyncMock()
-    mock_cursor.fetchall.return_value = [(1, "test")]
-    mock_cursor.description = ["id", "name", "email"]
+
+    # Create a simple object that behaves like aiosqlite.Row and can be converted to dict
+    class MockRow:
+        def __init__(self, data: dict):
+            self._data = data
+
+        def __iter__(self) -> Any:
+            return iter(self._data.items())
+
+        def __getitem__(self, key: Any) -> Any:
+            return self._data[key]
+
+        def keys(self) -> Any:
+            return self._data.keys()
+
+        def values(self) -> Any:
+            return self._data.values()
+
+        def items(self) -> Any:
+            return self._data.items()
+
+    mock_row = MockRow({"id": 1, "name": "test", "email": "test@example.com"})
+    mock_cursor.fetchall.return_value = [mock_row]
+    mock_cursor.description = [("id",), ("name",), ("email",)]
 
     async def _cursor(*args: Any, **kwargs: Any) -> AsyncMock:
         return mock_cursor
@@ -95,7 +117,7 @@ async def test_aiosqlite_driver_execute_statement_select(
     from sqlspec.statement.result import SQLResult
 
     assert isinstance(result, SQLResult)
-    assert result.data == [(1, "test")]  # type: ignore[comparison-overlap]
+    assert result.data == [{"id": 1, "name": "test", "email": "test@example.com"}]
     assert result.operation_type == "SELECT"
 
 

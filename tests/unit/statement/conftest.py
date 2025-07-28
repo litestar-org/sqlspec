@@ -6,7 +6,7 @@ import pytest
 
 
 @pytest.fixture
-def mock_psycopg_connection():
+def mock_psycopg_connection() -> MagicMock:
     """Mock psycopg connection for testing."""
     mock_conn = MagicMock()
     # Add common psycopg connection attributes
@@ -17,7 +17,7 @@ def mock_psycopg_connection():
 
 
 @pytest.fixture
-def mock_duckdb_connection():
+def mock_duckdb_connection() -> MagicMock:
     """Mock DuckDB connection for testing."""
     mock_conn = MagicMock()
     # Add common DuckDB connection attributes

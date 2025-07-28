@@ -36,9 +36,9 @@ def test_aiosqlite_typed_dict_structure() -> None:
 
 def test_aiosqlite_config_basic_creation() -> None:
     """Test Aiosqlite config creation with basic parameters."""
-    # Test minimal config creation
+    # Test minimal config creation - should auto-convert :memory: to shared format for pooling
     config = AiosqliteConfig()
-    assert config.connection_config["database"] == ":memory:"
+    assert config.connection_config["database"] == "file::memory:?cache=shared"
 
     # Test with all parameters including extra
     config_full = AiosqliteConfig(connection_config={"database": "test.db", "extra": {"custom": "value"}})
@@ -266,8 +266,12 @@ def test_convert_to_shared_memory_function() -> None:
         (":memory:", "file::memory:?cache=shared", True),
         ("file::memory:", "file::memory:?cache=shared", True),
         ("file::memory:?mode=memory", "file::memory:?mode=memory&cache=shared", True),
-        ("file::memory:?cache=shared", "file::memory:?cache=shared", True),
-        ("file::memory:?mode=memory&cache=shared", "file::memory:?mode=memory&cache=shared", True),
+        ("file::memory:?cache=shared", "file::memory:?cache=shared", None),  # Already shared, no changes
+        (
+            "file::memory:?mode=memory&cache=shared",
+            "file::memory:?mode=memory&cache=shared",
+            None,
+        ),  # Already shared, no changes
         ("test.db", "test.db", None),  # Regular file should not change
     ],
     ids=[

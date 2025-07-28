@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.driver.context import set_current_driver
-from sqlspec.driver.mixins import SQLTranslatorMixin, SyncAdapterCacheMixin, ToSchemaMixin
+from sqlspec.driver.mixins import SQLTranslatorMixin, ToSchemaMixin
 from sqlspec.exceptions import NotFoundError
 from sqlspec.statement.builder import QueryBuilder
 from sqlspec.statement.result import SQLResult
@@ -25,8 +25,8 @@ __all__ = ("SyncDriverAdapterBase",)
 EMPTY_FILTERS: "list[StatementFilter]" = []
 
 
-class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToSchemaMixin, SyncAdapterCacheMixin):
-    __slots__ = ("_compiled_cache", "_prepared_counter", "_prepared_statements", "config", "connection")
+class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToSchemaMixin):
+    __slots__ = ()
 
     def _dispatch_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
         """Central execution dispatcher using the Template Method Pattern.
@@ -259,7 +259,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         Raises an exception if no rows or more than one row is returned.
         """
         result = self.execute(statement, *parameters, config=config, **kwargs)
-        data = cast("list[dict[str, Any]]", result.get_data())
+        data = result.get_data()
         if not data:
             msg = "No rows found"
             raise NotFoundError(msg)
@@ -308,7 +308,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         Raises an exception if more than one row is returned.
         """
         result = self.execute(statement, *parameters, config=config, **kwargs)
-        data = cast("list[dict[str, Any]]", result.get_data())
+        data = result.get_data()
         if not data:
             return None
         if len(data) > 1:
@@ -368,7 +368,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         Raises an exception if no rows or more than one row/column is returned.
         """
         result = self.execute(statement, *parameters, config=config, **kwargs)
-        row = cast("dict[str, Any]", result.one())
+        row = result.one()
         if not row:
             msg = "No rows found"
             raise NotFoundError(msg)
@@ -400,7 +400,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         Raises an exception if more than one row is returned.
         """
         result = self.execute(statement, *parameters, config=config, **kwargs)
-        data = cast("list[dict[str, Any]]", result.get_data())
+        data = result.get_data()
         if not data:
             return None
         if len(data) > 1:

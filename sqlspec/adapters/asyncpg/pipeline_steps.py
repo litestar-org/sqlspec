@@ -1,4 +1,4 @@
-"""PostgreSQL COPY operation pipeline steps for psycopg driver."""
+"""PostgreSQL COPY operation pipeline steps for asyncpg driver."""
 
 import sqlglot.expressions as exp
 

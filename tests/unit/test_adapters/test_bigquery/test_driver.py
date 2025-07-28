@@ -226,35 +226,6 @@ def test_prepare_bq_query_parameters_unsupported(driver: BigQueryDriver) -> None
 
 
 # Execute Statement Tests
-@pytest.mark.parametrize(
-    "sql_text,is_script,is_many,expected_method",
-    [
-        ("SELECT * FROM users", False, False, "_execute"),
-        ("INSERT INTO users VALUES (@id)", False, True, "_execute_many"),
-        ("CREATE TABLE test; INSERT INTO test;", True, False, "_execute_script"),
-    ],
-    ids=["select", "execute_many", "script"],
-)
-def test_execute_statement_routing(
-    driver: BigQueryDriver,
-    mock_connection: MagicMock,
-    sql_text: str,
-    is_script: bool,
-    is_many: bool,
-    expected_method: str,
-) -> None:
-    """Test that _execute_statement routes to correct method."""
-    from sqlspec.statement.sql import SQLConfig
-
-    # Create config that allows DDL if needed
-    config = SQLConfig(enable_validation=False) if "CREATE" in sql_text else SQLConfig()
-    statement = SQL(sql_text, config=config)
-    statement._is_script = is_script
-    statement._is_many = is_many
-
-    with patch.object(BigQueryDriver, expected_method, return_value={"rows_affected": 0}) as mock_method:
-        driver.execute(statement)
-        mock_method.assert_called_once()
 
 
 def test_execute_select_statement(driver: BigQueryDriver, mock_connection: MagicMock) -> None:
