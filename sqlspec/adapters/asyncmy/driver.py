@@ -2,7 +2,6 @@
 import logging
 from typing import TYPE_CHECKING, Any, Optional, Union
 
-from asyncmy import Connection
 from asyncmy.cursors import Cursor, DictCursor
 
 from sqlspec.driver import AsyncDriverAdapterBase
@@ -10,6 +9,7 @@ from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 
 if TYPE_CHECKING:
+    from asyncmy import Connection
     from sqlglot.dialects.dialect import DialectType
 
 __all__ = ("AsyncmyConnection", "AsyncmyDriver")
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
     AsyncmyConnection: TypeAlias = Connection
 else:
-    AsyncmyConnection = Connection
+    AsyncmyConnection = Any
 
 
 class _AsyncmyCursorManager:

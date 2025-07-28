@@ -27,7 +27,21 @@ def sqlite_session() -> Generator[SqliteDriver, None, None]:
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        yield session
+        # Commit DDL to prevent table locking issues in subsequent operations
+        session.commit()
+
+        try:
+            yield session
+        finally:
+            # Ensure any pending transactions are committed before test ends
+            try:
+                session.commit()
+            except Exception:
+                # If commit fails, try rollback to clean up transaction state
+                try:
+                    session.rollback()
+                except Exception:
+                    pass
         # Cleanup is automatic with in-memory database
 
 
@@ -80,6 +94,10 @@ def test_sqlite_basic_crud(sqlite_session: SqliteDriver) -> None:
 @pytest.mark.xdist_group("sqlite")
 def test_sqlite_parameter_styles(sqlite_session: SqliteDriver, params: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles."""
+    # Clear any existing data between parameterized test runs
+    sqlite_session.execute("DELETE FROM test_table")
+    sqlite_session.commit()
+
     # Insert test data
     sqlite_session.execute("INSERT INTO test_table (name) VALUES (?)", ("test_value",))
 
@@ -99,6 +117,10 @@ def test_sqlite_parameter_styles(sqlite_session: SqliteDriver, params: Any, styl
 @pytest.mark.xdist_group("sqlite")
 def test_sqlite_execute_many(sqlite_session: SqliteDriver) -> None:
     """Test execute_many functionality."""
+    # Clear any existing data
+    sqlite_session.execute("DELETE FROM test_table")
+    sqlite_session.commit()
+
     params_list = [("name1", 1), ("name2", 2), ("name3", 3)]
 
     result = sqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", params_list)

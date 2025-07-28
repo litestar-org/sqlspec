@@ -464,17 +464,29 @@ class SQL:
 
     def _process_parameters(self, *parameters: Any, **kwargs: Any) -> None:
         """Process and categorize parameters."""
-        for param in parameters:
-            self._process_parameter_item(param)
+        if self._is_many:
+            # Use batch parameter processing for execute_many
+            param_list = list(parameters)
+            if "parameters" in kwargs:
+                param_value = kwargs.pop("parameters")
+                if isinstance(param_value, list):
+                    param_list.extend(param_value)
+                else:
+                    param_list.append(param_value)
+            self._process_batch_parameters(param_list)
+        else:
+            # Use single parameter processing for regular execute
+            for param in parameters:
+                self._process_parameter_item(param)
 
-        if "parameters" in kwargs:
-            param_value = kwargs.pop("parameters")
-            if isinstance(param_value, (list, tuple)):
-                self._positional_params.extend(param_value)
-            elif is_dict(param_value):
-                self._named_params.update(param_value)
-            else:
-                self._positional_params.append(param_value)
+            if "parameters" in kwargs:
+                param_value = kwargs.pop("parameters")
+                if isinstance(param_value, (list, tuple)):
+                    self._positional_params.extend(param_value)
+                elif is_dict(param_value):
+                    self._named_params.update(param_value)
+                else:
+                    self._positional_params.append(param_value)
 
         self._named_params.update({k: v for k, v in kwargs.items() if not k.startswith("_")})
 
@@ -498,6 +510,32 @@ class SQL:
             self._positional_params.extend(item)
         else:
             self._positional_params.append(item)
+
+    def _process_batch_parameters(self, parameters: list[Any]) -> None:
+        """Process parameters for batch execution (execute_many).
+
+        Preserves tuple structure for parameter sets while still handling
+        statement filters and other special cases.
+        """
+        for item in parameters:
+            if is_statement_filter(item):
+                self._filters.append(item)
+                # For batch execution, filters should apply to all parameter sets
+                pos_params, named_params = self._extract_filter_parameters(item)
+                self._positional_params.extend(pos_params)
+                self._named_params.update(named_params)
+            elif isinstance(item, tuple):
+                # In batch mode, preserve tuples as parameter sets
+                self._positional_params.append(item)
+            elif isinstance(item, list):
+                # Nested lists in batch mode - could be parameter sets or complex values
+                self._positional_params.append(item)
+            elif is_dict(item):
+                # Dictionary parameters in batch mode
+                self._positional_params.append(item)
+            else:
+                # Single values in batch mode
+                self._positional_params.append(item)
 
     def _ensure_processed(self) -> None:
         """Ensure the SQL has been processed through the pipeline (lazy initialization).
@@ -562,6 +600,9 @@ class SQL:
 
     def _convert_parameters(self, final_params: Any) -> Any:
         """Convert parameters based on placeholder mapping."""
+        # Only convert if we actually have a parameter conversion state indicating transformation
+        if not self._parameter_conversion_state or not self._parameter_conversion_state.was_transformed:
+            return final_params
         if is_dict(final_params):
             converted_params = {}
             for placeholder_key, original_name in self._placeholder_mapping.items():
@@ -705,27 +746,32 @@ class SQL:
         """Denormalize SQL back to original parameter style."""
 
         original_sql = self._original_sql
-        param_info = self._config.parameter_validator.extract_parameters(original_sql)
-        target_styles = {p.style for p in param_info}
+        # Extract param info from the ORIGINAL SQL to get the target styles
+        original_param_info = self._config.parameter_validator.extract_parameters(original_sql)
+        target_styles = {p.style for p in original_param_info}
+
+        # Extract param info from the PROCESSED SQL for correct positions
+        processed_param_info = self._config.parameter_validator.extract_parameters(processed_sql)
+
         if ParameterStyle.POSITIONAL_PYFORMAT in target_styles:
             processed_sql = self._config.parameter_converter._convert_sql_placeholders(
-                processed_sql, ParameterStyle.POSITIONAL_PYFORMAT, param_info
+                processed_sql, ParameterStyle.POSITIONAL_PYFORMAT, processed_param_info
             )
         elif ParameterStyle.NAMED_PYFORMAT in target_styles:
             processed_sql = self._config.parameter_converter._convert_sql_placeholders(
-                processed_sql, ParameterStyle.NAMED_PYFORMAT, param_info
+                processed_sql, ParameterStyle.NAMED_PYFORMAT, processed_param_info
             )
             if self._placeholder_mapping and context.parameters and is_dict(context.parameters):
                 # For mypyc: create new variable after type narrowing
                 dict_params = context.parameters  # Type narrowed to dict[str, Any]
                 context.parameters = self._denormalize_pyformat_params(dict_params)
         elif ParameterStyle.POSITIONAL_COLON in target_styles:
-            processed_param_info = self._config.parameter_validator.extract_parameters(processed_sql)
+            # Already extracted processed_param_info above
             has_param_placeholders = any(p.name and p.name.startswith(PARAM_PREFIX) for p in processed_param_info)
 
             if not has_param_placeholders:
                 processed_sql = self._config.parameter_converter._convert_sql_placeholders(
-                    processed_sql, ParameterStyle.POSITIONAL_COLON, param_info
+                    processed_sql, ParameterStyle.POSITIONAL_COLON, processed_param_info
                 )
             if self._placeholder_mapping and context.parameters and is_dict(context.parameters):
                 # For mypyc: create new variable after type narrowing
@@ -1567,6 +1613,33 @@ class SQL:
         else:
             # Just unwrap TypedParameters
             params = self._unwrap_typed_parameters(params)
+
+            # If we have dict parameters but the target style expects positional params,
+            # convert them back to list format
+            if (
+                params
+                and isinstance(params, dict)
+                and target_style in {ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_PYFORMAT}
+            ):
+                # Extract parameter info to determine order
+                param_info = validator.extract_parameters(sql)
+                if param_info:
+                    # Convert dict back to list based on parameter order
+                    list_params = []
+                    for p_info in param_info:
+                        # Check for param_0, param_1 keys (from _create_processing_context)
+                        key = f"param_{p_info.ordinal}"
+                        if key in params:
+                            list_params.append(params[key])
+                        elif p_info.name and p_info.name in params:
+                            list_params.append(params[p_info.name])
+                        else:
+                            # Try numeric key for numeric placeholders
+                            numeric_key = str(p_info.ordinal + 1)
+                            if numeric_key in params:
+                                list_params.append(params[numeric_key])
+                    if list_params:
+                        params = list_params
 
         return sql, params
 

@@ -1,22 +1,21 @@
 """Synchronous driver protocol implementation."""
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Optional, Union, overload
+from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.driver.context import set_current_driver
 from sqlspec.driver.mixins import SQLTranslatorMixin, SyncAdapterCacheMixin, ToSchemaMixin
 from sqlspec.exceptions import NotFoundError
-from sqlspec.statement.builder import QueryBuilder, Select
+from sqlspec.statement.builder import QueryBuilder
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig, Statement
-from sqlspec.typing import ModelDTOT
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_dict_row, is_indexable_row
 
 if TYPE_CHECKING:
     from sqlspec.statement.filters import StatementFilter
-    from sqlspec.typing import StatementParameters
+    from sqlspec.typing import ModelDTOT, ModelT, RowT, StatementParameters
 
 logger = get_logger("sqlspec")
 
@@ -27,7 +26,7 @@ EMPTY_FILTERS: "list[StatementFilter]" = []
 
 
 class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToSchemaMixin, SyncAdapterCacheMixin):
-    __slots__ = ()
+    __slots__ = ("_compiled_cache", "_prepared_counter", "_prepared_statements", "config", "connection")
 
     def _dispatch_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
         """Central execution dispatcher using the Template Method Pattern.
@@ -56,7 +55,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
                 self._perform_execute(cursor, statement)
                 return self._build_result(cursor, statement)
         finally:
-            # Clear driver context
             set_current_driver(None)
 
     @abstractmethod
@@ -195,6 +193,13 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
 
         Parameters passed will be used as the batch execution sequence.
         """
+        # For execute_many, we need to handle parameters specially to preserve structure
+        if parameters and len(parameters) == 1 and isinstance(parameters[0], list):
+            # Direct list of parameter sets - pass to as_many
+            sql_statement = self._prepare_sql(statement, config=config or self.config, **kwargs)
+            return self._dispatch_execution(statement=sql_statement.as_many(parameters[0]), connection=self.connection)
+
+        # Default behavior for other cases
         sql_statement = self._prepare_sql(statement, *parameters, config=config or self.config, **kwargs)
         return self._dispatch_execution(statement=sql_statement.as_many(), connection=self.connection)
 
@@ -221,7 +226,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
     @overload
     def select_one(
         self,
-        statement: "Union[Statement, Select]",
+        statement: "Union[Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
@@ -232,41 +237,44 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
     @overload
     def select_one(
         self,
-        statement: "Union[Statement, Select]",
+        statement: "Union[Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "dict[str,Any]": ...
+    ) -> "Union[ModelT, RowT, dict[str, Any]]": ...  # pyright: ignore[reportInvalidTypeVarUse]
 
-    def select_one(
+    def select_one(  # type: ignore[misc]
         self,
-        statement: "Union[Statement, Select]",
+        statement: "Union[Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Union[dict[str, Any], ModelDTOT]":
+    ) -> "Union[ModelT, RowT, ModelDTOT]":  # pyright: ignore[reportInvalidTypeVarUse]
         """Execute a select statement and return exactly one row.
 
         Raises an exception if no rows or more than one row is returned.
         """
         result = self.execute(statement, *parameters, config=config, **kwargs)
-        data = result.get_data()
+        data = cast("list[dict[str, Any]]", result.get_data())
         if not data:
             msg = "No rows found"
             raise NotFoundError(msg)
         if len(data) > 1:
             msg = f"Expected exactly one row, found {len(data)}"
             raise ValueError(msg)
-        return self.to_schema(data[0], schema_type=schema_type) if schema_type else data[0]
+        return cast(
+            "Union[ModelT, RowT, ModelDTOT]",
+            self.to_schema(data[0], schema_type=schema_type) if schema_type else data[0],
+        )
 
     @overload
     def select_one_or_none(
         self,
-        statement: "Union[Statement, Select]",
+        statement: "Union[Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
@@ -277,41 +285,41 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
     @overload
     def select_one_or_none(
         self,
-        statement: "Union[Statement, Select]",
+        statement: "Union[Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Optional[dict[str, Any]]": ...
+    ) -> "Optional[ModelT]": ...  # pyright: ignore[reportInvalidTypeVarUse]
 
     def select_one_or_none(
         self,
-        statement: "Union[Statement, Select]",
+        statement: "Union[Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
+    ) -> "Optional[Union[ModelT, ModelDTOT]]":  # pyright: ignore[reportInvalidTypeVarUse]
         """Execute a select statement and return at most one row.
 
         Returns None if no rows are found.
         Raises an exception if more than one row is returned.
         """
         result = self.execute(statement, *parameters, config=config, **kwargs)
-        data = result.get_data()
+        data = cast("list[dict[str, Any]]", result.get_data())
         if not data:
             return None
         if len(data) > 1:
             msg = f"Expected at most one row, found {len(data)}"
             raise ValueError(msg)
-        return self.to_schema(data[0], schema_type=schema_type)
+        return cast("Optional[Union[ModelT, ModelDTOT]]", self.to_schema(data[0], schema_type=schema_type))
 
     @overload
     def select(
         self,
-        statement: "Union[Statement, Select]",
+        statement: "Union[Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
@@ -322,30 +330,33 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
     @overload
     def select(
         self,
-        statement: "Union[Statement, Select]",
+        statement: "Union[Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> "list[dict[str, Any]]": ...
+    ) -> "list[ModelT]": ...  # pyright: ignore[reportInvalidTypeVarUse]
 
     def select(
         self,
-        statement: "Union[Statement, Select]",
+        statement: "Union[Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,
         config: "Optional[SQLConfig]" = None,
         **kwargs: Any,
-    ) -> Union[list[dict[str, Any]], list[ModelDTOT]]:
+    ) -> "Union[list[ModelT], list[ModelDTOT]]":  # pyright: ignore[reportInvalidTypeVarUse]
         """Execute a select statement and return all rows."""
         result = self.execute(statement, *parameters, config=config, **kwargs)
-        return self.to_schema(result.get_data(), schema_type=schema_type)
+        return cast(
+            "Union[list[ModelT], list[ModelDTOT]]",
+            self.to_schema(cast("list[ModelT]", result.get_data()), schema_type=schema_type),  # type: ignore[arg-type]
+        )
 
     def select_value(
         self,
-        statement: "Union[Statement, Select]",
+        statement: "Union[Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         config: "Optional[SQLConfig]" = None,
@@ -357,14 +368,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         Raises an exception if no rows or more than one row/column is returned.
         """
         result = self.execute(statement, *parameters, config=config, **kwargs)
-        data = result.get_data()
-        if not data:
+        row = cast("dict[str, Any]", result.one())
+        if not row:
             msg = "No rows found"
             raise NotFoundError(msg)
-        if len(data) > 1:
-            msg = f"Expected exactly one row, found {len(data)}"
-            raise ValueError(msg)
-        row = data[0]
         if is_dict_row(row):
             if not row:
                 msg = "Row has no columns"
@@ -380,7 +387,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
 
     def select_value_or_none(
         self,
-        statement: "Union[Statement, Select]",
+        statement: "Union[Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         config: "Optional[SQLConfig]" = None,
@@ -393,7 +400,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         Raises an exception if more than one row is returned.
         """
         result = self.execute(statement, *parameters, config=config, **kwargs)
-        data = result.get_data()
+        data = cast("list[dict[str, Any]]", result.get_data())
         if not data:
             return None
         if len(data) > 1:

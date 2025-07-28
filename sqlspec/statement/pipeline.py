@@ -70,7 +70,7 @@ class SQLTransformContext:
             return self.driver_adapter._convert_parameters_to_driver_format(sql_str, self.parameters)
 
         # Fallback to original logic if no driver adapter
-        if isinstance(self.parameters, dict) and self.dialect in {"mysql", "sqlite"}:
+        if isinstance(self.parameters, dict) and self.dialect in {"mysql", "sqlite", "duckdb"}:
             # Convert to positional list ordered by parameter position in SQL
             # This ensures parameters are ordered as they appear in the SQL query
 

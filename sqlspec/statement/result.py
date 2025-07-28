@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, Any, Literal, Optional, Union, cast
 
 from typing_extensions import TypeVar
 
+from sqlspec.typing import RowT
+
 if TYPE_CHECKING:
     from sqlspec.statement.sql import SQL
 
@@ -94,7 +96,7 @@ class StatementResult(ABC):
         self.metadata[key] = value
 
 
-class SQLResult(StatementResult):
+class SQLResult:
     """Unified result class for SQL operations that return a list of rows
     or affect rows (e.g., SELECT, INSERT, UPDATE, DELETE).
 
@@ -106,14 +108,20 @@ class SQLResult(StatementResult):
 
     __slots__ = (
         "column_names",
+        "data",
         "error",
         "errors",
+        "execution_time",
         "has_more",
         "inserted_ids",
+        "last_inserted_id",
+        "metadata",
         "operation_index",
         "operation_type",
         "parameters",
         "pipeline_sql",
+        "rows_affected",
+        "statement",
         "statement_results",
         "successful_statements",
         "total_count",
@@ -123,7 +131,7 @@ class SQLResult(StatementResult):
     def __init__(
         self,
         statement: "SQL",
-        data: Optional[list[dict[str, Any]]] = None,
+        data: Optional[list[RowT]] = None,
         rows_affected: int = 0,
         last_inserted_id: Optional[Union[int, str]] = None,
         execution_time: Optional[float] = None,
@@ -142,14 +150,12 @@ class SQLResult(StatementResult):
         total_statements: int = 0,
         successful_statements: int = 0,
     ) -> None:
-        super().__init__(
-            statement=statement,
-            data=data if data is not None else [],
-            rows_affected=rows_affected,
-            last_inserted_id=last_inserted_id,
-            execution_time=execution_time,
-            metadata=metadata,
-        )
+        self.statement = statement
+        self.data = data or []
+        self.rows_affected = rows_affected
+        self.last_inserted_id = last_inserted_id
+        self.execution_time = execution_time
+        self.metadata = metadata if metadata is not None else {}
         self.error = error
         self.operation_type = operation_type
         self.operation_index = operation_index
@@ -172,6 +178,27 @@ class SQLResult(StatementResult):
         if self.total_count is None:
             self.total_count = len(self.data) if self.data else 0
 
+    def get_metadata(self, key: str, default: Any = None) -> Any:
+        """Get metadata value by key.
+
+        Args:
+            key: The metadata key to retrieve.
+            default: Default value if key is not found.
+
+        Returns:
+            The metadata value or default.
+        """
+        return self.metadata.get(key, default)
+
+    def set_metadata(self, key: str, value: Any) -> None:
+        """Set metadata value by key.
+
+        Args:
+            key: The metadata key to set.
+            value: The value to set.
+        """
+        self.metadata[key] = value
+
     def is_success(self) -> bool:
         """Check if the operation was successful.
 
@@ -192,23 +219,26 @@ class SQLResult(StatementResult):
 
         return False
 
-    def get_data(self) -> "list[dict[str, Any]]":
+    def get_data(self) -> "list[RowT]":  # pyright: ignore
         """Get the data from the result.
 
         For regular operations, returns the list of rows.
         For script operations, returns a summary dictionary.
         """
         if self.operation_type.upper() == "SCRIPT":
-            return [
-                {
-                    "total_statements": self.total_statements,
-                    "successful_statements": self.successful_statements,
-                    "failed_statements": self.total_statements - self.successful_statements,
-                    "errors": self.errors,
-                    "statement_results": self.statement_results,
-                }
-            ]
-        return cast("list[dict[str, Any]]", self.data)
+            return cast(
+                "list[RowT]",
+                [
+                    {
+                        "total_statements": self.total_statements,
+                        "successful_statements": self.successful_statements,
+                        "failed_statements": self.total_statements - self.successful_statements,
+                        "errors": self.errors,
+                        "statement_results": self.statement_results,
+                    }
+                ],
+            )
+        return cast("list[RowT]", self.data)
 
     def add_statement_result(self, result: "SQLResult") -> None:
         """Add a statement result to the script execution results."""
@@ -234,9 +264,9 @@ class SQLResult(StatementResult):
         """Get the number of columns in the result data."""
         return len(self.column_names) if self.column_names else 0
 
-    def get_first(self) -> "Optional[dict[str, Any]]":
+    def get_first(self) -> "Optional[RowT]":  # pyright: ignore
         """Get the first row from the result, if any."""
-        return self.data[0] if self.data else None
+        return cast("Optional[RowT]", self.data[0] if self.data else None)
 
     def get_count(self) -> int:
         """Get the number of rows in the current result set (e.g., a page of data)."""
@@ -270,7 +300,7 @@ class SQLResult(StatementResult):
         """
         return len(self.data)
 
-    def __getitem__(self, index: int) -> "dict[str, Any]":
+    def __getitem__(self, index: int) -> "RowT":  # pyright: ignore
         """Get a row by index.
 
         Args:
@@ -279,17 +309,17 @@ class SQLResult(StatementResult):
         Returns:
             The row at the specified index
         """
-        return cast("dict[str, Any]", self.data[index])
+        return cast("RowT", self.data[index])
 
-    def all(self) -> list[dict[str, Any]]:
+    def all(self) -> list[RowT]:  # pyright: ignore
         """Return all rows as a list.
 
         Returns:
             List of all rows in the result
         """
-        return self.data or []
+        return cast("list[RowT]", self.data or [])
 
-    def one(self) -> "dict[str, Any]":
+    def one(self) -> "RowT":  # pyright: ignore
         """Return exactly one row.
 
         Returns:
@@ -304,9 +334,9 @@ class SQLResult(StatementResult):
         if len(self.data) > 1:
             msg = f"Multiple results found ({len(self.data)}), exactly one row expected"
             raise ValueError(msg)
-        return cast("dict[str, Any]", self.data[0])
+        return cast("RowT", self.data[0])
 
-    def one_or_none(self) -> "Optional[dict[str, Any]]":
+    def one_or_none(self) -> "Optional[RowT]":  # pyright: ignore
         """Return at most one row.
 
         Returns:
@@ -320,7 +350,7 @@ class SQLResult(StatementResult):
         if len(self.data) > 1:
             msg = f"Multiple results found ({len(self.data)}), at most one row expected"
             raise ValueError(msg)
-        return cast("Optional[dict[str, Any]]", self.data[0])
+        return cast("Optional[RowT]", self.data[0])
 
     def scalar(self) -> Any:
         """Return the first column of the first row.

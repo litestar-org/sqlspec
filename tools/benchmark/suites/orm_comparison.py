@@ -1,6 +1,7 @@
 """Comprehensive ORM comparison benchmark suite testing all databases and async/sync variants."""
 
 import asyncio
+import time
 from typing import Any
 
 from rich.panel import Panel
@@ -179,18 +180,38 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
 
     def _get_sqlite_configs(self) -> tuple[SqliteConfig, SqliteConfig]:
         """Get SQLite configs with and without caching."""
-        db_path = ".benchmark/test_sync.db"
+        # Use separate database files to avoid locking issues
         return (
-            SqliteConfig(connection_config={"database": db_path}, statement_config=SQLConfig(enable_caching=False)),
-            SqliteConfig(connection_config={"database": db_path}, statement_config=SQLConfig(enable_caching=True)),
+            SqliteConfig(
+                connection_config={"database": ".benchmark/test_sync_no_cache.db"},
+                statement_config=SQLConfig(enable_caching=False),
+                min_pool_size=1,
+                max_pool_size=1,  # Reduce pool size to avoid concurrent access
+            ),
+            SqliteConfig(
+                connection_config={"database": ".benchmark/test_sync_with_cache.db"},
+                statement_config=SQLConfig(enable_caching=True),
+                min_pool_size=1,
+                max_pool_size=1,  # Reduce pool size to avoid concurrent access
+            ),
         )
 
     def _get_aiosqlite_configs(self) -> tuple[AiosqliteConfig, AiosqliteConfig]:
         """Get AioSQLite configs with and without caching."""
-        db_path = ".benchmark/test_async.db"
+        # Use separate database files to avoid locking issues
         return (
-            AiosqliteConfig(connection_config={"database": db_path}, statement_config=SQLConfig(enable_caching=False)),
-            AiosqliteConfig(connection_config={"database": db_path}, statement_config=SQLConfig(enable_caching=True)),
+            AiosqliteConfig(
+                connection_config={"database": ".benchmark/test_async_no_cache.db"},
+                statement_config=SQLConfig(enable_caching=False),
+                min_pool=1,
+                max_pool=1,  # Reduce pool size to avoid concurrent access
+            ),
+            AiosqliteConfig(
+                connection_config={"database": ".benchmark/test_async_with_cache.db"},
+                statement_config=SQLConfig(enable_caching=True),
+                min_pool=1,
+                max_pool=1,  # Reduce pool size to avoid concurrent access
+            ),
         )
 
     def _get_psycopg_configs(self, host: str, port: int) -> tuple[PsycopgSyncConfig, PsycopgSyncConfig]:
@@ -207,6 +228,24 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         return (
             PsycopgSyncConfig(pool_config=pool_params, statement_config=SQLConfig(enable_caching=False)),
             PsycopgSyncConfig(pool_config=pool_params, statement_config=SQLConfig(enable_caching=True)),
+        )
+
+    def _get_asyncpg_configs(self, host: str, port: int) -> tuple[Any, Any]:
+        """Get Asyncpg configs with and without caching."""
+        from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+        pool_params = {
+            "host": host,
+            "port": port,
+            "user": "postgres",
+            "password": "postgres",
+            "database": "postgres",
+            "min_size": 10,
+            "max_size": 20,
+        }
+        return (
+            AsyncpgConfig(pool_config=pool_params, statement_config=SQLConfig(enable_caching=False)),
+            AsyncpgConfig(pool_config=pool_params, statement_config=SQLConfig(enable_caching=True)),
         )
 
     def _run_sync_benchmarks(self, db_config: dict[str, Any]) -> dict[str, TimingResult]:
@@ -273,35 +312,77 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
 
     def _setup_sync_db(self, engine: Any) -> None:
         """Set up a synchronous database, creating tables and inserting test data."""
-        metadata.drop_all(engine, checkfirst=True)
-        metadata.create_all(engine, checkfirst=True)
-        with engine.begin() as conn:
-            users_data = [
-                {
-                    "id": i,
-                    "name": f"user_{i}",
-                    "email": f"user{i}@example.com",
-                    "status": "active" if i % 2 == 0 else "inactive",
-                }
-                for i in range(1, 1001)
-            ]
-            conn.execute(insert(users_table), users_data)
+        # For SQLite, we need to setup all database files
+        if "sqlite" in str(engine.url):
+            # Setup all SQLite database files
+            for db_file in [".benchmark/test_sync_no_cache.db", ".benchmark/test_sync_with_cache.db"]:
+                temp_engine = create_engine(f"sqlite:///{db_file}")
+                metadata.drop_all(temp_engine, checkfirst=True)
+                metadata.create_all(temp_engine, checkfirst=True)
+                with temp_engine.begin() as conn:
+                    users_data = [
+                        {
+                            "id": i,
+                            "name": f"user_{i}",
+                            "email": f"user{i}@example.com",
+                            "status": "active" if i % 2 == 0 else "inactive",
+                        }
+                        for i in range(1, 1001)
+                    ]
+                    conn.execute(insert(users_table), users_data)
+                temp_engine.dispose()
+        else:
+            # For other databases, use the provided engine
+            metadata.drop_all(engine, checkfirst=True)
+            metadata.create_all(engine, checkfirst=True)
+            with engine.begin() as conn:
+                users_data = [
+                    {
+                        "id": i,
+                        "name": f"user_{i}",
+                        "email": f"user{i}@example.com",
+                        "status": "active" if i % 2 == 0 else "inactive",
+                    }
+                    for i in range(1, 1001)
+                ]
+                conn.execute(insert(users_table), users_data)
 
     async def _setup_async_db(self, engine: Any) -> None:
         """Set up an asynchronous database, creating tables and inserting test data."""
-        async with engine.begin() as conn:
-            await conn.run_sync(metadata.drop_all, checkfirst=True)
-            await conn.run_sync(metadata.create_all, checkfirst=True)
-            users_data = [
-                {
-                    "id": i,
-                    "name": f"user_{i}",
-                    "email": f"user{i}@example.com",
-                    "status": "active" if i % 2 == 0 else "inactive",
-                }
-                for i in range(1, 1001)
-            ]
-            await conn.execute(insert(users_table), users_data)
+        # For SQLite (aiosqlite), we need to setup all database files
+        if "sqlite" in str(engine.url):
+            # Setup all async SQLite database files
+            for db_file in [".benchmark/test_async_no_cache.db", ".benchmark/test_async_with_cache.db"]:
+                temp_engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}")
+                async with temp_engine.begin() as conn:
+                    await conn.run_sync(metadata.drop_all, checkfirst=True)
+                    await conn.run_sync(metadata.create_all, checkfirst=True)
+                    users_data = [
+                        {
+                            "id": i,
+                            "name": f"user_{i}",
+                            "email": f"user{i}@example.com",
+                            "status": "active" if i % 2 == 0 else "inactive",
+                        }
+                        for i in range(1, 1001)
+                    ]
+                    await conn.execute(insert(users_table), users_data)
+                await temp_engine.dispose()
+        else:
+            # For other databases, use the provided engine
+            async with engine.begin() as conn:
+                await conn.run_sync(metadata.drop_all, checkfirst=True)
+                await conn.run_sync(metadata.create_all, checkfirst=True)
+                users_data = [
+                    {
+                        "id": i,
+                        "name": f"user_{i}",
+                        "email": f"user{i}@example.com",
+                        "status": "active" if i % 2 == 0 else "inactive",
+                    }
+                    for i in range(1, 1001)
+                ]
+                await conn.execute(insert(users_table), users_data)
 
     def _warmup_sync_connections(self, engine: Any, config_no_cache: Any, config_with_cache: Any) -> None:
         """Warm up synchronous connections for both SQLAlchemy and SQLSpec."""
@@ -398,28 +479,46 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
     ) -> dict[str, TimingResult]:
         """Benchmark inserting 100 records (sync)."""
         results = {}
+        # Generate unique data for each iteration to avoid conflicts
+        # Start IDs after existing data (1-1000)
+        base_id = 1001 + (int(time.time() * 1000) % 100000) * 100
         insert_data = [
-            {"name": f"insert_user_{i}", "email": f"insert{i}@example.com", "status": "pending"} for i in range(100)
+            {"id": base_id + i, "name": f"insert_user_{i}", "email": f"insert{i}@example.com", "status": "pending"}
+            for i in range(100)
         ]
-        sql = SQL("INSERT INTO users (name, email, status) VALUES (?, ?, ?)")
+        sql = SQL("INSERT INTO users (id, name, email, status) VALUES (?, ?, ?, ?)")
 
         # SQLSpec (no cache)
         with config_no_cache.provide_session() as session:
-            times = self.runner.metrics.time_operation(
-                lambda: session.execute_many(sql, [list(d.values()) for d in insert_data]), 10
-            )
+
+            def insert_and_cleanup() -> None:
+                session.execute_many(sql, *[list(d.values()) for d in insert_data])
+                # Clean up inserted data
+                session.execute(SQL(f"DELETE FROM users WHERE id >= {base_id} AND id < {base_id + 100}"))
+
+            times = self.runner.metrics.time_operation(insert_and_cleanup, 10)
             results["insert_bulk_sqlspec_no_cache"] = TimingResult("insert_bulk_sqlspec_no_cache", len(times), times)
 
         # SQLSpec (with cache)
         with config_with_cache.provide_session() as session:
-            times = self.runner.metrics.time_operation(
-                lambda: session.execute_many(sql, [list(d.values()) for d in insert_data]), 10
-            )
+
+            def insert_and_cleanup() -> None:
+                session.execute_many(sql, *[list(d.values()) for d in insert_data])
+                # Clean up inserted data
+                session.execute(SQL(f"DELETE FROM users WHERE id >= {base_id} AND id < {base_id + 100}"))
+
+            times = self.runner.metrics.time_operation(insert_and_cleanup, 10)
             results["insert_bulk_sqlspec_cache"] = TimingResult("insert_bulk_sqlspec_cache", len(times), times)
 
         # SQLAlchemy Core
         with engine.begin() as conn:
-            times = self.runner.metrics.time_operation(lambda: conn.execute(insert(users_table), insert_data), 10)
+
+            def insert_and_cleanup() -> None:
+                conn.execute(insert(users_table), insert_data)
+                # Clean up inserted data
+                conn.execute(text(f"DELETE FROM users WHERE id >= {base_id} AND id < {base_id + 100}"))
+
+            times = self.runner.metrics.time_operation(insert_and_cleanup, 10)
             results["insert_bulk_sqlalchemy_core"] = TimingResult("insert_bulk_sqlalchemy_core", len(times), times)
 
         return results
@@ -559,16 +658,22 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
     ) -> dict[str, TimingResult]:
         """Benchmark inserting 100 records (async)."""
         results = {}
+        # Generate unique data for each iteration to avoid conflicts
+        # Start IDs after existing data (1-1000)
+        base_id = 1001 + (int(time.time() * 1000) % 100000) * 100
         insert_data = [
-            {"name": f"insert_user_{i}", "email": f"insert{i}@example.com", "status": "pending"} for i in range(100)
+            {"id": base_id + i, "name": f"insert_user_{i}", "email": f"insert{i}@example.com", "status": "pending"}
+            for i in range(100)
         ]
-        sql = SQL("INSERT INTO users (name, email, status) VALUES (?, ?, ?)")
+        sql = SQL("INSERT INTO users (id, name, email, status) VALUES (?, ?, ?, ?)")
 
         # SQLSpec (no cache)
         async with config_no_cache.provide_session() as session:
 
             async def op() -> Any:
-                return await session.execute_many(sql, [list(d.values()) for d in insert_data])
+                await session.execute_many(sql, *[list(d.values()) for d in insert_data])
+                # Clean up inserted data
+                await session.execute(SQL(f"DELETE FROM users WHERE id >= {base_id} AND id < {base_id + 100}"))
 
             times = await self.runner.metrics.time_operation_async(op, 10)
             results["insert_bulk_sqlspec_no_cache"] = TimingResult("insert_bulk_sqlspec_no_cache", len(times), times)
@@ -577,7 +682,9 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         async with config_with_cache.provide_session() as session:
 
             async def op() -> Any:
-                return await session.execute_many(sql, [list(d.values()) for d in insert_data])
+                await session.execute_many(sql, *[list(d.values()) for d in insert_data])
+                # Clean up inserted data
+                await session.execute(SQL(f"DELETE FROM users WHERE id >= {base_id} AND id < {base_id + 100}"))
 
             times = await self.runner.metrics.time_operation_async(op, 10)
             results["insert_bulk_sqlspec_cache"] = TimingResult("insert_bulk_sqlspec_cache", len(times), times)
@@ -586,7 +693,9 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         async with engine.begin() as conn:
 
             async def op() -> Any:
-                return await conn.execute(insert(users_table), insert_data)
+                await conn.execute(insert(users_table), insert_data)
+                # Clean up inserted data
+                await conn.execute(text(f"DELETE FROM users WHERE id >= {base_id} AND id < {base_id + 100}"))
 
             times = await self.runner.metrics.time_operation_async(op, 10)
             results["insert_bulk_sqlalchemy_core"] = TimingResult("insert_bulk_sqlalchemy_core", len(times), times)

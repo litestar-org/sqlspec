@@ -29,7 +29,6 @@ __all__ = ("BigQueryConnection", "BigQueryDriver")
 if TYPE_CHECKING:
     BigQueryConnection: TypeAlias = Client
 else:
-    # Direct assignment for mypyc runtime
     BigQueryConnection = Client
 
 logger = logging.getLogger("sqlspec.adapters.bigquery")

@@ -25,7 +25,12 @@ class AdapterCacheMixin:
     Integrates transparently with existing adapter execution flow.
     """
 
-    __slots__ = ("_compiled_cache", "_prepared_counter", "_prepared_statements")
+    __slots__ = ()
+
+    # Declare attributes for type checking - actual storage in concrete classes
+    _compiled_cache: Optional[SQLCache]
+    _prepared_statements: dict[str, str]
+    _prepared_counter: int
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize adapter with caching support."""
@@ -37,8 +42,8 @@ class AdapterCacheMixin:
         enable_cache = getattr(config, "enable_adapter_cache", True) if config else True
 
         # Initialize caches
-        self._compiled_cache: Optional[SQLCache] = SQLCache(max_size=cache_size) if enable_cache else None
-        self._prepared_statements: dict[str, str] = {}
+        self._compiled_cache = SQLCache(max_size=cache_size) if enable_cache else None
+        self._prepared_statements = {}
         self._prepared_counter = 0
 
     def _get_compiled_sql(self, statement: "SQL", target_style: ParameterStyle) -> tuple[str, Any]:

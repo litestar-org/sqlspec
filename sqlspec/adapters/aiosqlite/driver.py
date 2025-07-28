@@ -18,15 +18,13 @@ if TYPE_CHECKING:
 
     from sqlspec.statement.sql import SQL, SQLConfig
 
+    AiosqliteConnection: TypeAlias = aiosqlite.Connection
+else:
+    AiosqliteConnection = Any
+
 __all__ = ("AiosqliteConnection", "AiosqliteDriver")
 
 logger = logging.getLogger("sqlspec")
-
-if TYPE_CHECKING:
-    AiosqliteConnection: TypeAlias = aiosqlite.Connection
-else:
-    # Direct assignment for mypyc runtime
-    AiosqliteConnection = aiosqlite.Connection
 
 
 class _AsyncAiosqliteCursorManager:

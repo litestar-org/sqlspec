@@ -5,13 +5,12 @@ import logging
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
+    from psqlpy import Connection
     from typing_extensions import TypeAlias
 
     from sqlspec.statement.result import SQLResult
     from sqlspec.statement.sql import SQL, SQLConfig
 
-
-from psqlpy import Connection
 
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
@@ -24,8 +23,7 @@ __all__ = ("PsqlpyConnection", "PsqlpyDriver")
 if TYPE_CHECKING:
     PsqlpyConnection: TypeAlias = Connection
 else:
-    # Direct assignment for mypyc runtime
-    PsqlpyConnection = Connection
+    PsqlpyConnection = Any
 logger = logging.getLogger("sqlspec")
 
 

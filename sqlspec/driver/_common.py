@@ -43,13 +43,12 @@ ROW_RETURNING_TOKENS = {
 class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
-    __slots__ = ("config", "connection")
+    __slots__ = ()
 
+    connection: "Any"
+    config: "SQLConfig"
     dialect: "DialectType"
-    """The SQL dialect supported by the underlying database driver."""
-
     parameter_config: "DriverParameterConfig"
-    """Driver parameter configuration."""
 
     def __init__(self, connection: "Any", config: "Optional[SQLConfig]" = None) -> None:
         """Initialize async driver adapter.

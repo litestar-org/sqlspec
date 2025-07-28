@@ -1,13 +1,14 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import contextlib
 import datetime
-import sqlite3
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 from sqlspec.driver import SyncDriverAdapterBase
 
 if TYPE_CHECKING:
+    import sqlite3
+
     from sqlglot.dialects.dialect import DialectType
     from typing_extensions import TypeAlias
 
@@ -23,8 +24,8 @@ logger = get_logger("adapters.sqlite")
 if TYPE_CHECKING:
     SqliteConnection: TypeAlias = sqlite3.Connection
 else:
-    # Direct assignment for mypyc runtime
-    SqliteConnection = sqlite3.Connection
+    # Use Any for mypyc runtime to avoid "unreachable code" error
+    SqliteConnection = Any
 
 
 class _SqliteCursorManager:

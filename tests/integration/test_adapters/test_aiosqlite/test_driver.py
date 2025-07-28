@@ -29,7 +29,21 @@ async def aiosqlite_session() -> AsyncGenerator[AiosqliteDriver, None]:
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        yield session
+        # Commit DDL to prevent table locking issues in subsequent operations
+        await session.commit()
+
+        try:
+            yield session
+        finally:
+            # Ensure any pending transactions are committed before test ends
+            try:
+                await session.commit()
+            except Exception:
+                # If commit fails, try rollback to clean up transaction state
+                try:
+                    await session.rollback()
+                except Exception:
+                    pass
         # Cleanup is automatic with in-memory database
 
 
@@ -86,6 +100,10 @@ async def test_aiosqlite_basic_crud(aiosqlite_session: AiosqliteDriver) -> None:
 @pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_parameter_styles(aiosqlite_session: AiosqliteDriver, params: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles."""
+    # Clear any existing data between parameterized test runs
+    await aiosqlite_session.execute("DELETE FROM test_table")
+    await aiosqlite_session.commit()
+
     # Insert test data
     await aiosqlite_session.execute("INSERT INTO test_table (name) VALUES (?)", ("test_value"))
 
@@ -105,6 +123,10 @@ async def test_aiosqlite_parameter_styles(aiosqlite_session: AiosqliteDriver, pa
 @pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_execute_many(aiosqlite_session: AiosqliteDriver) -> None:
     """Test execute_many functionality."""
+    # Clear any existing data
+    await aiosqlite_session.execute("DELETE FROM test_table")
+    await aiosqlite_session.commit()
+
     params_list = [("name1", 1), ("name2", 2), ("name3", 3)]
 
     result = await aiosqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", params_list)

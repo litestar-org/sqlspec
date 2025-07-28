@@ -2,8 +2,6 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 from typing import TYPE_CHECKING, Any
 
-from duckdb import DuckDBPyConnection
-
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 from sqlspec.utils.logging import get_logger
@@ -11,6 +9,7 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from typing import Optional
 
+    from duckdb import DuckDBPyConnection
     from sqlglot.dialects.dialect import DialectType
     from typing_extensions import TypeAlias
 
@@ -22,7 +21,7 @@ __all__ = ("DuckDBConnection", "DuckDBDriver")
 if TYPE_CHECKING:
     DuckDBConnection: TypeAlias = DuckDBPyConnection
 else:
-    DuckDBConnection = DuckDBPyConnection
+    DuckDBConnection = Any
 
 logger = get_logger("adapters.duckdb")
 
@@ -52,14 +51,12 @@ class DuckDBDriver(SyncDriverAdapterBase):
     def __init__(self, connection: "DuckDBConnection", config: "Optional[SQLConfig]" = None) -> None:  # noqa: FA100
         super().__init__(connection=connection, config=config)
         self.parameter_config = DriverParameterConfig(
-            supported_parameter_styles=[
-                ParameterStyle.QMARK,  # ?
-                ParameterStyle.NUMERIC,  # $1, $2
-            ],
+            supported_parameter_styles=[ParameterStyle.QMARK, ParameterStyle.NUMERIC],
             default_parameter_style=ParameterStyle.QMARK,
             type_coercion_map={},
-            has_native_list_expansion=True,  # DuckDB handles lists natively
+            has_native_list_expansion=True,
         )
+        self._execution_state = {"executemany_count": None}
 
     def with_cursor(self, connection: "DuckDBConnection") -> "_DuckDBCursorManager":
         return _DuckDBCursorManager(connection)
@@ -81,9 +78,16 @@ class DuckDBDriver(SyncDriverAdapterBase):
                 # For execute_many, params is already a list of parameter sets
                 prepared_params = self._prepare_driver_parameters_many(params) if params else []
                 cursor.executemany(sql, prepared_params)
+                # Store the parameter count for accurate row count reporting
+                # DuckDB's rowcount after executemany only reports the last batch
+                if prepared_params and sql.strip().upper().startswith("INSERT"):
+                    self._execution_state["executemany_count"] = len(prepared_params)
+                else:
+                    self._execution_state["executemany_count"] = None
             else:
                 prepared_params = self._prepare_driver_parameters(params)
                 cursor.execute(sql, prepared_params or [])
+                self._execution_state["executemany_count"] = None
 
     def _extract_select_data(self, cursor: "DuckDBConnection") -> "tuple[list[dict[str, Any]], list[str], int]":
         """Extract data from cursor after SELECT execution."""
@@ -99,6 +103,11 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
     def _extract_execute_rowcount(self, cursor: "DuckDBConnection") -> int:
         """Extract row count from cursor after INSERT/UPDATE/DELETE."""
+        executemany_count = self._execution_state.get("executemany_count")
+        if executemany_count is not None:
+            self._execution_state["executemany_count"] = None
+            return executemany_count
+
         try:
             result = cursor.fetchone()
             return int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0

@@ -19,9 +19,9 @@ if TYPE_CHECKING:
     OracleSyncConnection: TypeAlias = Connection
     OracleAsyncConnection: TypeAlias = AsyncConnection
 else:
-    # Direct assignment for mypyc runtime
-    OracleSyncConnection = Connection
-    OracleAsyncConnection = AsyncConnection
+    # Use Any for mypyc runtime to avoid "unreachable code" error
+    OracleSyncConnection = Any
+    OracleAsyncConnection = Any
 
 logger = get_logger("adapters.oracledb")
 

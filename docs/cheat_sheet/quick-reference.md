@@ -452,10 +452,271 @@ sqlspec/
     └── .todos/       # Task tracking
 ```
 
+## Adapter Development Patterns
+
+### Script Execution (CRITICAL FIX)
+
+**❌ WRONG - Double Compilation:**
+
+```python
+def _perform_execute(self, cursor, statement):
+    if statement.is_script:
+        sql = self._prepare_script_sql(statement)  # ← Compiles internally
+        cursor.executescript(sql)  # ← Another compilation path
+```
+
+**✅ CORRECT - Single Compilation:**
+
+```python
+def _perform_execute(self, cursor, statement):
+    sql, params = statement.compile()
+    if statement.is_script:
+        # Single compilation with STATIC style to embed parameters
+        sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+        cursor.executescript(sql)
+    else:
+        # Regular execution with driver's parameter style
+        sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
+        prepared_params = self._prepare_driver_parameters(params)
+        cursor.execute(sql, prepared_params or ())
+```
+
+### Four-Method Execution Pattern
+
+**Standard Implementation Structure:**
+
+```python
+def _perform_execute(self, cursor, statement):
+    """Main dispatch method - SINGLE compilation point."""
+    if statement.is_script:
+        return self._execute_script(cursor, statement)
+    elif statement.is_many:
+        return self._execute_many(cursor, statement)
+    else:
+        return self._execute_single(cursor, statement)
+
+def _execute_script(self, cursor, statement):
+    """Script execution - uses STATIC compilation."""
+    sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+    # Database-specific script execution
+
+def _execute_many(self, cursor, statement):
+    """Batch execution - uses driver's parameter style."""
+    sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
+    prepared_params = self._prepare_driver_parameters_many(params)
+    # Database-specific batch execution
+
+def _execute_single(self, cursor, statement):
+    """Single statement execution - uses driver's parameter style."""
+    sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
+    prepared_params = self._prepare_driver_parameters(params)
+    # Database-specific single execution
+```
+
+### Configuration Pattern
+
+**Complete Adapter Config:**
+
+```python
+from typing import ClassVar
+from sqlspec.adapters.base import BaseConfig
+from sqlspec.parameters import DriverParameterConfig, ParameterStyle
+
+class MyDbConfig(BaseConfig[MyDbConnection, MyDbDriver]):
+    """Configuration for MyDb adapter."""
+
+    driver_class: ClassVar[type[MyDbDriver]] = MyDbDriver
+
+    # Driver parameter configuration
+    parameter_config: ClassVar[DriverParameterConfig] = DriverParameterConfig(
+        supported_parameter_styles=[ParameterStyle.QMARK, ParameterStyle.NAMED_COLON],
+        default_parameter_style=ParameterStyle.QMARK,
+        type_coercion_map={
+            bool: int,  # Convert booleans to integers
+            datetime.datetime: lambda v: v.isoformat(),  # ISO format
+            Decimal: str,  # String representation
+            dict: to_json,  # JSON serialization
+            list: to_json,  # JSON serialization
+        },
+        has_native_list_expansion=False,  # Whether DB supports IN (?, ?, ?)
+    )
+
+    def _create_connection(self) -> MyDbConnection:
+        """Create database connection from config."""
+        return MyDbConnection(**self.connection_config)
+```
+
+### Driver Class Structure
+
+**Complete Driver Implementation:**
+
+```python
+from typing import ClassVar, Optional, Any
+from sqlspec.driver import SyncDriverAdapterBase
+from sqlspec.parameters import DriverParameterConfig, ParameterStyle
+
+class MyDbDriver(SyncDriverAdapterBase):
+    """Driver for MyDb database."""
+
+    # Required class attributes
+    dialect: ClassVar[str] = "mydb"
+    parameter_config: ClassVar[DriverParameterConfig] = DriverParameterConfig(
+        supported_parameter_styles=[ParameterStyle.QMARK],
+        default_parameter_style=ParameterStyle.QMARK,
+        type_coercion_map={},
+        has_native_list_expansion=False,
+    )
+
+    @contextmanager
+    def with_cursor(self, connection):
+        """Context manager for cursor lifecycle."""
+        cursor = connection.cursor()
+        try:
+            yield cursor
+        finally:
+            cursor.close()
+
+    def _perform_execute(self, cursor, statement):
+        """Main execution dispatch - SINGLE compilation point."""
+        if statement.is_script:
+            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            cursor.executescript(sql)
+        else:
+            sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
+            if statement.is_many:
+                prepared_params = self._prepare_driver_parameters_many(params) if params else []
+                cursor.executemany(sql, prepared_params)
+            else:
+                prepared_params = self._prepare_driver_parameters(params)
+                cursor.execute(sql, prepared_params or ())
+
+    def _extract_select_data(self, cursor):
+        """Extract data from SELECT results."""
+        data = cursor.fetchall()
+        columns = [desc[0] for desc in cursor.description or []]
+        return [dict(zip(columns, row)) for row in data], columns, len(data)
+
+    def _extract_execute_rowcount(self, cursor):
+        """Extract row count from INSERT/UPDATE/DELETE."""
+        return cursor.rowcount if cursor.rowcount is not None else 0
+```
+
+### Script Execution Patterns by Database
+
+**SQLite (executescript support):**
+
+```python
+if statement.is_script:
+    sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+    cursor.executescript(sql)  # Native script support
+```
+
+**PostgreSQL (no executescript):**
+
+```python
+if statement.is_script:
+    sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
+    prepared_params = self._prepare_driver_parameters(params)
+    statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
+    for stmt in statements:
+        if stmt.strip():
+            cursor.execute(stmt, prepared_params or ())
+```
+
+**BigQuery (job-based):**
+
+```python
+if statement.is_script:
+    sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
+    prepared_params = self._prepare_driver_parameters(params)
+    statements = self._split_script_statements(sql)
+    jobs = []
+    for stmt in statements:
+        if stmt.strip():
+            job = self._run_query_job(stmt, prepared_params)
+            jobs.append(job)
+    cursor.jobs = jobs
+```
+
+### Parameter Processing Rules
+
+**DO:**
+
+- Use `statement.compile()` ONCE per execution path
+- Use `ParameterStyle.STATIC` for scripts that don't support parameters
+- Use driver's `default_parameter_style` for regular execution
+- Call `_prepare_driver_parameters()` to unwrap TypedParameter objects
+- Trust the type coercion system
+
+**DON'T:**
+
+- Call `_prepare_script_sql()` followed by another compilation
+- Manually process TypedParameter objects
+- Add custom parameter conversion logic
+- Modify SQL strings directly after compilation
+- Mix parameter styles within a single execution
+
+### Testing Pattern
+
+**Adapter Test Structure:**
+
+```python
+def test_script_execution(session):
+    """Test script execution without double compilation."""
+    script = """
+    CREATE TABLE test (id INTEGER, name TEXT);
+    INSERT INTO test (id, name) VALUES (1, 'test');
+    SELECT * FROM test;
+    """
+
+    result = session.execute_script(script)
+    assert isinstance(result, SQLResult)
+
+    # Verify results
+    check = session.execute("SELECT * FROM test")
+    assert len(check.data) == 1
+    assert check.data[0]["name"] == "test"
+
+def test_parameter_styles(session):
+    """Test different parameter binding styles."""
+    # Tuple parameters
+    result = session.execute("SELECT ?", ("value",))
+
+    # Dict parameters
+    result = session.execute("SELECT :name", {"name": "value"})
+
+    # Many parameters
+    result = session.execute_many(
+        "INSERT INTO test (name) VALUES (?)",
+        [("name1",), ("name2",)]
+    )
+```
+
+### Common Pitfalls
+
+| Problem | Symptom | Solution |
+|---------|---------|----------|
+| Double compilation | Performance degradation, parameter loss | Use single `statement.compile()` call |
+| Script parameter loss | NULL values in script execution | Use `ParameterStyle.STATIC` for scripts |
+| Type coercion errors | Database type mismatches | Define proper `type_coercion_map` |
+| Parameter count mismatch | Database driver errors | Don't manually process parameters |
+| Memory leaks | Growing memory usage | Properly close cursors in context managers |
+
+### Development Workflow
+
+1. **Start with SQLite adapter as reference** - `sqlspec/adapters/sqlite/driver.py`
+2. **Copy the four-method execution structure** - Main dispatch + 3 execution methods
+3. **Define parameter configuration** - Supported styles and type coercion
+4. **Implement cursor management** - Context manager pattern
+5. **Test script execution** - Verify single compilation
+6. **Add database-specific optimizations** - Connection pooling, etc.
+7. **Create comprehensive tests** - Unit + integration coverage
+
 ## Remember
 
-1. **Pipeline transforms SQL only** - not parameters
-2. **TypeCoercionMixin processes parameters** - trust it
-3. **Special cases need special handling** - but in the right place
-4. **Types flow through the system** - preserve them
-5. **Test everything** - especially edge cases
+1. **Single Compilation Rule** - One `statement.compile()` call per execution path
+2. **Pipeline transforms SQL only** - not parameters
+3. **TypeCoercionMixin processes parameters** - trust it
+4. **Script execution uses STATIC style** - to embed parameters as literals
+5. **Types flow through the system** - preserve them
+6. **Test everything** - especially edge cases and script execution

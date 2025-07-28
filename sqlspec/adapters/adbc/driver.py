@@ -1,20 +1,20 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import contextlib
+import datetime
+import decimal
 import logging
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 if TYPE_CHECKING:
+    from adbc_driver_manager.dbapi import Connection, Cursor
     from sqlglot.dialects.dialect import DialectType
     from typing_extensions import TypeAlias
 
 
-from adbc_driver_manager.dbapi import Connection, Cursor
-
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
-
-# Type handlers removed - ADBC has good native type support
+from sqlspec.utils.serializers import to_json
 
 __all__ = ("AdbcConnection", "AdbcDriver")
 
@@ -23,7 +23,7 @@ logger = logging.getLogger("sqlspec")
 if TYPE_CHECKING:
     AdbcConnection: TypeAlias = Connection
 else:
-    AdbcConnection = Connection
+    AdbcConnection = Any
 
 
 class _AdbcCursorManager:
@@ -87,15 +87,47 @@ class AdbcDriver(SyncDriverAdapterBase):
         self.parameter_config = DriverParameterConfig(
             supported_parameter_styles=supported_styles,
             default_parameter_style=default_style,
-            type_coercion_map={
-                # ADBC has good native type support across dialects
-                # Add any specific type mappings as needed
-            },
+            type_coercion_map=self._get_type_coercion_map(),
             has_native_list_expansion=True,  # ADBC handles lists natively
         )
 
         # Type handlers can be registered if the base class supports it
         # ADBC has good native type support, so we don't need explicit type handlers
+
+    def _get_type_coercion_map(self) -> "dict[type, Any]":
+        """Get type coercion map for Arrow/ADBC type handling."""
+        # Basic type mappings for Arrow/ADBC compatibility
+        type_map = {
+            # Handle None/NULL values explicitly
+            type(None): lambda _: None,
+            # Date/Time types - DO NOT convert to strings, PostgreSQL expects actual date/time objects
+            datetime.datetime: lambda x: x,
+            datetime.date: lambda x: x,
+            datetime.time: lambda x: x,
+            # Decimal type for numeric precision
+            decimal.Decimal: float,
+            # Boolean handling
+            bool: lambda x: x,
+            # Numeric types
+            int: lambda x: x,
+            float: lambda x: x,
+            # String types
+            str: lambda x: x,
+            bytes: lambda x: x,
+            # Collection types (lists/arrays)
+            list: lambda x: x,
+            tuple: lambda x: list(x),  # Convert tuples to lists for Arrow
+            dict: lambda x: x,  # For JSON/JSONB types
+        }
+
+        # PostgreSQL-specific type handling
+        if self.dialect == "postgres":
+            # PostgreSQL arrays need special handling
+            type_map[list] = lambda x: x if x is not None else []
+            # PostgreSQL JSON types - convert dict to JSON string
+            type_map[dict] = lambda x: to_json(x) if x is not None else None
+
+        return type_map
 
     @staticmethod
     def _get_dialect(connection: "AdbcConnection") -> str:
@@ -141,11 +173,15 @@ class AdbcDriver(SyncDriverAdapterBase):
                             parameters=self._prepare_cursor_parameters(self._handle_postgres_empty_params(parameters)),
                         )
             elif statement.is_many:
-                cursor.executemany(sql, parameters or [])
+                # Use the proper parameter preparation for execute_many
+                prepared_params = self._prepare_driver_parameters_many(parameters) if parameters else []
+                cursor.executemany(sql, prepared_params)
             else:
-                cursor.execute(
-                    sql, parameters=self._prepare_cursor_parameters(self._handle_postgres_empty_params(parameters))
-                )
+                # For single execution, prepare parameters intelligently
+                prepared_params = self._prepare_cursor_parameters(self._handle_postgres_empty_params(parameters))
+                # Handle special case where a single-element list is passed for a single parameter
+                prepared_params = self._handle_single_param_list(sql, prepared_params)
+                cursor.execute(sql, parameters=prepared_params)
         except Exception as e:
             self._handle_postgres_rollback(cursor)
             raise e from e
@@ -182,11 +218,117 @@ class AdbcDriver(SyncDriverAdapterBase):
             cursor.execute("COMMIT")
 
     def _prepare_cursor_parameters(self, parameters: "Any") -> "list[Any]":
-        """Convert parameters to the format expected by ADBC cursor."""
+        """Convert parameters to the format expected by ADBC cursor.
+
+        ADBC/Arrow requires special handling for certain types:
+        - NULL values need to be handled properly
+        - Date/time types may need conversion
+        - Arrays and complex types need proper formatting
+        """
         if parameters is None:
             return []
+
+        # Handle dict parameters (for named parameters)
+        if isinstance(parameters, dict):
+            if not parameters:
+                return []
+            # For dict parameters, we need to handle conversion
+            values = list(parameters.values())
+            # Apply type conversions to each value individually
+            return [self._convert_single_parameter(v) for v in values]
+
+        # Handle list/tuple parameters
         if isinstance(parameters, (list, tuple)):
-            return list(parameters)
-        if isinstance(parameters, dict) and not parameters:
+            # Apply type conversions to each parameter individually
+            return [self._convert_single_parameter(p) for p in parameters]
+
+        # Single parameter case
+        return [self._convert_single_parameter(parameters)]
+
+    def _convert_single_parameter(self, param: "Any") -> "Any":
+        """Convert a single parameter to Arrow-compatible type.
+
+        This handles special cases for Arrow/ADBC:
+        - None values (Arrow 'na' type issues)
+        - Date/time conversions
+        - Decimal to float conversions
+        - JSON/dict conversions
+        """
+        if param is None:
+            # Keep None as is - ADBC should handle it
+            return None
+        if isinstance(param, decimal.Decimal):
+            # Convert Decimal to float for Arrow compatibility
+            return float(param)
+        if isinstance(param, (datetime.date, datetime.time, datetime.datetime)):
+            # Keep datetime objects as is - ADBC should handle them
+            # The driver will convert them appropriately based on the column type
+            return param
+        if isinstance(param, (list, tuple)):
+            # Arrays should be passed as lists
+            return list(param) if isinstance(param, tuple) else param
+        if isinstance(param, dict):
+            # For JSON/JSONB types - convert to string if needed
+            return to_json(param) if self.dialect == "postgres" else param
+        # Keep other types as is
+        return param
+
+    def _convert_parameters_for_arrow(self, params: "list[Any]") -> "list[Any]":
+        """Convert parameters to Arrow-compatible types.
+
+        This handles special cases for Arrow/ADBC:
+        - None values (Arrow 'na' type issues)
+        - Date/time conversions
+        - Decimal to float conversions
+        """
+        return [self._convert_single_parameter(param) for param in params]
+
+    def _handle_single_param_list(self, sql: str, params: "list[Any]") -> "list[Any]":
+        """Handle special case where a single-element list is passed for a single parameter.
+
+        When we have a SQL query with one parameter placeholder and receive a list with
+        one element that is itself a list, we need to determine if this is:
+        1. A single parameter that should be an array (keep as is)
+        2. A mistaken way of passing a single parameter (extract the value)
+
+        For now, we'll check if the parameter count matches.
+        """
+        # Count parameter placeholders in SQL
+        param_count = sql.count("$1") + sql.count("$2") + sql.count("?") + sql.count("%s")
+
+        # If we have exactly one parameter placeholder and one parameter that is a list
+        # and the list contains exactly one non-list element, extract it
+        if (
+            param_count == 1
+            and len(params) == 1
+            and isinstance(params[0], list)
+            and len(params[0]) == 1
+            and not isinstance(params[0][0], (list, tuple))
+        ):
+            return params[0]
+
+        return params
+
+    def _prepare_driver_parameters_many(self, parameters: "Any") -> "list[Any]":
+        """Prepare parameters for execute_many operations.
+
+        ADBC requires special handling for batch operations with Arrow.
+        """
+        if not parameters:
             return []
-        return [parameters]
+
+        # Convert each parameter set
+        prepared = []
+        for param_set in parameters:
+            if isinstance(param_set, dict):
+                # Named parameters - convert values
+                values = list(param_set.values())
+                prepared.append([self._convert_single_parameter(v) for v in values])
+            elif isinstance(param_set, (list, tuple)):
+                # Positional parameters
+                prepared.append([self._convert_single_parameter(p) for p in param_set])
+            else:
+                # Single value parameter sets
+                prepared.append([self._convert_single_parameter(param_set)])
+
+        return prepared

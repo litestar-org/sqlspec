@@ -71,6 +71,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             has_native_list_expansion=True,
             force_style_conversion=True,
         )
+        self._execution_state = {"last_status": None, "compiled_sql": None, "prepared_params": None}
 
     def with_cursor(self, connection: "AsyncpgConnection") -> "_AsyncpgCursorManager":
         return _AsyncpgCursorManager(connection)
@@ -89,7 +90,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                 if stmt.strip():  # Skip empty statements
                     last_status = await cursor.execute(stmt, *(prepared_params or []))
             # Store the last statement's status for row count
-            self._last_execute_status = last_status
+            self._execution_state["last_status"] = last_status
         elif statement.is_many:
             # For execute_many, params is already a list of parameter sets
             prepared_params = self._prepare_driver_parameters_many(params) if params else []
@@ -98,20 +99,20 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             # For executemany, we can't get exact row count from asyncpg
             # Store approximate count based on number of parameter sets
             row_count = len(prepared_params) if prepared_params else 0
-            self._last_execute_status = f"EXECUTE_MANY {row_count}"
+            self._execution_state["last_status"] = f"EXECUTE_MANY {row_count}"
         else:
             prepared_params = self._prepare_driver_parameters(params)
             # asyncpg uses *args for parameters, and execute() returns status string
             status = await cursor.execute(sql, *(prepared_params or []))
             # Store status for row count extraction in non-SELECT operations
             if not self.returns_rows(statement.expression):
-                self._last_execute_status = status
+                self._execution_state["last_status"] = status
 
         # Store compiled SQL and prepared params for SELECT fetch operations
         # AsyncPG requires separate fetch() call for SELECT statements
         if self.returns_rows(statement.expression):
-            self._last_compiled_sql = sql
-            self._last_prepared_params = prepared_params
+            self._execution_state["compiled_sql"] = sql
+            self._execution_state["prepared_params"] = prepared_params
 
     async def _extract_select_data(self, cursor: "AsyncpgConnection") -> "tuple[list[dict[str, Any]], list[str], int]":
         """Extract data from cursor after SELECT execution.
@@ -120,9 +121,9 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """
         # Use the compiled SQL and prepared params stored during _perform_execute
         # This avoids re-compilation and follows single-pass processing principle
-        if hasattr(self, "_last_compiled_sql") and hasattr(self, "_last_prepared_params"):
-            sql = self._last_compiled_sql
-            prepared_params = self._last_prepared_params
+        sql = self._execution_state.get("compiled_sql")
+        prepared_params = self._execution_state.get("prepared_params")
+        if sql is not None:
             records = await cursor.fetch(sql, *(prepared_params or []))
         else:
             # Fallback - this shouldn't happen in normal flow
@@ -135,7 +136,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     def _extract_execute_rowcount(self, cursor: "AsyncpgConnection") -> int:
         """Extract row count from cursor after INSERT/UPDATE/DELETE."""
         # Use the status stored during _perform_execute
-        status = getattr(self, "_last_execute_status", "UNKNOWN 0")
+        status = self._execution_state.get("last_status", "UNKNOWN 0")
         return self._parse_asyncpg_status(status)
 
     async def _build_result(self, cursor: "AsyncpgConnection", statement: "SQL") -> "SQLResult":
@@ -144,12 +145,9 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             return await super()._build_result(cursor, statement)
         finally:
             # Clean up stored state after result is built
-            if hasattr(self, "_last_compiled_sql"):
-                delattr(self, "_last_compiled_sql")
-            if hasattr(self, "_last_prepared_params"):
-                delattr(self, "_last_prepared_params")
-            if hasattr(self, "_last_execute_status"):
-                delattr(self, "_last_execute_status")
+            self._execution_state["compiled_sql"] = None
+            self._execution_state["prepared_params"] = None
+            self._execution_state["last_status"] = None
 
     @staticmethod
     def _parse_asyncpg_status(status: str) -> int:

@@ -1,14 +1,13 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 from typing import TYPE_CHECKING, Any, Optional
 
-from psycopg import AsyncConnection, Connection
-
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from psycopg import AsyncConnection, Connection
     from psycopg.rows import DictRow as PsycopgDictRow
     from sqlglot.dialects.dialect import DialectType
     from typing_extensions import TypeAlias
@@ -22,8 +21,8 @@ if TYPE_CHECKING:
     PsycopgSyncConnection: TypeAlias = Connection[PsycopgDictRow]
     PsycopgAsyncConnection: TypeAlias = AsyncConnection[PsycopgDictRow]
 else:
-    PsycopgSyncConnection = Connection
-    PsycopgAsyncConnection = AsyncConnection
+    PsycopgSyncConnection = Any
+    PsycopgAsyncConnection = Any
 
 
 class _PsycopgCursorManager:

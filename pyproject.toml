@@ -104,6 +104,8 @@ lint = [
 
 ]
 test = [
+  "aiohttp",
+  "requests",
   "anyio",
   "coverage>=7.6.1",
   "pytest>=8.0.0",
@@ -141,32 +143,31 @@ exclude = [
   "tests/**",                         # Test files
   "sqlspec/__main__.py",              # Entry point (can't run directly when compiled)
   "sqlspec/cli.py",                   # CLI module (not performance critical)
-  "sqlspec/**/__init__.py",           # Init files (usually just imports)
-  "sqlspec/protocols.py",             # Protocol definitions
   "sqlspec/typing.py",                # Type aliases
+  "sqlspec/_typing.py",               # Type aliases
   "sqlspec/adapters/*/config.py",     # Configuration classes
   "sqlspec/config.py",                # Main config
   "sqlspec/extensions/**",            # All extensions
   "sqlspec/storage/backends/base.py", # Abstract base
+  "sqlspec/**/__init__.py",           # Init files (usually just imports)
+  "sqlspec/protocols.py",             # Protocol definitions
 ]
 include = [
   "sqlspec/statement/**/*.py", # All statement-related modules
   "sqlspec/loader.py",
 
-
-  # === DRIVER CORE (NEW) ===
+  # === DRIVER CORE ===
   "sqlspec/driver/*.py",
   "sqlspec/driver/mixins/*.py",
-  "sqlspec/driver/mixins/_result_utils.py",
+  "sqlspec/parameters/**/*.py",
 
-
-  # === STORAGE LAYER (NEW) ===
+  # === STORAGE LAYER ===
   "sqlspec/storage/registry.py",
   "sqlspec/storage/capabilities.py",
   "sqlspec/storage/backends/obstore.py",
   "sqlspec/storage/backends/fsspec.py",
 
-  # === CORE ADAPTERS (NEW) ===
+  # === CORE ADAPTERS ===
   "sqlspec/adapters/sqlite/driver.py",
   "sqlspec/adapters/psycopg/driver.py",
   "sqlspec/adapters/asyncpg/driver.py",
@@ -183,6 +184,7 @@ include = [
   "sqlspec/utils/text.py",
   "sqlspec/utils/sync_tools.py",
   "sqlspec/utils/type_guards.py",
+  "sqlspec/utils/fixtures.py",
 ]
 mypy-args = [
   "--ignore-missing-imports",

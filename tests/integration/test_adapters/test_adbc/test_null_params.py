@@ -79,10 +79,10 @@ def test_postgresql_mixed_null_parameters(adbc_postgresql_null_session: AdbcDriv
 
     # Verify data
     result = adbc_postgresql_null_session.execute("SELECT * FROM test_null_params")
-    assert len(result.data) == 1
-    assert result.data[0]["col1"] == "value1"
-    assert result.data[0]["col2"] is None
-    assert result.data[0]["col3"] == "value3"
+    assert len(result.get_data()) == 1
+    assert result.get_data()[0]["col1"] == "value1"
+    assert result.get_data()[0]["col2"] is None
+    assert result.get_data()[0]["col3"] == "value3"
 
 
 @pytest.mark.xdist_group("postgres")
