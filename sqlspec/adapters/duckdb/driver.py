@@ -2,6 +2,8 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 from typing import TYPE_CHECKING, Any
 
+from duckdb import DuckDBPyConnection
+
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 from sqlspec.utils.logging import get_logger
@@ -9,7 +11,6 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from typing import Optional
 
-    from duckdb import DuckDBPyConnection
     from sqlglot.dialects.dialect import DialectType
     from typing_extensions import TypeAlias
 
@@ -21,7 +22,7 @@ __all__ = ("DuckDBConnection", "DuckDBDriver")
 if TYPE_CHECKING:
     DuckDBConnection: TypeAlias = DuckDBPyConnection
 else:
-    DuckDBConnection = Any
+    DuckDBConnection = DuckDBPyConnection
 
 logger = get_logger("adapters.duckdb")
 

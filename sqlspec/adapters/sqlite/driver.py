@@ -1,21 +1,20 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import contextlib
 import datetime
+import sqlite3
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 from sqlspec.driver import SyncDriverAdapterBase
+from sqlspec.parameters import DriverParameterConfig, ParameterStyle
+from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    import sqlite3
-
     from sqlglot.dialects.dialect import DialectType
     from typing_extensions import TypeAlias
 
     from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.parameters import DriverParameterConfig, ParameterStyle
-from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import to_json
 
 __all__ = ("SqliteConnection", "SqliteDriver")
 
@@ -24,8 +23,7 @@ logger = get_logger("adapters.sqlite")
 if TYPE_CHECKING:
     SqliteConnection: TypeAlias = sqlite3.Connection
 else:
-    # Use Any for mypyc runtime to avoid "unreachable code" error
-    SqliteConnection = Any
+    SqliteConnection = sqlite3.Connection
 
 
 class _SqliteCursorManager:

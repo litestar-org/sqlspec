@@ -201,6 +201,8 @@ class ParameterValidator:
     def get_parameter_style(self, parameters: list[ParameterInfo]) -> ParameterStyle:
         """Determine the dominant parameter style from a list of parameters.
 
+        In case of ties, named styles take precedence over positional styles.
+
         Args:
             parameters: List of parameter information
 
@@ -215,8 +217,23 @@ class ParameterValidator:
         for param in parameters:
             style_counts[param.style] = style_counts.get(param.style, 0) + 1
 
-        # Return the most common style
-        return max(style_counts.items(), key=lambda x: x[1])[0]
+        # Define precedence order (higher number = higher precedence)
+        # Named styles take precedence over positional styles in ties
+        precedence = {
+            ParameterStyle.QMARK: 1,
+            ParameterStyle.NUMERIC: 2,
+            ParameterStyle.POSITIONAL_COLON: 3,
+            ParameterStyle.POSITIONAL_PYFORMAT: 4,
+            ParameterStyle.NAMED_AT: 5,
+            ParameterStyle.NAMED_DOLLAR: 6,
+            ParameterStyle.NAMED_COLON: 7,
+            ParameterStyle.NAMED_PYFORMAT: 8,
+            ParameterStyle.NONE: 0,
+            ParameterStyle.STATIC: 0,
+        }
+
+        # Return the style with highest count, with precedence as tiebreaker
+        return max(style_counts.items(), key=lambda x: (x[1], precedence.get(x[0], 0)))[0]
 
     def determine_parameter_input_type(self, parameters: list[ParameterInfo]) -> Optional[type]:
         """Determine expected parameter input type based on parameter styles.
