@@ -1,27 +1,17 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import Any, Optional, cast
 
-from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
+from oracledb import AsyncCursor, Cursor
 from sqlglot.dialects.dialect import DialectType
 
+from sqlspec.adapters.oracledb._types import OracleAsyncConnection, OracleSyncConnection
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.driver.context import set_current_driver
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.utils.logging import get_logger
 
-if TYPE_CHECKING:
-    from typing_extensions import TypeAlias
-
-
-__all__ = ("OracleAsyncConnection", "OracleAsyncDriver", "OracleSyncConnection", "OracleSyncDriver")
-
-if TYPE_CHECKING:
-    OracleSyncConnection: TypeAlias = Connection
-    OracleAsyncConnection: TypeAlias = AsyncConnection
-else:
-    OracleSyncConnection = Connection
-    OracleAsyncConnection = AsyncConnection
+__all__ = ("OracleAsyncDriver", "OracleSyncDriver")
 
 logger = get_logger("adapters.oracledb")
 

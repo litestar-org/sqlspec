@@ -3,26 +3,18 @@
 
 from typing import TYPE_CHECKING, Any, Optional
 
+from sqlspec.adapters.psqlpy._types import PsqlpyConnection
+from sqlspec.driver import AsyncDriverAdapterBase
+from sqlspec.parameters import DriverParameterConfig, ParameterStyle
+
 if TYPE_CHECKING:
-    from typing_extensions import TypeAlias
+    from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.statement.result import SQLResult
     from sqlspec.statement.sql import SQL, SQLConfig
 
 
-from sqlspec.driver import AsyncDriverAdapterBase
-from sqlspec.parameters import DriverParameterConfig, ParameterStyle
-
-if TYPE_CHECKING:
-    from psqlpy import Connection
-    from sqlglot.dialects.dialect import DialectType
-    from typing_extensions import TypeAlias
-
-    PsqlpyConnection: TypeAlias = Connection
-else:
-    from psqlpy import Connection as PsqlpyConnection
-
-__all__ = ("PsqlpyConnection", "PsqlpyCursor", "PsqlpyDriver")
+__all__ = ("PsqlpyCursor", "PsqlpyDriver")
 
 
 class PsqlpyCursor:

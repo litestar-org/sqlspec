@@ -1,7 +1,6 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 from typing import TYPE_CHECKING, Any, Optional, Union
 
-from asyncmy import Connection
 from asyncmy.cursors import Cursor, DictCursor
 
 from sqlspec.driver import AsyncDriverAdapterBase
@@ -11,15 +10,9 @@ from sqlspec.statement.sql import SQL, SQLConfig
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-__all__ = ("AsyncmyConnection", "AsyncmyCursor", "AsyncmyDriver")
+    from sqlspec.adapters.asyncmy._types import AsyncmyConnection
 
-
-if TYPE_CHECKING:
-    from typing_extensions import TypeAlias
-
-    AsyncmyConnection: TypeAlias = Connection
-else:
-    AsyncmyConnection = Connection
+__all__ = ("AsyncmyCursor", "AsyncmyDriver")
 
 
 class AsyncmyCursor:
@@ -42,7 +35,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
     dialect: "DialectType" = "mysql"
     parameter_config: DriverParameterConfig
 
-    def __init__(self, connection: AsyncmyConnection, config: Optional[SQLConfig] = None) -> None:
+    def __init__(self, connection: "AsyncmyConnection", config: Optional[SQLConfig] = None) -> None:
         super().__init__(connection=connection, config=config)
         self.parameter_config = DriverParameterConfig(
             supported_parameter_styles=[

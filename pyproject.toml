@@ -146,12 +146,14 @@ exclude = [
   "sqlspec/typing.py",                 # Type aliases
   "sqlspec/_typing.py",                # Type aliases
   "sqlspec/adapters/*/config.py",      # Configuration classes
+  "sqlspec/adapters/*/_types.py",      # Types classes Often not found during mypy checks
   "sqlspec/config.py",                 # Main config
   "sqlspec/extensions/**",             # All extensions
   "sqlspec/storage/backends/base.py",  # Abstract base
   "sqlspec/**/__init__.py",            # Init files (usually just imports)
   "sqlspec/protocols.py",              # Protocol definitions
   "sqlspec/statement/builder/**/*.py", # Builder (not performance critical)
+
 ]
 include = [
   "sqlspec/statement/**/*.py", # All statement-related modules

@@ -67,7 +67,12 @@ class CommonDriverAttributesMixin:
         """
         self.connection = connection
         self.config = config or SQLConfig()
-        self._compiled_cache = SQLCache() if self.config.enable_caching else None
+        # Initialize cache with config cache_size if available, otherwise use default
+        if self.config.enable_caching:
+            cache_size = getattr(self.config, "cache_size", None)
+            self._compiled_cache = SQLCache(max_size=cache_size) if cache_size is not None else SQLCache()
+        else:
+            self._compiled_cache = None
         self._prepared_statements = {}
         self._prepared_counter = 0
 
@@ -148,11 +153,12 @@ class CommonDriverAttributesMixin:
         """
         # Parse string to expression if needed
         if isinstance(expression, str):
+            original_sql = expression
             try:
-                expression = sqlglot.parse_one(expression, read=self.dialect or None)
+                expression = sqlglot.maybe_parse(expression, read=self.dialect or None)
             except Exception:
                 # If parsing fails, fall back to token analysis
-                return self._has_parameters_by_tokens(expression)
+                return self._has_parameters_by_tokens(original_sql)
 
         # Walk the AST looking for placeholder nodes
         return any(isinstance(node, (exp.Placeholder, exp.Parameter)) for node in expression.walk())

@@ -10,7 +10,8 @@ from asyncmy.cursors import Cursor, DictCursor
 from asyncmy.pool import Pool as AsyncmyPool
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.asyncmy.driver import AsyncmyConnection, AsyncmyCursor, AsyncmyDriver
+from sqlspec.adapters.asyncmy._types import AsyncmyConnection
+from sqlspec.adapters.asyncmy.driver import AsyncmyCursor, AsyncmyDriver
 from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
 
@@ -89,14 +90,14 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             extras = self.pool_config.pop("extra")
             self.pool_config.update(extras)
 
-        self.statement_config = statement_config or SQLConfig()
-
         super().__init__(
             pool_instance=pool_instance,
             migration_config=migration_config,
             enable_adapter_cache=enable_adapter_cache,
             adapter_cache_size=adapter_cache_size,
         )
+
+        self.statement_config = statement_config or SQLConfig(dialect=self.dialect)
 
     async def _create_pool(self) -> "Pool":  # pyright: ignore
         """Create the actual async connection pool."""

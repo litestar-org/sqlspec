@@ -238,13 +238,12 @@ class BenchmarkSummary:
         """Display comprehensive ORM comparison across all databases."""
         # ORM comparison variants to look for
         orm_variants = {"sqlspec_cache", "sqlspec_no_cache", "sqlalchemy_core", "sqlalchemy_orm"}
-        
+
         # Filter for ORM-related results by checking if key contains any ORM variant
-        orm_results = {}
-        for key, result in results.items():
-            if any(variant in key for variant in orm_variants):
-                orm_results[key] = result
-                
+        orm_results = {
+            key: result for key, result in results.items() if any(variant in key for variant in orm_variants)
+        }
+
         if not orm_results:
             return
 
@@ -257,19 +256,20 @@ class BenchmarkSummary:
                 if key.endswith(variant):
                     matched_variant = variant
                     break
-            
+
             if not matched_variant:
                 continue
-                
+
             # Extract database and operation by removing the variant suffix
-            prefix = key[:-len(matched_variant)].rstrip("_")
+            prefix = key[: -len(matched_variant)].rstrip("_")
             parts = prefix.split("_", 1)  # Split into database and operation (operation may have underscores)
-            
-            if len(parts) < 2:
+
+            min_required_parts = 2
+            if len(parts) < min_required_parts:
                 continue
-                
+
             db_name, op_name = parts[0], parts[1]
-            
+
             if db_name not in grouped_results:
                 grouped_results[db_name] = {}
             if op_name not in grouped_results[db_name]:

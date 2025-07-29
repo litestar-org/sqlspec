@@ -134,7 +134,7 @@ class TestParameterizeLiteralsStep:
         result = parameterize_literals_step(context)
 
         # Check that literal was replaced with placeholder
-        assert "param_0" in result.parameters
+        assert isinstance(result.parameters, dict) and "param_0" in result.parameters
         param = result.parameters["param_0"]
         assert hasattr(param, "value"), "Parameter should be TypedParameter with value attribute"
         assert param.value == "John"  # type: ignore[attr-defined]
@@ -156,7 +156,7 @@ class TestParameterizeLiteralsStep:
         result = parameterize_literals_step(context)
 
         # Check parameters
-        assert len(result.parameters) == 2
+        assert isinstance(result.parameters, dict) and len(result.parameters) == 2
         param_0 = result.parameters["param_0"]
         param_1 = result.parameters["param_1"]
         assert hasattr(param_0, "value"), "Parameter should be TypedParameter with value attribute"
@@ -297,7 +297,7 @@ class TestFullPipeline:
         assert result.metadata["validated"] is True
 
         # Check parameters were extracted
-        assert "param_0" in result.parameters
+        assert isinstance(result.parameters, dict) and "param_0" in result.parameters
         param = result.parameters["param_0"]
         assert hasattr(param, "value"), "Parameter should be TypedParameter with value attribute"
         assert param.value == "John"  # type: ignore[attr-defined]

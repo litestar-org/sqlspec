@@ -10,7 +10,8 @@ from asyncpg.connection import ConnectionMeta
 from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.asyncpg.driver import AsyncpgConnection, AsyncpgCursor, AsyncpgDriver
+from sqlspec.adapters.asyncpg._types import AsyncpgConnection
+from sqlspec.adapters.asyncpg.driver import AsyncpgCursor, AsyncpgDriver
 from sqlspec.adapters.asyncpg.pipeline_steps import postgres_copy_pipeline_step
 from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
@@ -72,9 +73,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
     def __init__(
         self,
         *,
-        pool_instance: "Optional[Pool[Record]]" = None,
         pool_config: "Optional[Union[AsyncpgPoolConfig, dict[str, Any]]]" = None,
         statement_config: "Optional[SQLConfig]" = None,
+        pool_instance: "Optional[Pool[Record]]" = None,
         migration_config: "Optional[dict[str, Any]]" = None,
         enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,

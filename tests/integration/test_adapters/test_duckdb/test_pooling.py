@@ -48,7 +48,7 @@ def test_regular_memory_auto_conversion() -> None:
     # Verify pooling is not disabled (no more pool size overrides)
     assert config.min_pool == 5
     assert config.max_pool == 10
-    # tdodo: readd this feature
+    # TODO: re-add this feature
     # Verify database was auto-converted to shared memory
     assert config.connection_config["database"] == ":memory:shared_db"
 
@@ -75,7 +75,7 @@ def test_file_database_pooling() -> None:
     """Test that file databases work with pooling (no changes needed)."""
     import tempfile
 
-    # TODO: Use a temorary directory instead.  This method doesn't tend to work otherwise.
+    # TODO: Use a temporary directory instead.  This method doesn't tend to work otherwise.
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp_file:
         db_path = tmp_file.name
 

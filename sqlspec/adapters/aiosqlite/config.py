@@ -9,7 +9,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, TypedDict, Uni
 import aiosqlite
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.aiosqlite.driver import AiosqliteConnection, AiosqliteCursor, AiosqliteDriver
+from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
+from sqlspec.adapters.aiosqlite.driver import AiosqliteCursor, AiosqliteDriver
 from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.statement.sql import SQLConfig

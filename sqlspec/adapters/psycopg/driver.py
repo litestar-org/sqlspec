@@ -1,23 +1,15 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 from typing import TYPE_CHECKING, Any, Optional
 
+from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 
 if TYPE_CHECKING:
-    from psycopg import AsyncConnection, Connection
-    from psycopg.rows import DictRow as PsycopgDictRow
     from sqlglot.dialects.dialect import DialectType
-    from typing_extensions import TypeAlias
 
-    PsycopgSyncConnection: TypeAlias = Connection[PsycopgDictRow]
-    PsycopgAsyncConnection: TypeAlias = AsyncConnection[PsycopgDictRow]
-else:
-    from psycopg import AsyncConnection, Connection
-
-    PsycopgSyncConnection = Connection
-    PsycopgAsyncConnection = AsyncConnection
+__all__ = ("PsycopgAsyncCursor", "PsycopgAsyncDriver", "PsycopgSyncCursor", "PsycopgSyncDriver")
 
 
 class PsycopgSyncCursor:
@@ -48,16 +40,6 @@ class PsycopgAsyncCursor:
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         if self.cursor:
             await self.cursor.close()
-
-
-__all__ = (
-    "PsycopgAsyncConnection",
-    "PsycopgAsyncCursor",
-    "PsycopgAsyncDriver",
-    "PsycopgSyncConnection",
-    "PsycopgSyncCursor",
-    "PsycopgSyncDriver",
-)
 
 
 class PsycopgSyncDriver(SyncDriverAdapterBase):

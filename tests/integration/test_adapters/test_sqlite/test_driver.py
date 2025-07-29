@@ -179,6 +179,10 @@ def test_sqlite_execute_script(sqlite_session: SqliteDriver) -> None:
 @pytest.mark.xdist_group("sqlite")
 def test_sqlite_result_methods(sqlite_session: SqliteDriver) -> None:
     """Test SelectResult and ExecuteResult methods."""
+    # Clean up any existing data to ensure consistent test results
+    sqlite_session.execute("DELETE FROM test_table")
+    sqlite_session.commit()
+
     # Insert test data
     sqlite_session.execute_many(
         "INSERT INTO test_table (name, value) VALUES (?, ?)", [("result1", 10), ("result2", 20), ("result3", 30)]

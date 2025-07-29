@@ -2,26 +2,19 @@
 
 import contextlib
 import logging
-from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union, cast
 
 import oracledb
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.oracledb.driver import (
-    OracleAsyncConnection,
-    OracleAsyncCursor,
-    OracleAsyncDriver,
-    OracleSyncConnection,
-    OracleSyncCursor,
-    OracleSyncDriver,
-)
+from sqlspec.adapters.oracledb._types import OracleAsyncConnection, OracleSyncConnection
+from sqlspec.adapters.oracledb.driver import OracleAsyncCursor, OracleAsyncDriver, OracleSyncCursor, OracleSyncDriver
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator
+    from collections.abc import AsyncGenerator, Callable, Generator
 
     from oracledb import AuthMode
     from oracledb.pool import AsyncConnectionPool, ConnectionPool
@@ -133,7 +126,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         if self.pool_instance:
             self.pool_instance.close()
 
-    def create_connection(self) -> OracleSyncConnection:
+    def create_connection(self) -> "OracleSyncConnection":
         """Create a single connection (not from pool).
 
         Returns:
@@ -287,7 +280,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         return cast("OracleAsyncConnection", await self.pool_instance.acquire())
 
     @asynccontextmanager
-    async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[OracleAsyncConnection, None]:
+    async def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[OracleAsyncConnection, None]":
         """Provide an async connection context manager.
 
         Args:
@@ -306,7 +299,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
             await self.pool_instance.release(conn)
 
     @asynccontextmanager
-    async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[OracleAsyncDriver, None]:
+    async def provide_session(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[OracleAsyncDriver, None]":
         """Provide an async driver session context manager.
 
         Args:

@@ -51,6 +51,11 @@ _PARAMETER_REGEX: Final = re.compile(
 class ParameterValidator:
     """Validates and extracts SQL parameters with detailed information."""
 
+    def __init__(self) -> None:
+        """Initialize validator with caching support."""
+        # Use a simple dict cache to ensure same object identity for same SQL
+        self._parameter_cache: dict[str, list[ParameterInfo]] = {}
+
     def extract_parameters(self, sql: str) -> list[ParameterInfo]:
         """Extract parameter information from SQL string.
 
@@ -63,6 +68,10 @@ class ParameterValidator:
         Returns:
             List of ParameterInfo objects, sorted by position
         """
+        # Check cache first
+        if sql in self._parameter_cache:
+            return self._parameter_cache[sql]
+
         parameters: list[ParameterInfo] = []
         ordinal = 0
 
@@ -162,6 +171,8 @@ class ParameterValidator:
                 )
                 ordinal += 1
 
+        # Cache the result before returning
+        self._parameter_cache[sql] = parameters
         return parameters
 
     def has_parameters(self, sql: str) -> bool:

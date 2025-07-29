@@ -178,6 +178,10 @@ async def test_aiosqlite_execute_script(aiosqlite_session: AiosqliteDriver) -> N
 @pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_result_methods(aiosqlite_session: AiosqliteDriver) -> None:
     """Test SelectResult and ExecuteResult methods."""
+    # Clean up any existing data to ensure consistent test results
+    await aiosqlite_session.execute("DELETE FROM test_table")
+    await aiosqlite_session.commit()
+
     # Insert test data
     await aiosqlite_session.execute_many(
         "INSERT INTO test_table (name, value) VALUES (?, ?)", [("result1", 10), ("result2", 20), ("result3", 30)]

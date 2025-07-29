@@ -45,10 +45,23 @@ async def test_acquire_cursor(driver: AsyncpgDriver, mock_connection: AsyncMock)
 @pytest.mark.asyncio
 async def test_perform_execute_single(driver: AsyncpgDriver, mock_connection: AsyncMock) -> None:
     """Test _perform_execute for a single statement."""
-    statement = SQL("SELECT 1")
+    statement = SQL("CREATE TABLE test (id INT)")
     await driver._perform_execute(mock_connection, statement)
     # Driver compiles internally, so check execute was called
     mock_connection.execute.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_perform_execute_select(driver: AsyncpgDriver, mock_connection: AsyncMock) -> None:
+    """Test _perform_execute for a SELECT statement (row-returning)."""
+    statement = SQL("SELECT 1")
+    await driver._perform_execute(mock_connection, statement)
+    # For row-returning queries, asyncpg driver stores SQL/params for later fetch()
+    # execute() should NOT be called immediately
+    mock_connection.execute.assert_not_called()
+    # Instead, SQL and params should be stored for _extract_select_data
+    assert driver._execution_state["compiled_sql"] is not None
+    assert driver._execution_state["prepared_params"] is not None
 
 
 @pytest.mark.asyncio

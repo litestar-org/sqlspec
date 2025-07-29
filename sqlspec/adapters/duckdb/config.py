@@ -12,7 +12,8 @@ from typing import TYPE_CHECKING, Any, Final, Optional, TypedDict
 import duckdb
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.duckdb.driver import DuckDBConnection, DuckDBCursor, DuckDBDriver
+from sqlspec.adapters.duckdb._types import DuckDBConnection
+from sqlspec.adapters.duckdb.driver import DuckDBCursor, DuckDBDriver
 from sqlspec.config import SyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import Empty
@@ -427,6 +428,11 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         if "database" not in self.connection_config or not self.connection_config["database"]:
             self.connection_config["database"] = ":memory:"
 
+        # Check if this is an in-memory database and auto-convert to shared memory for pooling
+        database = self.connection_config.get("database", ":memory:")
+        if self._is_memory_database(database):
+            self._convert_to_shared_memory()
+
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.extensions = list(extensions) if extensions else []
@@ -628,6 +634,41 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
                 )
             driver = self.driver_type(connection=connection, config=statement_config)
             yield driver
+
+    def _is_memory_database(self, database: str) -> bool:
+        """Check if the database is an in-memory database.
+
+        Args:
+            database: Database path or connection string
+
+        Returns:
+            True if this is an in-memory database
+        """
+        if not database:
+            return True
+
+        # Standard :memory: database
+        if database == ":memory:":
+            return True
+
+        # Check for :memory: with custom name but NOT shared
+        return ":memory:" in database and "shared" not in database
+
+    def _convert_to_shared_memory(self) -> None:
+        """Convert in-memory database to shared memory for connection pooling.
+
+        Automatically converts :memory: databases to :memory:shared_db format
+        to enable safe connection pooling with DuckDB named memory databases.
+        """
+        database = self.connection_config.get("database", ":memory:")
+
+        if database in {":memory:", ""}:
+            # Convert :memory: to shared memory with standard name
+            self.connection_config["database"] = ":memory:shared_db"
+        elif ":memory:" in database and "shared" not in database:
+            # For custom named memory databases, ensure they're marked as shared
+            # Convert :memory:custom_name to :memory:shared_db for consistency
+            self.connection_config["database"] = ":memory:shared_db"
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":
         """Get the signature namespace for DuckDB types.

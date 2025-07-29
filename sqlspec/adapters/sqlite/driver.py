@@ -1,7 +1,6 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import contextlib
 import datetime
-import sqlite3
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
@@ -11,19 +10,16 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    from sqlglot.dialects.dialect import DialectType
-    from typing_extensions import TypeAlias
+    import sqlite3
 
+    from sqlglot.dialects.dialect import DialectType
+
+    from sqlspec.adapters.sqlite._types import SqliteConnection
     from sqlspec.statement.sql import SQL, SQLConfig
 
-__all__ = ("SqliteConnection", "SqliteCursor", "SqliteDriver")
+__all__ = ("SqliteCursor", "SqliteDriver")
 
 logger = get_logger("adapters.sqlite")
-
-if TYPE_CHECKING:
-    SqliteConnection: TypeAlias = sqlite3.Connection
-else:
-    SqliteConnection = sqlite3.Connection
 
 
 class SqliteCursor:
@@ -109,4 +105,4 @@ class SqliteDriver(SyncDriverAdapterBase):
 
     def _extract_execute_rowcount(self, cursor: "sqlite3.Cursor") -> int:
         """Extract row count from cursor after INSERT/UPDATE/DELETE."""
-        return cursor.rowcount if cursor.rowcount is not None else 0
+        return cursor.rowcount or 0

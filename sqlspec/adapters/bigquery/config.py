@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict, 
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.bigquery.driver import BigQueryConnection, BigQueryCursor, BigQueryDriver
+from sqlspec.adapters.bigquery._types import BigQueryConnection
+from sqlspec.adapters.bigquery.driver import BigQueryCursor, BigQueryDriver
 from sqlspec.config import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.statement.sql import SQLConfig

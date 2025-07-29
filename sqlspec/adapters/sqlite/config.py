@@ -9,7 +9,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, TypedDict, Uni
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.sqlite.driver import SqliteConnection, SqliteCursor, SqliteDriver
+from sqlspec.adapters.sqlite._types import SqliteConnection
+from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver
 from sqlspec.config import SyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
 

@@ -202,8 +202,8 @@ async def test_asyncmy_dialect_propagation_with_filters(mysql_service: MySQLServ
 
     # Create a real connection
     async with config.provide_connection() as connection:
-        # Create driver
-        driver = AsyncmyDriver(connection=connection, config=SQLConfig())
+        # Create driver - use the statement config from the database config to preserve dialect
+        driver = AsyncmyDriver(connection=connection, config=config.statement_config)
 
         # Create temp table and execute a query with filter
         await driver.execute_script("CREATE TEMPORARY TABLE test_users (id INT, name VARCHAR(100))")

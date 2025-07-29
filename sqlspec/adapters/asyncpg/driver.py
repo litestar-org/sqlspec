@@ -2,30 +2,22 @@
 import re
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
-from asyncpg import Connection as AsyncpgNativeConnection
-from asyncpg.pool import PoolConnectionProxy
-
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from asyncpg import Record
     from sqlglot.dialects.dialect import DialectType
-    from typing_extensions import TypeAlias
 
+    from sqlspec.adapters.asyncpg._types import AsyncpgConnection
     from sqlspec.statement.result import SQLResult
     from sqlspec.statement.sql import SQL, SQLConfig
 
 
-__all__ = ("AsyncpgConnection", "AsyncpgCursor", "AsyncpgDriver")
+__all__ = ("AsyncpgCursor", "AsyncpgDriver")
 
 logger = get_logger("adapters.asyncpg")
 
-if TYPE_CHECKING:
-    AsyncpgConnection: TypeAlias = Union[AsyncpgNativeConnection[Record], PoolConnectionProxy[Record]]
-else:
-    AsyncpgConnection = Union[AsyncpgNativeConnection, PoolConnectionProxy]
 
 # Compiled regex to parse asyncpg status messages like "INSERT 0 1" or "UPDATE 1"
 # Group 1: Command Tag (e.g., INSERT, UPDATE)

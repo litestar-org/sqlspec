@@ -180,8 +180,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
             if self.dialect and (not statement._config.dialect or statement._config.dialect != self.dialect):
                 new_config = statement._config.replace(dialect=self.dialect)
                 if statement.parameters:
-                    return statement.copy(config=new_config)
-                return statement.copy(config=new_config)
+                    return statement.copy(config=new_config, dialect=self.dialect)
+                return statement.copy(config=new_config, dialect=self.dialect)
             return statement
         if self.dialect and config and not config.dialect:
             config = config.replace(dialect=self.dialect)

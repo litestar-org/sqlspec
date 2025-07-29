@@ -13,15 +13,12 @@ from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
-    from typing_extensions import TypeAlias
 
+    from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
     from sqlspec.statement.sql import SQL, SQLConfig
 
-    AiosqliteConnection: TypeAlias = aiosqlite.Connection
-else:
-    AiosqliteConnection = aiosqlite.Connection
 
-__all__ = ("AiosqliteConnection", "AiosqliteCursor", "AiosqliteDriver")
+__all__ = ("AiosqliteCursor", "AiosqliteDriver")
 
 
 class AiosqliteCursor:
@@ -111,4 +108,4 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
     def _extract_execute_rowcount(self, cursor: "aiosqlite.Cursor") -> int:
         """Extract row count from cursor after INSERT/UPDATE/DELETE."""
-        return cursor.rowcount if cursor.rowcount is not None else 0
+        return cursor.rowcount or 0

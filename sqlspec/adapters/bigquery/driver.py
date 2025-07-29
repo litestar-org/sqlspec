@@ -6,14 +6,10 @@ from collections.abc import Iterator
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
-if TYPE_CHECKING:
-    from typing_extensions import TypeAlias
-
-    from sqlspec.statement.sql import SQL, SQLConfig
-
-from google.cloud.bigquery import ArrayQueryParameter, Client, QueryJob, QueryJobConfig, ScalarQueryParameter
+from google.cloud.bigquery import ArrayQueryParameter, QueryJob, QueryJobConfig, ScalarQueryParameter
 from google.cloud.bigquery.table import Row as BigQueryRow
 
+from sqlspec.adapters.bigquery._types import BigQueryConnection
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
@@ -23,13 +19,11 @@ from sqlspec.utils.serializers import to_json
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
+    from sqlspec.statement.sql import SQL, SQLConfig
 
-__all__ = ("BigQueryConnection", "BigQueryCursor", "BigQueryDriver")
 
-if TYPE_CHECKING:
-    BigQueryConnection: TypeAlias = Client
-else:
-    BigQueryConnection = Client
+__all__ = ("BigQueryCursor", "BigQueryDriver")
+
 
 logger = logging.getLogger("sqlspec.adapters.bigquery")
 
