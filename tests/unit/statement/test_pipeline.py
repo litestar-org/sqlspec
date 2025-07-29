@@ -135,7 +135,9 @@ class TestParameterizeLiteralsStep:
 
         # Check that literal was replaced with placeholder
         assert "param_0" in result.parameters
-        assert result.parameters["param_0"] == "John"  # type: ignore[call-overload]
+        param = result.parameters["param_0"]
+        assert hasattr(param, "value"), "Parameter should be TypedParameter with value attribute"
+        assert param.value == "John"  # type: ignore[attr-defined]
         assert result.metadata["literals_parameterized"] is True
         assert result.metadata["parameter_count"] == 1
 
@@ -155,8 +157,12 @@ class TestParameterizeLiteralsStep:
 
         # Check parameters
         assert len(result.parameters) == 2
-        assert result.parameters["param_0"] == "John"  # type: ignore[call-overload]
-        assert result.parameters["param_1"] == 30  # type: ignore[call-overload]  # Numbers are stored as their proper Python type
+        param_0 = result.parameters["param_0"]
+        param_1 = result.parameters["param_1"]
+        assert hasattr(param_0, "value"), "Parameter should be TypedParameter with value attribute"
+        assert hasattr(param_1, "value"), "Parameter should be TypedParameter with value attribute"
+        assert param_0.value == "John"  # type: ignore[attr-defined]
+        assert param_1.value == 30  # type: ignore[attr-defined]  # Numbers are stored as their proper Python type
         assert result.metadata["parameter_count"] == 2
 
     def test_parameterize_no_literals(self) -> None:
@@ -292,7 +298,9 @@ class TestFullPipeline:
 
         # Check parameters were extracted
         assert "param_0" in result.parameters
-        assert result.parameters["param_0"] == "John"  # type: ignore[call-overload]
+        param = result.parameters["param_0"]
+        assert hasattr(param, "value"), "Parameter should be TypedParameter with value attribute"
+        assert param.value == "John"  # type: ignore[attr-defined]
 
         # Check that parameters were properly handled
         # The tautology (1=1) might have been optimized away by the optimize step

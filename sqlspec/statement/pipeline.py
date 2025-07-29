@@ -12,6 +12,7 @@ import sqlglot.expressions as exp
 from sqlglot.optimizer.normalize import normalize
 
 from sqlspec.parameters import ParameterValidator
+from sqlspec.parameters.types import TypedParameter
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -169,6 +170,10 @@ def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformCont
             # Skip literals that are direct aliases (like 'processed' as status)
             if isinstance(node.parent, exp.Alias) and node.parent.this == node:
                 continue
+            # Skip literals that are direct SELECT expressions (like SELECT 1, SELECT 'test')
+            # These are typically used for testing connectivity and should not be parameterized
+            if isinstance(node.parent, exp.Select) and node in node.parent.expressions:
+                continue
             # Get the SQL position by finding the literal in the SQL string
             literal_sql = node.sql(dialect=context.dialect)
             literals_in_order.append((node, literal_sql))
@@ -194,8 +199,21 @@ def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformCont
 
     for _, literal, literal_sql in literal_positions:
         param_name = f"param_{param_index}"
-        # Use SQLGlot's to_py() method to get the proper Python type
-        context.parameters[param_name] = literal.to_py()
+        # Create TypedParameter with proper Python type for driver compatibility
+        # This provides proper types to asyncpg while maintaining backward compatibility
+        python_value = literal.to_py()
+        python_type = type(python_value).__name__
+
+        # Determine SQLGlot data type based on literal type
+        if literal.is_number:
+            data_type = exp.DataType.build("FLOAT") if "." in str(literal.this) else exp.DataType.build("INTEGER")
+        elif literal.is_string:
+            data_type = exp.DataType.build("VARCHAR")
+        else:
+            # Handle other types (boolean, null, etc.)
+            data_type = exp.DataType.build("VARCHAR")
+
+        context.parameters[param_name] = TypedParameter(value=python_value, data_type=data_type, type_hint=python_type)
         # Use literal value and SQL representation as key for more reliable lookup
         literal_key = (str(literal.this), literal_sql)
         literal_to_param[literal_key] = param_name
