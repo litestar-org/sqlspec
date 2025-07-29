@@ -1238,24 +1238,6 @@ class AlterTable(DDLBuilder):
         self._operations.append(operation)
         return self
 
-    def set_default(self, column: str, default: "Any") -> "Self":
-        """Set default value for a column."""
-        operation = AlterOperation(
-            operation_type="ALTER COLUMN SET DEFAULT",
-            column_name=column,
-            column_definition=ColumnDefinition(name=column, dtype="", default=default),
-        )
-
-        self._operations.append(operation)
-        return self
-
-    def drop_default(self, column: str) -> "Self":
-        """Remove default value from a column."""
-        operation = AlterOperation(operation_type="ALTER COLUMN DROP DEFAULT", column_name=column)
-
-        self._operations.append(operation)
-        return self
-
     def _create_base_expression(self) -> "exp.Expression":
         """Create the SQLGlot expression for ALTER TABLE."""
         if not self._operations:

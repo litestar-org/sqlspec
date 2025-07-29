@@ -279,10 +279,10 @@ class BenchmarkSummary:
         for db_name, ops in grouped_results.items():
             table = Table(title=f"ORM Comparison - {db_name.title()}", show_header=True)
             table.add_column("Operation", style="cyan")
-            table.add_column("SQLSpec (Cached)", justify="right")
-            table.add_column("SQLSpec (No Cache)", justify="right")
-            table.add_column("SQLAlchemy Core", justify="right")
-            table.add_column("SQLAlchemy ORM", justify="right")
+            table.add_column("SQLSpec (Cached)\nms | TPS", justify="right")
+            table.add_column("SQLSpec (No Cache)\nms | TPS", justify="right")
+            table.add_column("SQLAlchemy Core\nms | TPS", justify="right")
+            table.add_column("SQLAlchemy ORM\nms | TPS", justify="right")
             table.add_column("Winner", justify="right")
 
             for op_name, variants in ops.items():
@@ -306,16 +306,24 @@ class BenchmarkSummary:
                 if sqlalchemy_orm and sqlalchemy_orm.avg_ms < winner_time:
                     winner = "SQLAlchemy ORM"
 
+                def format_result(result: TimingResult) -> str:
+                    if result:
+                        return f"{result.avg_ms:.3f} | {result.ops_per_sec:.0f}"
+                    return "N/A"
+
                 table.add_row(
                     op_name.replace("_", " ").title(),
-                    f"{sqlspec_cached.avg_ms:.3f}ms" if sqlspec_cached else "N/A",
-                    f"{sqlspec_no_cache.avg_ms:.3f}ms" if sqlspec_no_cache else "N/A",
-                    f"{sqlalchemy_core.avg_ms:.3f}ms" if sqlalchemy_core else "N/A",
-                    f"{sqlalchemy_orm.avg_ms:.3f}ms" if sqlalchemy_orm else "N/A",
+                    format_result(sqlspec_cached),
+                    format_result(sqlspec_no_cache),
+                    format_result(sqlalchemy_core),
+                    format_result(sqlalchemy_orm),
                     winner,
                 )
 
             self.console.print(table)
+
+        # Add unified comparison table with all databases and TPS
+        self._display_unified_orm_comparison(grouped_results)
 
     def _display_performance_by_driver(
         self, db_results: dict[str, dict[str, TimingResult]], key_operations: list[tuple]
@@ -913,3 +921,147 @@ class BenchmarkSummary:
             )
 
         return insights
+
+    def _display_unified_orm_comparison(self, grouped_results: dict[str, dict[str, dict[str, TimingResult]]]) -> None:
+        """Display a unified comparison table showing all databases and their TPS."""
+        if not grouped_results:
+            return
+
+        # Create unified table
+        table = Table(title="🚀 Unified ORM Performance Comparison (TPS = Transactions Per Second)", show_header=True)
+        table.add_column("Database", style="cyan")
+        table.add_column("Operation", style="cyan")
+        table.add_column("SQLSpec Cached\n(TPS)", justify="right", style="green")
+        table.add_column("SQLSpec No Cache\n(TPS)", justify="right", style="green dim")
+        table.add_column("SQLAlchemy Core\n(TPS)", justify="right", style="yellow")
+        table.add_column("SQLAlchemy ORM\n(TPS)", justify="right", style="blue")
+        table.add_column("Best TPS", justify="right", style="bold magenta")
+        table.add_column("Winner", justify="center", style="bold")
+
+        # Collect all operations across databases
+        all_operations = set()
+        for ops in grouped_results.values():
+            all_operations.update(ops.keys())
+
+        for db_name in sorted(grouped_results.keys()):
+            ops = grouped_results[db_name]
+            for op_name in sorted(all_operations):
+                if op_name not in ops:
+                    continue
+
+                variants = ops[op_name]
+                sqlspec_cached = variants.get("sqlspec_cache")
+                sqlspec_no_cache = variants.get("sqlspec_no_cache")
+                sqlalchemy_core = variants.get("sqlalchemy_core")
+                sqlalchemy_orm = variants.get("sqlalchemy_orm")
+
+                # Find best TPS and winner
+                best_tps = 0
+                winner = "N/A"
+
+                if sqlspec_cached and sqlspec_cached.ops_per_sec > best_tps:
+                    best_tps = sqlspec_cached.ops_per_sec
+                    winner = "SQLSpec (C)"
+                if sqlspec_no_cache and sqlspec_no_cache.ops_per_sec > best_tps:
+                    best_tps = sqlspec_no_cache.ops_per_sec
+                    winner = "SQLSpec (NC)"
+                if sqlalchemy_core and sqlalchemy_core.ops_per_sec > best_tps:
+                    best_tps = sqlalchemy_core.ops_per_sec
+                    winner = "SA Core"
+                if sqlalchemy_orm and sqlalchemy_orm.ops_per_sec > best_tps:
+                    best_tps = sqlalchemy_orm.ops_per_sec
+                    winner = "SA ORM"
+
+                def format_tps(result: TimingResult) -> str:
+                    return f"{result.ops_per_sec:.0f}" if result else "N/A"
+
+                table.add_row(
+                    db_name.title(),
+                    op_name.replace("_", " ").title(),
+                    format_tps(sqlspec_cached),
+                    format_tps(sqlspec_no_cache),
+                    format_tps(sqlalchemy_core),
+                    format_tps(sqlalchemy_orm),
+                    f"{best_tps:.0f}" if best_tps > 0 else "N/A",
+                    winner,
+                )
+
+        self.console.print(table)
+
+        # Add summary statistics
+        self._display_tps_summary(grouped_results)
+
+    def _display_tps_summary(self, grouped_results: dict[str, dict[str, dict[str, TimingResult]]]) -> None:
+        """Display summary statistics for TPS across all databases."""
+        if not grouped_results:
+            return
+
+        # Collect TPS data by adapter type
+        adapter_tps = {"SQLSpec (Cached)": [], "SQLSpec (No Cache)": [], "SQLAlchemy Core": [], "SQLAlchemy ORM": []}
+
+        database_tps = {}  # Track TPS by database
+
+        for db_name, ops in grouped_results.items():
+            database_tps[db_name] = []
+
+            for variants in ops.values():
+                if "sqlspec_cache" in variants:
+                    tps = variants["sqlspec_cache"].ops_per_sec
+                    adapter_tps["SQLSpec (Cached)"].append(tps)
+                    database_tps[db_name].append(tps)
+                if "sqlspec_no_cache" in variants:
+                    tps = variants["sqlspec_no_cache"].ops_per_sec
+                    adapter_tps["SQLSpec (No Cache)"].append(tps)
+                    database_tps[db_name].append(tps)
+                if "sqlalchemy_core" in variants:
+                    tps = variants["sqlalchemy_core"].ops_per_sec
+                    adapter_tps["SQLAlchemy Core"].append(tps)
+                    database_tps[db_name].append(tps)
+                if "sqlalchemy_orm" in variants:
+                    tps = variants["sqlalchemy_orm"].ops_per_sec
+                    adapter_tps["SQLAlchemy ORM"].append(tps)
+                    database_tps[db_name].append(tps)
+
+        # Create summary table
+        summary_table = Table(title="📊 TPS Performance Summary", show_header=True)
+        summary_table.add_column("Adapter", style="cyan")
+        summary_table.add_column("Avg TPS", justify="right", style="green")
+        summary_table.add_column("Max TPS", justify="right", style="bold green")
+        summary_table.add_column("Min TPS", justify="right", style="red")
+        summary_table.add_column("Operations", justify="right")
+
+        for adapter_name, tps_values in adapter_tps.items():
+            if tps_values:
+                avg_tps = sum(tps_values) / len(tps_values)
+                max_tps = max(tps_values)
+                min_tps = min(tps_values)
+                count = len(tps_values)
+
+                summary_table.add_row(adapter_name, f"{avg_tps:.0f}", f"{max_tps:.0f}", f"{min_tps:.0f}", str(count))
+
+        self.console.print(summary_table)
+
+        # Database-specific summary
+        if len(database_tps) > 1:
+            db_summary_table = Table(title="🎯 Database Performance Ranking", show_header=True)
+            db_summary_table.add_column("Database", style="cyan")
+            db_summary_table.add_column("Avg TPS", justify="right", style="green")
+            db_summary_table.add_column("Max TPS", justify="right", style="bold green")
+            db_summary_table.add_column("Rank", justify="center", style="bold")
+
+            # Calculate averages and rank
+            db_averages = []
+            for db_name, tps_values in database_tps.items():
+                if tps_values:
+                    avg_tps = sum(tps_values) / len(tps_values)
+                    max_tps = max(tps_values)
+                    db_averages.append((db_name, avg_tps, max_tps))
+
+            # Sort by average TPS
+            db_averages.sort(key=lambda x: x[1], reverse=True)
+
+            for rank, (db_name, avg_tps, max_tps) in enumerate(db_averages, 1):
+                rank_icon = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else "📍"
+                db_summary_table.add_row(db_name.title(), f"{avg_tps:.0f}", f"{max_tps:.0f}", f"{rank_icon} #{rank}")
+
+            self.console.print(db_summary_table)

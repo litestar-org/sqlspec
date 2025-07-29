@@ -619,6 +619,29 @@ class SQLFactory:
             return exp.Any(this=exp.Literal.string(values))
         return exp.Any(this=values)
 
+    @staticmethod
+    def not_any_(values: Union[list[Any], exp.Expression, str]) -> exp.Expression:
+        """Create a NOT ANY expression for use with comparison operators.
+
+        Args:
+            values: Values, expression, or subquery for the NOT ANY clause.
+
+        Returns:
+            NOT ANY expression.
+
+        Example:
+            ```python
+            # WHERE id <> ANY(subquery)
+            subquery = sql.select("user_id").from_("blocked_users")
+            query = (
+                sql.select("*")
+                .from_("users")
+                .where(sql.id.neq(sql.not_any(subquery)))
+            )
+            ```
+        """
+        return SQLFactory.any(values)  # NOT ANY is handled by the comparison operator
+
     # ===================
     # String Functions
     # ===================

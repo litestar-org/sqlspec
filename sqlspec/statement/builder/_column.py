@@ -238,11 +238,11 @@ class Column:
         """Create an aliased column expression."""
         return exp.Alias(this=self._expression, alias=alias_name)
 
-    def asc(self) -> exp.Expression:
+    def asc(self) -> exp.Ordered:
         """Create an ASC ordering expression."""
         return exp.Ordered(this=self._expression, desc=False)
 
-    def desc(self) -> exp.Expression:
+    def desc(self) -> exp.Ordered:
         """Create a DESC ordering expression."""
         return exp.Ordered(this=self._expression, desc=True)
 

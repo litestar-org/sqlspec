@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 if TYPE_CHECKING:
@@ -62,7 +63,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
                 # Add any specific type mappings as needed
             },
             has_native_list_expansion=True,  # Psycopg handles lists/tuples natively
-            force_style_conversion=True,  # SQLGlot doesn't generate pyformat
+            force_style_conversion=False,  # Psycopg natively supports %s placeholders
         )
 
     def with_cursor(self, connection: PsycopgSyncConnection) -> PsycopgSyncCursor:
@@ -143,6 +144,44 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         """Extract row count from cursor after INSERT/UPDATE/DELETE."""
         return cursor.rowcount if cursor.rowcount is not None else 0
 
+    def _build_result(self, cursor: Any, statement: "SQL") -> "SQLResult":
+        """Build and return the result of the SQL execution.
+
+        Override to handle psycopg-specific executemany + RETURNING behavior.
+        Psycopg's executemany doesn't return result sets even for RETURNING clauses.
+        """
+        if statement.is_script:
+            row_count = self._extract_execute_rowcount(cursor)
+            # Count statements in the script
+            sql, _ = statement.compile()
+            statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
+            statement_count = len([stmt for stmt in statements if stmt.strip()])
+            return SQLResult(
+                statement=statement,
+                data=[],
+                rows_affected=row_count,
+                operation_type="SCRIPT",
+                total_statements=statement_count,
+                successful_statements=statement_count,  # Assume all successful if no exception
+                metadata={"status_message": "OK"},
+            )
+
+        # Special handling for executemany with RETURNING clauses
+        if statement.is_many and self.returns_rows(statement.expression):
+            # Psycopg's executemany doesn't return result sets for RETURNING clauses
+            # so we treat it as an execute operation (rowcount only)
+            row_count = self._extract_execute_rowcount(cursor)
+            return self._build_execute_result_from_data(statement=statement, row_count=row_count)
+
+        # Handle regular operations (delegate to parent)
+        if self.returns_rows(statement.expression):
+            data, column_names, row_count = self._extract_select_data(cursor)
+            return self._build_select_result_from_data(
+                statement=statement, data=data, column_names=column_names, row_count=row_count
+            )
+        row_count = self._extract_execute_rowcount(cursor)
+        return self._build_execute_result_from_data(statement=statement, row_count=row_count)
+
     def begin(self) -> None:
         """Begin transaction using psycopg-specific method."""
         self.connection.execute("BEGIN")
@@ -173,7 +212,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
             default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
             type_coercion_map={},
             has_native_list_expansion=True,
-            force_style_conversion=True,
+            force_style_conversion=False,
         )
 
     def with_cursor(self, connection: "PsycopgAsyncConnection") -> "PsycopgAsyncCursor":
@@ -253,6 +292,44 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
     def _extract_execute_rowcount(self, cursor: Any) -> int:
         """Extract row count from cursor after INSERT/UPDATE/DELETE."""
         return cursor.rowcount if cursor.rowcount is not None else 0
+
+    async def _build_result(self, cursor: Any, statement: "SQL") -> "SQLResult":
+        """Build and return the result of the SQL execution.
+
+        Override to handle psycopg-specific executemany + RETURNING behavior.
+        Psycopg's executemany doesn't return result sets even for RETURNING clauses.
+        """
+        if statement.is_script:
+            row_count = self._extract_execute_rowcount(cursor)
+            # Count statements in the script
+            sql, _ = statement.compile()
+            statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
+            statement_count = len([stmt for stmt in statements if stmt.strip()])
+            return SQLResult(
+                statement=statement,
+                data=[],
+                rows_affected=row_count,
+                operation_type="SCRIPT",
+                total_statements=statement_count,
+                successful_statements=statement_count,  # Assume all successful if no exception
+                metadata={"status_message": "OK"},
+            )
+
+        # Special handling for executemany with RETURNING clauses
+        if statement.is_many and self.returns_rows(statement.expression):
+            # Psycopg's executemany doesn't return result sets for RETURNING clauses
+            # so we treat it as an execute operation (rowcount only)
+            row_count = self._extract_execute_rowcount(cursor)
+            return self._build_execute_result_from_data(statement=statement, row_count=row_count)
+
+        # Handle regular operations (delegate to parent)
+        if self.returns_rows(statement.expression):
+            data, column_names, row_count = await self._extract_select_data(cursor)
+            return self._build_select_result_from_data(
+                statement=statement, data=data, column_names=column_names, row_count=row_count
+            )
+        row_count = self._extract_execute_rowcount(cursor)
+        return self._build_execute_result_from_data(statement=statement, row_count=row_count)
 
     async def begin(self) -> None:
         """Begin transaction using psycopg-specific method."""

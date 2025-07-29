@@ -46,6 +46,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             default_parameter_style=ParameterStyle.QMARK,
             type_coercion_map={},
             has_native_list_expansion=True,
+            force_style_conversion=True,  # DuckDB doesn't support mixed parameter styles
         )
         self._execution_state: dict[str, Optional[int]] = {"executemany_count": None}
 
@@ -68,13 +69,20 @@ class DuckDBDriver(SyncDriverAdapterBase):
             if statement.is_many:
                 # For execute_many, params is already a list of parameter sets
                 prepared_params = self._prepare_driver_parameters_many(params) if params else []
-                cursor.executemany(sql, prepared_params)
-                # Store the parameter count for accurate row count reporting
-                # DuckDB's rowcount after executemany only reports the last batch
-                if prepared_params and sql.strip().upper().startswith("INSERT"):
-                    self._execution_state["executemany_count"] = len(prepared_params)
+                
+                # DuckDB requires non-empty parameter sets for executemany
+                if prepared_params:
+                    cursor.executemany(sql, prepared_params)
+                    # Store the parameter count for accurate row count reporting
+                    # DuckDB's rowcount after executemany only reports the last batch
+                    if sql.strip().upper().startswith("INSERT"):
+                        self._execution_state["executemany_count"] = len(prepared_params)
+                    else:
+                        self._execution_state["executemany_count"] = None
                 else:
-                    self._execution_state["executemany_count"] = None
+                    # Empty parameter set - no operation performed
+                    # Set executemany_count to 0 to indicate no rows were affected
+                    self._execution_state["executemany_count"] = 0
             else:
                 prepared_params = self._prepare_driver_parameters(params)
                 cursor.execute(sql, prepared_params or [])

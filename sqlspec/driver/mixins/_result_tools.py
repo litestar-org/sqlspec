@@ -5,23 +5,15 @@ from collections.abc import Sequence
 from enum import Enum
 from functools import partial
 from pathlib import Path, PurePath
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast, overload
+from typing import Any, Callable, Optional, Union, cast, overload
 from uuid import UUID
 
 from mypy_extensions import trait
-from sqlglot import exp
 
 from sqlspec.exceptions import SQLSpecError, wrap_exceptions
-from sqlspec.statement.result import OperationType, SQLResult
-from sqlspec.statement.sql import SQL
+from sqlspec.statement.result import OperationType
 from sqlspec.typing import ModelDTOT, ModelT, convert, get_type_adapter
-from sqlspec.utils.type_guards import is_dataclass, is_msgspec_struct, is_pydantic_model, is_select_builder
-
-if TYPE_CHECKING:
-    from sqlspec.statement import Statement
-    from sqlspec.statement.builder import Select
-    from sqlspec.statement.sql import SQLConfig
-
+from sqlspec.utils.type_guards import is_dataclass, is_msgspec_struct, is_pydantic_model
 
 __all__ = ("_DEFAULT_TYPE_DECODERS", "_default_msgspec_deserializer")
 
@@ -102,54 +94,6 @@ class ToSchemaMixin:
             return "SELECT"
         return "EXECUTE"
 
-    def _build_modify_result(self, cursor: "Any", statement: "Any") -> "SQLResult":
-        """Build result for non-SELECT operations.
-
-        Standard implementation for INSERT, UPDATE, DELETE, and other
-        non-SELECT operations that return a row count.
-
-        Args:
-            cursor: Database cursor object with rowcount attribute
-            statement: SQL statement object
-
-        Returns:
-            SQLResult object with operation metadata
-        """
-
-        return SQLResult(
-            statement=statement,
-            data=cast("list[dict[str, Any]]", []),
-            rows_affected=cursor.rowcount,
-            operation_type=self._determine_operation_type(statement),
-            metadata={"status_message": "OK"},
-        )
-
-    def _build_select_result(self, cursor: "Any", statement: "Any") -> "SQLResult":
-        """Build result for SELECT operations.
-
-        Standard implementation for SELECT operations that return rows.
-        Fetches all data and extracts column names from cursor description.
-
-        Args:
-            cursor: Database cursor object with fetchall() and description
-            statement: SQL statement object
-
-        Returns:
-            SQLResult object with fetched data and metadata
-        """
-        fetched_data = cursor.fetchall()
-        # Convert to list if needed (some drivers return iterators)
-        if hasattr(fetched_data, "__iter__") and not isinstance(fetched_data, list):
-            fetched_data = list(fetched_data)
-
-        return SQLResult(
-            statement=statement,
-            data=cast("list[dict[str, Any]]", fetched_data),
-            column_names=[col[0] for col in cursor.description or []],
-            rows_affected=len(fetched_data),
-            operation_type="SELECT",
-        )
-
     @overload
     @staticmethod
     def to_schema(data: "list[ModelT]", *, schema_type: None = None) -> "list[ModelT]": ...
@@ -222,29 +166,3 @@ class ToSchemaMixin:
             )
         msg = "`schema_type` should be a valid Dataclass, Pydantic model or Msgspec struct"
         raise SQLSpecError(msg)
-
-    def _transform_to_sql(
-        self,
-        statement: "Union[Statement, Select]",
-        params: "Optional[dict[str, Any]]" = None,
-        config: "Optional[SQLConfig]" = None,
-    ) -> "SQL":
-        """Normalize a statement of any supported type into a SQL object.
-
-        Args:
-            statement: The statement to normalize (str, Expression, SQL, or Select)
-            params: Optional parameters (ignored for Select and SQL objects)
-            config: Optional SQL configuration
-
-        Returns:
-            A converted SQL object
-        """
-        if is_select_builder(statement):
-            safe_query = statement.build()
-            return SQL(safe_query.sql, parameters=safe_query.parameters, config=config)
-        if isinstance(statement, SQL):
-            return statement
-        if isinstance(statement, (str, exp.Expression)):
-            return SQL(statement, parameters=params, config=config)
-        msg = f"Unsupported statement type: {type(statement).__name__}"
-        raise TypeError(msg)

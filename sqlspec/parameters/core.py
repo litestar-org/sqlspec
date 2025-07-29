@@ -134,6 +134,11 @@ class ParameterProcessor:
         if target_style == "named" and ParameterStyle.POSITIONAL_COLON in detected_styles:
             return False  # :1, :2 are valid for named style in Oracle
 
+        # CRITICAL FIX: Always convert when we have mixed parameter styles
+        # Even if target style is present, mixed styles need normalization
+        if len(detected_styles) > 1:
+            return True
+
         return target_enum not in detected_styles
 
     def _expand_in_clauses(self, sql: str, params: Any) -> tuple[str, Any]:

@@ -297,7 +297,7 @@ def test_merge_parameters(
     expected_result: "StatementParameters",
 ) -> None:
     """Test parameter merging logic."""
-    result = converter.merge_parameters(parameters, list(args) if args else None, kwargs)
+    result = converter.merge_parameters(parameters, list(args) if args is not None else None, kwargs)
     assert result == expected_result
 
 

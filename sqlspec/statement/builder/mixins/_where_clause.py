@@ -1,7 +1,7 @@
 # ruff: noqa: PLR2004
 """Consolidated WHERE and HAVING clause mixins."""
 
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from sqlglot import exp
 from typing_extensions import Self
@@ -19,33 +19,6 @@ __all__ = ("HavingClauseMixin", "WhereClauseMixin")
 
 class WhereClauseMixin:
     """Mixin providing WHERE clause methods for SELECT, UPDATE, and DELETE builders."""
-
-    def _create_operator_handler(self, operator_class: type[exp.Expression]) -> Callable:
-        """Create a handler that properly parameterizes values."""
-
-        def handler(self: "SQLBuilderProtocol", column_exp: exp.Expression, value: Any) -> exp.Expression:
-            _, param_name = self.add_parameter(value)
-            return operator_class(this=column_exp, expression=exp.Placeholder(this=param_name))
-
-        return handler
-
-    def _create_like_handler(self) -> Callable:
-        """Create LIKE handler."""
-
-        def handler(self: "SQLBuilderProtocol", column_exp: exp.Expression, value: Any) -> exp.Expression:
-            _, param_name = self.add_parameter(value)
-            return exp.Like(this=column_exp, expression=exp.Placeholder(this=param_name))
-
-        return handler
-
-    def _create_not_like_handler(self) -> Callable:
-        """Create NOT LIKE handler."""
-
-        def handler(self: "SQLBuilderProtocol", column_exp: exp.Expression, value: Any) -> exp.Expression:
-            _, param_name = self.add_parameter(value)
-            return exp.Not(this=exp.Like(this=column_exp, expression=exp.Placeholder(this=param_name)))
-
-        return handler
 
     def _handle_in_operator(self, column_exp: exp.Expression, value: Any) -> exp.Expression:
         """Handle IN operator."""

@@ -107,13 +107,11 @@ class _ProcessedState:
 
     def __hash__(self) -> int:
         """Hash based on processed SQL and expression."""
-        return hash(
-            (
-                self.processed_sql,
-                str(self.processed_expression),
-                len(self.validation_errors) if self.validation_errors else 0,
-            )
-        )
+        return hash((
+            self.processed_sql,
+            str(self.processed_expression),
+            len(self.validation_errors) if self.validation_errors else 0,
+        ))
 
     def __init__(
         self,
@@ -207,20 +205,18 @@ class SQLConfig:
 
     def __hash__(self) -> int:
         """Hash based on key configuration settings."""
-        return hash(
-            (
-                self.enable_parsing,
-                self.enable_validation,
-                self.enable_transformations,
-                self.enable_analysis,
-                self.enable_expression_simplification,
-                self.enable_parameter_type_wrapping,
-                self.enable_caching,
-                self.dialect,
-                self.default_parameter_style,
-                tuple(self.allowed_parameter_styles) if self.allowed_parameter_styles else None,
-            )
-        )
+        return hash((
+            self.enable_parsing,
+            self.enable_validation,
+            self.enable_transformations,
+            self.enable_analysis,
+            self.enable_expression_simplification,
+            self.enable_parameter_type_wrapping,
+            self.enable_caching,
+            self.dialect,
+            self.default_parameter_style,
+            tuple(self.allowed_parameter_styles) if self.allowed_parameter_styles else None,
+        ))
 
     def __init__(
         self,
@@ -507,7 +503,7 @@ class SQL:
         elif is_dict(item):
             self._named_params.update(item)
         elif isinstance(item, tuple):
-            self._positional_params.extend(item)
+            self._positional_params.append(item)
         else:
             self._positional_params.append(item)
 
@@ -648,7 +644,35 @@ class SQL:
         param_info = None  # Initialize to avoid unbound variable
         if final_params:
             if is_dict(final_params):
-                param_dict = final_params
+                # CRITICAL FIX: Handle tuple parameters that are already in dict format
+                # This happens when parameters are pre-processed by earlier pipeline stages
+                param_dict = {}
+                validator = self._config.parameter_validator
+                param_info = validator.extract_parameters(initial_sql_for_context)
+
+                # Check if we have a single tuple parameter that needs processing
+                if len(final_params) == 1 and next(iter(final_params.keys())).startswith("param_"):
+                    # Get the single parameter value
+                    single_param_value = next(iter(final_params.values()))
+
+                    # Handle tuple parameters correctly
+                    if isinstance(single_param_value, tuple):
+                        if len(param_info) > 1 and len(single_param_value) == len(param_info):
+                            # Multi-element tuple expansion: ('a', 'b', 'c') with 3 placeholders → param_0='a', param_1='b', param_2='c'
+                            for i, param_value in enumerate(single_param_value):
+                                param_dict[f"param_{i}"] = param_value
+                        elif len(param_info) == 1 and len(single_param_value) == 1:
+                            # Single-element tuple unwrapping: (['array'],) with 1 placeholder → param_0=['array']
+                            param_dict["param_0"] = single_param_value[0]
+                        else:
+                            # Keep tuple as-is for other cases
+                            param_dict = final_params
+                    else:
+                        # Non-tuple parameter, keep original dict format
+                        param_dict = final_params
+                else:
+                    # Keep original dict format
+                    param_dict = final_params
             elif isinstance(final_params, (list, tuple)):
                 # Extract parameter info to check if we have numeric placeholders
                 validator = self._config.parameter_validator
@@ -660,10 +684,46 @@ class SQL:
                 if has_numeric_placeholders:
                     # For numeric placeholders, map parameters by their numeric value
                     # $1 -> key "1", $2 -> key "2", etc.
-                    for i, param in enumerate(final_params):
-                        param_dict[str(i + 1)] = param
+
+                    # CRITICAL FIX: Handle tuple parameters correctly for numeric placeholders
+                    if len(final_params) == 1 and isinstance(final_params[0], tuple):
+                        tuple_param = final_params[0]
+                        if len(param_info) == 1 and len(tuple_param) == 1:
+                            # Single placeholder, single-element tuple -> extract the element
+                            param_dict["1"] = tuple_param[0]
+                        elif len(param_info) > 1 and len(tuple_param) == len(param_info):
+                            # Multiple placeholders, tuple with matching elements -> expand
+                            for i, param in enumerate(tuple_param):
+                                param_dict[str(i + 1)] = param
+                        else:
+                            # Keep tuple as-is for other cases
+                            param_dict["1"] = tuple_param
+                    else:
+                        # CRITICAL FIX: For mixed parameter styles, map parameters based on their position in SQL
+                        # Sort parameters by position to ensure correct order
+                        sorted_params = sorted(param_info, key=lambda p: p.position)
+                        for i, p_info in enumerate(sorted_params):
+                            if i < len(final_params):
+                                # CRITICAL FIX: For mixed styles, use parameter name when available
+                                # Otherwise fall back to positional naming
+                                key = p_info.name if p_info.name is not None else f"param_{i}"
+                                param_dict[key] = final_params[i]
+                # For other styles, use param_0, param_1, etc.
+                # CRITICAL FIX: Handle tuple parameters correctly
+                elif len(final_params) == 1 and isinstance(final_params[0], tuple):
+                    tuple_param = final_params[0]
+                    if len(param_info) == 1 and len(tuple_param) == 1:
+                        # Single placeholder, single-element tuple -> extract the element
+                        param_dict["param_0"] = tuple_param[0]
+                    elif len(param_info) > 1 and len(tuple_param) == len(param_info):
+                        # Multiple placeholders, tuple with matching elements -> expand
+                        for i, param in enumerate(tuple_param):
+                            param_dict[f"param_{i}"] = param
+                    else:
+                        # Keep tuple as-is for other cases
+                        param_dict["param_0"] = tuple_param
                 else:
-                    # For other styles, use param_0, param_1, etc.
+                    # Normal case: map each parameter to its position
                     for i, param in enumerate(final_params):
                         param_dict[f"param_{i}"] = param
             else:
@@ -1626,21 +1686,25 @@ class SQL:
                 # Extract parameter info to determine order
                 param_info = validator.extract_parameters(sql)
                 if param_info:
-                    # Convert dict back to list based on parameter order
+                    # CRITICAL FIX: For mixed parameter styles, use position-based ordering
+                    # Sort parameters by their position in the SQL text
+                    sorted_param_info = sorted(param_info, key=lambda p: p.position)
+
+                    # Convert dict back to list based on position order
                     list_params = []
-                    for p_info in param_info:
-                        # Check for param_0, param_1 keys (from _create_processing_context)
-                        key = f"param_{p_info.ordinal}"
+                    for i, p_info in enumerate(sorted_param_info):
+                        # For mixed styles, the keys are "1", "2", etc. based on position
+                        key = str(i + 1)
                         if key in params:
                             list_params.append(params[key])
+                        # Fallback: try param_0, param_1 keys (from _create_processing_context)
+                        elif f"param_{p_info.ordinal}" in params:
+                            list_params.append(params[f"param_{p_info.ordinal}"])
+                        # Fallback: try parameter name if available
                         elif p_info.name and p_info.name in params:
                             list_params.append(params[p_info.name])
-                        else:
-                            # Try numeric key for numeric placeholders
-                            numeric_key = str(p_info.ordinal + 1)
-                            if numeric_key in params:
-                                list_params.append(params[numeric_key])
-                    if list_params:
+
+                    if list_params and len(list_params) == len(param_info):
                         params = list_params
 
         return sql, params
@@ -1853,6 +1917,9 @@ class SQL:
         return sql, None
 
     def _replace_placeholders_in_sql(self, sql: str, param_info: list[Any], target_style: ParameterStyle) -> str:
+        """Replace placeholders in SQL string with target style placeholders."""
+        print(f"[DEBUG] _replace_placeholders_in_sql CALLED with sql={sql[:100]}... target_style={target_style}")
+
         """Replace placeholders in SQL string with target style placeholders.
 
         Args:
@@ -1872,7 +1939,32 @@ class SQL:
             sql = sql[:start] + new_placeholder + sql[end:]
 
         # For pyformat styles, escape literal % characters after placeholder replacement
-        if target_style in {ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT}:
+        # Skip escaping entirely if this is execute_many compilation or denormalization
+        skip_escaping = (
+            # Check if we're in execute_many context
+            (hasattr(self, "_is_many") and self._is_many)
+            or
+            # Check if we're converting from named colon (denormalization)
+            (
+                param_info
+                and len(param_info) > 0
+                and param_info[0].style == ParameterStyle.NAMED_COLON
+                and target_style == ParameterStyle.POSITIONAL_PYFORMAT
+            )
+        )
+
+        # DEBUG: Print escaping decision
+        print(f"[DEBUG] _replace_placeholders_in_sql: target_style={target_style}, skip_escaping={skip_escaping}")
+        print(f"[DEBUG] hasattr(_is_many)={hasattr(self, '_is_many')}, _is_many={getattr(self, '_is_many', 'MISSING')}")
+        if param_info:
+            print(f"[DEBUG] param_info[0].style={param_info[0].style}")
+
+        print(
+            f"[DEBUG] Escaping condition: target_style in pyformats = {target_style in {ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT}}, not skip_escaping = {not skip_escaping}"
+        )
+
+        if target_style in {ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT} and not skip_escaping:
+            print("[DEBUG] ENTERING ESCAPING LOGIC")
             # We need to escape % that are not part of our placeholders
             # Since we just replaced placeholders, we know %s and %(name)s are our placeholders
             # So we escape any % that is not followed by 's' or '('

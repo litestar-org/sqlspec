@@ -44,7 +44,6 @@ class SqliteDriver(SyncDriverAdapterBase):
 
     dialect: "DialectType" = "sqlite"
     default_parameter_style: "ClassVar[str]" = "qmark"
-    parameter_config: DriverParameterConfig
 
     def __init__(self, connection: "SqliteConnection", config: "Optional[SQLConfig]" = None) -> None:
         super().__init__(connection=connection, config=config)

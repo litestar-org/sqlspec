@@ -214,7 +214,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         """
         # For execute_many, we need to handle parameters specially to preserve structure
         if parameters and len(parameters) == 1 and isinstance(parameters[0], list):
-            # Direct list of parameter sets - pass to as_many
+            # Direct list of parameter sets - pass the full list to as_many
             sql_statement = self._prepare_sql(statement, config=config or self.config, **kwargs)
             return self._dispatch_execution(statement=sql_statement.as_many(parameters[0]), connection=self.connection)
 

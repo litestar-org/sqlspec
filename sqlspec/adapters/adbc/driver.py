@@ -164,14 +164,14 @@ class AdbcDriver(SyncDriverAdapterBase):
     def _perform_execute(self, cursor: "Cursor", statement: "SQL") -> None:
         """Execute the SQL statement using the provided cursor."""
         try:
-            sql, parameters = statement.compile()
+            sql, parameters = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
             if statement.is_script:
                 statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
                 for stmt in statements:
                     if stmt.strip():
                         cursor.execute(
                             stmt,
-                            parameters=self._prepare_cursor_parameters(self._handle_postgres_empty_params(parameters)),
+                            parameters=self._prepare_driver_parameters(self._handle_postgres_empty_params(parameters)),
                         )
             elif statement.is_many:
                 # Use the proper parameter preparation for execute_many
@@ -185,9 +185,10 @@ class AdbcDriver(SyncDriverAdapterBase):
                     cursor.executemany(sql, prepared_params)
             else:
                 # For single execution, prepare parameters intelligently
-                prepared_params = self._prepare_cursor_parameters(self._handle_postgres_empty_params(parameters))
+                prepared_params = self._prepare_driver_parameters(self._handle_postgres_empty_params(parameters))
                 # Handle special case where a single-element list is passed for a single parameter
                 prepared_params = self._handle_single_param_list(sql, prepared_params)
+
                 cursor.execute(sql, parameters=prepared_params)
         except Exception as e:
             self._handle_postgres_rollback(cursor)
@@ -224,33 +225,29 @@ class AdbcDriver(SyncDriverAdapterBase):
         with self.with_cursor(self.connection) as cursor:
             cursor.execute("COMMIT")
 
-    def _prepare_cursor_parameters(self, parameters: "Any") -> "list[Any]":
-        """Convert parameters to the format expected by ADBC cursor.
+    def _prepare_driver_parameters(self, parameters: "Any") -> "list[Any]":
+        """Convert parameters to the format expected by ADBC driver.
 
         ADBC/Arrow requires special handling for certain types:
         - NULL values need to be handled properly
         - Date/time types may need conversion
         - Arrays and complex types need proper formatting
+
+        Overrides base class to provide ADBC-specific type conversions.
+        The base class handles dict->list conversion for positional parameter styles.
         """
-        if parameters is None:
+        # Use base class for parameter structure conversion
+        base_params = super()._prepare_driver_parameters(parameters)
+
+        if not base_params:
             return []
 
-        # Handle dict parameters (for named parameters)
-        if isinstance(parameters, dict):
-            if not parameters:
-                return []
-            # For dict parameters, we need to handle conversion
-            values = list(parameters.values())
-            # Apply type conversions to each value individually
-            return [self._convert_single_parameter(v) for v in values]
-
-        # Handle list/tuple parameters
-        if isinstance(parameters, (list, tuple)):
-            # Apply type conversions to each parameter individually
-            return [self._convert_single_parameter(p) for p in parameters]
-
-        # Single parameter case
-        return [self._convert_single_parameter(parameters)]
+        # Apply ADBC-specific type conversions
+        if isinstance(base_params, list):
+            return [self._convert_single_parameter(p) for p in base_params]
+        if isinstance(base_params, dict):
+            return {k: self._convert_single_parameter(v) for k, v in base_params.items()}
+        return [self._convert_single_parameter(base_params)]
 
     def _convert_single_parameter(self, param: "Any") -> "Any":
         """Convert a single parameter to Arrow-compatible type.

@@ -260,6 +260,31 @@ class CommonDriverAttributesMixin:
         if not parameters:
             return []
         if isinstance(parameters, dict):
+            if not parameters:
+                return []
+
+            # CRITICAL FIX: For drivers using positional parameter styles,
+            # convert dict to properly ordered list based on parameter ordinals.
+            # This ensures compatibility across all drivers (SQLite, PostgreSQL, MySQL, etc.)
+            if self.parameter_config.default_parameter_style in {
+                ParameterStyle.NUMERIC,  # PostgreSQL $1, $2
+                ParameterStyle.QMARK,  # SQLite ?, ?
+                ParameterStyle.POSITIONAL_PYFORMAT,  # MySQL %s, %s
+            }:
+                # Convert dict to ordered list based on numeric or param_ keys
+                ordered_params = []
+                # Sort by numeric key or param_0, param_1 pattern to maintain parameter order
+                sorted_items = sorted(
+                    parameters.items(),
+                    key=lambda item: int(item[0])
+                    if item[0].isdigit()
+                    else (int(item[0][6:]) if item[0].startswith("param_") and item[0][6:].isdigit() else float("inf")),
+                )
+                for _key, value in sorted_items:
+                    ordered_params.append(value.value if isinstance(value, TypedParameter) else value)
+                return ordered_params
+
+            # For named parameter styles, keep as dict
             return {k: (v.value if isinstance(v, TypedParameter) else v) for k, v in parameters.items()}
         if isinstance(parameters, (list, tuple)):
             return [p.value if isinstance(p, TypedParameter) else p for p in parameters]
