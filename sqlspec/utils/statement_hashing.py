@@ -109,15 +109,15 @@ def hash_parameters(
                     hashable_params.append((param.value, param.type_hint))
             elif isinstance(param, (list, dict)):
                 # Convert unhashable types to hashable representations
-                hashable_params.append((repr(param),))
+                hashable_params.append((repr(param), "unhashable"))
             else:
                 # Check if param itself contains unhashable types
                 try:
                     hash(param)
-                    hashable_params.append(param)
+                    hashable_params.append((param, "primitive"))
                 except TypeError:
                     # If unhashable, convert to string representation
-                    hashable_params.append(repr(param))
+                    hashable_params.append((repr(param), "unhashable_repr"))
 
         param_hash ^= hash(tuple(hashable_params))
 
@@ -132,9 +132,9 @@ def hash_parameters(
                 else:
                     hashable_items.append((key, (value.value, value.type_hint)))
             elif isinstance(value, (list, dict)):
-                hashable_items.append((key, repr(value)))
+                hashable_items.append((key, (repr(value), "unhashable")))
             else:
-                hashable_items.append((key, value))
+                hashable_items.append((key, (value, "primitive")))
         param_hash ^= hash(tuple(hashable_items))
 
     # Hash original parameters (important for execute_many)

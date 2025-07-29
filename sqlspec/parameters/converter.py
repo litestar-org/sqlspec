@@ -178,10 +178,10 @@ class ParameterConverter:
                 return params
 
             # Wrap complex types in the dict
-            wrapped = {}
+            wrapped_dict = {}
             for key, value in params.items():
-                wrapped[key] = self._wrap_single_parameter(value, key)
-            return wrapped
+                wrapped_dict[key] = self._wrap_single_parameter(value, key)
+            return wrapped_dict
 
         # If we have a list/tuple of parameters
         if isinstance(params, (list, tuple)):
@@ -190,14 +190,14 @@ class ParameterConverter:
                 return params
 
             # Wrap complex types in the list
-            wrapped: list[Any] = []
+            wrapped_list: list[Any] = []
             for i, value in enumerate(params):
                 # Use parameter name from param_info if available
                 semantic_name = None
                 if i < len(param_info) and param_info[i].name:
                     semantic_name = param_info[i].name
-                wrapped.append(self._wrap_single_parameter(value, semantic_name))
-            return wrapped
+                wrapped_list.append(self._wrap_single_parameter(value, semantic_name))
+            return wrapped_list
 
         # Single parameter value
         return self._wrap_single_parameter(params, None)
@@ -489,8 +489,8 @@ class ParameterConverter:
             was_transformed=True,
             original_styles=original_styles,
             transformation_style=ParameterStyle.NAMED_COLON,
-            placeholder_map=placeholder_map,
-            reverse_map=reverse_map,
+            placeholder_map=placeholder_map,  # type: ignore[arg-type]
+            reverse_map=reverse_map,  # type: ignore[arg-type]
             original_param_info=param_info,
         )
 

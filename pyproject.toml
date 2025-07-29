@@ -140,17 +140,18 @@ packages = ["sqlspec"]
 dependencies = ["hatch-mypyc"]
 enable-by-default = false
 exclude = [
-  "tests/**",                         # Test files
-  "sqlspec/__main__.py",              # Entry point (can't run directly when compiled)
-  "sqlspec/cli.py",                   # CLI module (not performance critical)
-  "sqlspec/typing.py",                # Type aliases
-  "sqlspec/_typing.py",               # Type aliases
-  "sqlspec/adapters/*/config.py",     # Configuration classes
-  "sqlspec/config.py",                # Main config
-  "sqlspec/extensions/**",            # All extensions
-  "sqlspec/storage/backends/base.py", # Abstract base
-  "sqlspec/**/__init__.py",           # Init files (usually just imports)
-  "sqlspec/protocols.py",             # Protocol definitions
+  "tests/**",                          # Test files
+  "sqlspec/__main__.py",               # Entry point (can't run directly when compiled)
+  "sqlspec/cli.py",                    # CLI module (not performance critical)
+  "sqlspec/typing.py",                 # Type aliases
+  "sqlspec/_typing.py",                # Type aliases
+  "sqlspec/adapters/*/config.py",      # Configuration classes
+  "sqlspec/config.py",                 # Main config
+  "sqlspec/extensions/**",             # All extensions
+  "sqlspec/storage/backends/base.py",  # Abstract base
+  "sqlspec/**/__init__.py",            # Init files (usually just imports)
+  "sqlspec/protocols.py",              # Protocol definitions
+  "sqlspec/statement/builder/**/*.py", # Builder (not performance critical)
 ]
 include = [
   "sqlspec/statement/**/*.py", # All statement-related modules

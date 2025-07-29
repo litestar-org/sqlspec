@@ -4,12 +4,16 @@ import math
 from typing import Any
 
 from rich.panel import Panel
+from sqlglot import exp
 
 from sqlspec.parameters import ParameterStyle
 from sqlspec.parameters.types import TypedParameter
 from sqlspec.statement.sql import SQL
 from tools.benchmark.core.metrics import BenchmarkMetrics, TimingResult
 from tools.benchmark.suites.base import BaseBenchmarkSuite
+
+# Create data_type once at module level for efficiency
+_STRING_DATA_TYPE = exp.DataType.build("VARCHAR")
 
 
 class ParametersBenchmark(BaseBenchmarkSuite):
@@ -119,7 +123,7 @@ class ParametersBenchmark(BaseBenchmarkSuite):
         for name, value in test_cases:
             # Benchmark wrapping
             def wrap_param(val: Any = value) -> None:
-                TypedParameter(val, sqlglot_type="str", type_hint="str")
+                TypedParameter(val, data_type=_STRING_DATA_TYPE, type_hint="str")
 
             times = BenchmarkMetrics.time_operation(
                 wrap_param, iterations=self.config.iterations, warmup=self.config.warmup_iterations
@@ -129,7 +133,7 @@ class ParametersBenchmark(BaseBenchmarkSuite):
             )
 
             # Benchmark access
-            param = TypedParameter(value, sqlglot_type="str", type_hint="str")
+            param = TypedParameter(value, data_type=_STRING_DATA_TYPE, type_hint="str")
 
             def access_param(p: "TypedParameter" = param) -> None:
                 _ = p.value

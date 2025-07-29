@@ -41,7 +41,6 @@ class SafeQuery:
     dialect: DialectType = field(default=None)
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
 @dataclass
 class QueryBuilder(ABC):
     """Abstract base class for SQL query builders with SQLGlot optimization.
