@@ -2,14 +2,15 @@
 import re
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
+from asyncpg import Connection as AsyncpgNativeConnection
+from asyncpg.pool import PoolConnectionProxy
+
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from asyncpg import Connection as AsyncpgNativeConnection
     from asyncpg import Record
-    from asyncpg.pool import PoolConnectionProxy
     from sqlglot.dialects.dialect import DialectType
     from typing_extensions import TypeAlias
 
@@ -17,14 +18,14 @@ if TYPE_CHECKING:
     from sqlspec.statement.sql import SQL, SQLConfig
 
 
-__all__ = ("AsyncpgConnection", "AsyncpgDriver")
+__all__ = ("AsyncpgConnection", "AsyncpgCursor", "AsyncpgDriver")
 
 logger = get_logger("adapters.asyncpg")
 
 if TYPE_CHECKING:
     AsyncpgConnection: TypeAlias = Union[AsyncpgNativeConnection[Record], PoolConnectionProxy[Record]]
 else:
-    AsyncpgConnection = Any
+    AsyncpgConnection = Union[AsyncpgNativeConnection, PoolConnectionProxy]
 
 # Compiled regex to parse asyncpg status messages like "INSERT 0 1" or "UPDATE 1"
 # Group 1: Command Tag (e.g., INSERT, UPDATE)
@@ -45,7 +46,7 @@ OPERATION_MAP: Final[dict[str, str]] = {
 }
 
 
-class _AsyncpgCursorManager:
+class AsyncpgCursor:
     def __init__(self, connection: "AsyncpgConnection") -> None:
         self.connection = connection
 
@@ -74,8 +75,8 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         )
         self._execution_state = {"last_status": None, "compiled_sql": None, "prepared_params": None}
 
-    def with_cursor(self, connection: "AsyncpgConnection") -> "_AsyncpgCursorManager":
-        return _AsyncpgCursorManager(connection)
+    def with_cursor(self, connection: "AsyncpgConnection") -> "AsyncpgCursor":
+        return AsyncpgCursor(connection)
 
     async def _perform_execute(self, cursor: "AsyncpgConnection", statement: "SQL") -> None:
         sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
@@ -108,17 +109,17 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             self._execution_state["last_status"] = f"EXECUTE_MANY {row_count}"
         else:
             prepared_params = self._prepare_driver_parameters(params)
-            # asyncpg uses *args for parameters, and execute() returns status string
-            status = await cursor.execute(sql, *(prepared_params or []))
-            # Store status for row count extraction in non-SELECT operations
-            if not self.returns_rows(statement.expression):
+            # For row-returning queries (including CTEs with INSERT...RETURNING),
+            # we need to use fetch() directly instead of execute() to get the results
+            if self.returns_rows(statement.expression):
+                # Store params for _extract_select_data to use
+                self._execution_state["prepared_params"] = prepared_params
+                self._execution_state["compiled_sql"] = sql
+                # For CTEs with RETURNING, we'll fetch the data in _extract_select_data
+            else:
+                # For non-row-returning queries, use execute() and store status
+                status = await cursor.execute(sql, *(prepared_params or []))
                 self._execution_state["last_status"] = status
-
-        # Store compiled SQL and prepared params for SELECT fetch operations
-        # AsyncPG requires separate fetch() call for SELECT statements
-        if self.returns_rows(statement.expression):
-            self._execution_state["compiled_sql"] = sql
-            self._execution_state["prepared_params"] = prepared_params
 
     async def _extract_select_data(self, cursor: "AsyncpgConnection") -> "tuple[list[dict[str, Any]], list[str], int]":
         """Extract data from cursor after SELECT execution.

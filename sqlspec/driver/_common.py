@@ -130,6 +130,59 @@ class CommonDriverAttributesMixin:
             return False
 
         return False
+    
+    def has_parameters(self, expression: "Union[exp.Expression, str]") -> bool:
+        """Check if a SQL expression contains any parameter placeholders using AST analysis.
+        
+        This method uses SQLGlot's AST to detect parameter placeholders rather than
+        naive string searching. It supports all parameter styles including:
+        - Placeholder expressions (?, :name, $1, etc.)
+        - Parameter expressions ({param})
+        - Any other parameterized constructs
+        
+        Args:
+            expression: SQLGlot expression or SQL string to analyze
+            
+        Returns:
+            True if the expression contains parameter placeholders
+        """
+        # Parse string to expression if needed
+        if isinstance(expression, str):
+            try:
+                expression = sqlglot.parse_one(expression, read=self.dialect if self.dialect else None)
+            except Exception:
+                # If parsing fails, fall back to token analysis
+                return self._has_parameters_by_tokens(expression)
+        
+        # Walk the AST looking for placeholder nodes
+        for node in expression.walk():
+            if isinstance(node, (exp.Placeholder, exp.Parameter)):
+                return True
+                
+        return False
+    
+    def _has_parameters_by_tokens(self, sql_text: str) -> bool:
+        """Fallback parameter detection using token analysis.
+        
+        Used when AST parsing fails, this method tokenizes the SQL and looks
+        for parameter-related tokens.
+        
+        Args:
+            sql_text: SQL string to analyze
+            
+        Returns:
+            True if parameter tokens are found
+        """
+        try:
+            tokens = list(sqlglot.tokenize(sql_text, read=self.dialect if self.dialect else None))
+            for token in tokens:
+                if token.token_type in {TokenType.PLACEHOLDER, TokenType.PARAMETER}:
+                    return True
+            return False
+        except Exception:
+            # Last resort: look for common parameter patterns
+            # But only as absolute fallback when tokenization fails
+            return any(marker in sql_text for marker in ['?', '$', ':'])
 
     def _select_parameter_style(self, statement: "Union[SQL, exp.Expression]") -> "ParameterStyle":
         """Select the best parameter style based on detected styles in SQL.

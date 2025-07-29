@@ -75,7 +75,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     is_async: ClassVar[bool] = False
     supports_connection_pooling: ClassVar[bool] = False
     driver_type: ClassVar[type[AdbcDriver]] = AdbcDriver
-    connection_type: ClassVar[type[AdbcConnection]] = AdbcConnection
+    connection_type: "ClassVar[type[AdbcConnection]]" = AdbcConnection
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark",)
     default_parameter_style: ClassVar[str] = "qmark"
 

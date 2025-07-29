@@ -1,4 +1,11 @@
 from sqlspec.adapters.asyncmy.config import AsyncmyConfig, AsyncmyConnectionParams, AsyncmyPoolParams
-from sqlspec.adapters.asyncmy.driver import AsyncmyConnection, AsyncmyDriver
+from sqlspec.adapters.asyncmy.driver import AsyncmyConnection, AsyncmyCursor, AsyncmyDriver
 
-__all__ = ("AsyncmyConfig", "AsyncmyConnection", "AsyncmyConnectionParams", "AsyncmyDriver", "AsyncmyPoolParams")
+__all__ = (
+    "AsyncmyConfig",
+    "AsyncmyConnection",
+    "AsyncmyConnectionParams",
+    "AsyncmyCursor",
+    "AsyncmyDriver",
+    "AsyncmyPoolParams",
+)

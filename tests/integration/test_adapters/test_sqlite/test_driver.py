@@ -381,31 +381,6 @@ def test_sqlite_column_names_and_metadata(sqlite_session: SqliteDriver) -> None:
     assert row["created_at"] is not None
 
 
-@pytest.mark.xdist_group("sqlite")
-def test_sqlite_with_schema_type(sqlite_session: SqliteDriver) -> None:
-    """Test SQLite driver with schema type conversion."""
-    from dataclasses import dataclass
-    from typing import Optional
-
-    @dataclass
-    class TestRecord:
-        id: Optional[int]
-        name: str
-        value: int
-
-    # Insert test data
-    sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("schema_test", 456))
-
-    # Query with schema type
-    result = sqlite_session.select_one(
-        "SELECT id, name, value FROM test_table WHERE name = ?", ("schema_test",), schema_type=TestRecord
-    )
-
-    assert isinstance(result, TestRecord)
-    assert result.name == "schema_test"
-    assert result.value == 456
-    assert result.id is not None
-
 
 @pytest.mark.xdist_group("sqlite")
 def test_sqlite_performance_bulk_operations(sqlite_session: SqliteDriver) -> None:

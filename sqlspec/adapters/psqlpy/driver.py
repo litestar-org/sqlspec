@@ -1,16 +1,16 @@
 """Psqlpy Driver Implementation."""
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 
-import logging
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
-    from psqlpy import Connection
     from typing_extensions import TypeAlias
 
     from sqlspec.statement.result import SQLResult
     from sqlspec.statement.sql import SQL, SQLConfig
 
+
+from psqlpy import Connection
 
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
@@ -18,16 +18,15 @@ from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-__all__ = ("PsqlpyConnection", "PsqlpyDriver")
+__all__ = ("PsqlpyConnection", "PsqlpyCursor", "PsqlpyDriver")
 
 if TYPE_CHECKING:
     PsqlpyConnection: TypeAlias = Connection
 else:
-    PsqlpyConnection = Any
-logger = logging.getLogger("sqlspec")
+    PsqlpyConnection = Connection
 
 
-class _PsqlpyCursorManager:
+class PsqlpyCursor:
     def __init__(self, connection: "PsqlpyConnection") -> None:
         self.connection = connection
 
@@ -56,8 +55,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             has_native_list_expansion=True,  # Psqlpy handles lists natively
         )
 
-    def with_cursor(self, connection: PsqlpyConnection) -> "_PsqlpyCursorManager":
-        return _PsqlpyCursorManager(connection)
+    def with_cursor(self, connection: PsqlpyConnection) -> "PsqlpyCursor":
+        return PsqlpyCursor(connection)
 
     async def _perform_execute(self, cursor: PsqlpyConnection, statement: "SQL") -> None:
         sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)

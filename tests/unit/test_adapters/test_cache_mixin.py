@@ -7,27 +7,19 @@ from sqlspec.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, DriverParameterConfig, SQLConfig
 
 
-class MockConfig:
-    """Mock config for testing."""
-
-    def __init__(self, enable_cache: bool = True, cache_size: int = 100) -> None:
-        self.enable_adapter_cache = enable_cache
-        self.adapter_cache_size = cache_size
-
-
 class MockSQLConfig(SQLConfig):
     """Mock SQLConfig with cache attributes for testing."""
 
-    def __init__(self, enable_cache: bool = True, cache_size: int = 500, **kwargs: Any) -> None:
+    def __init__(self, enable_cache: bool = True, cache_size: int = 1000, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self.enable_adapter_cache = enable_cache
-        self.adapter_cache_size = cache_size
+        self.enable_caching = enable_cache
+        self.cache_size = cache_size
 
 
 class MockAdapter(CommonDriverAttributesMixin):
     """Mock adapter for testing cache functionality."""
 
-    def __init__(self, config: Optional[MockConfig] = None, connection: Any = None) -> None:
+    def __init__(self, config: Optional[MockSQLConfig] = None, connection: Any = None) -> None:
         # Set required attributes for CommonDriverAttributesMixin
         self.dialect = "sqlite"
         self.parameter_config = DriverParameterConfig(
@@ -37,19 +29,17 @@ class MockAdapter(CommonDriverAttributesMixin):
             has_native_list_expansion=True,
         )
 
-        # Create SQLConfig with cache settings
-        if config:
-            sql_config = MockSQLConfig(enable_cache=config.enable_adapter_cache, cache_size=config.adapter_cache_size)
-        else:
-            sql_config = MockSQLConfig()
+        # Use provided config or default
+        sql_config = config or MockSQLConfig()
 
-        super().__init__(connection=connection or "mock_connection", config=sql_config)
+        # Initialize CommonDriverAttributesMixin which handles caching
+        CommonDriverAttributesMixin.__init__(self, connection=connection or "mock_connection", config=sql_config)
 
 
 class MockAsyncAdapter(CommonDriverAttributesMixin):
     """Mock async adapter for testing cache functionality."""
 
-    def __init__(self, config: Optional[MockConfig] = None, connection: Any = None) -> None:
+    def __init__(self, config: Optional[MockSQLConfig] = None, connection: Any = None) -> None:
         # Set required attributes for CommonDriverAttributesMixin
         self.dialect = "sqlite"
         self.parameter_config = DriverParameterConfig(
@@ -59,13 +49,11 @@ class MockAsyncAdapter(CommonDriverAttributesMixin):
             has_native_list_expansion=True,
         )
 
-        # Create SQLConfig with cache settings
-        if config:
-            sql_config = MockSQLConfig(enable_cache=config.enable_adapter_cache, cache_size=config.adapter_cache_size)
-        else:
-            sql_config = MockSQLConfig()
+        # Use provided config or default
+        sql_config = config or MockSQLConfig()
 
-        super().__init__(connection=connection or "mock_connection", config=sql_config)
+        # Initialize CommonDriverAttributesMixin which handles caching
+        CommonDriverAttributesMixin.__init__(self, connection=connection or "mock_connection", config=sql_config)
 
 
 class TestAdapterCacheMixin:
@@ -73,7 +61,7 @@ class TestAdapterCacheMixin:
 
     def test_cache_initialization_with_config(self) -> None:
         """Test cache is initialized with config values."""
-        config = MockConfig(enable_cache=True, cache_size=200)
+        config = MockSQLConfig(enable_cache=True, cache_size=200)
         adapter = MockAdapter(config=config)
 
         assert adapter._compiled_cache is not None
@@ -86,13 +74,13 @@ class TestAdapterCacheMixin:
         adapter = MockAdapter()
 
         assert adapter._compiled_cache is not None
-        assert adapter._compiled_cache.max_size == 500  # default
+        assert adapter._compiled_cache.max_size == 1000  # default
         assert adapter._prepared_statements == {}
         assert adapter._prepared_counter == 0
 
     def test_cache_disabled(self) -> None:
         """Test cache is disabled when configured."""
-        config = MockConfig(enable_cache=False)
+        config = MockSQLConfig(enable_cache=False)
         adapter = MockAdapter(config=config)
 
         assert adapter._compiled_cache is None
@@ -119,7 +107,7 @@ class TestAdapterCacheMixin:
 
     def test_get_compiled_sql_without_cache(self) -> None:
         """Test that compiled SQL works when cache is disabled."""
-        config = MockConfig(enable_cache=False)
+        config = MockSQLConfig(enable_cache=False)
         adapter = MockAdapter(config=config)
         statement = SQL("SELECT 1")
         target_style = ParameterStyle.QMARK
@@ -209,7 +197,7 @@ class TestAsyncAdapterCacheMixin:
 
     def test_async_cache_initialization(self) -> None:
         """Test async cache mixin initialization."""
-        config = MockConfig(enable_cache=True, cache_size=150)
+        config = MockSQLConfig(enable_cache=True, cache_size=150)
         adapter = MockAsyncAdapter(config=config)
 
         assert adapter._compiled_cache is not None

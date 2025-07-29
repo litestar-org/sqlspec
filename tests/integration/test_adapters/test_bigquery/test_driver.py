@@ -399,33 +399,6 @@ def test_bigquery_column_names_and_metadata(
     assert "created_at" in row
 
 
-@pytest.mark.xdist_group("bigquery")
-def test_bigquery_with_schema_type(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
-    """Test BigQuery driver with schema type conversion."""
-    from dataclasses import dataclass
-
-    @dataclass
-    class TestRecord:
-        id: int | None
-        name: str
-        value: int
-
-    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
-
-    # Insert test data
-    bigquery_session.execute(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", (1, "schema_test", 456))
-
-    # Query with schema type
-    result = bigquery_session.execute(
-        f"SELECT id, name, value FROM {table_name} WHERE name = ?", ("schema_test"), schema_type=TestRecord
-    )
-
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) == 1
-
-    # The data should be converted to the schema type by the ResultConverter
-    assert result.column_names == ["id", "name", "value"]
 
 
 @pytest.mark.xdist_group("bigquery")

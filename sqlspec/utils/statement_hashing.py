@@ -96,22 +96,56 @@ def hash_parameters(
 
     # Hash positional parameters
     if positional_params:
+        # Import TypedParameter locally to avoid circular imports
+        from sqlspec.parameters.types import TypedParameter
+        
         # Handle unhashable types like lists
         hashable_params = []
-        for param in positional_params:
-            if isinstance(param, (list, dict)):
+        for i, param in enumerate(positional_params):
+            # Debug: Print parameter details
+            # print(f"Debug: param {i}: type={type(param)}, value={param!r}")
+            
+            if isinstance(param, TypedParameter):
+                # For TypedParameter, hash its value with type info
+                if isinstance(param.value, (list, dict)):
+                    hashable_params.append((repr(param.value), param.type_hint))
+                else:
+                    hashable_params.append((param.value, param.type_hint))
+            elif isinstance(param, (list, dict)):
                 # Convert unhashable types to hashable representations
                 hashable_params.append(repr(param))
             else:
-                hashable_params.append(param)
-        param_hash ^= hash(tuple(hashable_params))
+                # Check if param itself contains unhashable types
+                try:
+                    hash(param)
+                    hashable_params.append(param)
+                except TypeError:
+                    # If unhashable, convert to string representation
+                    hashable_params.append(repr(param))
+        
+        try:
+            param_hash ^= hash(tuple(hashable_params))
+        except TypeError as e:
+            # Debug: Print the problematic params
+            for i, p in enumerate(hashable_params):
+                print(f"Debug: hashable_param {i}: type={type(p)}, value={p!r}")
+            raise
 
     # Hash named parameters
     if named_params:
+        # Import TypedParameter locally if not already imported
+        from sqlspec.parameters.types import TypedParameter
+        
         # Handle unhashable types in named params
         hashable_items = []
         for key, value in sorted(named_params.items()):
-            if isinstance(value, (list, dict)):
+            if isinstance(value, TypedParameter):
+                # For TypedParameter, hash its value with type info
+                if isinstance(value.value, (list, dict)):
+                    hashable_items.append((key, (repr(value.value), value.type_hint)))
+                else:
+                    hashable_items.append((key, (value.value, value.type_hint)))
+            elif isinstance(value, (list, dict)):
                 hashable_items.append((key, repr(value)))
             else:
                 hashable_items.append((key, value))

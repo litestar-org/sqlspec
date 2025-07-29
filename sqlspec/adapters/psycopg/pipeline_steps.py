@@ -32,13 +32,13 @@ def postgres_copy_pipeline_step(context: SQLTransformContext) -> SQLTransformCon
         # Remove the incorrect "INTO" keyword that SQLGlot adds
         copy_sql = copy_sql.replace("COPY INTO", "COPY").replace("copy into", "copy")
 
-    # Store consistent metadata for both drivers
-    context.metadata["copy_operation"] = True
-    context.metadata["original_sql"] = copy_sql
+    # Store consistent metadata for both drivers with postgres prefix
+    context.metadata["postgres_copy_operation"] = True
+    context.metadata["postgres_copy_original_sql"] = copy_sql
 
     # Process parameters in single pass - move all to metadata
     if context.parameters:
-        context.metadata["copy_data"] = context.parameters
+        context.metadata["postgres_copy_data"] = context.parameters
         # Clear parameters to prevent SQL parameter processing
         context.parameters = {}
 

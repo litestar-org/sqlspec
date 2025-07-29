@@ -10,6 +10,7 @@ from sqlglot.dialects.dialect import Dialect
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.parameters import ParameterStyle
+from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
 
@@ -418,17 +419,16 @@ class TestDialectPropagation:
 
     def test_dialect_in_execute_script(self) -> None:
         """Test that dialect is passed in execute_script."""
-        from sqlspec.statement.sql import SQL
 
         driver = MockDriver(connection=MockConnection(), config=SQLConfig())
 
-        with patch.object(driver, "_execute_statement") as mock_execute:
-            mock_execute.return_value = "SCRIPT EXECUTED"
+        with patch.object(driver, "_dispatch_execution") as mock_dispatch:
+            mock_dispatch.return_value = SQLResult(statement=SQL("test"), data=[], operation_type="SCRIPT")
 
             driver.execute_script("CREATE TABLE test (id INT);")
 
             # Check that SQL was created with correct dialect
-            call_args = mock_execute.call_args
+            call_args = mock_dispatch.call_args
             sql_statement = call_args[1]["statement"]
             assert isinstance(sql_statement, SQL)
             assert sql_statement.dialect == "sqlite"

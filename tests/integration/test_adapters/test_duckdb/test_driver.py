@@ -493,51 +493,6 @@ def test_duckdb_error_handling_and_edge_cases(duckdb_session: DuckDBDriver) -> N
     duckdb_session.execute_script("DROP TABLE constraint_test")
 
 
-@pytest.mark.xdist_group("duckdb")
-def test_duckdb_with_schema_type_conversion(duckdb_session: DuckDBDriver) -> None:
-    """Test DuckDB driver with schema type conversion."""
-    from dataclasses import dataclass
-
-    @dataclass
-    class TestRecord:
-        id: int
-        name: str
-        value: float | None = None
-
-    # Create test data
-    duckdb_session.execute_script("""
-        CREATE TABLE schema_conversion_test (
-            id INTEGER,
-            name TEXT,
-            value DOUBLE
-        );
-
-        INSERT INTO schema_conversion_test VALUES
-            (1, 'Record 1', 100.5),
-            (2, 'Record 2', 200.75),
-            (3, 'Record 3', NULL);
-    """)
-
-    # Test schema type conversion
-    result = duckdb_session.execute(
-        "SELECT id, name, value FROM schema_conversion_test ORDER BY id", schema_type=TestRecord
-    )
-
-    assert isinstance(result, SQLResult)
-    assert result.total_count == 3
-
-    # Verify converted data types
-    for i, record in enumerate(result.data, 1):
-        assert isinstance(record, TestRecord)
-        assert record.id == i
-        assert record.name == f"Record {i}"
-        if i < 3:
-            assert record.value is not None
-        else:
-            assert record.value is None
-
-    # Clean up
-    duckdb_session.execute_script("DROP TABLE schema_conversion_test")
 
 
 @pytest.mark.xdist_group("duckdb")

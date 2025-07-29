@@ -65,9 +65,10 @@ async def test_build_result_select(driver: PsqlpyDriver, mock_psqlpy_connection:
     """Test _build_result for a SELECT statement."""
     statement = SQL("SELECT * FROM users")
     with patch.object(driver, "returns_rows", return_value=True):
-        with patch.object(driver, "_build_select_result") as mock_build_select:
+        with patch.object(driver, "_extract_select_data") as mock_extract_select:
+            mock_extract_select.return_value = ([], [], 0)
             await driver._build_result(mock_psqlpy_connection, statement)
-            mock_build_select.assert_called_once()
+            mock_extract_select.assert_called_once_with(mock_psqlpy_connection)
 
 
 @pytest.mark.asyncio
@@ -75,9 +76,10 @@ async def test_build_result_dml(driver: PsqlpyDriver, mock_psqlpy_connection: As
     """Test _build_result for a DML statement."""
     statement = SQL("INSERT INTO users (name) VALUES ('Alice')")
     with patch.object(driver, "returns_rows", return_value=False):
-        with patch.object(driver, "_build_modify_result") as mock_build_modify:
+        with patch.object(driver, "_extract_execute_rowcount") as mock_extract_rowcount:
+            mock_extract_rowcount.return_value = 1
             await driver._build_result(mock_psqlpy_connection, statement)
-            mock_build_modify.assert_called_once()
+            mock_extract_rowcount.assert_called_once_with(mock_psqlpy_connection)
 
 
 # Dispatcher Integration Tests

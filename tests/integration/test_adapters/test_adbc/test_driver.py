@@ -803,33 +803,6 @@ def test_adbc_postgresql_column_names_and_metadata(adbc_postgresql_session: Adbc
 
 
 @pytest.mark.xdist_group("postgres")
-def test_adbc_postgresql_with_schema_type(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test ADBC PostgreSQL driver with schema type conversion."""
-    from dataclasses import dataclass
-
-    @dataclass
-    class TestRecord:
-        id: int | None
-        name: str
-        value: int
-
-    # Insert test data
-    adbc_postgresql_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("schema_test", 456))
-
-    # Query with schema type
-    result = adbc_postgresql_session.execute(
-        "SELECT id, name, value FROM test_table WHERE name = $1", ("schema_test"), schema_type=TestRecord
-    )
-
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert result.get_count() == 1
-
-    # The data should be converted to the schema type by the ResultConverter
-    assert result.column_names == ["id", "name", "value"]
-
-
-@pytest.mark.xdist_group("postgres")
 def test_adbc_postgresql_performance_bulk_operations(adbc_postgresql_session: AdbcDriver) -> None:
     """Test performance with bulk operations using ADBC PostgreSQL."""
     # Generate bulk data

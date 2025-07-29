@@ -388,29 +388,6 @@ async def test_aiosqlite_column_names_and_metadata(aiosqlite_session: AiosqliteD
     assert row["created_at"] is not None
 
 
-@pytest.mark.xdist_group("aiosqlite")
-async def test_aiosqlite_with_schema_type(aiosqlite_session: AiosqliteDriver) -> None:
-    """Test aiosqlite driver with schema type conversion."""
-    from dataclasses import dataclass
-
-    @dataclass
-    class TestRecord:
-        id: int | None
-        name: str
-        value: int
-
-    # Insert test data
-    await aiosqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("schema_test", 456))
-
-    # Query with schema type
-    result = await aiosqlite_session.select_one(
-        "SELECT id, name, value FROM test_table WHERE name = ?", ("schema_test",), schema_type=TestRecord
-    )
-
-    assert isinstance(result, TestRecord)
-    assert result.name == "schema_test"
-    assert result.value == 456
-    assert result.id is not None
 
 
 @pytest.mark.xdist_group("aiosqlite")

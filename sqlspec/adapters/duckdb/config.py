@@ -427,11 +427,6 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         if "database" not in self.connection_config or not self.connection_config["database"]:
             self.connection_config["database"] = ":memory:"
 
-        # Check if this is an in-memory database and auto-convert to shared memory
-        database = self.connection_config.get("database", ":memory:")
-        if self._is_memory_database(database):
-            self._convert_to_shared_memory()
-
         # Store other config
         self.statement_config = statement_config or SQLConfig()
         self.extensions = list(extensions) if extensions else []
@@ -513,33 +508,6 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             secrets=secrets_dicts,
             on_connection_create=pool_callback,
         )
-
-    def _convert_to_shared_memory(self) -> None:
-        """Convert in-memory database to shared memory for connection pooling.
-
-        DuckDB supports named in-memory databases that can be shared across
-        multiple connections. Auto-converts :memory: to :memory:shared_db to
-        enable safe connection pooling.
-        """
-        database = self.connection_config.get("database", ":memory:")
-
-        if database == ":memory:":
-            # Convert :memory: to named shared memory database
-            self.connection_config["database"] = ":memory:shared_db"
-        # Named memory databases (like :memory:custom_name) already support sharing
-
-    def _is_memory_database(self, database: str) -> bool:
-        """Check if the database is an in-memory database.
-
-        Args:
-            database: Database path or connection string
-
-        Returns:
-            True if this is an in-memory database that needs conversion
-        """
-        if not database:
-            return True
-        return database == ":memory:"
 
     def _close_pool(self) -> None:
         """Close the connection pool."""

@@ -58,7 +58,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
     """Configuration for Asyncmy database connections with direct field-based configuration."""
 
     driver_type: ClassVar[type[AsyncmyDriver]] = AsyncmyDriver
-    connection_type: ClassVar[type[AsyncmyConnection]] = AsyncmyConnection  # pyright: ignore
+    connection_type: "ClassVar[type[AsyncmyConnection]]" = AsyncmyConnection  # pyright: ignore
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional",)
     default_parameter_style: ClassVar[str] = "pyformat_positional"
 

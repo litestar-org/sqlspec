@@ -1,7 +1,7 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
-import logging
 from typing import TYPE_CHECKING, Any, Optional, Union
 
+from asyncmy import Connection
 from asyncmy.cursors import Cursor, DictCursor
 
 from sqlspec.driver import AsyncDriverAdapterBase
@@ -9,22 +9,20 @@ from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 
 if TYPE_CHECKING:
-    from asyncmy import Connection
     from sqlglot.dialects.dialect import DialectType
 
-__all__ = ("AsyncmyConnection", "AsyncmyDriver")
+__all__ = ("AsyncmyConnection", "AsyncmyCursor", "AsyncmyDriver")
 
-logger = logging.getLogger("sqlspec")
 
 if TYPE_CHECKING:
     from typing_extensions import TypeAlias
 
     AsyncmyConnection: TypeAlias = Connection
 else:
-    AsyncmyConnection = Any
+    AsyncmyConnection = Connection
 
 
-class _AsyncmyCursorManager:
+class AsyncmyCursor:
     def __init__(self, connection: "AsyncmyConnection") -> None:
         self.connection = connection
         self.cursor: Optional[Union[Cursor, DictCursor]] = None
@@ -82,8 +80,8 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """Get the connection to use for the operation."""
         return connection or self.connection
 
-    def with_cursor(self, connection: "AsyncmyConnection") -> "_AsyncmyCursorManager":
-        return _AsyncmyCursorManager(connection)
+    def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncmyCursor":
+        return AsyncmyCursor(connection)
 
     async def _perform_execute(self, cursor: "Union[Cursor, DictCursor]", statement: "SQL") -> None:
         """Execute the SQL statement using the provided cursor."""

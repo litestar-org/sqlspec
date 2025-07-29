@@ -1,13 +1,14 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 from typing import TYPE_CHECKING, Any, Optional
 
+from psycopg import AsyncConnection, Connection
+
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from psycopg import AsyncConnection, Connection
     from psycopg.rows import DictRow as PsycopgDictRow
     from sqlglot.dialects.dialect import DialectType
     from typing_extensions import TypeAlias
@@ -15,17 +16,24 @@ if TYPE_CHECKING:
 
 logger = get_logger("adapters.psycopg")
 
-__all__ = ("PsycopgAsyncConnection", "PsycopgAsyncDriver", "PsycopgSyncConnection", "PsycopgSyncDriver")
+__all__ = (
+    "PsycopgAsyncConnection",
+    "PsycopgAsyncCursor",
+    "PsycopgAsyncDriver",
+    "PsycopgSyncConnection",
+    "PsycopgSyncCursor",
+    "PsycopgSyncDriver",
+)
 
 if TYPE_CHECKING:
     PsycopgSyncConnection: TypeAlias = Connection[PsycopgDictRow]
     PsycopgAsyncConnection: TypeAlias = AsyncConnection[PsycopgDictRow]
 else:
-    PsycopgSyncConnection = Any
-    PsycopgAsyncConnection = Any
+    PsycopgSyncConnection = Connection
+    PsycopgAsyncConnection = AsyncConnection
 
 
-class _PsycopgCursorManager:
+class PsycopgSyncCursor:
     """Context manager for Psycopg cursor management."""
 
     def __init__(self, connection: PsycopgSyncConnection) -> None:
@@ -64,8 +72,8 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
             force_style_conversion=True,  # SQLGlot doesn't generate pyformat
         )
 
-    def with_cursor(self, connection: PsycopgSyncConnection) -> _PsycopgCursorManager:
-        return _PsycopgCursorManager(connection)
+    def with_cursor(self, connection: PsycopgSyncConnection) -> PsycopgSyncCursor:
+        return PsycopgSyncCursor(connection)
 
     def _perform_execute(self, cursor: Any, statement: "SQL") -> None:
         sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
@@ -155,7 +163,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         self.connection.commit()
 
 
-class _AsyncPsycopgCursorManager:
+class PsycopgAsyncCursor:
     def __init__(self, connection: "PsycopgAsyncConnection") -> None:
         self.connection = connection
         self.cursor: Optional[Any] = None
@@ -189,8 +197,8 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
             force_style_conversion=True,
         )
 
-    def with_cursor(self, connection: "PsycopgAsyncConnection") -> "_AsyncPsycopgCursorManager":
-        return _AsyncPsycopgCursorManager(connection)
+    def with_cursor(self, connection: "PsycopgAsyncConnection") -> "PsycopgAsyncCursor":
+        return PsycopgAsyncCursor(connection)
 
     async def _perform_execute(self, cursor: Any, statement: "SQL") -> None:
         sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)

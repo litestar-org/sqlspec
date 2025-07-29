@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
 
-__all__ = ("BigQueryConnection", "BigQueryDriver")
+__all__ = ("BigQueryConnection", "BigQueryCursor", "BigQueryDriver")
 
 if TYPE_CHECKING:
     BigQueryConnection: TypeAlias = Client
@@ -39,21 +39,21 @@ DATASET_TABLE_PARTS = 2  # dataset.table
 TIMESTAMP_ERROR_MSG_LENGTH = 189  # Length check for timestamp parsing error
 
 
-class MockCursor:
+class BigQueryMockCursor:
     def __init__(self, connection: "BigQueryConnection") -> None:
         self.connection = connection
         self.job: Optional[QueryJob] = None
 
 
-class _BigQueryCursorManager:
+class BigQueryCursor:
     """Context manager for BigQuery cursor management."""
 
     def __init__(self, connection: "BigQueryConnection") -> None:
         self.connection = connection
-        self.cursor: Optional[MockCursor] = None
+        self.cursor: Optional[BigQueryMockCursor] = None
 
-    def __enter__(self) -> MockCursor:
-        self.cursor = MockCursor(self.connection)
+    def __enter__(self) -> BigQueryMockCursor:
+        self.cursor = BigQueryMockCursor(self.connection)
         return self.cursor
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -231,9 +231,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """Convert BigQuery rows to dictionary format."""
         return [dict(row) for row in rows_iterator]
 
-    def with_cursor(self, connection: "BigQueryConnection") -> "_BigQueryCursorManager":
+    def with_cursor(self, connection: "BigQueryConnection") -> "BigQueryCursor":
         """Create and return a context manager for cursor acquisition and cleanup."""
-        return _BigQueryCursorManager(connection)
+        return BigQueryCursor(connection)
 
     def begin(self) -> None:
         """Begin transaction - BigQuery doesn't support transactions."""

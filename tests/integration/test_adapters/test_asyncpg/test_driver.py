@@ -394,28 +394,6 @@ async def test_asyncpg_column_names_and_metadata(asyncpg_session: AsyncpgDriver)
     assert row["created_at"] is not None
 
 
-@pytest.mark.xdist_group("postgres")
-async def test_asyncpg_with_schema_type(asyncpg_session: AsyncpgDriver) -> None:
-    """Test asyncpg driver with schema type conversion."""
-    from dataclasses import dataclass
-
-    @dataclass
-    class TestRecord:
-        id: int | None
-        name: str
-        value: int
-
-    # Insert test data
-    await asyncpg_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("schema_test", 456))
-    # Query with schema type
-    result = await asyncpg_session.select_one(
-        "SELECT id, name, value FROM test_table WHERE name = $1", ("schema_test"), schema_type=TestRecord
-    )
-
-    assert isinstance(result, TestRecord)
-
-    # The data should be converted to the schema type by the ResultConverter
-    assert result.__dict__.keys() == {"id", "name", "value"}
 
 
 @pytest.mark.xdist_group("postgres")

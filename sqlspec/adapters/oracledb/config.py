@@ -77,7 +77,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
     supports_connection_pooling: ClassVar[bool] = True
 
     driver_type: ClassVar[type[OracleSyncDriver]] = OracleSyncDriver
-    connection_type: ClassVar[type[OracleSyncConnection]] = OracleSyncConnection
+    connection_type: "ClassVar[type[OracleSyncConnection]]" = OracleSyncConnection
 
     # Parameter style support information
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_colon", "positional_colon")
@@ -212,7 +212,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
     is_async: ClassVar[bool] = True
     supports_connection_pooling: ClassVar[bool] = True
 
-    connection_type: ClassVar[type[OracleAsyncConnection]] = OracleAsyncConnection
+    connection_type: "ClassVar[type[OracleAsyncConnection]]" = OracleAsyncConnection
     driver_type: ClassVar[type[OracleAsyncDriver]] = OracleAsyncDriver
 
     # Parameter style support information

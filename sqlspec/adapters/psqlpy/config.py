@@ -79,7 +79,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
     """Configuration for Psqlpy asynchronous database connections with direct field-based configuration."""
 
     driver_type: ClassVar[type[PsqlpyDriver]] = PsqlpyDriver
-    connection_type: ClassVar[type[PsqlpyConnection]] = PsqlpyConnection
+    connection_type: "ClassVar[type[PsqlpyConnection]]" = PsqlpyConnection
     # Parameter style support information
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("numeric",)
     """Psqlpy only supports $1, $2, ... (numeric) parameter style."""
@@ -105,22 +105,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             migration_config: Migration configuration
             enable_adapter_cache: Enable SQL compilation caching
             adapter_cache_size: Max cached SQL statements
-
-        Example:
-            >>> config = PsqlpyConfig(
-            ...     pool_config={
-            ...         "host": "localhost",
-            ...         "port": 5432,
-            ...         "username": "user",
-            ...         "password": "pass",
-            ...         "db_name": "test",
-            ...         "max_db_pool_size": 20,
-            ...         "conn_recycling_method": "clean",
-            ...     }
-            ... )
-
-        Raises:
-            ImproperConfigurationError: If neither pool_config nor pool_instance is provided
         """
         # Store pool config as dict and extract/merge extras
         self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}

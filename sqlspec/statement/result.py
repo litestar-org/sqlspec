@@ -94,7 +94,7 @@ class StatementResult(ABC):
         self.metadata[key] = value
 
 
-class SQLResult:
+class SQLResult(StatementResult):
     """Unified result class for SQL operations that return a list of rows
     or affect rows (e.g., SELECT, INSERT, UPDATE, DELETE).
 
@@ -106,20 +106,14 @@ class SQLResult:
 
     __slots__ = (
         "column_names",
-        "data",
         "error",
         "errors",
-        "execution_time",
         "has_more",
         "inserted_ids",
-        "last_inserted_id",
-        "metadata",
         "operation_index",
         "operation_type",
         "parameters",
         "pipeline_sql",
-        "rows_affected",
-        "statement",
         "statement_results",
         "successful_statements",
         "total_count",
@@ -148,12 +142,15 @@ class SQLResult:
         total_statements: int = 0,
         successful_statements: int = 0,
     ) -> None:
-        self.statement = statement
-        self.data = data or []
-        self.rows_affected = rows_affected
-        self.last_inserted_id = last_inserted_id
-        self.execution_time = execution_time
-        self.metadata = metadata if metadata is not None else {}
+        # Call parent constructor with base parameters
+        super().__init__(
+            statement=statement,
+            data=data,  # Don't convert None to [] here, let parent handle it
+            rows_affected=rows_affected,
+            last_inserted_id=last_inserted_id,
+            execution_time=execution_time,
+            metadata=metadata,
+        )
         self.error = error
         self.operation_type = operation_type
         self.operation_index = operation_index
@@ -171,10 +168,10 @@ class SQLResult:
         """Total number of statements in the script."""
         self.successful_statements = successful_statements
         """Number of statements that executed successfully."""
-        if not self.column_names and self.data:
+        if not self.column_names and self.data is not None and self.data:
             self.column_names = list(self.data[0].keys())
         if self.total_count is None:
-            self.total_count = len(self.data) if self.data else 0
+            self.total_count = len(self.data) if self.data is not None else 0
 
     def get_metadata(self, key: str, default: Any = None) -> Any:
         """Get metadata value by key.
@@ -210,7 +207,7 @@ class SQLResult:
             return not self.errors and self.total_statements == self.successful_statements
 
         if op_type == "SELECT":
-            return self.rows_affected >= 0
+            return self.data is not None and self.rows_affected >= 0
 
         if op_type in {"INSERT", "UPDATE", "DELETE", "EXECUTE"}:
             return self.rows_affected >= 0
@@ -231,9 +228,10 @@ class SQLResult:
                     "failed_statements": self.total_statements - self.successful_statements,
                     "errors": self.errors,
                     "statement_results": self.statement_results,
+                    "total_rows_affected": self.get_total_rows_affected(),
                 }
             ]
-        return self.data or []
+        return self.data if self.data is not None else []
 
     def add_statement_result(self, result: "SQLResult") -> None:
         """Add a statement result to the script execution results."""
@@ -265,11 +263,11 @@ class SQLResult:
 
     def get_count(self) -> int:
         """Get the number of rows in the current result set (e.g., a page of data)."""
-        return len(self.data) if self.data else 0
+        return len(self.data) if self.data is not None else 0
 
     def is_empty(self) -> bool:
         """Check if the result set (self.data) is empty."""
-        return not self.data
+        return not self.data if self.data is not None else True
 
     def get_affected_count(self) -> int:
         """Get the number of rows affected by a DML operation."""

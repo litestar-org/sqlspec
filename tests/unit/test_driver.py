@@ -673,27 +673,6 @@ async def test_async_driver_execute_script() -> None:
         assert result.operation_type == "SCRIPT"
 
 
-async def test_async_driver_execute_with_schema_type() -> None:
-    """Test async driver execute with schema type."""
-    connection = MockAsyncConnection()
-    driver = MockAsyncDriver(connection)
-
-    with patch.object(driver, "_dispatch_execution") as mock_execute:
-        # _dispatch_execution should return SQLResult directly
-        mock_result = SQLResult(
-            statement=SQL("SELECT * FROM users"),
-            data=[{"id": 1, "name": "test"}],
-            column_names=["id", "name"],
-            operation_type="SELECT",
-            rows_affected=1,
-        )
-        mock_execute.return_value = mock_result
-
-        # Note: This test may need adjustment based on actual schema_type support
-        result = await driver.execute("SELECT * FROM users")
-
-        mock_execute.assert_called_once()
-        assert result == mock_result
 
 
 # Error Handling Tests

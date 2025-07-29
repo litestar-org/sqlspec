@@ -76,6 +76,23 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         This method is now implemented in the base class using the
         abstract extraction methods.
         """
+        if statement.is_script:
+            row_count = self._extract_execute_rowcount(cursor)
+            # Count statements in the script
+            sql, _ = statement.compile()
+            statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
+            statement_count = len([stmt for stmt in statements if stmt.strip()])
+            return SQLResult(
+                statement=statement,
+                data=[],
+                rows_affected=row_count,
+                operation_type="SCRIPT",
+                total_statements=statement_count,
+                successful_statements=statement_count,  # Assume all successful if no exception
+                metadata={"status_message": "OK"},
+            )
+
+        # Handle regular operations
         if self.returns_rows(statement.expression):
             data, column_names, row_count = await self._extract_select_data(cursor)
             return self._build_select_result_from_data(

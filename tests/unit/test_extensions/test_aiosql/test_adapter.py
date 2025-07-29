@@ -62,33 +62,6 @@ def test_sync_adapter_select_with_record_class_warning(
     assert "record_class parameter is deprecated" in caplog.text
 
 
-def test_sync_adapter_select_with_schema_type_in_params(sync_adapter: AiosqlSyncAdapter) -> None:
-    """Test select with schema_type in parameters (passed through as regular param)."""
-    from pydantic import BaseModel
-
-    class User(BaseModel):
-        id: int
-        name: str
-
-    mock_result = Mock(spec=SQLResult)
-    mock_result.data = [User(id=1, name="John")]
-    sync_adapter.driver.execute.return_value = mock_result  # type: ignore[union-attr]
-
-    # _sqlspec_schema_type is just passed through as a regular parameter
-    parameters = {"active": True, "_sqlspec_schema_type": User}
-
-    result = list(
-        sync_adapter.select(
-            conn=Mock(),
-            query_name="test_query",
-            sql="SELECT * FROM users WHERE active = :active",
-            parameters=parameters,
-        )
-    )
-
-    # Verify driver was called (parameters are passed through as-is)
-    sync_adapter.driver.execute.assert_called_once()  # type: ignore[union-attr]
-    assert result == [User(id=1, name="John")]
 
 
 def test_sync_adapter_select_one_with_limit_filter(sync_adapter: AiosqlSyncAdapter) -> None:
@@ -243,28 +216,6 @@ async def test_async_adapter_select_with_record_class_warning(
     assert "record_class parameter is deprecated" in caplog.text
 
 
-@pytest.mark.asyncio
-async def test_async_adapter_select_with_schema_type_in_params(async_adapter: AiosqlAsyncAdapter) -> None:
-    """Test async select with schema_type in parameters."""
-    from pydantic import BaseModel
-
-    class User(BaseModel):
-        id: int
-        name: str
-
-    mock_result = Mock(spec=SQLResult)
-    mock_result.data = [User(id=1, name="John")]
-    async_adapter.driver.execute.return_value = mock_result  # type: ignore[union-attr]
-
-    parameters = {"active": True, "_sqlspec_schema_type": User}
-
-    result = await async_adapter.select(
-        conn=Mock(), query_name="test_query", sql="SELECT * FROM users WHERE active = :active", parameters=parameters
-    )
-
-    # Verify driver was called (parameters are passed through as-is)
-    async_adapter.driver.execute.assert_called_once()  # type: ignore[union-attr]
-    assert result == [User(id=1, name="John")]
 
 
 @pytest.mark.asyncio

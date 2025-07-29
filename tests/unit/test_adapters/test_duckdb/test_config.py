@@ -376,16 +376,19 @@ def test_default_parameter_style() -> None:
 
 # Database Path Tests
 @pytest.mark.parametrize(
-    "database,description",
-    [(":memory:", "in_memory"), ("/tmp/test.db", "file_path"), ("~/data/duck.db", "home_path"), ("", "empty_string")],
+    "database,description,expected_database",
+    [
+        (":memory:", "in_memory", ":memory:"),
+        ("/tmp/test.db", "file_path", "/tmp/test.db"),
+        ("~/data/duck.db", "home_path", "~/data/duck.db"),
+        ("", "empty_string", ":memory:"),
+    ],
     ids=["memory", "absolute", "home", "empty"],
 )
-def test_database_paths(database: str, description: str) -> None:
+def test_database_paths(database: str, description: str, expected_database: str) -> None:
     """Test various database path configurations."""
     connection_config = {"database": database} if database else {}
     config = DuckDBConfig(connection_config=connection_config)
-    # Empty string defaults to :memory:
-    expected_database = ":memory:" if database == "" else database
     assert config.connection_config["database"] == expected_database
 
 
@@ -481,40 +484,20 @@ def test_config_readonly_memory() -> None:
 
 
 # Memory Database Detection Tests
-def test_is_memory_database() -> None:
-    """Test memory database detection logic."""
-    config = DuckDBConfig()
-
-    # Test standard :memory: database (needs conversion)
-    assert config._is_memory_database(":memory:") is True
-
-    # Test empty string (needs conversion)
-    assert config._is_memory_database("") is True
-
-    # Test None (though shouldn't happen in practice, needs conversion)
-    assert config._is_memory_database(None) is True  # type: ignore[arg-type]
-
-    # Test named memory databases (don't need conversion)
-    assert config._is_memory_database(":memory:shared_db") is False
-    assert config._is_memory_database(":memory:custom_name") is False
-
-    # Test regular file databases
-    assert config._is_memory_database("test.db") is False
-    assert config._is_memory_database("/path/to/database.db") is False
-    assert config._is_memory_database("file:test.db") is False
+# Memory database detection tests removed - function no longer exists
 
 
-def test_memory_database_auto_conversion() -> None:
-    """Test that memory databases are auto-converted to shared memory with pooling enabled."""
+def test_memory_database_no_conversion() -> None:
+    """Test that memory databases are not converted (DuckDB handles sharing natively)."""
     # Create config with regular memory database
     config = DuckDBConfig(connection_config={"database": ":memory:"}, min_pool=5, max_pool=10)
 
-    # Verify pooling is not disabled (no more warnings or pool size overrides)
+    # Verify pooling works normally
     assert config.min_pool == 5
     assert config.max_pool == 10
 
-    # Verify database was auto-converted to shared memory
-    assert config.connection_config["database"] == ":memory:shared_db"
+    # Verify database was NOT converted (DuckDB handles memory sharing natively)
+    assert config.connection_config["database"] == ":memory:"
 
 
 def test_named_memory_database_no_conversion() -> None:
@@ -544,8 +527,8 @@ def test_file_database_no_conversion() -> None:
 @pytest.mark.parametrize(
     "database,expected_database",
     [
-        (":memory:", ":memory:shared_db"),
-        ("", ":memory:shared_db"),  # Empty string defaults to :memory: then gets converted
+        (":memory:", ":memory:"),
+        ("", ":memory:"),  # Empty string defaults to :memory:
         (":memory:existing_name", ":memory:existing_name"),  # Named memory DB - no conversion
         ("test.db", "test.db"),  # File DB - no conversion
         ("/tmp/test.db", "/tmp/test.db"),  # Absolute path - no conversion
@@ -561,25 +544,14 @@ def test_memory_database_conversion_behavior(database: str, expected_database: s
     assert config.connection_config["database"] == expected_database
 
 
-def test_convert_to_shared_memory_function() -> None:
-    """Test the _convert_to_shared_memory method directly."""
-    # Test conversion of :memory:
-    config = DuckDBConfig(connection_config={"database": "test.db"})  # Start with file DB
-    config.connection_config["database"] = ":memory:"  # Manually set to test conversion
-    config._convert_to_shared_memory()
-    assert config.connection_config["database"] == ":memory:shared_db"
-
-    # Test that named memory databases are not changed
-    config.connection_config["database"] = ":memory:custom_name"
-    config._convert_to_shared_memory()
-    assert config.connection_config["database"] == ":memory:custom_name"  # No change
+# Shared memory conversion tests removed - function no longer exists
 
 
-def test_default_memory_conversion() -> None:
-    """Test that default empty config creates shared memory database."""
+def test_default_memory_no_conversion() -> None:
+    """Test that default empty config creates standard memory database."""
     config = DuckDBConfig()
-    # Default should be converted to shared memory
-    assert config.connection_config["database"] == ":memory:shared_db"
+    # Default should be standard :memory: (no conversion needed)
+    assert config.connection_config["database"] == ":memory:"
 
 
 def test_connection_health_check() -> None:

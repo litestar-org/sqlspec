@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
     from sqlspec.statement.sql import SQL, SQLConfig
 
-__all__ = ("SqliteConnection", "SqliteDriver")
+__all__ = ("SqliteConnection", "SqliteCursor", "SqliteDriver")
 
 logger = get_logger("adapters.sqlite")
 
@@ -26,7 +26,7 @@ else:
     SqliteConnection = sqlite3.Connection
 
 
-class _SqliteCursorManager:
+class SqliteCursor:
     """Context manager for SQLite cursor management."""
 
     def __init__(self, connection: "SqliteConnection") -> None:
@@ -66,8 +66,8 @@ class SqliteDriver(SyncDriverAdapterBase):
             has_native_list_expansion=False,
         )
 
-    def with_cursor(self, connection: "SqliteConnection") -> "_SqliteCursorManager":
-        return _SqliteCursorManager(connection)
+    def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
+        return SqliteCursor(connection)
 
     def _perform_execute(self, cursor: "sqlite3.Cursor", statement: "SQL") -> None:
         if statement.is_script:

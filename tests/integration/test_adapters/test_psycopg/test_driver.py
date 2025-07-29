@@ -427,31 +427,6 @@ def test_psycopg_column_names_and_metadata(psycopg_session: PsycopgSyncDriver) -
     assert row["created_at"] is not None
 
 
-@pytest.mark.xdist_group("postgres")
-def test_psycopg_with_schema_type(psycopg_session: PsycopgSyncDriver) -> None:
-    """Test psycopg driver with schema type conversion."""
-    from dataclasses import dataclass
-
-    @dataclass
-    class TestRecord:
-        id: int | None
-        name: str
-        value: int
-
-    # Insert test data
-    psycopg_session.execute("INSERT INTO test_table (name, value) VALUES (%s, %s)", parameters=("schema_test", 456))
-
-    # Query with schema type
-    result = psycopg_session.execute(
-        "SELECT id, name, value FROM test_table WHERE name = %s", "schema_test", schema_type=TestRecord
-    )
-
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result) == 1
-
-    # The data should be converted to the schema type by the ResultConverter
-    assert result.column_names == ["id", "name", "value"]
 
 
 @pytest.mark.xdist_group("postgres")

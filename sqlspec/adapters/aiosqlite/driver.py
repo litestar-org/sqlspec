@@ -20,14 +20,14 @@ if TYPE_CHECKING:
 
     AiosqliteConnection: TypeAlias = aiosqlite.Connection
 else:
-    AiosqliteConnection = Any
+    AiosqliteConnection = aiosqlite.Connection
 
-__all__ = ("AiosqliteConnection", "AiosqliteDriver")
+__all__ = ("AiosqliteConnection", "AiosqliteCursor", "AiosqliteDriver")
 
 logger = logging.getLogger("sqlspec")
 
 
-class _AsyncAiosqliteCursorManager:
+class AiosqliteCursor:
     def __init__(self, connection: "AiosqliteConnection") -> None:
         self.connection = connection
         self.cursor: Optional[aiosqlite.Cursor] = None
@@ -65,9 +65,9 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             has_native_list_expansion=False,
         )
 
-    def with_cursor(self, connection: "Optional[AiosqliteConnection]" = None) -> "_AsyncAiosqliteCursorManager":
+    def with_cursor(self, connection: "Optional[AiosqliteConnection]" = None) -> "AiosqliteCursor":
         conn_to_use = connection or self.connection
-        return _AsyncAiosqliteCursorManager(conn_to_use)
+        return AiosqliteCursor(conn_to_use)
 
     async def begin(self) -> None:
         """Begin a database transaction."""

@@ -272,10 +272,19 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         extras = self.connection_config.pop("extra", {})
         self.connection_config.update(extras)
 
+        # Handle default database setting - ensure empty string or None becomes :memory:
+        database = self.connection_config.get("database")
+        if not database:  # None, empty string, or other falsy values
+            self.connection_config["database"] = ":memory:"
+            database = ":memory:"
+
         # Check if this is an in-memory database and auto-convert to shared memory
-        database = self.connection_config.get("database", ":memory:")
         if self._is_memory_database(database):
             self._convert_to_shared_memory()
+        # Also handle cases where database is already a shared memory URI
+        elif "file::memory:" in database:
+            # Ensure uri=True is set for all file::memory: databases
+            self.connection_config["uri"] = True
 
         self.statement_config = statement_config or SQLConfig()
         self.min_pool_size = min_pool_size
@@ -302,10 +311,13 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             # Convert :memory: to shared memory
             self.connection_config["database"] = "file::memory:?cache=shared"
             self.connection_config["uri"] = True
-        elif "file::memory:" in database and "cache=shared" not in database:
-            # Add cache=shared to existing file::memory: URI
-            separator = "&" if "?" in database else "?"
-            self.connection_config["database"] = f"{database}{separator}cache=shared"
+        elif "file::memory:" in database:
+            # For file::memory: URIs, ensure they have cache=shared and uri=True
+            if "cache=shared" not in database:
+                # Add cache=shared to existing file::memory: URI
+                separator = "&" if "?" in database else "?"
+                self.connection_config["database"] = f"{database}{separator}cache=shared"
+            # Always ensure uri=True for file::memory: databases
             self.connection_config["uri"] = True
 
     def _get_connection_config_dict(self) -> "dict[str, Any]":
@@ -325,7 +337,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             recycle=self.pool_recycle,
         )
 
-    def _is_memory_database(self, database: str) -> bool:
+    def _is_memory_database(self, database: "Optional[str]") -> bool:
         """Check if the database is an in-memory database.
 
         Args:

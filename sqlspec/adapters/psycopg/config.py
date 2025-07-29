@@ -271,7 +271,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
     """Configuration for Psycopg asynchronous database connections with direct field-based configuration."""
 
     driver_type: ClassVar[type[PsycopgAsyncDriver]] = PsycopgAsyncDriver
-    connection_type: ClassVar[type[PsycopgAsyncConnection]] = PsycopgAsyncConnection
+    connection_type: "ClassVar[type[PsycopgAsyncConnection]]" = PsycopgAsyncConnection
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional", "pyformat_named")
     default_parameter_style: ClassVar[str] = "pyformat_positional"
 

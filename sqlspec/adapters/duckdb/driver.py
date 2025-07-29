@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from sqlspec.statement.sql import SQL, SQLConfig
 
 
-__all__ = ("DuckDBConnection", "DuckDBDriver")
+__all__ = ("DuckDBConnection", "DuckDBCursor", "DuckDBDriver")
 
 if TYPE_CHECKING:
     DuckDBConnection: TypeAlias = DuckDBPyConnection
@@ -27,7 +27,7 @@ else:
 logger = get_logger("adapters.duckdb")
 
 
-class _DuckDBCursorManager:
+class DuckDBCursor:
     """Context manager for DuckDB cursor management."""
 
     def __init__(self, connection: "DuckDBConnection") -> None:
@@ -59,8 +59,8 @@ class DuckDBDriver(SyncDriverAdapterBase):
         )
         self._execution_state: dict[str, Optional[int]] = {"executemany_count": None}
 
-    def with_cursor(self, connection: "DuckDBConnection") -> "_DuckDBCursorManager":
-        return _DuckDBCursorManager(connection)
+    def with_cursor(self, connection: "DuckDBConnection") -> "DuckDBCursor":
+        return DuckDBCursor(connection)
 
     def _perform_execute(self, cursor: "DuckDBConnection", statement: "SQL") -> None:
         if statement.is_script:

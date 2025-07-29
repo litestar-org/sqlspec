@@ -78,7 +78,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     """
 
     driver_type: ClassVar[type[BigQueryDriver]] = BigQueryDriver
-    connection_type: ClassVar[type[BigQueryConnection]] = BigQueryConnection
+    connection_type: "ClassVar[type[BigQueryConnection]]" = BigQueryConnection
     supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_at",)
     default_parameter_style: ClassVar[str] = "named_at"
 

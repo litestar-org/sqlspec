@@ -74,10 +74,11 @@ def test_build_result_select(driver: DuckDBDriver, mock_connection: MagicMock) -
     statement = SQL("SELECT * FROM users")
 
     with patch.object(driver, "returns_rows", return_value=True) as mock_returns_rows:
-        with patch.object(driver, "_build_select_result") as mock_build_select:
+        with patch.object(driver, "_extract_select_data") as mock_extract_select:
+            mock_extract_select.return_value = ([], [], 0)
             driver._build_result(mock_cursor, statement)
             mock_returns_rows.assert_called_once_with(statement.expression)
-            mock_build_select.assert_called_once_with(mock_cursor, statement)
+            mock_extract_select.assert_called_once_with(mock_cursor)
 
 
 def test_build_result_dml(driver: DuckDBDriver, mock_connection: MagicMock) -> None:
@@ -86,10 +87,11 @@ def test_build_result_dml(driver: DuckDBDriver, mock_connection: MagicMock) -> N
     statement = SQL("INSERT INTO users (name) VALUES ('Alice')")
 
     with patch.object(driver, "returns_rows", return_value=False) as mock_returns_rows:
-        with patch.object(driver, "_build_modify_result") as mock_build_modify:
+        with patch.object(driver, "_extract_execute_rowcount") as mock_extract_rowcount:
+            mock_extract_rowcount.return_value = 1
             driver._build_result(mock_cursor, statement)
             mock_returns_rows.assert_called_once_with(statement.expression)
-            mock_build_modify.assert_called_once_with(mock_cursor, statement)
+            mock_extract_rowcount.assert_called_once_with(mock_cursor)
 
 
 # Dispatcher Integration Tests

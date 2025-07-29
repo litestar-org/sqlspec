@@ -5,28 +5,29 @@ import decimal
 import logging
 from typing import TYPE_CHECKING, Any, Optional, cast
 
-if TYPE_CHECKING:
-    from adbc_driver_manager.dbapi import Connection, Cursor
-    from sqlglot.dialects.dialect import DialectType
-    from typing_extensions import TypeAlias
-
+from adbc_driver_manager.dbapi import Connection
 
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.utils.serializers import to_json
 
-__all__ = ("AdbcConnection", "AdbcDriver")
+if TYPE_CHECKING:
+    from adbc_driver_manager.dbapi import Cursor
+    from sqlglot.dialects.dialect import DialectType
+    from typing_extensions import TypeAlias
+
+__all__ = ("AdbcConnection", "AdbcCursor", "AdbcDriver")
 
 logger = logging.getLogger("sqlspec")
 
 if TYPE_CHECKING:
     AdbcConnection: TypeAlias = Connection
 else:
-    AdbcConnection = Any
+    AdbcConnection = Connection
 
 
-class _AdbcCursorManager:
+class AdbcCursor:
     """Context manager for ADBC cursor management."""
 
     def __init__(self, connection: "AdbcConnection") -> None:
@@ -157,8 +158,8 @@ class AdbcDriver(SyncDriverAdapterBase):
             return None
         return params
 
-    def with_cursor(self, connection: "AdbcConnection") -> "_AdbcCursorManager":
-        return _AdbcCursorManager(connection)
+    def with_cursor(self, connection: "AdbcConnection") -> "AdbcCursor":
+        return AdbcCursor(connection)
 
     def _perform_execute(self, cursor: "Cursor", statement: "SQL") -> None:
         """Execute the SQL statement using the provided cursor."""
@@ -175,7 +176,13 @@ class AdbcDriver(SyncDriverAdapterBase):
             elif statement.is_many:
                 # Use the proper parameter preparation for execute_many
                 prepared_params = self._prepare_driver_parameters_many(parameters) if parameters else []
-                cursor.executemany(sql, prepared_params)
+                # ADBC requires at least one parameter set for executemany with parameterized queries
+                # Use AST-based parameter detection instead of naive string searching
+                if not prepared_params and self.has_parameters(statement.expression):
+                    # No parameters to execute, set rowcount to 0
+                    cursor._rowcount = 0
+                else:
+                    cursor.executemany(sql, prepared_params)
             else:
                 # For single execution, prepare parameters intelligently
                 prepared_params = self._prepare_cursor_parameters(self._handle_postgres_empty_params(parameters))
