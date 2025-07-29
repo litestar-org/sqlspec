@@ -493,8 +493,6 @@ def test_duckdb_error_handling_and_edge_cases(duckdb_session: DuckDBDriver) -> N
     duckdb_session.execute_script("DROP TABLE constraint_test")
 
 
-
-
 @pytest.mark.xdist_group("duckdb")
 def test_duckdb_result_methods_comprehensive(duckdb_session: DuckDBDriver) -> None:
     """Test comprehensive SelectResult and ExecuteResult methods."""

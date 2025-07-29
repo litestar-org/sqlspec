@@ -10,20 +10,19 @@ if TYPE_CHECKING:
     from sqlspec.statement.sql import SQL, SQLConfig
 
 
-from psqlpy import Connection
-
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 
 if TYPE_CHECKING:
+    from psqlpy import Connection
     from sqlglot.dialects.dialect import DialectType
+    from typing_extensions import TypeAlias
 
-__all__ = ("PsqlpyConnection", "PsqlpyCursor", "PsqlpyDriver")
-
-if TYPE_CHECKING:
     PsqlpyConnection: TypeAlias = Connection
 else:
-    PsqlpyConnection = Connection
+    from psqlpy import Connection as PsqlpyConnection
+
+__all__ = ("PsqlpyConnection", "PsqlpyCursor", "PsqlpyDriver")
 
 
 class PsqlpyCursor:

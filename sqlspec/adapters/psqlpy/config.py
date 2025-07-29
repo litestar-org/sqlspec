@@ -5,15 +5,25 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union
 
-from psqlpy import ConnectionPool
+from psqlpy import Connection, ConnectionPool
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.psqlpy.driver import PsqlpyConnection, PsqlpyDriver
+from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
 from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from typing_extensions import TypeAlias
+
+    from sqlspec.adapters.psqlpy.driver import PsqlpyCursor, PsqlpyDriver
+
+    PsqlpyConnection: TypeAlias = Connection
+else:
+    from psqlpy import Connection as PsqlpyConnection
+
+    from sqlspec.adapters.psqlpy.driver import PsqlpyCursor, PsqlpyDriver
 
 
 logger = logging.getLogger("sqlspec.adapters.psqlpy")
@@ -72,7 +82,7 @@ class PsqlpyPoolParams(PsqlpyConnectionParams, total=False):
     extra: NotRequired[dict[str, Any]]
 
 
-__all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyPoolParams")
+__all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyPoolParams")
 
 
 class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyDriver]):
@@ -230,5 +240,5 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             Dictionary mapping type names to types.
         """
         namespace = super().get_signature_namespace()
-        namespace.update({"PsqlpyConnection": PsqlpyConnection})
+        namespace.update({"PsqlpyConnection": PsqlpyConnection, "PsqlpyCursor": PsqlpyCursor})
         return namespace

@@ -673,8 +673,6 @@ async def test_async_driver_execute_script() -> None:
         assert result.operation_type == "SCRIPT"
 
 
-
-
 # Error Handling Tests
 
 

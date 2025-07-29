@@ -1,7 +1,6 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import contextlib
 import datetime
-import logging
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
@@ -23,8 +22,6 @@ else:
     AiosqliteConnection = aiosqlite.Connection
 
 __all__ = ("AiosqliteConnection", "AiosqliteCursor", "AiosqliteDriver")
-
-logger = logging.getLogger("sqlspec")
 
 
 class AiosqliteCursor:

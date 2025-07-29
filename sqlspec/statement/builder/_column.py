@@ -238,6 +238,14 @@ class Column:
         """Create an aliased column expression."""
         return exp.Alias(this=self._expression, alias=alias_name)
 
+    def asc(self) -> exp.Expression:
+        """Create an ASC ordering expression."""
+        return exp.Ordered(this=self._expression, desc=False)
+
+    def desc(self) -> exp.Expression:
+        """Create a DESC ordering expression."""
+        return exp.Ordered(this=self._expression, desc=True)
+
     def __repr__(self) -> str:
         if self.table:
             return f"Column<{self.table}.{self.name}>"

@@ -399,8 +399,6 @@ def test_bigquery_column_names_and_metadata(
     assert "created_at" in row
 
 
-
-
 @pytest.mark.xdist_group("bigquery")
 @pytest.mark.xfail(reason="BigQuery emulator reports 0 rows affected for bulk operations")
 def test_bigquery_performance_bulk_operations(

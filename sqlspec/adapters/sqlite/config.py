@@ -1,6 +1,5 @@
 """SQLite database configuration with QueuePool-like connection pooling."""
 
-import logging
 import sqlite3
 import threading
 import time
@@ -10,15 +9,13 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, TypedDict, Uni
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.sqlite.driver import SqliteConnection, SqliteDriver
+from sqlspec.adapters.sqlite.driver import SqliteConnection, SqliteCursor, SqliteDriver
 from sqlspec.config import SyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-
-logger = logging.getLogger(__name__)
 
 DEFAULT_MIN_POOL: Final[int] = 5
 DEFAULT_MAX_POOL: Final[int] = 20
@@ -145,7 +142,11 @@ class SqliteConnectionPool:
 
     @contextmanager
     def get_connection(self) -> "Generator[SqliteConnection, None, None]":
-        """Get a connection from the pool with automatic return."""
+        """Get a connection from the pool with automatic return.
+
+        Yields:
+            SqliteConnection: A connection from the pool.
+        """
         connection = None
         try:
             # Try to get existing connection
@@ -386,3 +387,17 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
                     default_parameter_style=self.default_parameter_style,
                 )
             yield self.driver_type(connection=connection, config=statement_config)
+
+    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+        """Get the signature namespace for SQLite types.
+
+        This provides all SQLite-specific types that Litestar needs to recognize
+        to avoid serialization attempts.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+
+        namespace = super().get_signature_namespace()
+        namespace.update({"SqliteConnection": SqliteConnection, "SqliteCursor": SqliteCursor})
+        return namespace

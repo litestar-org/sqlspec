@@ -246,7 +246,7 @@ def test_database_paths(database: str, uri: "bool | None", description: str) -> 
         connection_config["uri"] = uri  # type: ignore[assignment]
 
     config = SqliteConfig(connection_config=connection_config)
-    
+
     # Memory databases get auto-converted to shared memory for pooling
     if database == ":memory:":
         assert config.connection_config["database"] == "file::memory:?cache=shared"

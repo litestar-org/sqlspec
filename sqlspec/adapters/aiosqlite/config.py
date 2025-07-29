@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, TypedDict, Uni
 import aiosqlite
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.aiosqlite.driver import AiosqliteConnection, AiosqliteDriver
+from sqlspec.adapters.aiosqlite.driver import AiosqliteConnection, AiosqliteCursor, AiosqliteDriver
 from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.statement.sql import SQLConfig
@@ -408,6 +408,7 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
         Returns:
             Dictionary mapping type names to types.
         """
+
         namespace = super().get_signature_namespace()
-        namespace.update({"AiosqliteConnection": AiosqliteConnection})
+        namespace.update({"AiosqliteConnection": AiosqliteConnection, "AiosqliteCursor": AiosqliteCursor})
         return namespace

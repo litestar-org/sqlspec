@@ -10,7 +10,7 @@ from asyncpg.connection import ConnectionMeta
 from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.asyncpg.driver import AsyncpgConnection, AsyncpgDriver
+from sqlspec.adapters.asyncpg.driver import AsyncpgConnection, AsyncpgCursor, AsyncpgDriver
 from sqlspec.adapters.asyncpg.pipeline_steps import postgres_copy_pipeline_step
 from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
@@ -202,6 +202,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Returns:
             Dictionary mapping type names to types.
         """
+
         namespace = super().get_signature_namespace()
         namespace.update(
             {
@@ -212,6 +213,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                 "ConnectionMeta": ConnectionMeta,
                 "Record": Record,
                 "AsyncpgConnection": type(AsyncpgConnection),
+                "AsyncpgCursor": AsyncpgCursor,
             }
         )
         return namespace

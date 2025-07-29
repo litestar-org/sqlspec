@@ -1,34 +1,21 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 from typing import TYPE_CHECKING, Any, Optional
 
-from psycopg import AsyncConnection, Connection
-
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from psycopg import AsyncConnection, Connection
     from psycopg.rows import DictRow as PsycopgDictRow
     from sqlglot.dialects.dialect import DialectType
     from typing_extensions import TypeAlias
 
-
-logger = get_logger("adapters.psycopg")
-
-__all__ = (
-    "PsycopgAsyncConnection",
-    "PsycopgAsyncCursor",
-    "PsycopgAsyncDriver",
-    "PsycopgSyncConnection",
-    "PsycopgSyncCursor",
-    "PsycopgSyncDriver",
-)
-
-if TYPE_CHECKING:
     PsycopgSyncConnection: TypeAlias = Connection[PsycopgDictRow]
     PsycopgAsyncConnection: TypeAlias = AsyncConnection[PsycopgDictRow]
 else:
+    from psycopg import AsyncConnection, Connection
+
     PsycopgSyncConnection = Connection
     PsycopgAsyncConnection = AsyncConnection
 
@@ -47,6 +34,30 @@ class PsycopgSyncCursor:
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         if self.cursor is not None:
             self.cursor.close()
+
+
+class PsycopgAsyncCursor:
+    def __init__(self, connection: "PsycopgAsyncConnection") -> None:
+        self.connection = connection
+        self.cursor: Optional[Any] = None
+
+    async def __aenter__(self) -> Any:
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if self.cursor:
+            await self.cursor.close()
+
+
+__all__ = (
+    "PsycopgAsyncConnection",
+    "PsycopgAsyncCursor",
+    "PsycopgAsyncDriver",
+    "PsycopgSyncConnection",
+    "PsycopgSyncCursor",
+    "PsycopgSyncDriver",
+)
 
 
 class PsycopgSyncDriver(SyncDriverAdapterBase):
@@ -161,20 +172,6 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
     def commit(self) -> None:
         """Commit transaction using psycopg-specific method."""
         self.connection.commit()
-
-
-class PsycopgAsyncCursor:
-    def __init__(self, connection: "PsycopgAsyncConnection") -> None:
-        self.connection = connection
-        self.cursor: Optional[Any] = None
-
-    async def __aenter__(self) -> Any:
-        self.cursor = self.connection.cursor()
-        return self.cursor
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        if self.cursor:
-            await self.cursor.close()
 
 
 class PsycopgAsyncDriver(AsyncDriverAdapterBase):

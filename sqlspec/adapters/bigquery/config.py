@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict, 
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.bigquery.driver import BigQueryConnection, BigQueryDriver
+from sqlspec.adapters.bigquery.driver import BigQueryConnection, BigQueryCursor, BigQueryDriver
 from sqlspec.config import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.statement.sql import SQLConfig
@@ -267,3 +267,17 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
                 on_job_complete=self.on_job_complete,
             )
             yield driver
+
+    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+        """Get the signature namespace for BigQuery types.
+
+        This provides all BigQuery-specific types that Litestar needs to recognize
+        to avoid serialization attempts.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+
+        namespace = super().get_signature_namespace()
+        namespace.update({"BigQueryConnection": BigQueryConnection, "BigQueryCursor": BigQueryCursor})
+        return namespace

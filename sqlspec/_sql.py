@@ -395,6 +395,18 @@ class SQLFactory:
     # Column References
     # ===================
 
+    def column(self, name: str, table: Optional[str] = None) -> Column:
+        """Create a column reference.
+
+        Args:
+            name: Column name.
+            table: Optional table name.
+
+        Returns:
+            Column object that supports method chaining and operator overloading.
+        """
+        return Column(name, table)
+
     def __getattr__(self, name: str) -> Column:
         """Dynamically create column references.
 

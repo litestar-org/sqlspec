@@ -1185,12 +1185,11 @@ class SQL:
             overrides["_positional_params"] = []
             overrides["_named_params"] = {}
             overrides["_original_parameters"] = parameters
-        else:
-            # No parameters provided - use existing positional params as the sequence
-            # This allows: sql.as_many() to use whatever parameters are already there
-            # But preserve None if there were no original parameters
-            if self._positional_params:  # If we have positional params, use them
-                overrides["_original_parameters"] = self._positional_params
+        # No parameters provided - use existing positional params as the sequence
+        # This allows: sql.as_many() to use whatever parameters are already there
+        # But preserve None if there were no original parameters
+        elif self._positional_params:  # If we have positional params, use them
+            overrides["_original_parameters"] = self._positional_params
             # Otherwise keep _original_parameters as None (don't override)
 
         return self._copy_with(**overrides)

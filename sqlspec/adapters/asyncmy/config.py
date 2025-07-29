@@ -6,10 +6,11 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union
 
 import asyncmy
+from asyncmy.cursors import Cursor, DictCursor
 from asyncmy.pool import Pool as AsyncmyPool
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.asyncmy.driver import AsyncmyConnection, AsyncmyDriver
+from sqlspec.adapters.asyncmy.driver import AsyncmyConnection, AsyncmyCursor, AsyncmyDriver
 from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
 
@@ -172,6 +173,9 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         Returns:
             Dictionary mapping type names to types.
         """
+
         namespace = super().get_signature_namespace()
-        namespace.update({"AsyncmyConnection": AsyncmyConnection, "AsyncmyPool": AsyncmyPool})
+        namespace.update(
+            {"AsyncmyConnection": AsyncmyConnection, "AsyncmyPool": AsyncmyPool, "AsyncmyCursor": AsyncmyCursor}
+        )
         return namespace

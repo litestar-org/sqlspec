@@ -394,8 +394,6 @@ async def test_asyncpg_column_names_and_metadata(asyncpg_session: AsyncpgDriver)
     assert row["created_at"] is not None
 
 
-
-
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_performance_bulk_operations(asyncpg_session: AsyncpgDriver) -> None:
     """Test performance with bulk operations."""

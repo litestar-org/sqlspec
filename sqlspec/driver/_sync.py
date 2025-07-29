@@ -3,10 +3,12 @@
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
+from sqlglot import exp
+
 from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.driver.context import set_current_driver
 from sqlspec.driver.mixins import SQLTranslatorMixin, ToSchemaMixin
-from sqlspec.exceptions import NotFoundError
+from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
 from sqlspec.statement.builder import QueryBuilder
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig, Statement
@@ -435,3 +437,118 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         except (TypeError, IndexError) as e:
             msg = f"Cannot extract value from row type {type(row).__name__}: {e}"
             raise TypeError(msg) from e
+
+    def _create_count_query(self, original_sql: "SQL") -> "SQL":
+        """Create a COUNT query from the original SQL statement.
+
+        Transforms the original SELECT statement to count total rows while preserving
+        WHERE, HAVING, and GROUP BY clauses but removing ORDER BY, LIMIT, and OFFSET.
+
+        For queries with GROUP BY, wraps the query in a subquery to count groups correctly.
+        """
+        if not original_sql.expression:
+            msg = "Cannot create COUNT query from empty SQL expression"
+            raise ImproperConfigurationError(msg)
+        expr = original_sql.expression.copy()
+
+        if isinstance(expr, exp.Select):
+            # Check if query has GROUP BY clause
+            if expr.args.get("group"):
+                # For GROUP BY queries, wrap in subquery and count rows
+                # This counts the number of groups, not the total rows
+                subquery = expr.subquery(alias="grouped_data")
+                count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
+            else:
+                # Simple case: replace SELECT list with COUNT(*)
+                count_expr = exp.select(exp.Count(this=exp.Star())).from_(
+                    cast("exp.Expression", expr.args.get("from")), copy=False
+                )
+                if expr.args.get("where"):
+                    count_expr = count_expr.where(cast("exp.Expression", expr.args.get("where")), copy=False)
+                if expr.args.get("having"):
+                    count_expr = count_expr.having(cast("exp.Expression", expr.args.get("having")), copy=False)
+
+            # Remove ORDER BY, LIMIT, OFFSET - preserve WHERE, HAVING, GROUP BY
+            count_expr.set("order", None)
+            count_expr.set("limit", None)
+            count_expr.set("offset", None)
+
+            # Create new SQL with same parameters and config as original
+            return SQL(count_expr, *original_sql._positional_params, config=original_sql._config)
+
+        # Handle other query types (UNION, etc.) - wrap in subquery
+        subquery = cast("exp.Select", expr).subquery(alias="total_query")
+        count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
+        # Create new SQL with same parameters and config as original
+        return SQL(count_expr, *original_sql._positional_params, config=original_sql._config)
+
+    @overload
+    def select_with_total(
+        self,
+        statement: "Union[Statement, QueryBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: "type[ModelDTOT]",
+        config: "Optional[SQLConfig]" = None,
+        **kwargs: Any,
+    ) -> "tuple[list[ModelDTOT], int]": ...
+
+    @overload
+    def select_with_total(
+        self,
+        statement: "Union[Statement, QueryBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: None = None,
+        config: "Optional[SQLConfig]" = None,
+        **kwargs: Any,
+    ) -> "tuple[list[dict[str, Any]], int]": ...
+
+    def select_with_total(
+        self,
+        statement: "Union[Statement, QueryBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: "Optional[type[ModelDTOT]]" = None,
+        config: "Optional[SQLConfig]" = None,
+        **kwargs: Any,
+    ) -> "tuple[Union[list[dict[str, Any]], list[ModelDTOT]], int]":
+        """Execute a select statement and return both the data and total count.
+
+        This method is designed for pagination scenarios where you need both
+        the current page of data and the total number of rows that match the query.
+
+        Args:
+            statement: The SQL statement, QueryBuilder, or raw SQL string
+            *parameters: Parameters for the SQL statement
+            schema_type: Optional schema type for data transformation
+            config: Optional SQL configuration
+            **kwargs: Additional keyword arguments
+
+        Returns:
+            A tuple containing:
+            - List of data rows (transformed by schema_type if provided)
+            - Total count of rows matching the query (ignoring LIMIT/OFFSET)
+
+        Example:
+            >>> data, total = driver.select_with_total(
+            ...     "SELECT * FROM users WHERE active = ? LIMIT 10 OFFSET 20",
+            ...     True,
+            ... )
+            >>> print(f"Page data: {len(data)} rows, Total: {total} rows")
+        """
+        # 1. Prepare original SQL statement
+        sql_statement = self._prepare_sql(statement, *parameters, config=config or self.config, **kwargs)
+
+        # 2. Create optimized COUNT query
+        count_sql = self._create_count_query(sql_statement)
+
+        # 3. Execute COUNT first (faster, validates query)
+        count_result = self._dispatch_execution(count_sql, self.connection)
+        total_count = count_result.scalar()
+
+        # 4. Execute original SELECT
+        select_result = self.execute(sql_statement)
+        data = self.to_schema(select_result.get_data(), schema_type=schema_type)
+
+        return (data, total_count)

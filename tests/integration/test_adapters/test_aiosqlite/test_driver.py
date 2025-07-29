@@ -388,8 +388,6 @@ async def test_aiosqlite_column_names_and_metadata(aiosqlite_session: AiosqliteD
     assert row["created_at"] is not None
 
 
-
-
 @pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_performance_bulk_operations(aiosqlite_session: AiosqliteDriver) -> None:
     """Test performance with bulk operations."""

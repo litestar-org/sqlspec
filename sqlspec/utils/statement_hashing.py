@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from sqlglot import exp
 
+from sqlspec.utils.type_guards import is_typed_parameter
+
 if TYPE_CHECKING:
     from sqlspec.statement.filters import StatementFilter
     from sqlspec.statement.sql import SQL
@@ -96,24 +98,18 @@ def hash_parameters(
 
     # Hash positional parameters
     if positional_params:
-        # Import TypedParameter locally to avoid circular imports
         from sqlspec.parameters.types import TypedParameter
-        
-        # Handle unhashable types like lists
+
         hashable_params = []
-        for i, param in enumerate(positional_params):
-            # Debug: Print parameter details
-            # print(f"Debug: param {i}: type={type(param)}, value={param!r}")
-            
+        for param in positional_params:
             if isinstance(param, TypedParameter):
-                # For TypedParameter, hash its value with type info
                 if isinstance(param.value, (list, dict)):
                     hashable_params.append((repr(param.value), param.type_hint))
                 else:
                     hashable_params.append((param.value, param.type_hint))
             elif isinstance(param, (list, dict)):
                 # Convert unhashable types to hashable representations
-                hashable_params.append(repr(param))
+                hashable_params.append((repr(param),))
             else:
                 # Check if param itself contains unhashable types
                 try:
@@ -122,24 +118,14 @@ def hash_parameters(
                 except TypeError:
                     # If unhashable, convert to string representation
                     hashable_params.append(repr(param))
-        
-        try:
-            param_hash ^= hash(tuple(hashable_params))
-        except TypeError as e:
-            # Debug: Print the problematic params
-            for i, p in enumerate(hashable_params):
-                print(f"Debug: hashable_param {i}: type={type(p)}, value={p!r}")
-            raise
 
-    # Hash named parameters
+        param_hash ^= hash(tuple(hashable_params))
+
     if named_params:
-        # Import TypedParameter locally if not already imported
-        from sqlspec.parameters.types import TypedParameter
-        
         # Handle unhashable types in named params
         hashable_items = []
         for key, value in sorted(named_params.items()):
-            if isinstance(value, TypedParameter):
+            if is_typed_parameter(value):
                 # For TypedParameter, hash its value with type info
                 if isinstance(value.value, (list, dict)):
                     hashable_items.append((key, (repr(value.value), value.type_hint)))

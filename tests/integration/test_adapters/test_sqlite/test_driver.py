@@ -381,7 +381,6 @@ def test_sqlite_column_names_and_metadata(sqlite_session: SqliteDriver) -> None:
     assert row["created_at"] is not None
 
 
-
 @pytest.mark.xdist_group("sqlite")
 def test_sqlite_performance_bulk_operations(sqlite_session: SqliteDriver) -> None:
     """Test performance with bulk operations."""

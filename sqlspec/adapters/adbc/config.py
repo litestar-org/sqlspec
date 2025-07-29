@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict, 
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.adbc.driver import AdbcConnection, AdbcDriver
+from sqlspec.adapters.adbc.driver import AdbcConnection, AdbcCursor, AdbcDriver
 from sqlspec.adapters.adbc.pipeline_steps import adbc_null_transform_step
 from sqlspec.config import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
@@ -442,3 +442,17 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             config.pop("driver_name", None)
 
         return config
+
+    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+        """Get the signature namespace for ADBC types.
+
+        This provides all ADBC-specific types that Litestar needs to recognize
+        to avoid serialization attempts.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+
+        namespace = super().get_signature_namespace()
+        namespace.update({"AdbcConnection": AdbcConnection, "AdbcCursor": AdbcCursor})
+        return namespace

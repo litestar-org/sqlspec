@@ -178,7 +178,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                 prepared_params = self._prepare_driver_parameters_many(parameters) if parameters else []
                 # ADBC requires at least one parameter set for executemany with parameterized queries
                 # Use AST-based parameter detection instead of naive string searching
-                if not prepared_params and self.has_parameters(statement.expression):
+                if not prepared_params and self.has_parameters(statement.expression or statement.sql):
                     # No parameters to execute, set rowcount to 0
                     cursor._rowcount = 0
                 else:

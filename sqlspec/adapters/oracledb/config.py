@@ -11,8 +11,10 @@ from typing_extensions import NotRequired
 
 from sqlspec.adapters.oracledb.driver import (
     OracleAsyncConnection,
+    OracleAsyncCursor,
     OracleAsyncDriver,
     OracleSyncConnection,
+    OracleSyncCursor,
     OracleSyncDriver,
 )
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
@@ -201,8 +203,15 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         Returns:
             Dictionary mapping type names to types.
         """
+
         namespace = super().get_signature_namespace()
-        namespace.update({"OracleSyncConnection": OracleSyncConnection, "OracleAsyncConnection": OracleAsyncConnection})
+        namespace.update(
+            {
+                "OracleSyncConnection": OracleSyncConnection,
+                "OracleAsyncConnection": OracleAsyncConnection,
+                "OracleSyncCursor": OracleSyncCursor,
+            }
+        )
         return namespace
 
 
@@ -337,6 +346,14 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         Returns:
             Dictionary mapping type names to types.
         """
+
         namespace = super().get_signature_namespace()
-        namespace.update({"OracleSyncConnection": OracleSyncConnection, "OracleAsyncConnection": OracleAsyncConnection})
+        namespace.update(
+            {
+                "OracleSyncConnection": OracleSyncConnection,
+                "OracleAsyncConnection": OracleAsyncConnection,
+                "OracleSyncCursor": OracleSyncCursor,
+                "OracleAsyncCursor": OracleAsyncCursor,
+            }
+        )
         return namespace

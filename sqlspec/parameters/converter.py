@@ -190,7 +190,7 @@ class ParameterConverter:
                 return params
 
             # Wrap complex types in the list
-            wrapped = []
+            wrapped: list[Any] = []
             for i, value in enumerate(params):
                 # Use parameter name from param_info if available
                 semantic_name = None

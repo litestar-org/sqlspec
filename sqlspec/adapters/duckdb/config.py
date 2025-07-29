@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Final, Optional, TypedDict
 import duckdb
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.duckdb.driver import DuckDBConnection, DuckDBDriver
+from sqlspec.adapters.duckdb.driver import DuckDBConnection, DuckDBCursor, DuckDBDriver
 from sqlspec.config import SyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
 from sqlspec.typing import Empty
@@ -628,3 +628,17 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
                 )
             driver = self.driver_type(connection=connection, config=statement_config)
             yield driver
+
+    def get_signature_namespace(self) -> "dict[str, type[Any]]":
+        """Get the signature namespace for DuckDB types.
+
+        This provides all DuckDB-specific types that Litestar needs to recognize
+        to avoid serialization attempts.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+
+        namespace = super().get_signature_namespace()
+        namespace.update({"DuckDBConnection": DuckDBConnection, "DuckDBCursor": DuckDBCursor})
+        return namespace

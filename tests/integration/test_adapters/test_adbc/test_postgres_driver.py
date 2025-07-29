@@ -183,7 +183,10 @@ def test_parameter_types(adbc_postgresql_session: AdbcDriver) -> None:
         INSERT INTO param_test (int_col, text_col, float_col, bool_col)
         VALUES ($1, $2, $3, $4)
         """),
-        42, "test_string", math.pi, True,  # Pass as individual arguments
+        42,
+        "test_string",
+        math.pi,
+        True,  # Pass as individual arguments
     )
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected in (-1, 1)

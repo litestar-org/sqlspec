@@ -302,7 +302,7 @@ class SQLResult(StatementResult):
         Returns:
             The row at the specified index
         """
-        return self.data[index]
+        return cast("dict[str, Any]", self.data[index])
 
     def all(self) -> list[dict[str, Any]]:
         """Return all rows as a list.
@@ -327,7 +327,7 @@ class SQLResult(StatementResult):
         if len(self.data) > 1:
             msg = f"Multiple results found ({len(self.data)}), exactly one row expected"
             raise ValueError(msg)
-        return self.data[0]
+        return cast("dict[str, Any]", self.data[0])
 
     def one_or_none(self) -> "Optional[dict[str, Any]]":
         """Return at most one row.
@@ -343,7 +343,7 @@ class SQLResult(StatementResult):
         if len(self.data) > 1:
             msg = f"Multiple results found ({len(self.data)}), at most one row expected"
             raise ValueError(msg)
-        return self.data[0]
+        return cast("dict[str, Any]", self.data[0])
 
     def scalar(self) -> Any:
         """Return the first column of the first row.

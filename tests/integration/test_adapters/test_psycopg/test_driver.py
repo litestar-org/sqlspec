@@ -427,8 +427,6 @@ def test_psycopg_column_names_and_metadata(psycopg_session: PsycopgSyncDriver) -
     assert row["created_at"] is not None
 
 
-
-
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_performance_bulk_operations(psycopg_session: PsycopgSyncDriver) -> None:
     """Test performance with bulk operations."""

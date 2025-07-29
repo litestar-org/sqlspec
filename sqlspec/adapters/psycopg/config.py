@@ -9,18 +9,38 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.psycopg.driver import (
-    PsycopgAsyncConnection,
-    PsycopgAsyncDriver,
-    PsycopgSyncConnection,
-    PsycopgSyncDriver,
-)
 from sqlspec.adapters.psycopg.pipeline_steps import postgres_copy_pipeline_step
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 from sqlspec.statement.sql import SQLConfig
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
+
+    from psycopg import AsyncConnection, Connection
+    from psycopg.rows import DictRow as PsycopgDictRow
+    from typing_extensions import TypeAlias
+
+    from sqlspec.adapters.psycopg.driver import (
+        PsycopgAsyncCursor,
+        PsycopgAsyncDriver,
+        PsycopgSyncCursor,
+        PsycopgSyncDriver,
+    )
+
+    PsycopgSyncConnection: TypeAlias = Connection[PsycopgDictRow]
+    PsycopgAsyncConnection: TypeAlias = AsyncConnection[PsycopgDictRow]
+else:
+    from psycopg import AsyncConnection, Connection
+
+    from sqlspec.adapters.psycopg.driver import (
+        PsycopgAsyncCursor,
+        PsycopgAsyncDriver,
+        PsycopgSyncCursor,
+        PsycopgSyncDriver,
+    )
+
+    PsycopgSyncConnection = Connection
+    PsycopgAsyncConnection = AsyncConnection
 
 
 logger = logging.getLogger("sqlspec.adapters.psycopg")
@@ -62,7 +82,14 @@ class PsycopgPoolParams(PsycopgConnectionParams, total=False):
     kwargs: NotRequired[dict[str, Any]]
 
 
-__all__ = ("PsycopgAsyncConfig", "PsycopgConnectionParams", "PsycopgPoolParams", "PsycopgSyncConfig")
+__all__ = (
+    "PsycopgAsyncConfig",
+    "PsycopgAsyncCursor",
+    "PsycopgConnectionParams",
+    "PsycopgPoolParams",
+    "PsycopgSyncConfig",
+    "PsycopgSyncCursor",
+)
 
 
 class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool, PsycopgSyncDriver]):
@@ -263,7 +290,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             Dictionary mapping type names to types.
         """
         namespace = super().get_signature_namespace()
-        namespace.update({"PsycopgSyncConnection": PsycopgSyncConnection})
+        namespace.update({"PsycopgSyncConnection": PsycopgSyncConnection, "PsycopgSyncCursor": PsycopgSyncCursor})
         return namespace
 
 
@@ -454,5 +481,5 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             Dictionary mapping type names to types.
         """
         namespace = super().get_signature_namespace()
-        namespace.update({"PsycopgAsyncConnection": PsycopgAsyncConnection})
+        namespace.update({"PsycopgAsyncConnection": PsycopgAsyncConnection, "PsycopgAsyncCursor": PsycopgAsyncCursor})
         return namespace

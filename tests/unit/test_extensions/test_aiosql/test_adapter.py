@@ -62,8 +62,6 @@ def test_sync_adapter_select_with_record_class_warning(
     assert "record_class parameter is deprecated" in caplog.text
 
 
-
-
 def test_sync_adapter_select_one_with_limit_filter(sync_adapter: AiosqlSyncAdapter) -> None:
     """Test select_one applies implicit limit."""
     mock_result = Mock(spec=SQLResult)
@@ -214,8 +212,6 @@ async def test_async_adapter_select_with_record_class_warning(
         )
 
     assert "record_class parameter is deprecated" in caplog.text
-
-
 
 
 @pytest.mark.asyncio

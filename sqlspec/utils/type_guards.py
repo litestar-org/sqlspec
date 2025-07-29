@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from sqlglot import exp
     from typing_extensions import TypeGuard
 
+    from sqlspec.parameters.types import TypedParameter
     from sqlspec.protocols import (
         AsyncCloseableConnectionProtocol,
         AsyncCopyCapableConnectionProtocol,
@@ -131,6 +132,7 @@ __all__ = (
     "is_sync_pipeline_capable_driver",
     "is_sync_transaction_capable",
     "is_sync_transaction_state_capable",
+    "is_typed_parameter",
     "schema_dump",
     "supports_limit",
     "supports_offset",
@@ -1240,3 +1242,17 @@ def is_copy_statement(expression: Any) -> "TypeGuard[exp.Expression]":
         return sql_text.startswith("COPY ")
 
     return False
+
+
+def is_typed_parameter(obj: Any) -> "TypeGuard[TypedParameter]":
+    """Check if an object is a typed parameter.
+
+    Args:
+        obj: The object to check
+
+    Returns:
+        True if the object is a TypedParameter, False otherwise
+    """
+    from sqlspec.parameters.types import TypedParameter
+
+    return isinstance(obj, TypedParameter)
