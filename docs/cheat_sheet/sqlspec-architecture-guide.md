@@ -7,13 +7,9 @@
 1. [Architecture Overview](#architecture-overview)
 2. [Data Flow](#data-flow)
 3. [Core Components](#core-components)
-4. [Mixin Architecture](#mixin-architecture)
-5. [Pipeline System](#pipeline-system)
-6. [Driver Implementation](#driver-implementation)
-7. [Parameter Handling](#parameter-handling)
-8. [Special Cases](#special-cases)
-9. [Testing & Development](#testing--development)
-10. [Common Patterns](#common-patterns)
+4. [Driver Implementation](#driver-implementation)
+5. [Parameter Handling](#parameter-handling)
+6. [Testing & Development](#testing--development)
 
 ---
 
@@ -23,114 +19,62 @@ SQLSpec provides a unified interface for SQL execution across multiple database 
 
 ### Key Design Principles
 
-1. **Single Source of Truth**: The SQL object holds all state
-2. **Immutability**: All operations return new instances
-3. **Type Safety**: Parameters carry type information through the pipeline
-4. **Separation of Concerns**: Clear boundaries between components
-5. **Composition over Inheritance**: Use mixins for shared functionality
+1. **Single Source of Truth**: The `SQL` object holds all state for a given statement.
+2. **Immutability**: All operations on a `SQL` object return new instances.
+3. **Type Safety**: Parameters carry type information through the processing pipeline.
+4. **Separation of Concerns**: Clear boundaries between statement representation, parameter processing, and driver execution.
+5. **Composition over Inheritance**: Use of mixins is minimized in favor of a clear protocol-based driver architecture.
 
 ### Component Hierarchy
 
-```
-User API
-    ↓
-SQL Statement (sql.py)
-    ↓
-Single-Pass Pipeline Processing (pipeline.py)
-    ↓
-Three-Tier Caching System
-    ↓
-Compilation (SQL.compile())
-    ↓
-Driver Adapter (adapters/*/driver.py)
-    ↓
-Database Engine
+```mermaid
+graph TD
+    A[User API: SQL(), sql.select()] --> B{SQL Object};
+    B --> C{Driver.execute()};
+    C --> D{SQL Processing Pipeline};
+    D --> E{Driver-Specific Execution};
+    E --> F[SQLResult];
+    F --> G[User Code];
 ```
 
-**Note**: The architecture uses a single-pass pipeline system with SQLTransformContext and compose_pipeline, delivering 25-40% performance improvements with up to 90% gains from the three-tier caching system.
+**Note**: The architecture uses a single-pass pipeline system with `SQLTransformContext` and `compose_pipeline`, delivering significant performance improvements, further enhanced by a multi-tier caching system.
 
 ---
 
 ## Data Flow
 
-### 1. Statement Creation
-
-```python
-# User creates SQL
-sql = SQL("SELECT * FROM users WHERE id = ?", 1)
-```
-
-### 2. Pipeline Processing
-
-```python
-# Pipeline transforms SQL (if enabled)
-# - Literal parameterization
-# - Normalization
-# - Validation
-_ensure_processed() → Pipeline → _ProcessedState
-```
-
-### 3. Compilation
-
-```python
-# SQL.compile() produces final SQL and parameters
-sql_str, params = sql.compile(placeholder_style="qmark")
-```
-
-### 4. Driver Execution
-
-```python
-# Driver processes parameters and executes
-processed_params = driver._process_parameters(params)  # TypeCoercionMixin
-result = driver._execute(sql_str, processed_params, statement)
-```
-
-### 5. Result Serialization
-
-```python
-# Results wrapped in SQLResult with metadata
-return SQLResult(data=rows, statement=statement, ...)
-```
+For a detailed breakdown of the data flow, please see the [SQLSpec Data Flow Guide](./sqlspec-data-flow-guide.md).
 
 ---
 
 ## Core Components
 
-### SQL Class (`statement/sql.py`)
+### `SQL` Class (`sqlspec.statement.sql.SQL`)
 
 The central abstraction for SQL statements.
 
 **Key Responsibilities:**
 
-- Parse SQL strings into AST (via SQLGlot)
-- Manage parameters (positional and named)
-- Apply filters and transformations
-- Compile to target parameter styles
+- Parse SQL strings into an AST (via `sqlglot`).
+- Manage parameters (positional and named) and filters.
+- Compile to a target parameter style for a specific driver.
 
 **Key Methods:**
 
 ```python
 # Public API
-sql.compile(placeholder_style="qmark") → (str, params)
-sql.where(condition) → SQL
-sql.limit(n) → SQL
-sql.as_many(params) → SQL
-sql.as_script() → SQL
+sql.compile(placeholder_style="qmark") # -> (str, params)
+sql.where(condition) # -> SQL
+sql.limit(n) # -> SQL
+sql.as_many(params) # -> SQL
+sql.as_script() # -> SQL
 
 # Internal
-sql._ensure_processed() → None
-sql._build_final_state() → (expression, params)
+sql._ensure_processed() # -> None
+sql._build_final_state() # -> (expression, params)
 ```
 
-**Important Fields:**
-
-- `_raw_sql`: Original SQL string
-- `_statement`: SQLGlot AST expression
-- `_positional_params`: List of positional parameters
-- `_named_params`: Dict of named parameters
-- `_processed_state`: Cached pipeline results
-
-### SQLConfig (`statement/sql.py`)
+### `SQLConfig` (`sqlspec.statement.sql.SQLConfig`)
 
 Configuration for SQL processing behavior.
 
@@ -144,264 +88,9 @@ SQLConfig(
 )
 ```
 
-### TypedParameter (`statement/parameters.py`)
+### `TypedParameter` (`sqlspec.parameters.types.TypedParameter`)
 
-Carries type information through the pipeline.
-
-```python
-TypedParameter(
-    value=123,                    # Actual value
-    type_hint="int",             # Type hint for coercion
-    sqlglot_type=exp.DataType,   # SQLGlot type expression
-    semantic_name="user_id"      # Parameter meaning
-)
-```
-
----
-
-## Mixin Architecture
-
-SQLSpec uses mixins to compose driver functionality. Each mixin provides specific capabilities.
-
-### TypeCoercionMixin (`driver/mixins/_type_coercion.py`)
-
-**Purpose**: Extract values from TypedParameter objects and apply database-specific type conversions.
-
-**Required Methods**:
-
-```python
-def _process_parameters(self, parameters: Any) -> Any:
-    """Main entry point - processes all parameters"""
-    # DO NOT BYPASS THIS METHOD
-
-def _coerce_parameter_type(self, param: Any) -> Any:
-    """Process single parameter"""
-
-# Override these for specific databases:
-def _coerce_boolean(self, value: Any) -> Any:
-    """SQLite/MySQL need 0/1 instead of True/False"""
-
-def _coerce_decimal(self, value: Any) -> Any:
-    """Some DBs need string decimals"""
-
-def _coerce_json(self, value: Any) -> Any:
-    """Some DBs need JSON as strings"""
-
-def _coerce_array(self, value: Any) -> Any:
-    """DBs without array support need JSON"""
-```
-
-**Key Rule**: This mixin handles ALL parameter processing. Don't add duplicate processing.
-
-### SyncStorageMixin / AsyncStorageMixin
-
-**Purpose**: Provide data import/export capabilities.
-
-**Required Methods**:
-
-```python
-def fetch_arrow_table(self, sql: SQL) -> ArrowResult
-def ingest_arrow_table(self, table: Any, table_name: str) -> int
-def export_csv(self, sql: SQL, path: str) -> None
-def import_csv(self, path: str, table_name: str) -> int
-```
-
-### SyncPipelinedExecutionMixin / AsyncPipelinedExecutionMixin
-
-**Purpose**: Integrate with the SQL pipeline system.
-
-**Key Methods**:
-
-```python
-def _get_compiled_sql(self, statement: SQL, style: ParameterStyle) -> tuple[str, Any]:
-    """Get compiled SQL with proper parameter style"""
-    return statement.compile(placeholder_style=style)
-```
-
-### SQLTranslatorMixin
-
-**Purpose**: Handle SQL dialect translation.
-
-**Methods**:
-
-```python
-def transpile_sql(self, sql: str, from_dialect: str, to_dialect: str) -> str
-def optimize_sql(self, sql: str, dialect: str) -> str
-```
-
-### ToSchemaMixin
-
-**Purpose**: Convert query results to structured schemas.
-
-```python
-def to_schema(self, result: SQLResult, schema_type: type[T]) -> list[T]
-```
-
-### SyncAdapterCacheMixin / AsyncAdapterCacheMixin
-
-**Purpose**: Cache prepared statements and query results.
-
-```python
-def _get_cache_key(self, sql: str, params: Any) -> str
-def _cache_statement(self, key: str, statement: Any) -> None
-```
-
----
-
-## Pipeline System
-
-SQLSpec uses a **single-pass pipeline architecture** that delivers significant performance improvements.
-
-### Architecture
-
-The system uses a unified pipeline with composable steps:
-
-- **SQLTransformContext**: Carries state through all pipeline steps
-- **compose_pipeline()**: Combines multiple steps into single function
-- **Pipeline Steps**: normalize, parameterize_literals, optimize, validate
-
-**Performance Results**: Achieved 25-40% overall improvement with up to 90% gains from three-tier caching.
-
-### Three-Tier Caching System
-
-1. **Base Statement Cache**: Processed SQL objects
-2. **Filter Result Cache**: Applied filter transformations
-3. **Optimized Expression Cache**: SQLGlot optimization results
-
-### Key Components
-
-```python
-from sqlspec.statement.pipeline import (
-    SQLTransformContext,
-    compose_pipeline,
-    parameterize_literals_step,
-    optimize_step,
-    validate_step,
-)
-
-# Example usage
-context = SQLTransformContext(
-    current_expression=expression,
-    original_expression=expression,
-    parameters=params,
-    dialect=dialect
-)
-
-pipeline = compose_pipeline([
-    parameterize_literals_step,
-    optimize_step,
-    validate_step,
-])
-
-result = pipeline(context)
-```
-
-### Custom Pipeline Steps
-
-Adapters can add custom pipeline steps for special handling:
-
-```python
-# In adapter config's provide_session method:
-if self._get_dialect() == "postgres":
-    # Add the ADBC null transform step to custom pipeline steps
-    custom_pipeline_steps = [adbc_null_transform_step]
-
-    # Preserve user's custom steps
-    if statement_config.custom_pipeline_steps:
-        custom_pipeline_steps.extend(statement_config.custom_pipeline_steps)
-
-    statement_config = statement_config.replace(custom_pipeline_steps=custom_pipeline_steps)
-```
-
-### Creating Custom Pipeline Steps
-
-Custom pipeline steps follow a simple pattern:
-
-```python
-from sqlspec.statement.pipeline import SQLTransformContext
-
-def custom_transform_step(context: SQLTransformContext) -> SQLTransformContext:
-    """Description of what this step does."""
-    # Access the current AST
-    expression = context.current_expression
-
-    # Access parameters dictionary
-    params = context.parameters
-
-    # Transform the AST if needed
-    context.current_expression = expression.transform(transform_func)
-
-    # Store metadata for driver
-    context.metadata["custom_key"] = value
-
-    return context
-```
-
-### Key Patterns
-
-1. **Parameter Manipulation** (ADBC NULL handling example):
-   - Pipeline steps run BEFORE `parameterize_literals_step` to see actual parameter values
-   - Use `context.parameters` dictionary to access/modify parameters
-   - Remove parameters that shouldn't be sent to database: `del context.parameters[key]`
-   - Transform AST nodes based on parameter values
-
-2. **Special Command Detection** (psycopg COPY example):
-   - Check expression type: `isinstance(expression, exp.Copy)`
-   - Extract metadata from AST: `expression.args.get("files", [])`
-   - Move special data from parameters to metadata
-   - Store flags in metadata for driver to check later
-
-3. **AST Transformation**:
-
-   ```python
-   def transform_node(node: exp.Expression) -> exp.Expression:
-       if isinstance(node, exp.Placeholder):
-           # Transform placeholder nodes
-           if should_transform(node):
-               return exp.Null()  # or other node type
-       return node
-
-   context.current_expression = context.current_expression.transform(transform_node)
-   ```
-
-### Real Examples
-
-**ADBC NULL Transformer** (`adbc_null_transform_step`):
-
-- Finds parameters with `None` values
-- Transforms Placeholder/Parameter nodes to Null nodes
-- Removes NULL parameters from context
-- Prevents "Can't map Arrow type 'na' to Postgres type" errors
-
-**Psycopg COPY Transformer** (`psycopg_copy_transform_step`):
-
-- Detects COPY FROM STDIN/TO STDOUT commands
-- Extracts data from first positional parameter
-- Moves data to metadata for driver bypass of validation
-- Enables proper COPY command handling
-
-### Important Notes
-
-1. Custom steps are added to `SQLConfig.custom_pipeline_steps` list
-2. They run at the beginning of the pipeline (before standard steps)
-3. Always return the context object
-4. Use metadata dictionary to pass information to driver
-5. Modify parameters dictionary to control what gets sent to database
-
-### Literal Parameterization
-
-Extracts literal values from SQL and replaces with placeholders:
-
-```python
-# Input
-SELECT * FROM users WHERE name = 'John' AND age = 25
-
-# Output
-SELECT * FROM users WHERE name = :param_0 AND age = :param_1
-# Parameters: {"param_0": "John", "param_1": 25}
-```
-
-**Important**: Types are preserved during extraction.
+Carries type information through the pipeline, ensuring that data types are handled correctly by each database driver.
 
 ---
 
@@ -411,210 +100,77 @@ SELECT * FROM users WHERE name = :param_0 AND age = :param_1
 
 Every driver must:
 
-1. Inherit from `SyncDriverAdapterBase` or `AsyncDriverAdapterBase`
-2. Include required mixins
-3. Implement four execution methods
-4. Handle database-specific quirks
+1. Inherit from `SyncDriverAdapterBase` or `AsyncDriverAdapterBase`.
+2. Implement the required abstract methods.
+3. Define its `dialect` and `parameter_config`.
 
 ### Required Methods
 
 ```python
-class MyDriver(
-    SyncDriverAdapterBase[ConnectionT, RowT],
-    TypeCoercionMixin,
-    SyncStorageMixin,
-    SyncPipelinedExecutionMixin,
-):
-    def _execute_statement(
-        self,
-        statement: SQL,
-        connection: Optional[ConnectionT] = None,
-        **kwargs: Any
-    ) -> SQLResult:
-        """Main dispatcher - routes to appropriate method"""
+class MyDriver(SyncDriverAdapterBase):
+    dialect: DialectType = "mydialect"
+    parameter_config: DriverParameterConfig = DriverParameterConfig(...)
 
-    def _execute(
-        self,
-        sql: str,
-        parameters: Any,
-        statement: SQL,
-        connection: Optional[ConnectionT] = None,
-        **kwargs: Any
-    ) -> SQLResult:
-        """Execute single statement"""
+    def with_cursor(self, connection: Any) -> Any:
+        # ...
 
-    def _execute_many(
-        self,
-        sql: str,
-        param_list: Any,
-        connection: Optional[ConnectionT] = None,
-        **kwargs: Any
-    ) -> SQLResult:
-        """Execute with multiple parameter sets"""
+    def _perform_execute(self, cursor: Any, statement: "SQL") -> None:
+        # ...
 
-    def _execute_script(
-        self,
-        script: str,
-        connection: Optional[ConnectionT] = None,
-        **kwargs: Any
-    ) -> SQLResult:
-        """Execute multi-statement script"""
+    def _extract_select_data(self, cursor: Any) -> tuple[list[dict[str, Any]], list[str], int]:
+        # ...
+
+    def _extract_execute_rowcount(self, cursor: Any) -> int:
+        # ...
+
+    # begin(), commit(), rollback() are also required
 ```
 
 ### Implementation Pattern
 
+The `_dispatch_execution` method in the base class handles the overall flow. Your driver's main responsibility is to implement `_perform_execute` to send the compiled SQL and parameters to the database.
+
 ```python
-def _execute_statement(self, statement: SQL, connection: Optional[ConnectionT] = None, **kwargs: Any) -> SQLResult:
-    # 1. Handle script execution first (no parameters)
-    if statement.is_script:
-        sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
-        return self._execute_script(sql, connection=connection, **kwargs)
+def _perform_execute(self, cursor: Any, statement: "SQL") -> None:
+    # 1. Compile the SQL to the driver's expected parameter style
+    sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
 
-    # 2. Determine parameter style based on detected placeholders
-    target_style = self._determine_target_style(statement)
-
-    # 3. Get compiled SQL
-    sql, params = self._get_compiled_sql(statement, target_style)
-
-    # 4. Process parameters through TypeCoercionMixin
-    params = self._process_parameters(params)
-
-    # 5. Route to appropriate method
+    # 2. Execute the query using the DB-API cursor
     if statement.is_many:
-        return self._execute_many(sql, params, connection=connection, **kwargs)
+        cursor.executemany(sql, params)
     else:
-        return self._execute(sql, params, statement, connection=connection, **kwargs)
-```
-
-### Common Pitfalls
-
-❌ **DON'T** add duplicate parameter processing:
-
-```python
-# WRONG - double processing
-params = convert_parameter_sequence(params)  # Don't do this!
-params = self._process_parameters(params)    # This is enough
-```
-
-❌ **DON'T** bypass TypeCoercionMixin:
-
-```python
-# WRONG - manual extraction
-if has_parameter_value(param):
-    value = param.value  # Let TypeCoercionMixin handle this!
-```
-
-✅ **DO** override specific coercion methods:
-
-```python
-def _coerce_boolean(self, value: Any) -> Any:
-    """SQLite needs 0/1 for booleans"""
-    if isinstance(value, bool):
-        return 1 if value else 0
-    return value
+        cursor.execute(sql, params)
 ```
 
 ---
 
 ## Parameter Handling
 
-### Parameter Styles
+### `ParameterProcessor` (`sqlspec.parameters.core.ParameterProcessor`)
 
-SQLSpec supports multiple parameter styles:
+This class is the heart of `sqlspec`'s parameter handling. It is used internally by `SQL.compile()` to:
 
-```python
-class ParameterStyle(Enum):
-    QMARK = "?"              # SELECT * WHERE id = ?
-    NUMERIC = "numeric"      # SELECT * WHERE id = $1
-    NAMED_COLON = "colon"    # SELECT * WHERE id = :id
-    NAMED_AT = "at"          # SELECT * WHERE id = @id
-    POSITIONAL_COLON = "oracle"  # SELECT * WHERE id = :1
-    POSITIONAL_PYFORMAT = "%s"   # SELECT * WHERE id = %s
-    NAMED_PYFORMAT = "pyformat"  # SELECT * WHERE id = %(id)s
-```
+- Convert between parameter styles (e.g., `qmark` to `pyformat`).
+- Apply driver-specific type coercions.
+- Expand lists for `IN` clauses if the driver doesn't support it natively.
 
-### Parameter Flow
+### `DriverParameterConfig` (`sqlspec.parameters.config.DriverParameterConfig`)
 
-1. **User provides parameters**
-
-   ```python
-   sql = SQL("SELECT * WHERE id = ?", 123)
-   ```
-
-2. **Pipeline creates TypedParameter**
-
-   ```python
-   TypedParameter(value=123, type_hint="int", ...)
-   ```
-
-3. **Compile converts style**
-
-   ```python
-   sql_str, params = sql.compile(placeholder_style="numeric")
-   # "SELECT * WHERE id = $1", [TypedParameter(...)]
-   ```
-
-4. **Driver extracts values**
-
-   ```python
-   params = self._process_parameters(params)  # [123]
-   ```
-
-### Parameter Validation
-
-The `ParameterValidator` class handles:
-
-- Detecting parameter placeholders in SQL
-- Validating parameter counts match
-- Checking for SQL injection patterns
-- Extracting parameter information
-
----
-
-## Special Cases
-
-### ADBC NULL Parameters
-
-ADBC PostgreSQL can't determine types for NULL parameters. Solution: AST transformation.
+Each driver defines a `DriverParameterConfig` to declare its parameter handling requirements:
 
 ```python
-def _handle_null_parameters(self, sql: str, params: list[Any]) -> tuple[str, list[Any]]:
-    """Replace NULL parameters with typed CAST expressions"""
-    # Parse SQL into AST
-    ast = sqlglot.parse_one(sql)
-
-    # Find NULL parameters and their positions
-    null_indices = [i for i, p in enumerate(params) if p is None]
-
-    # Transform AST: $1 → CAST(NULL AS text)
-    # Remove NULLs from params and renumber
-
-    return modified_sql, non_null_params
+self.parameter_config = DriverParameterConfig(
+    supported_parameter_styles=[ParameterStyle.QMARK],
+    default_parameter_style=ParameterStyle.QMARK,
+    type_coercion_map={
+        bool: int,
+        datetime.datetime: lambda v: v.isoformat(),
+    },
+    has_native_list_expansion=False,
+)
 ```
 
-### Psycopg COPY Commands
-
-COPY FROM STDIN passes data as a parameter, but it's not a SQL parameter.
-
-```python
-# In parameter extraction
-if "COPY" in sql and "FROM STDIN" in sql:
-    return []  # No parameters to extract
-
-# In driver
-if is_copy_command:
-    # Handle data separately from SQL parameters
-    cursor.copy_expert(sql, data_parameter)
-```
-
-### BigQuery Array Parameters
-
-BigQuery uses UNNEST for array parameters:
-
-```python
-# Transform: WHERE id IN (?)
-# To: WHERE id IN UNNEST(@param_0)
-```
+This declarative approach centralizes the parameter processing logic, making drivers simpler and more consistent.
 
 ---
 
@@ -626,255 +182,30 @@ BigQuery uses UNNEST for array parameters:
 sqlspec/
 ├── .tmp/           # Debug scripts and outputs
 ├── .todos/         # Requirements and status docs
-├── .bugs/          # Bug analysis and reproductions
 ├── tests/
 │   ├── unit/       # Fast, isolated tests
 │   └── integration/# Full adapter tests
 ```
 
-### Development Workflow
-
-1. **Create debug scripts in `.tmp/`**
-
-   ```python
-   # .tmp/test_parameter_issue.py
-   from sqlspec.adapters.adbc.config import AdbcConfig
-   # Debug specific issue
-   ```
-
-2. **Document bugs in `.bugs/`**
-
-   ```markdown
-   # .bugs/parameter-duplication.md
-   ## Issue
-   ADBC sees 6 parameters instead of 3
-
-   ## Reproduction
-   ...
-   ```
-
-3. **Track progress in `.todos/`**
-   - `current-status.md` - Overall progress
-   - `remaining-errors.md` - Test failures
-   - `ACTION-CHECKLIST.md` - Next steps
-
 ### Testing Commands
 
 ```bash
 # Run all tests
-uv run make test
+make test
 
 # Run specific adapter tests
 uv run pytest tests/integration/test_adapter_adbc.py -xvs
 
-# Run with coverage
-uv run pytest --cov=sqlspec tests/
-
 # Type checking
-uv run make type-check
+make type-check
 
 # Linting
-uv run make lint
+make lint
 ```
 
 ### Adding a New Adapter
 
 1. Create adapter module: `sqlspec/adapters/mydb/`
-2. Implement driver class with required mixins
-3. Add configuration class
-4. Create integration tests
-5. Document any special cases
-
----
-
-## Common Patterns
-
-### Pattern: Lazy Processing
-
-SQL objects delay processing until needed:
-
-```python
-class SQL:
-    def _ensure_processed(self):
-        if self._processed_state is Empty:
-            # Run pipeline now
-            self._processed_state = self._run_pipeline()
-```
-
-### Pattern: Immutable Operations
-
-All modifications return new instances:
-
-```python
-sql1 = SQL("SELECT * FROM users")
-sql2 = sql1.where("active = true")  # New instance
-sql3 = sql2.limit(10)               # Another new instance
-```
-
-### Pattern: Builder Methods
-
-Chainable API for query construction:
-
-```python
-result = (
-    SQL("SELECT * FROM users")
-    .where("active = true")
-    .where("age > 18")
-    .limit(100)
-    .as_many(user_params)
-)
-```
-
-### Pattern: Type Preservation
-
-Types flow through the entire pipeline:
-
-```python
-# User input: integer
-SQL("SELECT * WHERE id = ?", 123)
-    ↓
-# Pipeline: TypedParameter with type_hint="int"
-TypedParameter(value=123, type_hint="int")
-    ↓
-# Driver: Coercion based on type hint
-driver._coerce_parameter_type(param)  # Returns 123 as int
-```
-
-### Pattern: Dialect Awareness
-
-Always consider dialect differences:
-
-```python
-# Bad: Hardcoded syntax
-sql = "SELECT * FROM users LIMIT 10"
-
-# Good: Use AST
-ast = exp.Select().from_("users").limit(10)
-sql = ast.sql(dialect="mssql")  # SELECT TOP 10 * FROM users
-```
-
----
-
-## Quick Reference Card
-
-### Essential Imports
-
-```python
-from sqlspec import SQL
-from sqlspec.statement.sql import SQLConfig
-from sqlspec.statement.parameters import TypedParameter, ParameterStyle
-from sqlspec.driver.mixins import TypeCoercionMixin
-import sqlglot.expressions as exp
-```
-
-### SQL Creation
-
-```python
-# Basic
-sql = SQL("SELECT * FROM users WHERE id = ?", 1)
-
-# With config
-config = SQLConfig(dialect="postgres", enable_transformations=False)
-sql = SQL("SELECT * FROM users", config=config)
-
-# Builder pattern
-sql = SQL("SELECT * FROM users").where("active = true").limit(10)
-```
-
-### Driver Implementation Checklist
-
-- [ ] Inherit from appropriate protocol
-- [ ] Include TypeCoercionMixin
-- [ ] Include storage mixin
-- [ ] Include pipeline mixin
-- [ ] Implement `_execute_statement`
-- [ ] Implement `_execute`
-- [ ] Implement `_execute_many`
-- [ ] Implement `_execute_script`
-- [ ] Override necessary `_coerce_*` methods
-- [ ] Handle special cases (NULL, arrays, etc.)
-- [ ] Add comprehensive tests
-
-### Pipeline Development Patterns
-
-#### Custom Pipeline Step Development
-
-```python
-def custom_pipeline_step(context: SQLTransformContext) -> SQLTransformContext:
-    """Custom pipeline step template."""
-    # 1. Check if this step should run
-    if not should_apply(context.dialect, context.parameters):
-        return context
-
-    # 2. Process parameters if needed
-    if context.parameters:
-        context.parameters = transform_parameters(context.parameters)
-
-    # 3. Transform AST if needed
-    if needs_ast_transformation(context.current_expression):
-        context.current_expression = transform_ast(context.current_expression)
-
-    # 4. Add metadata for downstream steps
-    context.metadata["custom_step_applied"] = True
-
-    return context
-```
-
-#### Error Handling in Pipeline Steps
-
-```python
-def robust_pipeline_step(context: SQLTransformContext) -> SQLTransformContext:
-    """Pipeline step with proper error handling."""
-    try:
-        # Attempt transformation
-        result = complex_transformation(context.current_expression)
-        context.current_expression = result
-        context.metadata["transformation_success"] = True
-    except Exception as e:
-        # Log but don't break the pipeline
-        logger.warning("Transformation failed: %s", e)
-        context.metadata["transformation_error"] = str(e)
-        # Continue with original expression
-
-    return context
-```
-
-#### Conditional Pipeline Composition
-
-```python
-def build_pipeline_for_adapter(dialect: str, config: SQLConfig) -> PipelineStep:
-    """Build adapter-specific pipeline."""
-    steps = []
-
-    # Always include parameter processing
-    steps.append(parameterize_literals_step)
-
-    # Dialect-specific steps
-    if dialect == "postgres":
-        steps.append(postgres_null_handling_step)
-    elif dialect == "sqlite":
-        steps.append(sqlite_type_conversion_step)
-
-    # Optional optimization
-    if config.enable_optimization:
-        steps.append(optimize_step)
-
-    # Always validate
-    steps.append(validate_step)
-
-    return compose_pipeline(steps)
-```
-
-### Golden Rules
-
-1. **Trust the pipeline** - Single-pass processing handles complexity
-2. **Parameters flow through context** - User → SQLTransformContext → Pipeline → Driver → Database
-3. **Types are preserved** - Use TypedParameter throughout
-4. **AST over strings** - Use SQLGlot for SQL manipulation
-5. **Immutability** - Return new instances, don't modify
-6. **Leverage caching** - Three-tier system provides massive performance gains
-7. **Test everything** - Each adapter needs full coverage
-
----
-
-*Remember: The architecture is designed to handle complexity through composition. When in doubt, check how existing adapters solve similar problems.*
+2. Implement the `config.py` and `driver.py` files.
+3. Add integration tests for the new adapter.
+4. Document any special cases or configurations.

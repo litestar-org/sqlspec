@@ -446,7 +446,7 @@ class WhereClauseMixin:
         return self.where(condition)
 
     def where_not_any(self, column: Union[str, exp.Column], values: Any) -> Self:
-        """Add WHERE column != ANY(values) clause."""
+        """Add WHERE column <> ANY(values) clause."""
         builder = cast("SQLBuilderProtocol", self)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         if has_query_builder_parameters(values) or isinstance(values, exp.Expression):

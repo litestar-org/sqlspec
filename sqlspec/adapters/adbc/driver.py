@@ -5,8 +5,6 @@ import decimal
 import logging
 from typing import TYPE_CHECKING, Any, Optional, cast
 
-from adbc_driver_manager.dbapi import Connection
-
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.parameters import DriverParameterConfig, ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
@@ -15,16 +13,12 @@ from sqlspec.utils.serializers import to_json
 if TYPE_CHECKING:
     from adbc_driver_manager.dbapi import Cursor
     from sqlglot.dialects.dialect import DialectType
-    from typing_extensions import TypeAlias
 
-__all__ = ("AdbcConnection", "AdbcCursor", "AdbcDriver")
+    from sqlspec.adapters.adbc._types import AdbcConnection
+
+__all__ = ("AdbcCursor", "AdbcDriver")
 
 logger = logging.getLogger("sqlspec")
-
-if TYPE_CHECKING:
-    AdbcConnection: TypeAlias = Connection
-else:
-    AdbcConnection = Connection
 
 
 class AdbcCursor:
@@ -105,20 +99,15 @@ class AdbcDriver(SyncDriverAdapterBase):
             datetime.datetime: lambda x: x,
             datetime.date: lambda x: x,
             datetime.time: lambda x: x,
-            # Decimal type for numeric precision
             decimal.Decimal: float,
-            # Boolean handling
             bool: lambda x: x,
-            # Numeric types
             int: lambda x: x,
             float: lambda x: x,
-            # String types
             str: lambda x: x,
             bytes: lambda x: x,
-            # Collection types (lists/arrays)
             list: lambda x: x,
-            tuple: lambda x: list(x),  # Convert tuples to lists for Arrow
-            dict: lambda x: x,  # For JSON/JSONB types
+            tuple: list,
+            dict: lambda x: x,
         }
 
         # PostgreSQL-specific type handling
@@ -164,7 +153,7 @@ class AdbcDriver(SyncDriverAdapterBase):
     def _perform_execute(self, cursor: "Cursor", statement: "SQL") -> None:
         """Execute the SQL statement using the provided cursor."""
         try:
-            sql, parameters = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
+            sql, parameters = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
             if statement.is_script:
                 statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
                 for stmt in statements:
@@ -225,7 +214,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         with self.with_cursor(self.connection) as cursor:
             cursor.execute("COMMIT")
 
-    def _prepare_driver_parameters(self, parameters: "Any") -> "list[Any]":
+    def _prepare_driver_parameters(self, parameters: "Any") -> "Any":
         """Convert parameters to the format expected by ADBC driver.
 
         ADBC/Arrow requires special handling for certain types:

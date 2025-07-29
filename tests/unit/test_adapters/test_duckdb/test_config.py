@@ -49,7 +49,7 @@ def test_duckdb_config_basic_creation() -> None:
     # Test minimal config creation
     connection_config = {"database": ":memory:", "read_only": False}
     config = DuckDBConfig(connection_config=connection_config)
-    assert config.connection_config["database"] == ":memory:"
+    assert config.connection_config["database"].startswith(":memory:pool_")
     assert config.connection_config["read_only"] is False
 
     # Test with additional parameters
@@ -72,8 +72,8 @@ def test_duckdb_config_with_no_connection_config() -> None:
     """Test DuckDB config with no connection config."""
     config = DuckDBConfig()
 
-    # Should have database set to :memory: as default
-    assert config.connection_config["database"] == ":memory:"
+    # Should have database set to :memory:shared_db (converted from default :memory:)
+    assert config.connection_config["database"] == ":memory:shared_db"
 
     # Check base class attributes
     assert isinstance(config.statement_config, SQLConfig)
@@ -469,17 +469,17 @@ def test_config_with_dict_config() -> None:
 
 
 def test_config_with_empty_database() -> None:
-    """Test config with empty database string (defaults to :memory:)."""
+    """Test config with empty database string (defaults to :memory:shared_db)."""
     connection_config = {"database": ""}
     config = DuckDBConfig(connection_config=connection_config)
-    assert config.connection_config["database"] == ":memory:"  # Empty string defaults to :memory:
+    assert config.connection_config["database"] == ":memory:shared_db"  # Empty string defaults to :memory:, then converts
 
 
 def test_config_readonly_memory() -> None:
     """Test read-only in-memory database configuration."""
     connection_config = {"database": ":memory:", "read_only": True}
     config = DuckDBConfig(connection_config=connection_config)
-    assert config.connection_config["database"] == ":memory:"
+    assert config.connection_config["database"] == ":memory:shared_db"
     assert config.connection_config["read_only"] is True
 
 
@@ -487,17 +487,17 @@ def test_config_readonly_memory() -> None:
 # Memory database detection tests removed - function no longer exists
 
 
-def test_memory_database_no_conversion() -> None:
-    """Test that memory databases are not converted (DuckDB handles sharing natively)."""
-    # Create config with regular memory database
+def test_basic_memory_database_conversion() -> None:
+    """Test that basic :memory: is converted to shared memory for pooling."""
+    # Create config with basic memory database
     config = DuckDBConfig(connection_config={"database": ":memory:"}, min_pool=5, max_pool=10)
 
     # Verify pooling works normally
     assert config.min_pool == 5
     assert config.max_pool == 10
 
-    # Verify database was NOT converted (DuckDB handles memory sharing natively)
-    assert config.connection_config["database"] == ":memory:"
+    # Verify basic :memory: was converted to shared memory for pooling
+    assert config.connection_config["database"] == ":memory:shared_db"
 
 
 def test_named_memory_database_no_conversion() -> None:
@@ -540,18 +540,21 @@ def test_memory_database_conversion_behavior(database: str, expected_database: s
     connection_config = {"database": database} if database else {}
     config = DuckDBConfig(connection_config=connection_config)
 
-    # Check the final database configuration
+    # Check the final database configuration  
+    # Note: Basic :memory: and empty string get converted to :memory:shared_db
+    if expected_database == ":memory:":
+        expected_database = ":memory:shared_db"
     assert config.connection_config["database"] == expected_database
 
 
 # Shared memory conversion tests removed - function no longer exists
 
 
-def test_default_memory_no_conversion() -> None:
-    """Test that default empty config creates standard memory database."""
+def test_default_memory_conversion() -> None:
+    """Test that default empty config creates shared memory database."""
     config = DuckDBConfig()
-    # Default should be standard :memory: (no conversion needed)
-    assert config.connection_config["database"] == ":memory:"
+    # Default :memory: should be converted to :memory:shared_db for pooling
+    assert config.connection_config["database"] == ":memory:shared_db"
 
 
 def test_connection_health_check() -> None:

@@ -16,7 +16,8 @@ click.rich_click.USE_RICH_MARKUP = True
 click.rich_click.SHOW_ARGUMENTS = True
 click.rich_click.GROUP_ARGUMENTS_OPTIONS = True
 
-console = Console()
+# Create console with wide display to prevent table truncation
+console = Console(width=200, force_terminal=True)
 
 
 @click.group()
@@ -46,16 +47,14 @@ def cli(ctx: click.Context, config: Optional[Path], storage: Optional[Path], ver
 @cli.command()
 @click.option(
     "--suite",
-    type=click.Choice(
-        [
-            "parameters",
-            "sql-compilation",
-            "orm-comparison",
-            "caching-comparison",
-            "caching-optimization",
-            "async-operations",
-        ]
-    ),
+    type=click.Choice([
+        "parameters",
+        "sql-compilation",
+        "orm-comparison",
+        "caching-comparison",
+        "caching-optimization",
+        "async-operations",
+    ]),
     help="Specific benchmark suite to run",
 )
 @click.option("--adapter", default="all", help="Adapter to test or 'all'")
@@ -63,6 +62,17 @@ def cli(ctx: click.Context, config: Optional[Path], storage: Optional[Path], ver
 @click.option("--quick", is_flag=True, help="Run in quick mode with fewer iterations")
 @click.option("--keep-containers", is_flag=True, help="Don't cleanup containers after run")
 @click.option("--no-containers", is_flag=True, help="Skip container-based tests")
+# Enhanced display options
+@click.option("--show-all", is_flag=True, help="Show all results without limits")
+@click.option("--max-items", type=int, default=20, help="Maximum items to display in tables (default: 20)")
+@click.option("--table-width", type=int, help="Override table width (bypasses terminal detection)")
+@click.option(
+    "--display-mode",
+    type=click.Choice(["compact", "detailed", "matrix"]),
+    default="compact",
+    help="Display mode for results",
+)
+@click.option("--no-truncate", is_flag=True, default=True, help="Disable all result truncation")
 @click.pass_context
 def run(
     ctx: click.Context,
@@ -72,6 +82,11 @@ def run(
     quick: bool,
     keep_containers: bool,
     no_containers: bool,
+    show_all: bool,
+    max_items: int,
+    table_width: Optional[int],
+    display_mode: str,
+    no_truncate: bool,
 ) -> None:
     """Run benchmark suites."""
     config: BenchmarkConfig = ctx.obj["config"]
@@ -131,7 +146,16 @@ def run(
     improvements = []
 
     try:
-        summary = BenchmarkSummary(console)
+        # Create display options dictionary
+        display_options = {
+            "show_all": show_all,
+            "max_items": max_items,
+            "display_mode": display_mode,
+            "no_truncate": no_truncate,
+            "table_width": table_width,
+        }
+
+        summary = BenchmarkSummary(console, display_options)
 
         for benchmark_suite in suites_to_run:
             console.print(f"\n[bold cyan]Running {benchmark_suite.description}[/bold cyan]")
@@ -177,7 +201,9 @@ def run(
         )
 
         console.print("\n")
-        summary.display_top_performers(all_results, count=5)
+        # Use show_all to determine count, otherwise use max_items
+        top_count = len(all_results) if show_all else max_items
+        summary.display_top_performers(all_results, count=top_count)
 
         # Show insights if we have enough data
         insights = summary.generate_benchmark_insights(all_results)

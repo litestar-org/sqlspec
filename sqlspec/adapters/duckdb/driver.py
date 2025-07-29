@@ -64,12 +64,12 @@ class DuckDBDriver(SyncDriverAdapterBase):
                     cursor.execute(stmt)
         else:
             # Enable intelligent parameter conversion - DuckDB supports both QMARK and NUMERIC
-            sql, params = statement.compile()
+            sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
 
             if statement.is_many:
                 # For execute_many, params is already a list of parameter sets
                 prepared_params = self._prepare_driver_parameters_many(params) if params else []
-                
+
                 # DuckDB requires non-empty parameter sets for executemany
                 if prepared_params:
                     cursor.executemany(sql, prepared_params)

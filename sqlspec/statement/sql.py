@@ -107,11 +107,13 @@ class _ProcessedState:
 
     def __hash__(self) -> int:
         """Hash based on processed SQL and expression."""
-        return hash((
-            self.processed_sql,
-            str(self.processed_expression),
-            len(self.validation_errors) if self.validation_errors else 0,
-        ))
+        return hash(
+            (
+                self.processed_sql,
+                str(self.processed_expression),
+                len(self.validation_errors) if self.validation_errors else 0,
+            )
+        )
 
     def __init__(
         self,
@@ -205,18 +207,20 @@ class SQLConfig:
 
     def __hash__(self) -> int:
         """Hash based on key configuration settings."""
-        return hash((
-            self.enable_parsing,
-            self.enable_validation,
-            self.enable_transformations,
-            self.enable_analysis,
-            self.enable_expression_simplification,
-            self.enable_parameter_type_wrapping,
-            self.enable_caching,
-            self.dialect,
-            self.default_parameter_style,
-            tuple(self.allowed_parameter_styles) if self.allowed_parameter_styles else None,
-        ))
+        return hash(
+            (
+                self.enable_parsing,
+                self.enable_validation,
+                self.enable_transformations,
+                self.enable_analysis,
+                self.enable_expression_simplification,
+                self.enable_parameter_type_wrapping,
+                self.enable_caching,
+                self.dialect,
+                self.default_parameter_style,
+                tuple(self.allowed_parameter_styles) if self.allowed_parameter_styles else None,
+            )
+        )
 
     def __init__(
         self,
@@ -640,7 +644,7 @@ class SQL:
     ) -> SQLTransformContext:
         """Create SQL processing context."""
         # Convert parameters to dict format for the context
-        param_dict = {}
+        param_dict: dict[str, Any] = {}
         param_info = None  # Initialize to avoid unbound variable
         if final_params:
             if is_dict(final_params):
@@ -1527,29 +1531,6 @@ class SQL:
                 extracted_params = self._processing_context.metadata.get("extracted_literals", [])
         return extracted_params
 
-    def _merge_extracted_params_with_sets(self, params: Any, extracted_params: "list[Any]") -> "list[tuple[Any, ...]]":
-        """Merge extracted parameters with each parameter set."""
-        enhanced_params = []
-        for param_set in params:
-            if isinstance(param_set, (list, tuple)):
-                extracted_values = []
-                for extracted in extracted_params:
-                    if has_parameter_value(extracted):
-                        extracted_values.append(extracted.value)
-                    else:
-                        extracted_values.append(extracted)
-                enhanced_set = list(param_set) + extracted_values
-                enhanced_params.append(tuple(enhanced_set))
-            else:
-                extracted_values = []
-                for extracted in extracted_params:
-                    if has_parameter_value(extracted):
-                        extracted_values.append(extracted.value)
-                    else:
-                        extracted_values.append(extracted)
-                enhanced_params.append((param_set, *extracted_values))
-        return enhanced_params
-
     def compile(self, placeholder_style: "Optional[str]" = None) -> "tuple[str, Any]":
         """Compile to SQL and parameters with driver awareness."""
         if self._is_script:
@@ -1918,7 +1899,6 @@ class SQL:
 
     def _replace_placeholders_in_sql(self, sql: str, param_info: list[Any], target_style: ParameterStyle) -> str:
         """Replace placeholders in SQL string with target style placeholders."""
-        print(f"[DEBUG] _replace_placeholders_in_sql CALLED with sql={sql[:100]}... target_style={target_style}")
 
         """Replace placeholders in SQL string with target style placeholders.
 
@@ -1954,17 +1934,10 @@ class SQL:
         )
 
         # DEBUG: Print escaping decision
-        print(f"[DEBUG] _replace_placeholders_in_sql: target_style={target_style}, skip_escaping={skip_escaping}")
-        print(f"[DEBUG] hasattr(_is_many)={hasattr(self, '_is_many')}, _is_many={getattr(self, '_is_many', 'MISSING')}")
         if param_info:
-            print(f"[DEBUG] param_info[0].style={param_info[0].style}")
-
-        print(
-            f"[DEBUG] Escaping condition: target_style in pyformats = {target_style in {ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT}}, not skip_escaping = {not skip_escaping}"
-        )
+            pass
 
         if target_style in {ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT} and not skip_escaping:
-            print("[DEBUG] ENTERING ESCAPING LOGIC")
             # We need to escape % that are not part of our placeholders
             # Since we just replaced placeholders, we know %s and %(name)s are our placeholders
             # So we escape any % that is not followed by 's' or '('

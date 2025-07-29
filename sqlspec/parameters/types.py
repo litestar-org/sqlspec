@@ -7,19 +7,10 @@ scattered in statement/parameters.py.
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
-from typing_extensions import TypedDict
-
 if TYPE_CHECKING:
     from sqlglot import exp
 
-__all__ = (
-    "ConvertedParameters",
-    "ParameterInfo",
-    "ParameterStyle",
-    "ParameterStyleConversionState",
-    "ParameterStyleInfo",
-    "TypedParameter",
-)
+__all__ = ("ConvertedParameters", "ParameterInfo", "ParameterStyle", "ParameterStyleConversionState", "TypedParameter")
 
 
 class ParameterStyle(str, Enum):
@@ -46,7 +37,7 @@ class ParameterStyle(str, Enum):
 
 
 class ParameterInfo:
-    """Immutable parameter information with optimal memory usage."""
+    """Immutable parameter information."""
 
     __slots__ = ("name", "ordinal", "placeholder_text", "position", "style")
 
@@ -154,14 +145,6 @@ SQLGLOT_INCOMPATIBLE_STYLES: Final = {
     ParameterStyle.NAMED_PYFORMAT,
     ParameterStyle.POSITIONAL_COLON,
 }
-
-
-class ParameterStyleInfo(TypedDict, total=False):
-    """Information about SQL parameter style transformation."""
-
-    was_converted: bool
-    placeholder_map: dict[str, Union[str, int]]
-    original_styles: list[ParameterStyle]
 
 
 class ParameterStyleConversionState:

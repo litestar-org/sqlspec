@@ -361,21 +361,6 @@ def test_transform_sql_for_parsing(converter: ParameterConverter) -> None:
     assert "param_1" in placeholder_map
 
 
-def test_merge_mixed_parameters(converter: ParameterConverter) -> None:
-    """Test merging of mixed parameter styles."""
-    sql = "SELECT * FROM users WHERE id = ? AND name = :name"
-    param_info = converter.validator.extract_parameters(sql)
-    args = [123]
-    kwargs = {"name": "John"}
-
-    merged = converter._merge_mixed_parameters(param_info, args, kwargs)
-
-    assert isinstance(merged, dict)
-    assert merged["name"] == "John"
-    assert "arg_0" in merged
-    assert merged["arg_0"] == 123
-
-
 @pytest.mark.parametrize(
     "sql,expected_dominant_style",
     [

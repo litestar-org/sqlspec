@@ -71,7 +71,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
                         cursor.execute(stmt)
             else:
                 # With force_style_conversion=True, always use the default parameter style
-                sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
+                sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
 
                 if statement.is_many:
                     # For execute_many, params is already a list of parameter sets
@@ -163,7 +163,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
                         await cursor.execute(stmt)
             else:
                 # With force_style_conversion=True, always use the default parameter style
-                sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
+                sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
 
                 if statement.is_many:
                     # For execute_many, params is already a list of parameter sets

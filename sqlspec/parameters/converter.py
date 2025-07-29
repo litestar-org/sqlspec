@@ -414,34 +414,6 @@ class ParameterConverter:
             conversion_state=ParameterStyleConversionState(was_transformed=False),
         )
 
-    def _merge_mixed_parameters(
-        self, param_info: list[ParameterInfo], args: Optional[list[Any]], kwargs: Optional[dict[str, Any]]
-    ) -> dict[str, Any]:
-        """Merge mixed positional and named parameters into a single dict.
-
-        Args:
-            param_info: Parameter information from SQL
-            args: Positional arguments
-            kwargs: Keyword arguments
-
-        Returns:
-            Dictionary with all parameters merged
-        """
-        result = {}
-
-        # Add keyword arguments first
-        if kwargs:
-            result.update(kwargs)
-
-        # Then add positional arguments with generated names
-        if args:
-            for i, (p_info, value) in enumerate(zip(param_info, args)):
-                if p_info.style in {ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NUMERIC}:
-                    # For positional parameters, use generated name
-                    result[f"arg_{i}"] = value
-
-        return result
-
     def _convert_to_sqlglot_compatible(
         self, sql: str, param_info: list[ParameterInfo], merged_params: Any
     ) -> tuple[str, ParameterStyleConversionState]:

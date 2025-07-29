@@ -69,10 +69,6 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """Rollback the current transaction."""
         await self.connection.rollback()
 
-    def _connection(self, connection: "Optional[AsyncmyConnection]" = None) -> "AsyncmyConnection":
-        """Get the connection to use for the operation."""
-        return connection or self.connection
-
     def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncmyCursor":
         return AsyncmyCursor(connection)
 
@@ -88,7 +84,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
                     await cursor.execute(stmt)
         else:
             # Enable intelligent parameter conversion - MySQL supports both POSITIONAL_PYFORMAT and NAMED_PYFORMAT
-            sql, params = statement.compile()
+            sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
 
             if statement.is_many:
                 # For execute_many, params is already a list of parameter sets

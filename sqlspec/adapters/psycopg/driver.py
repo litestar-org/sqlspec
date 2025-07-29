@@ -70,7 +70,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         return PsycopgSyncCursor(connection)
 
     def _perform_execute(self, cursor: Any, statement: "SQL") -> None:
-        sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
+        sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
 
         # Check if this is a COPY statement marked by the pipeline
         if statement._processing_context and statement._processing_context.metadata.get("postgres_copy_operation"):
@@ -219,7 +219,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         return PsycopgAsyncCursor(connection)
 
     async def _perform_execute(self, cursor: Any, statement: "SQL") -> None:
-        sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
+        sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
 
         # Check if this is a COPY statement marked by the pipeline
         if statement._processing_context and statement._processing_context.metadata.get("postgres_copy_operation"):

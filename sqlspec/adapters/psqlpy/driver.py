@@ -50,7 +50,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         return PsqlpyCursor(connection)
 
     async def _perform_execute(self, cursor: PsqlpyConnection, statement: "SQL") -> None:
-        sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
+        sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
 
         # Store compiled SQL and params to avoid re-compilation in _extract_select_data
         self._last_compiled_sql = sql

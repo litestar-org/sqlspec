@@ -14,7 +14,6 @@ from sqlspec.parameters.types import (
     ParameterInfo,
     ParameterStyle,
     ParameterStyleConversionState,
-    ParameterStyleInfo,
 )
 from sqlspec.parameters.validator import ParameterValidator
 
@@ -28,6 +27,5 @@ __all__ = (
     "ParameterProcessor",
     "ParameterStyle",
     "ParameterStyleConversionState",
-    "ParameterStyleInfo",
     "ParameterValidator",
 )

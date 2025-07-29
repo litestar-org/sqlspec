@@ -419,6 +419,68 @@ class SQLFactory:
         return Column(name)
 
     # ===================
+    # Raw SQL Expressions
+    # ===================
+
+    @staticmethod
+    def raw(sql_fragment: str) -> exp.Expression:
+        """Create a raw SQL expression from a string fragment.
+
+        This method makes it explicit that you are passing raw SQL that should
+        be parsed and included directly in the query. Useful for complex expressions,
+        database-specific functions, or when you need precise control over the SQL.
+
+        Args:
+            sql_fragment: Raw SQL string to parse into an expression.
+
+        Returns:
+            SQLGlot expression from the parsed SQL fragment.
+
+        Raises:
+            SQLBuilderError: If the SQL fragment cannot be parsed.
+
+        Example:
+            ```python
+            # Raw column expression with alias
+            query = sql.select(
+                sql.raw("user.id AS u_id"), "name"
+            ).from_("users")
+
+            # Raw function call
+            query = sql.select(
+                sql.raw("COALESCE(name, 'Unknown')")
+            ).from_("users")
+
+            # Raw complex expression
+            query = (
+                sql.select("*")
+                .from_("orders")
+                .where(sql.raw("DATE(created_at) = CURRENT_DATE"))
+            )
+
+            # Raw window function
+            query = sql.select(
+                "name",
+                sql.raw(
+                    "ROW_NUMBER() OVER (PARTITION BY department ORDER BY salary DESC)"
+                ),
+            ).from_("employees")
+            ```
+        """
+        try:
+            parsed = exp.maybe_parse(sql_fragment)
+            if parsed is not None:
+                return parsed
+            if sql_fragment.strip().replace("_", "").replace(".", "").isalnum():
+                return exp.to_identifier(sql_fragment)
+            return exp.Literal.string(sql_fragment)
+        except Exception as e:
+            from sqlspec.exceptions import SQLBuilderError
+
+            msg = f"Failed to parse raw SQL fragment '{sql_fragment}': {e}"
+            raise SQLBuilderError(msg) from e
+
+    # ===================
     # Aggregate Functions
     # ===================
 

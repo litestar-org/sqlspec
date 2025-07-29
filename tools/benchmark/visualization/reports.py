@@ -18,6 +18,11 @@ WIN_RATE_HIGH = 60
 WIN_RATE_MODERATE = 40
 CACHE_RATE_HIGH = 50
 SIGNIFICANT_RATE_HIGH = 30
+
+# Ranking positions
+FIRST_PLACE = 1
+SECOND_PLACE = 2
+THIRD_PLACE = 3
 IMPROVEMENT_TARGET = 15
 CRITICAL_REGRESSION = 25
 HIGH_REGRESSION = 10
@@ -35,8 +40,24 @@ SPLIT_COUNT_TWO = 2
 class BenchmarkSummary:
     """Generate comprehensive summaries of benchmark results."""
 
-    def __init__(self, console: Optional[Console] = None) -> None:
+    def __init__(self, console: Optional[Console] = None, display_options: Optional[dict] = None) -> None:
         self.console = console or Console()
+
+        # Set up display options with defaults (show all rows and no truncation by default)
+        self.display_options = display_options or {}
+        self.show_all = self.display_options.get("show_all", True)  # Default to showing all
+        self.max_items = self.display_options.get("max_items", 20)
+        self.display_mode = self.display_options.get("display_mode", "compact")
+        self.no_truncate = self.display_options.get("no_truncate", True)
+
+        # Calculate dynamic table width based on console width or override
+        override_width = self.display_options.get("table_width")
+        if override_width:
+            self.table_width = override_width
+        elif hasattr(self.console, "options") and hasattr(self.console.options, "max_width"):
+            self.table_width = self.console.options.max_width or 200
+        else:
+            self.table_width = 200  # Default enhanced width
 
     def display_suite_results(self, suite_name: str, results: dict[str, TimingResult]) -> None:
         """Display results for a single, specific benchmark suite."""
@@ -115,13 +136,20 @@ class BenchmarkSummary:
         sql_types = {key.split("_", 2)[-1] for key in caching_results}
 
         table = Table(title="🚀 Caching Impact Analysis", show_header=True)
-        table.add_column("SQL Operation", style="cyan", width=15)
+
+        # Dynamic column widths based on display options
+        op_width = None if self.no_truncate else (20 if self.display_mode == "detailed" else 15)
+        table.add_column("SQL Operation", style="cyan", width=op_width)
         table.add_column("No Cache (ms)", justify="right", style="red")
         table.add_column("With Cache (ms)", justify="right", style="green")
         table.add_column("Speedup", justify="right", style="bold magenta")
-        table.add_column("Cache Hit Benefit", justify="right", style="yellow")
-        table.add_column("No Cache Ops/sec", justify="right")
-        table.add_column("Cached Ops/sec", justify="right")
+
+        if self.display_mode != "compact":
+            table.add_column("Cache Hit Benefit", justify="right", style="yellow")
+
+        if self.display_mode == "detailed":
+            table.add_column("No Cache Ops/sec", justify="right")
+            table.add_column("Cached Ops/sec", justify="right")
 
         speedups = []
 
@@ -143,15 +171,24 @@ class BenchmarkSummary:
                     "green" if speedup > SPEEDUP_EXCELLENT else "yellow" if speedup > SPEEDUP_GOOD else "red"
                 )
 
-                table.add_row(
+                # Build row data based on display mode
+                row_data = [
                     sql_type.replace("_", " ").title(),
                     f"{no_cache.avg_ms:.3f}",
                     f"{with_cache.avg_ms:.3f}",
                     f"[{speedup_color}]{speedup:.2f}x[/{speedup_color}]",
-                    f"{cache_benefit:.1f}%",
-                    f"{no_cache.ops_per_sec:.0f}",
-                    f"{with_cache.ops_per_sec:.0f}",
-                )
+                ]
+
+                if self.display_mode != "compact":
+                    row_data.append(f"{cache_benefit:.1f}%")
+
+                if self.display_mode == "detailed":
+                    row_data.extend([
+                        f"{no_cache.ops_per_sec:.0f}",
+                        f"{with_cache.ops_per_sec:.0f}",
+                    ])
+
+                table.add_row(*row_data)
 
         self.console.print(table)
 
@@ -188,15 +225,20 @@ class BenchmarkSummary:
 
         # Create main comparison table
         table = Table(title="🔧 SQLGlot Configuration Performance Analysis", show_header=True)
-        table.add_column("SQL Type", style="cyan", width=12)
+        sql_type_width = None if self.no_truncate else 12
+        table.add_column("SQL Type", style="cyan", width=sql_type_width)
 
         # Add columns for each configuration
+        config_width = None if self.no_truncate else 10
         for config in config_types:
-            table.add_column(f"{config.title()}\n(ms)", justify="right", width=10)
+            table.add_column(f"{config.title()}\n(ms)", justify="right", width=config_width)
 
-        table.add_column("Best Config", style="bold green", width=12)
-        table.add_column("Worst Config", style="bold red", width=12)
-        table.add_column("Ratio", style="bold yellow", justify="right", width=8)
+        best_width = None if self.no_truncate else 12
+        worst_width = None if self.no_truncate else 12
+        ratio_width = None if self.no_truncate else 8
+        table.add_column("Best Config", style="bold green", width=best_width)
+        table.add_column("Worst Config", style="bold red", width=worst_width)
+        table.add_column("Ratio", style="bold yellow", justify="right", width=ratio_width)
 
         best_configs = {}
         worst_configs = {}
@@ -278,12 +320,30 @@ class BenchmarkSummary:
 
         for db_name, ops in grouped_results.items():
             table = Table(title=f"ORM Comparison - {db_name.title()}", show_header=True)
-            table.add_column("Operation", style="cyan")
-            table.add_column("SQLSpec (Cached)\nms | TPS", justify="right")
-            table.add_column("SQLSpec (No Cache)\nms | TPS", justify="right")
-            table.add_column("SQLAlchemy Core\nms | TPS", justify="right")
-            table.add_column("SQLAlchemy ORM\nms | TPS", justify="right")
-            table.add_column("Winner", justify="right")
+
+            # Dynamic column widths based on display options
+            op_width = None if self.no_truncate else (25 if self.display_mode == "detailed" else 20)
+            table.add_column("Operation", style="cyan", width=op_width)
+
+            if self.display_mode == "compact":
+                # Compact mode - just show best times
+                table.add_column("SQLSpec (ms)", justify="right", style="green")
+                table.add_column("Core (ms)", justify="right", style="yellow")
+                table.add_column("ORM (ms)", justify="right", style="blue")
+                table.add_column("Winner", justify="center")
+            elif self.display_mode == "matrix":
+                # Matrix mode - focus on comparison ratios
+                table.add_column("SQLSpec", justify="right", style="green")
+                table.add_column("Core", justify="right", style="yellow")
+                table.add_column("ORM", justify="right", style="blue")
+                table.add_column("Best→Worst", justify="right", style="magenta")
+            else:
+                # Detailed mode - full information
+                table.add_column("SQLSpec (Cached)\nms | TPS", justify="right")
+                table.add_column("SQLSpec (No Cache)\nms | TPS", justify="right")
+                table.add_column("SQLAlchemy Core\nms | TPS", justify="right")
+                table.add_column("SQLAlchemy ORM\nms | TPS", justify="right")
+                table.add_column("Winner", justify="right")
 
             for op_name, variants in ops.items():
                 sqlspec_cached = variants.get("sqlspec_cache")
@@ -291,34 +351,71 @@ class BenchmarkSummary:
                 sqlalchemy_core = variants.get("sqlalchemy_core")
                 sqlalchemy_orm = variants.get("sqlalchemy_orm")
 
+                # Find the best SQLSpec result
+                best_sqlspec = None
+                if sqlspec_cached and sqlspec_no_cache:
+                    best_sqlspec = sqlspec_cached if sqlspec_cached.avg_ms < sqlspec_no_cache.avg_ms else sqlspec_no_cache
+                elif sqlspec_cached:
+                    best_sqlspec = sqlspec_cached
+                elif sqlspec_no_cache:
+                    best_sqlspec = sqlspec_no_cache
+
                 # Find the winner
                 winner = ""
                 winner_time = float("inf")
-                if sqlspec_cached and sqlspec_cached.avg_ms < winner_time:
-                    winner = "SQLSpec (Cached)"
-                    winner_time = sqlspec_cached.avg_ms
-                if sqlspec_no_cache and sqlspec_no_cache.avg_ms < winner_time:
-                    winner = "SQLSpec (No Cache)"
-                    winner_time = sqlspec_no_cache.avg_ms
+                if best_sqlspec and best_sqlspec.avg_ms < winner_time:
+                    winner = "SQLSpec"
+                    winner_time = best_sqlspec.avg_ms
                 if sqlalchemy_core and sqlalchemy_core.avg_ms < winner_time:
-                    winner = "SQLAlchemy Core"
+                    winner = "Core"
                     winner_time = sqlalchemy_core.avg_ms
                 if sqlalchemy_orm and sqlalchemy_orm.avg_ms < winner_time:
-                    winner = "SQLAlchemy ORM"
+                    winner = "ORM"
 
-                def format_result(result: TimingResult) -> str:
-                    if result:
-                        return f"{result.avg_ms:.3f} | {result.ops_per_sec:.0f}"
-                    return "N/A"
+                # Build row based on display mode
+                if self.display_mode == "compact":
+                    row_data = [
+                        op_name.replace("_", " ").title(),
+                        f"{best_sqlspec.avg_ms:.3f}" if best_sqlspec else "N/A",
+                        f"{sqlalchemy_core.avg_ms:.3f}" if sqlalchemy_core else "N/A",
+                        f"{sqlalchemy_orm.avg_ms:.3f}" if sqlalchemy_orm else "N/A",
+                        winner,
+                    ]
+                elif self.display_mode == "matrix":
+                    # Calculate speedup ratios
+                    def calc_speedup(base_result: Optional[TimingResult], compare_result: Optional[TimingResult]) -> str:
+                        if base_result and compare_result and compare_result.avg_ms > 0:
+                            return f"{base_result.avg_ms / compare_result.avg_ms:.1f}x"
+                        return "N/A"
 
-                table.add_row(
-                    op_name.replace("_", " ").title(),
-                    format_result(sqlspec_cached),
-                    format_result(sqlspec_no_cache),
-                    format_result(sqlalchemy_core),
-                    format_result(sqlalchemy_orm),
-                    winner,
-                )
+                    # Calculate best to worst ratio
+                    times = [r.avg_ms for r in [best_sqlspec, sqlalchemy_core, sqlalchemy_orm] if r]
+                    ratio = f"{max(times) / min(times):.1f}x" if times else "N/A"
+
+                    row_data = [
+                        op_name.replace("_", " ").title(),
+                        f"{best_sqlspec.avg_ms:.3f}" if best_sqlspec else "N/A",
+                        f"{sqlalchemy_core.avg_ms:.3f}" if sqlalchemy_core else "N/A",
+                        f"{sqlalchemy_orm.avg_ms:.3f}" if sqlalchemy_orm else "N/A",
+                        ratio,
+                    ]
+                else:
+                    # Detailed mode
+                    def format_result(result: Optional[TimingResult]) -> str:
+                        if result:
+                            return f"{result.avg_ms:.3f} | {result.ops_per_sec:.0f}"
+                        return "N/A"
+
+                    row_data = [
+                        op_name.replace("_", " ").title(),
+                        format_result(sqlspec_cached),
+                        format_result(sqlspec_no_cache),
+                        format_result(sqlalchemy_core),
+                        format_result(sqlalchemy_orm),
+                        winner,
+                    ]
+
+                table.add_row(*row_data)
 
             self.console.print(table)
 
@@ -333,11 +430,11 @@ class BenchmarkSummary:
         self.console.print("[dim]Higher statements/second = better performance[/dim]\n")
 
         # Find fastest SQLSpec result across all operations for baseline
-        fastest_sqlspec_stmts_per_sec = 0
+        fastest_sqlspec_stmts_per_sec = 0.0
         for db_ops in db_results.values():
             for result_key, result in db_ops.items():
                 if "sqlspec" in result_key:
-                    stmts_per_sec = 1000.0 / result.avg_ms if result.avg_ms > 0 else 0
+                    stmts_per_sec = 1000.0 / result.avg_ms if result.avg_ms > 0 else 0.0
                     fastest_sqlspec_stmts_per_sec = max(fastest_sqlspec_stmts_per_sec, stmts_per_sec)
 
         # Group by driver type
@@ -357,12 +454,15 @@ class BenchmarkSummary:
                 continue
 
             table = Table(title=f"{driver_type} Performance", show_header=True)
-            table.add_column("Operation", style="cyan", width=18)
-            table.add_column("SQLSpec\n(cached)", justify="right", style="green", width=11)
-            table.add_column("SQLSpec\n(no cache)", justify="right", style="green dim", width=11)
-            table.add_column("Core\n(stmts/sec)", justify="right", style="yellow", width=11)
-            table.add_column("ORM\n(stmts/sec)", justify="right", style="blue", width=11)
-            table.add_column("Winner", justify="center", style="bold", width=10)
+            op_width = None if self.no_truncate else 18
+            metric_width = None if self.no_truncate else 11
+            winner_width = None if self.no_truncate else 10
+            table.add_column("Operation", style="cyan", width=op_width)
+            table.add_column("SQLSpec\n(cached)", justify="right", style="green", width=metric_width)
+            table.add_column("SQLSpec\n(no cache)", justify="right", style="green dim", width=metric_width)
+            table.add_column("Core\n(stmts/sec)", justify="right", style="yellow", width=metric_width)
+            table.add_column("ORM\n(stmts/sec)", justify="right", style="blue", width=metric_width)
+            table.add_column("Winner", justify="center", style="bold", width=winner_width)
 
             for op_key, op_name in key_operations:
                 # Aggregate results across matching databases
@@ -427,14 +527,22 @@ class BenchmarkSummary:
 
         # Create comprehensive table
         table = Table(title="Detailed Performance Metrics", show_header=True)
-        table.add_column("Database", style="cyan", width=15)
-        table.add_column("Sync/Async", justify="center", width=10)
-        table.add_column("Operation", style="cyan", width=20)
-        table.add_column("ORM Type", justify="center", width=10)
-        table.add_column("Avg Time (ms)", justify="right", width=12)
-        table.add_column("Stmts/sec", justify="right", style="bold green", width=12)
-        table.add_column("Std Dev (ms)", justify="right", width=12)
-        table.add_column("Min/Max (ms)", justify="right", width=15)
+        db_width = None if self.no_truncate else 15
+        sync_width = None if self.no_truncate else 10
+        op_width = None if self.no_truncate else 20
+        orm_width = None if self.no_truncate else 10
+        time_width = None if self.no_truncate else 12
+        tps_width = None if self.no_truncate else 12
+        std_width = None if self.no_truncate else 12
+        minmax_width = None if self.no_truncate else 15
+        table.add_column("Database", style="cyan", width=db_width)
+        table.add_column("Sync/Async", justify="center", width=sync_width)
+        table.add_column("Operation", style="cyan", width=op_width)
+        table.add_column("ORM Type", justify="center", width=orm_width)
+        table.add_column("Avg Time (ms)", justify="right", width=time_width)
+        table.add_column("Stmts/sec", justify="right", style="bold green", width=tps_width)
+        table.add_column("Std Dev (ms)", justify="right", width=std_width)
+        table.add_column("Min/Max (ms)", justify="right", width=minmax_width)
 
         # Process each database
         for db_name in sorted(db_results.keys()):
@@ -490,12 +598,15 @@ class BenchmarkSummary:
 
         # Create comparison table
         table = Table(title="Performance Relative to Fastest SQLSpec Implementation", show_header=True)
-        table.add_column("Database", style="cyan", width=15)
-        table.add_column("Operation", style="cyan", width=20)
-        table.add_column("SQLSpec\n(baseline)", justify="right", style="green", width=12)
-        table.add_column("Core\n(% slower)", justify="right", style="yellow", width=12)
-        table.add_column("ORM\n(% slower)", justify="right", style="blue", width=12)
-        table.add_column("Best→Worst\nRatio", justify="right", style="magenta", width=12)
+        db_width = None if self.no_truncate else 15
+        op_width = None if self.no_truncate else 20
+        metric_width = None if self.no_truncate else 12
+        table.add_column("Database", style="cyan", width=db_width)
+        table.add_column("Operation", style="cyan", width=op_width)
+        table.add_column("SQLSpec\n(baseline)", justify="right", style="green", width=metric_width)
+        table.add_column("Core\n(% slower)", justify="right", style="yellow", width=metric_width)
+        table.add_column("ORM\n(% slower)", justify="right", style="blue", width=metric_width)
+        table.add_column("Best→Worst\nRatio", justify="right", style="magenta", width=metric_width)
 
         for db_name in sorted(db_results.keys()):
             db_ops = db_results[db_name]
@@ -643,7 +754,7 @@ class BenchmarkSummary:
         self.console.print("\n[bold cyan]🚀 MyPyC Compilation Performance Analysis[/bold cyan]\n")
 
         # Group by module
-        modules = {}
+        modules: dict[str, dict[str, TimingResult]] = {}
         for key, result in mypyc_results.items():
             parts = key.split("_")
             if len(parts) >= SPLIT_COUNT_TWO:
@@ -656,13 +767,16 @@ class BenchmarkSummary:
 
         # Create comparison table
         table = Table(title="MyPyC Performance Improvements", show_header=True)
-        table.add_column("Module", style="cyan", width=25)
-        table.add_column("Baseline\n(ms)", justify="right", width=12)
-        table.add_column("Compiled\n(ms)", justify="right", width=12)
-        table.add_column("Speedup", justify="right", style="bold green", width=10)
-        table.add_column("Improvement", justify="right", style="bold yellow", width=12)
-        table.add_column("Baseline\n(ops/sec)", justify="right", width=12)
-        table.add_column("Compiled\n(ops/sec)", justify="right", width=12)
+        module_width = None if self.no_truncate else 25
+        metric_width = None if self.no_truncate else 12
+        speedup_width = None if self.no_truncate else 10
+        table.add_column("Module", style="cyan", width=module_width)
+        table.add_column("Baseline\n(ms)", justify="right", width=metric_width)
+        table.add_column("Compiled\n(ms)", justify="right", width=metric_width)
+        table.add_column("Speedup", justify="right", style="bold green", width=speedup_width)
+        table.add_column("Improvement", justify="right", style="bold yellow", width=metric_width)
+        table.add_column("Baseline\n(ops/sec)", justify="right", width=metric_width)
+        table.add_column("Compiled\n(ops/sec)", justify="right", width=metric_width)
 
         improvements = []
         for module_name, variants in sorted(modules.items()):
@@ -763,13 +877,21 @@ class BenchmarkSummary:
         # Add regression/improvement info if available
         if regressions:
             summary_text += "\n\n[bold red]⚠ Regressions Detected[/bold red]\n"
-            for op, info, _ in regressions[:3]:  # Show top 3
+            # Use display options to determine how many to show
+            reg_count = len(regressions) if self.show_all else min(3, len(regressions))
+            for op, info, _ in regressions[:reg_count]:
                 summary_text += f"• {op}: {info}\n"
+            if not self.show_all and len(regressions) > 3:
+                summary_text += f"• ... and {len(regressions) - 3} more (use --show-all to see all)\n"
 
         if improvements:
             summary_text += "\n[bold green]✓ Performance Improvements[/bold green]\n"
-            for op, info, _ in improvements[:3]:  # Show top 3
+            # Use display options to determine how many to show
+            imp_count = len(improvements) if self.show_all else min(3, len(improvements))
+            for op, info, _ in improvements[:imp_count]:
                 summary_text += f"• {op}: {info}\n"
+            if not self.show_all and len(improvements) > 3:
+                summary_text += f"• ... and {len(improvements) - 3} more (use --show-all to see all)\n"
 
         # Add system context if available
         if system_info:
@@ -784,33 +906,58 @@ class BenchmarkSummary:
 
         self.console.print(Panel.fit(summary_text, title="[bold]Benchmark Summary[/bold]", border_style="green"))
 
-    def display_top_performers(self, all_results: dict[str, TimingResult], count: int = 5) -> None:
+    def display_top_performers(self, all_results: dict[str, TimingResult], count: Optional[int] = None) -> None:
         """Display table of top performing operations."""
         if not all_results:
             return
 
+        # Use display options to determine count
+        if count is None:
+            if self.show_all:
+                count = len(all_results)
+            else:
+                count = min(self.max_items, len(all_results))
+
         # Sort by operations per second
         sorted_results = sorted(all_results.items(), key=lambda x: x[1].ops_per_sec, reverse=True)
 
-        table = Table(title=f"Top {count} Fastest Operations", show_header=True)
-        table.add_column("Rank", style="bold cyan", width=4)
-        table.add_column("Operation", style="cyan")
+        # Adjust title based on display mode
+        if self.show_all:
+            title = "All Operations by Performance"
+        else:
+            title = f"Top {count} Fastest Operations"
+
+        table = Table(title=title, show_header=True)
+        rank_width = None if self.no_truncate else 4
+        table.add_column("Rank", style="bold cyan", width=rank_width)
+
+        # Dynamic column width based on display mode
+        op_width = None if self.no_truncate else (40 if self.display_mode == "detailed" else 25)
+        table.add_column("Operation", style="cyan", width=op_width)
         table.add_column("Avg Time (ms)", justify="right")
         table.add_column("Ops/sec", justify="right", style="bold green")
-        table.add_column("Performance", justify="center")
+
+        if self.display_mode == "detailed":
+            table.add_column("Performance", justify="center")
+            table.add_column("Std Dev (ms)", justify="right")
 
         for i, (operation, result) in enumerate(sorted_results[:count], 1):
-            # Performance indicator
-            if result.ops_per_sec > OPS_LIGHTNING_FAST:
-                perf_indicator = "🚀"
-            elif result.ops_per_sec > OPS_VERY_FAST:
-                perf_indicator = "⚡"
-            elif result.ops_per_sec > OPS_FAST:
-                perf_indicator = "✅"
-            else:
-                perf_indicator = "🐌"
+            row_data = [str(i), operation, f"{result.avg_ms:.3f}", f"{result.ops_per_sec:.1f}"]
 
-            table.add_row(str(i), operation, f"{result.avg_ms:.3f}", f"{result.ops_per_sec:.1f}", perf_indicator)
+            if self.display_mode == "detailed":
+                # Performance indicator
+                if result.ops_per_sec > OPS_LIGHTNING_FAST:
+                    perf_indicator = "🚀"
+                elif result.ops_per_sec > OPS_VERY_FAST:
+                    perf_indicator = "⚡"
+                elif result.ops_per_sec > OPS_FAST:
+                    perf_indicator = "✅"
+                else:
+                    perf_indicator = "🐌"
+
+                row_data.extend([perf_indicator, f"{result.std_ms:.3f}"])
+
+            table.add_row(*row_data)
 
         self.console.print(table)
 
@@ -927,19 +1074,42 @@ class BenchmarkSummary:
         if not grouped_results:
             return
 
-        # Create unified table
-        table = Table(title="🚀 Unified ORM Performance Comparison (TPS = Transactions Per Second)", show_header=True)
-        table.add_column("Database", style="cyan")
-        table.add_column("Operation", style="cyan")
-        table.add_column("SQLSpec Cached\n(TPS)", justify="right", style="green")
-        table.add_column("SQLSpec No Cache\n(TPS)", justify="right", style="green dim")
-        table.add_column("SQLAlchemy Core\n(TPS)", justify="right", style="yellow")
-        table.add_column("SQLAlchemy ORM\n(TPS)", justify="right", style="blue")
-        table.add_column("Best TPS", justify="right", style="bold magenta")
-        table.add_column("Winner", justify="center", style="bold")
+        # Create unified table with dynamic layout
+        title = "🚀 Unified ORM Performance Comparison"
+        if self.display_mode != "compact":
+            title += " (TPS = Transactions Per Second)"
+
+        table = Table(title=title, show_header=True)
+
+        # Dynamic column widths based on display options
+        db_width = None if self.no_truncate else (12 if self.display_mode == "compact" else 15)
+        op_width = None if self.no_truncate else (15 if self.display_mode == "compact" else 20)
+
+        table.add_column("Database", style="cyan", width=db_width)
+        table.add_column("Operation", style="cyan", width=op_width)
+
+        if self.display_mode == "compact":
+            # Compact mode - just show best results and winner
+            table.add_column("Best SQLSpec", justify="right", style="green")
+            table.add_column("Best SA", justify="right", style="yellow")
+            table.add_column("Winner", justify="center", style="bold")
+        elif self.display_mode == "matrix":
+            # Matrix mode - show ratios and comparisons
+            table.add_column("SQLSpec TPS", justify="right", style="green")
+            table.add_column("Core TPS", justify="right", style="yellow")
+            table.add_column("ORM TPS", justify="right", style="blue")
+            table.add_column("Speedup", justify="right", style="bold magenta")
+        else:
+            # Detailed mode - show all data
+            table.add_column("SQLSpec Cached\n(TPS)", justify="right", style="green")
+            table.add_column("SQLSpec No Cache\n(TPS)", justify="right", style="green dim")
+            table.add_column("SQLAlchemy Core\n(TPS)", justify="right", style="yellow")
+            table.add_column("SQLAlchemy ORM\n(TPS)", justify="right", style="blue")
+            table.add_column("Best TPS", justify="right", style="bold magenta")
+            table.add_column("Winner", justify="center", style="bold")
 
         # Collect all operations across databases
-        all_operations = set()
+        all_operations: set[str] = set()
         for ops in grouped_results.values():
             all_operations.update(ops.keys())
 
@@ -956,7 +1126,7 @@ class BenchmarkSummary:
                 sqlalchemy_orm = variants.get("sqlalchemy_orm")
 
                 # Find best TPS and winner
-                best_tps = 0
+                best_tps = 0.0
                 winner = "N/A"
 
                 if sqlspec_cached and sqlspec_cached.ops_per_sec > best_tps:
@@ -972,19 +1142,67 @@ class BenchmarkSummary:
                     best_tps = sqlalchemy_orm.ops_per_sec
                     winner = "SA ORM"
 
-                def format_tps(result: TimingResult) -> str:
+                def format_tps(result: Optional[TimingResult]) -> str:
                     return f"{result.ops_per_sec:.0f}" if result else "N/A"
 
-                table.add_row(
-                    db_name.title(),
-                    op_name.replace("_", " ").title(),
-                    format_tps(sqlspec_cached),
-                    format_tps(sqlspec_no_cache),
-                    format_tps(sqlalchemy_core),
-                    format_tps(sqlalchemy_orm),
-                    f"{best_tps:.0f}" if best_tps > 0 else "N/A",
-                    winner,
-                )
+                # Build row data based on display mode
+                if self.display_mode == "compact":
+                    # Find best SQLSpec and SQLAlchemy results
+                    best_sqlspec_tps = 0.0
+                    best_sa_tps = 0.0
+
+                    if sqlspec_cached:
+                        best_sqlspec_tps = max(best_sqlspec_tps, sqlspec_cached.ops_per_sec)
+                    if sqlspec_no_cache:
+                        best_sqlspec_tps = max(best_sqlspec_tps, sqlspec_no_cache.ops_per_sec)
+                    if sqlalchemy_core:
+                        best_sa_tps = max(best_sa_tps, sqlalchemy_core.ops_per_sec)
+                    if sqlalchemy_orm:
+                        best_sa_tps = max(best_sa_tps, sqlalchemy_orm.ops_per_sec)
+
+                    row_data = [
+                        db_name.title(),
+                        op_name.replace("_", " ").title(),
+                        f"{best_sqlspec_tps:.0f}" if best_sqlspec_tps > 0 else "N/A",
+                        f"{best_sa_tps:.0f}" if best_sa_tps > 0 else "N/A",
+                        winner,
+                    ]
+                elif self.display_mode == "matrix":
+                    # Calculate best SQLSpec result for comparison
+                    best_sqlspec_tps = 0.0
+                    if sqlspec_cached:
+                        best_sqlspec_tps = max(best_sqlspec_tps, sqlspec_cached.ops_per_sec)
+                    if sqlspec_no_cache:
+                        best_sqlspec_tps = max(best_sqlspec_tps, sqlspec_no_cache.ops_per_sec)
+
+                    # Calculate speedup
+                    core_tps = sqlalchemy_core.ops_per_sec if sqlalchemy_core else 0.0
+                    speedup = "N/A"
+                    if best_sqlspec_tps > 0 and core_tps > 0:
+                        speedup = f"{best_sqlspec_tps / core_tps:.1f}x"
+
+                    row_data = [
+                        db_name.title(),
+                        op_name.replace("_", " ").title(),
+                        f"{best_sqlspec_tps:.0f}" if best_sqlspec_tps > 0 else "N/A",
+                        f"{core_tps:.0f}" if core_tps > 0 else "N/A",
+                        f"{sqlalchemy_orm.ops_per_sec:.0f}" if sqlalchemy_orm else "N/A",
+                        speedup,
+                    ]
+                else:
+                    # Detailed mode - show all data
+                    row_data = [
+                        db_name.title(),
+                        op_name.replace("_", " ").title(),
+                        format_tps(sqlspec_cached),
+                        format_tps(sqlspec_no_cache),
+                        format_tps(sqlalchemy_core),
+                        format_tps(sqlalchemy_orm),
+                        f"{best_tps:.0f}" if best_tps > 0 else "N/A",
+                        winner,
+                    ]
+
+                table.add_row(*row_data)
 
         self.console.print(table)
 
@@ -997,9 +1215,9 @@ class BenchmarkSummary:
             return
 
         # Collect TPS data by adapter type
-        adapter_tps = {"SQLSpec (Cached)": [], "SQLSpec (No Cache)": [], "SQLAlchemy Core": [], "SQLAlchemy ORM": []}
+        adapter_tps: dict[str, list[float]] = {"SQLSpec (Cached)": [], "SQLSpec (No Cache)": [], "SQLAlchemy Core": [], "SQLAlchemy ORM": []}
 
-        database_tps = {}  # Track TPS by database
+        database_tps: dict[str, list[float]] = {}  # Track TPS by database
 
         for db_name, ops in grouped_results.items():
             database_tps[db_name] = []
@@ -1022,13 +1240,20 @@ class BenchmarkSummary:
                     adapter_tps["SQLAlchemy ORM"].append(tps)
                     database_tps[db_name].append(tps)
 
-        # Create summary table
+        # Create summary table with dynamic layout
         summary_table = Table(title="📊 TPS Performance Summary", show_header=True)
-        summary_table.add_column("Adapter", style="cyan")
+
+        # Dynamic column widths
+        adapter_width = None if self.no_truncate else (25 if self.display_mode == "detailed" else 20)
+        summary_table.add_column("Adapter", style="cyan", width=adapter_width)
         summary_table.add_column("Avg TPS", justify="right", style="green")
-        summary_table.add_column("Max TPS", justify="right", style="bold green")
-        summary_table.add_column("Min TPS", justify="right", style="red")
-        summary_table.add_column("Operations", justify="right")
+
+        if self.display_mode != "compact":
+            summary_table.add_column("Max TPS", justify="right", style="bold green")
+            summary_table.add_column("Min TPS", justify="right", style="red")
+
+        if self.display_mode == "detailed":
+            summary_table.add_column("Operations", justify="right")
 
         for adapter_name, tps_values in adapter_tps.items():
             if tps_values:
@@ -1037,16 +1262,36 @@ class BenchmarkSummary:
                 min_tps = min(tps_values)
                 count = len(tps_values)
 
-                summary_table.add_row(adapter_name, f"{avg_tps:.0f}", f"{max_tps:.0f}", f"{min_tps:.0f}", str(count))
+                # Build row data based on display mode
+                row_data = [adapter_name, f"{avg_tps:.0f}"]
+
+                if self.display_mode != "compact":
+                    row_data.extend([f"{max_tps:.0f}", f"{min_tps:.0f}"])
+
+                if self.display_mode == "detailed":
+                    row_data.append(str(count))
+
+                summary_table.add_row(*row_data)
 
         self.console.print(summary_table)
 
         # Database-specific summary
         if len(database_tps) > 1:
+            # Limit display based on options
+            display_count = len(database_tps)
+            if not self.show_all:
+                display_count = min(self.max_items, len(database_tps))
+
             db_summary_table = Table(title="🎯 Database Performance Ranking", show_header=True)
-            db_summary_table.add_column("Database", style="cyan")
+
+            # Dynamic column widths
+            db_width = None if self.no_truncate else (15 if self.display_mode == "detailed" else 12)
+            db_summary_table.add_column("Database", style="cyan", width=db_width)
             db_summary_table.add_column("Avg TPS", justify="right", style="green")
-            db_summary_table.add_column("Max TPS", justify="right", style="bold green")
+
+            if self.display_mode != "compact":
+                db_summary_table.add_column("Max TPS", justify="right", style="bold green")
+
             db_summary_table.add_column("Rank", justify="center", style="bold")
 
             # Calculate averages and rank
@@ -1057,11 +1302,35 @@ class BenchmarkSummary:
                     max_tps = max(tps_values)
                     db_averages.append((db_name, avg_tps, max_tps))
 
-            # Sort by average TPS
+            # Sort by average TPS and limit results
             db_averages.sort(key=lambda x: x[1], reverse=True)
 
-            for rank, (db_name, avg_tps, max_tps) in enumerate(db_averages, 1):
-                rank_icon = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else "📍"
-                db_summary_table.add_row(db_name.title(), f"{avg_tps:.0f}", f"{max_tps:.0f}", f"{rank_icon} #{rank}")
+            # Apply display limit
+            limited_averages = db_averages[:display_count]
+
+            for rank, (db_name, avg_tps, max_tps) in enumerate(limited_averages, 1):
+                rank_icon = (
+                    "🥇"
+                    if rank == FIRST_PLACE
+                    else "🥈"
+                    if rank == SECOND_PLACE
+                    else "🥉"
+                    if rank == THIRD_PLACE
+                    else "📍"
+                )
+
+                # Build row data based on display mode
+                row_data = [db_name.title(), f"{avg_tps:.0f}"]
+
+                if self.display_mode != "compact":
+                    row_data.append(f"{max_tps:.0f}")
+
+                row_data.append(f"{rank_icon} #{rank}")
+
+                db_summary_table.add_row(*row_data)
+
+            # Add truncation note if needed
+            if not self.show_all and len(db_averages) > display_count:
+                self.console.print(f"[dim]... and {len(db_averages) - display_count} more databases (use --show-all to see all)[/dim]")
 
             self.console.print(db_summary_table)

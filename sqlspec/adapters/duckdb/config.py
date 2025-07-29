@@ -428,10 +428,14 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         if "database" not in self.connection_config or not self.connection_config["database"]:
             self.connection_config["database"] = ":memory:"
 
-        # Check if this is an in-memory database and auto-convert to shared memory for pooling
+        # Convert basic :memory: to unique named memory database for pooling
+        # Named memory databases already work with sharing
         database = self.connection_config.get("database", ":memory:")
-        if self._is_memory_database(database):
-            self._convert_to_shared_memory()
+        if database == ":memory:":
+            # Basic :memory: doesn't share between connections, convert to unique named
+            import uuid
+            unique_id = str(uuid.uuid4())[:8]  # Short unique identifier
+            self.connection_config["database"] = f":memory:pool_{unique_id}"
 
         # Store other config
         self.statement_config = statement_config or SQLConfig()
@@ -657,18 +661,23 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
     def _convert_to_shared_memory(self) -> None:
         """Convert in-memory database to shared memory for connection pooling.
 
-        Automatically converts :memory: databases to :memory:shared_db format
-        to enable safe connection pooling with DuckDB named memory databases.
+        Uses DuckDB's 'md:' prefix for named in-memory databases to maintain
+        uniqueness while enabling safe connection pooling.
         """
         database = self.connection_config.get("database", ":memory:")
 
         if database in {":memory:", ""}:
-            # Convert :memory: to shared memory with standard name
-            self.connection_config["database"] = ":memory:shared_db"
-        elif ":memory:" in database and "shared" not in database:
-            # For custom named memory databases, ensure they're marked as shared
-            # Convert :memory:custom_name to :memory:shared_db for consistency
-            self.connection_config["database"] = ":memory:shared_db"
+            # Convert default memory database to a default named instance
+            self.connection_config["database"] = "md:_default_shared"
+        elif database.startswith(":memory:"):
+            # Extract custom name and preserve it with md: prefix
+            # Format: ":memory:custom_name" -> "md:custom_name"
+            db_name = database.split(":", 2)[-1]  # Get part after second colon
+            if db_name:
+                self.connection_config["database"] = f"md:{db_name}"
+            else:
+                # Fallback for malformed ":memory:" variants
+                self.connection_config["database"] = "md:_default_shared"
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":
         """Get the signature namespace for DuckDB types.

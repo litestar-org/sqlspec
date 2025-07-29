@@ -243,7 +243,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
     def _perform_execute(self, cursor: "Any", statement: "SQL") -> None:
         """Execute the SQL statement using BigQuery."""
-        sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
+        sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
 
         if statement.is_many:
             # BigQuery doesn't support executemany directly, create script

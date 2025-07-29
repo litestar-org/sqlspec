@@ -66,22 +66,14 @@ class SqliteDriver(SyncDriverAdapterBase):
 
     def _perform_execute(self, cursor: "sqlite3.Cursor", statement: "SQL") -> None:
         if statement.is_script:
-            # Scripts use STATIC compilation to transpile parameters automatically
-            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
+            sql = self._prepare_script_sql(statement)
             cursor.executescript(sql)
         else:
-            # Regular execution - let intelligent conversion handle parameter style
-            # Since SQLite only supports QMARK, conversion will happen automatically when needed
-            sql, params = statement.compile()
-
+            sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
             if statement.is_many:
-                # For execute_many, params is already a list of parameter sets
-                prepared_params = self._prepare_driver_parameters_many(params) if params else []
-                cursor.executemany(sql, prepared_params)
+                cursor.executemany(sql, self._prepare_driver_parameters_many(params))
             else:
-                # Prepare parameters for driver consumption
-                prepared_params = self._prepare_driver_parameters(params)
-                cursor.execute(sql, prepared_params or ())
+                cursor.execute(sql, self._prepare_driver_parameters(params) or ())
 
     def begin(self) -> None:
         """Begin a database transaction."""

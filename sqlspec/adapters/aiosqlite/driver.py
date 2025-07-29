@@ -79,7 +79,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
     async def _perform_execute(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> None:
         # Compile with driver's parameter style
-        sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
+        sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
 
         if statement.is_script:
             # aiosqlite doesn't support executescript, so we need to execute statements one by one

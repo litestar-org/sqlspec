@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict, 
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.adbc.driver import AdbcConnection, AdbcCursor, AdbcDriver
+from sqlspec.adapters.adbc._types import AdbcConnection
+from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver
 from sqlspec.adapters.adbc.pipeline_steps import adbc_null_transform_step
 from sqlspec.config import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
@@ -225,9 +226,14 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
                 # Only default to SQLite for paths that look like file paths with clear directory separators
                 # and don't conflict with data file extensions
-                if ("/" in uri or "\\" in uri or uri.startswith(("./", "../"))) and not uri_lower.endswith(
-                    (".parquet", ".csv", ".json", ".txt", ".log", ".xml")
-                ):
+                if ("/" in uri or "\\" in uri or uri.startswith(("./", "../"))) and not uri_lower.endswith((
+                    ".parquet",
+                    ".csv",
+                    ".json",
+                    ".txt",
+                    ".log",
+                    ".xml",
+                )):
                     return "adbc_driver_sqlite.dbapi.connect"
 
         # Could not determine driver
