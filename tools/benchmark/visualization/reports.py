@@ -236,20 +236,45 @@ class BenchmarkSummary:
 
     def display_orm_comparison(self, results: dict[str, TimingResult]) -> None:
         """Display comprehensive ORM comparison across all databases."""
-        orm_results = {k: v for k, v in results.items() if "orm_comparison" in k}
+        # ORM comparison variants to look for
+        orm_variants = {"sqlspec_cache", "sqlspec_no_cache", "sqlalchemy_core", "sqlalchemy_orm"}
+        
+        # Filter for ORM-related results by checking if key contains any ORM variant
+        orm_results = {}
+        for key, result in results.items():
+            if any(variant in key for variant in orm_variants):
+                orm_results[key] = result
+                
         if not orm_results:
             return
 
         # Group results by database and operation
         grouped_results: dict[str, dict[str, dict[str, TimingResult]]] = {}
         for key, result in orm_results.items():
-            parts = key.split("_")
-            db_name, op_name, variant = parts[0], parts[1], "_".join(parts[2:])
+            # Find the matching variant (search from longest to shortest to avoid partial matches)
+            matched_variant = None
+            for variant in sorted(orm_variants, key=len, reverse=True):
+                if key.endswith(variant):
+                    matched_variant = variant
+                    break
+            
+            if not matched_variant:
+                continue
+                
+            # Extract database and operation by removing the variant suffix
+            prefix = key[:-len(matched_variant)].rstrip("_")
+            parts = prefix.split("_", 1)  # Split into database and operation (operation may have underscores)
+            
+            if len(parts) < 2:
+                continue
+                
+            db_name, op_name = parts[0], parts[1]
+            
             if db_name not in grouped_results:
                 grouped_results[db_name] = {}
             if op_name not in grouped_results[db_name]:
                 grouped_results[db_name][op_name] = {}
-            grouped_results[db_name][op_name][variant] = result
+            grouped_results[db_name][op_name][matched_variant] = result
 
         for db_name, ops in grouped_results.items():
             table = Table(title=f"ORM Comparison - {db_name.title()}", show_header=True)
