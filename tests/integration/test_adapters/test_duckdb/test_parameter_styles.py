@@ -1,5 +1,6 @@
 """Test different parameter styles for DuckDB drivers."""
 
+import math
 from collections.abc import Generator
 from typing import Any
 
@@ -210,7 +211,7 @@ def test_duckdb_parameter_data_types(duckdb_params_session: DuckDBDriver) -> Non
 
     # Test different data types
     test_data = [
-        (1, 42, 3.14, "hello", True, [1, 2, 3]),
+        (1, 42, math.pi, "hello", True, [1, 2, 3]),
         (2, -100, -2.5, "world", False, [4, 5, 6]),
         (3, 0, 0.0, "", None, []),
     ]

@@ -196,7 +196,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         suppress_warnings: bool = False,
         **kwargs: Any,
     ) -> "SQLResult":
-        sql_statement = self._prepare_sql(statement, *parameters, config=config or self.config, **kwargs)
+        sql_statement = self._prepare_sql(statement, *parameters, config=config or self.statement_config, **kwargs)
         return self._dispatch_execution(statement=sql_statement, connection=self.connection)
 
     def execute_many(
@@ -215,11 +215,11 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         # For execute_many, we need to handle parameters specially to preserve structure
         if parameters and len(parameters) == 1 and isinstance(parameters[0], list):
             # Direct list of parameter sets - pass the full list to as_many
-            sql_statement = self._prepare_sql(statement, config=config or self.config, **kwargs)
+            sql_statement = self._prepare_sql(statement, config=config or self.statement_config, **kwargs)
             return self._dispatch_execution(statement=sql_statement.as_many(parameters[0]), connection=self.connection)
 
         # Default behavior for other cases
-        sql_statement = self._prepare_sql(statement, *parameters, config=config or self.config, **kwargs)
+        sql_statement = self._prepare_sql(statement, *parameters, config=config or self.statement_config, **kwargs)
         return self._dispatch_execution(statement=sql_statement.as_many(), connection=self.connection)
 
     def execute_script(
@@ -237,7 +237,9 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         operations. Use suppress_warnings=True for migrations and admin scripts.
         """
         return self._dispatch_execution(
-            statement=self._prepare_sql(statement, *parameters, config=config or self.config, **kwargs).as_script(),
+            statement=self._prepare_sql(
+                statement, *parameters, config=config or self.statement_config, **kwargs
+            ).as_script(),
             connection=self.connection,
         )
 
@@ -538,7 +540,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
             >>> print(f"Page data: {len(data)} rows, Total: {total} rows")
         """
         # 1. Prepare original SQL statement
-        sql_statement = self._prepare_sql(statement, *parameters, config=config or self.config, **kwargs)
+        sql_statement = self._prepare_sql(statement, *parameters, config=config or self.statement_config, **kwargs)
 
         # 2. Create optimized COUNT query
         count_sql = self._create_count_query(sql_statement)

@@ -12,7 +12,7 @@ from google.cloud.bigquery.table import Row as BigQueryRow
 from sqlspec.adapters.bigquery._types import BigQueryConnection
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.parameters import DriverParameterConfig, ParameterStyle
+from sqlspec.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.utils.serializers import to_json
 
@@ -59,29 +59,32 @@ class BigQueryDriver(SyncDriverAdapterBase):
     """Advanced BigQuery Driver with comprehensive Google Cloud capabilities."""
 
     dialect: "DialectType" = "bigquery"
-    parameter_config: DriverParameterConfig
-
     _default_query_job_config: Optional[QueryJobConfig]
 
     def __init__(
         self,
         connection: BigQueryConnection,
-        config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[SQLConfig]" = None,
         default_query_job_config: Optional[QueryJobConfig] = None,
         on_job_start: Optional[Callable[[str], None]] = None,
         on_job_complete: Optional[Callable[[str, Any], None]] = None,
     ) -> None:
         """Initialize BigQuery driver with comprehensive feature support."""
-        super().__init__(connection=connection, config=config)
-        self.parameter_config = DriverParameterConfig(
-            supported_parameter_styles=[ParameterStyle.NAMED_AT],  # Only supports @name
-            default_parameter_style=ParameterStyle.NAMED_AT,
-            type_coercion_map={
-                # BigQuery has good native type support
-                # Type coercion is handled in _get_bq_param_type method
-            },
-            has_native_list_expansion=True,  # BigQuery handles arrays natively
-        )
+        from sqlspec.statement.sql import SQLConfig
+
+        # Set default BigQuery-specific configuration
+        if statement_config is None:
+            statement_config = SQLConfig(
+                supported_parameter_styles=[ParameterStyle.NAMED_AT],  # Only supports @name
+                default_parameter_style=ParameterStyle.NAMED_AT,
+                type_coercion_map={
+                    # BigQuery has good native type support
+                    # Type coercion is handled in _get_bq_param_type method
+                },
+                has_native_list_expansion=True,  # BigQuery handles arrays natively
+            )
+
+        super().__init__(connection=connection, statement_config=statement_config)
         self.on_job_start = on_job_start
         self.on_job_complete = on_job_complete
         conn_default_config = getattr(connection, "default_query_job_config", None)
@@ -243,7 +246,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
     def _perform_execute(self, cursor: "Any", statement: "SQL") -> None:
         """Execute the SQL statement using BigQuery."""
-        sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
+        sql, params = self._get_compiled_sql(
+            statement, self.statement_config.get_parameter_config().default_parameter_style
+        )
 
         if statement.is_many:
             # BigQuery doesn't support executemany directly, create script

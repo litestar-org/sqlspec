@@ -41,7 +41,7 @@ def test_sqlite_dialect_propagation_through_execute() -> None:
     connection.commit()
 
     # Create driver with real connection
-    driver = SqliteDriver(connection=connection, config=SQLConfig())
+    driver = SqliteDriver(connection=connection, statement_config=SQLConfig())
 
     # Verify driver has correct dialect
     assert driver.dialect == "sqlite"
@@ -78,7 +78,7 @@ def test_duckdb_dialect_propagation_with_query_builder() -> None:
     connection.execute("INSERT INTO users (id, name) VALUES (1, 'test')")
 
     # Create driver
-    driver = DuckDBDriver(connection=connection, config=SQLConfig())
+    driver = DuckDBDriver(connection=connection, statement_config=SQLConfig())
 
     # Create a query builder
     query = Select(dialect="duckdb").select("id", "name").from_("users").where("id = 1")
@@ -160,7 +160,7 @@ async def test_asyncpg_dialect_propagation_through_execute(postgres_service: Pos
     # Create a real connection
     async with config.provide_connection() as connection:
         # Create driver
-        driver = AsyncpgDriver(connection=connection, config=SQLConfig())
+        driver = AsyncpgDriver(connection=connection, statement_config=SQLConfig())
 
         # Create temp table and execute a query
         await connection.execute("CREATE TEMP TABLE test_users (id INT, name TEXT)")
@@ -265,7 +265,7 @@ def test_sql_translator_mixin_dialect_usage() -> None:
         dialect: DialectType = "sqlite"
 
     mock_connection = Mock()
-    driver = TestDriver(connection=mock_connection, config=SQLConfig())
+    driver = TestDriver(connection=mock_connection, statement_config=SQLConfig())
 
     # Test convert_todialect with string input
     # NOTE: This test patches internal implementation to verify dialect propagation.
@@ -331,7 +331,7 @@ def test_dialect_mismatch_handling() -> None:
 
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
-    driver = SqliteDriver(connection=connection, config=SQLConfig())
+    driver = SqliteDriver(connection=connection, statement_config=SQLConfig())
 
     # Create SQL with different dialect
     sql = SQL("SELECT 1 AS num", config=SQLConfig(dialect="postgres"))

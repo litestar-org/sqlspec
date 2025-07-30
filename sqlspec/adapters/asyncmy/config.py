@@ -71,7 +71,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         pool_instance: "Optional[Pool]" = None,
         statement_config: "Optional[SQLConfig]" = None,
         migration_config: Optional[dict[str, Any]] = None,
-        enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,
     ) -> None:
         """Initialize Asyncmy configuration.
@@ -81,8 +80,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             pool_instance: Existing pool instance to use
             statement_config: Default SQL statement configuration
             migration_config: Migration configuration
-            enable_adapter_cache: Enable SQL compilation caching
-            adapter_cache_size: Max cached SQL statements
+            adapter_cache_size: Max cached SQL statements (0 to disable caching)
         """
         # Store the pool config as a dict and extract/merge extras
         self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
@@ -91,13 +89,10 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             self.pool_config.update(extras)
 
         super().__init__(
-            pool_instance=pool_instance,
-            migration_config=migration_config,
-            enable_adapter_cache=enable_adapter_cache,
-            adapter_cache_size=adapter_cache_size,
+            pool_instance=pool_instance, migration_config=migration_config, adapter_cache_size=adapter_cache_size
         )
 
-        self.statement_config = statement_config or SQLConfig(dialect=self.dialect)
+        self.statement_config = statement_config or SQLConfig(dialect="mysql")
 
     async def _create_pool(self) -> "Pool":  # pyright: ignore
         """Create the actual async connection pool."""
@@ -135,25 +130,28 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             yield connection
 
     @asynccontextmanager
-    async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AsyncmyDriver, None]:
+    async def provide_session(
+        self, *args: Any, statement_config: "Optional[SQLConfig]" = None, **kwargs: Any
+    ) -> AsyncGenerator[AsyncmyDriver, None]:
         """Provide an async driver session context manager.
 
         Args:
             *args: Additional arguments.
+            statement_config: Optional statement configuration override.
             **kwargs: Additional keyword arguments.
 
         Yields:
             An AsyncmyDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as connection:
-            statement_config = self.statement_config
+            statement_config = statement_config or self.statement_config
             # Inject parameter style info if not already set
             if statement_config.allowed_parameter_styles is None:
                 statement_config = statement_config.replace(
                     allowed_parameter_styles=self.supported_parameter_styles,
                     default_parameter_style=self.default_parameter_style,
                 )
-            yield self.driver_type(connection=connection, config=statement_config)
+            yield self.driver_type(connection=connection, statement_config=statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool":  # pyright: ignore
         """Provide async pool instance.

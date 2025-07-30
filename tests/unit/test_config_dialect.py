@@ -410,17 +410,17 @@ class TestDialectPropagation:
         """Test that dialect is passed when building SQL statements."""
         from sqlspec.statement.sql import SQL
 
-        driver = MockDriver(connection=MockConnection(), config=SQLConfig())
+        driver = MockDriver(connection=MockConnection(), statement_config=SQLConfig())
 
         # When driver builds a statement, it should pass its dialect
-        statement = driver._prepare_sql("SELECT * FROM users", config=SQLConfig())
+        statement = driver._prepare_sql("SELECT * FROM users", statement_config=SQLConfig())
         assert isinstance(statement, SQL)
         assert statement.dialect == "sqlite"
 
     def test_dialect_in_execute_script(self) -> None:
         """Test that dialect is passed in execute_script."""
 
-        driver = MockDriver(connection=MockConnection(), config=SQLConfig())
+        driver = MockDriver(connection=MockConnection(), statement_config=SQLConfig())
 
         with patch.object(driver, "_dispatch_execution") as mock_dispatch:
             mock_dispatch.return_value = SQLResult(statement=SQL("test"), data=[], operation_type="SCRIPT")
@@ -441,7 +441,7 @@ class TestDialectPropagation:
         class TestTranslatorDriver(MockDriver, SQLTranslatorMixin):
             dialect = "postgres"
 
-        driver = TestTranslatorDriver(connection=MockConnection(), config=SQLConfig())
+        driver = TestTranslatorDriver(connection=MockConnection(), statement_config=SQLConfig())
 
         # Test convert_to_dialect uses driver dialect by default
         test_sql = "SELECT * FROM users"

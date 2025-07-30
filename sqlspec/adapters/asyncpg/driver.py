@@ -3,7 +3,7 @@ import re
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 from sqlspec.driver import AsyncDriverAdapterBase
-from sqlspec.parameters import DriverParameterConfig, ParameterStyle
+from sqlspec.parameters import ParameterStyle
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -53,25 +53,31 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     """AsyncPG PostgreSQL Driver Adapter. Modern protocol implementation."""
 
     dialect: "DialectType" = "postgres"
-    parameter_config: DriverParameterConfig
     _execution_state: dict[str, "Optional[Union[str, Any]]"]
 
-    def __init__(self, connection: "AsyncpgConnection", config: "Optional[SQLConfig]" = None) -> None:
-        super().__init__(connection=connection, config=config)
-        self.parameter_config = DriverParameterConfig(
-            supported_parameter_styles=[ParameterStyle.NUMERIC],
-            default_parameter_style=ParameterStyle.NUMERIC,
-            type_coercion_map={},
-            has_native_list_expansion=True,
-            force_style_conversion=True,
-        )
+    def __init__(self, connection: "AsyncpgConnection", statement_config: "Optional[SQLConfig]" = None) -> None:
+        from sqlspec.statement.sql import SQLConfig
+
+        # Set default asyncpg-specific configuration
+        if statement_config is None:
+            statement_config = SQLConfig(
+                supported_parameter_styles=[ParameterStyle.NUMERIC],
+                default_parameter_style=ParameterStyle.NUMERIC,
+                type_coercion_map={},
+                has_native_list_expansion=True,
+                force_style_conversion=True,
+            )
+
+        super().__init__(connection=connection, statement_config=statement_config)
         self._execution_state = {"last_status": None, "compiled_sql": None, "prepared_params": None}
 
     def with_cursor(self, connection: "AsyncpgConnection") -> "AsyncpgCursor":
         return AsyncpgCursor(connection)
 
     async def _perform_execute(self, cursor: "AsyncpgConnection", statement: "SQL") -> None:
-        sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
+        sql, params = self._get_compiled_sql(
+            statement, self.statement_config.get_parameter_config().default_parameter_style
+        )
 
         # Check if this is a COPY statement marked by the pipeline
         if statement._processing_context and statement._processing_context.metadata.get("postgres_copy_operation"):

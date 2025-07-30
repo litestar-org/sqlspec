@@ -7,7 +7,7 @@ from sqlglot.dialects.dialect import DialectType
 from sqlspec.adapters.oracledb._types import OracleAsyncConnection, OracleSyncConnection
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.driver.context import set_current_driver
-from sqlspec.parameters import DriverParameterConfig, ParameterStyle
+from sqlspec.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.utils.logging import get_logger
 
@@ -36,23 +36,27 @@ class OracleSyncDriver(SyncDriverAdapterBase):
     """Oracle Sync Driver Adapter. Refactored for new protocol."""
 
     dialect: "DialectType" = "oracle"
-    parameter_config: DriverParameterConfig
 
-    def __init__(self, connection: OracleSyncConnection, config: Optional[SQLConfig] = None) -> None:
-        super().__init__(connection=connection, config=config)
-        self.parameter_config = DriverParameterConfig(
-            supported_parameter_styles=[
-                ParameterStyle.POSITIONAL_COLON,  # :1, :2
-                ParameterStyle.NAMED_COLON,  # :name
-            ],
-            default_parameter_style=ParameterStyle.NAMED_COLON,
-            type_coercion_map={
-                # Oracle has good native type support
-                # Add any specific type mappings as needed
-            },
-            has_native_list_expansion=False,  # Oracle doesn't handle lists natively
-            force_style_conversion=True,  # Force conversion to avoid denormalization bugs
-        )
+    def __init__(self, connection: OracleSyncConnection, statement_config: Optional[SQLConfig] = None) -> None:
+        from sqlspec.statement.sql import SQLConfig
+
+        # Set default Oracle-specific configuration
+        if statement_config is None:
+            statement_config = SQLConfig(
+                supported_parameter_styles=[
+                    ParameterStyle.POSITIONAL_COLON,  # :1, :2
+                    ParameterStyle.NAMED_COLON,  # :name
+                ],
+                default_parameter_style=ParameterStyle.NAMED_COLON,
+                type_coercion_map={
+                    # Oracle has good native type support
+                    # Add any specific type mappings as needed
+                },
+                has_native_list_expansion=False,  # Oracle doesn't handle lists natively
+                force_style_conversion=True,  # Force conversion to avoid denormalization bugs
+            )
+
+        super().__init__(connection=connection, statement_config=statement_config)
 
     def with_cursor(self, connection: OracleSyncConnection) -> OracleSyncCursor:
         return OracleSyncCursor(connection)
@@ -71,7 +75,9 @@ class OracleSyncDriver(SyncDriverAdapterBase):
                         cursor.execute(stmt)
             else:
                 # With force_style_conversion=True, always use the default parameter style
-                sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
+                sql, params = self._get_compiled_sql(
+                    statement, self.statement_config.get_parameter_config().default_parameter_style
+                )
 
                 if statement.is_many:
                     # For execute_many, params is already a list of parameter sets
@@ -128,23 +134,27 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
     """Oracle Async Driver Adapter. Refactored for new protocol."""
 
     dialect: DialectType = "oracle"
-    parameter_config: DriverParameterConfig
 
-    def __init__(self, connection: OracleAsyncConnection, config: "Optional[SQLConfig]" = None) -> None:
-        super().__init__(connection=connection, config=config)
-        self.parameter_config = DriverParameterConfig(
-            supported_parameter_styles=[
-                ParameterStyle.POSITIONAL_COLON,  # :1, :2
-                ParameterStyle.NAMED_COLON,  # :name
-            ],
-            default_parameter_style=ParameterStyle.NAMED_COLON,
-            type_coercion_map={
-                # Oracle has good native type support
-                # Add any specific type mappings as needed
-            },
-            has_native_list_expansion=False,  # Oracle doesn't handle lists natively
-            force_style_conversion=True,  # Force conversion to avoid denormalization bugs
-        )
+    def __init__(self, connection: OracleAsyncConnection, statement_config: "Optional[SQLConfig]" = None) -> None:
+        from sqlspec.statement.sql import SQLConfig
+
+        # Set default Oracle-specific configuration
+        if statement_config is None:
+            statement_config = SQLConfig(
+                supported_parameter_styles=[
+                    ParameterStyle.POSITIONAL_COLON,  # :1, :2
+                    ParameterStyle.NAMED_COLON,  # :name
+                ],
+                default_parameter_style=ParameterStyle.NAMED_COLON,
+                type_coercion_map={
+                    # Oracle has good native type support
+                    # Add any specific type mappings as needed
+                },
+                has_native_list_expansion=False,  # Oracle doesn't handle lists natively
+                force_style_conversion=True,  # Force conversion to avoid denormalization bugs
+            )
+
+        super().__init__(connection=connection, statement_config=statement_config)
 
     def with_cursor(self, connection: "OracleAsyncConnection") -> "OracleAsyncCursor":
         return OracleAsyncCursor(connection)
@@ -163,7 +173,9 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
                         await cursor.execute(stmt)
             else:
                 # With force_style_conversion=True, always use the default parameter style
-                sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
+                sql, params = self._get_compiled_sql(
+                    statement, self.statement_config.get_parameter_config().default_parameter_style
+                )
 
                 if statement.is_many:
                     # For execute_many, params is already a list of parameter sets

@@ -93,7 +93,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         on_job_start: Optional[Callable[[str], None]] = None,
         on_job_complete: Optional[Callable[[str, Any], None]] = None,
         migration_config: Optional[dict[str, Any]] = None,
-        enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,
     ) -> None:
         """Initialize BigQuery configuration with comprehensive feature support.
@@ -106,8 +105,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             on_job_start: Callback executed when a BigQuery job starts
             on_job_complete: Callback executed when a BigQuery job completes
             migration_config: Migration configuration
-            enable_adapter_cache: Enable SQL compilation caching
-            adapter_cache_size: Max cached SQL statements
+            adapter_cache_size: Max cached SQL statements (0 to disable caching)
 
         Example:
             >>> # Basic BigQuery connection
@@ -160,11 +158,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         if self.connection_config.get("default_query_job_config") is None:
             self._setup_default_job_config()
 
-        super().__init__(
-            migration_config=migration_config,
-            enable_adapter_cache=enable_adapter_cache,
-            adapter_cache_size=adapter_cache_size,
-        )
+        super().__init__(migration_config=migration_config, adapter_cache_size=adapter_cache_size)
 
     def _setup_default_job_config(self) -> None:
         """Set up default job configuration based on connection settings."""
@@ -241,11 +235,14 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         yield connection
 
     @contextlib.contextmanager
-    def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[BigQueryDriver, None, None]":
+    def provide_session(
+        self, *args: Any, statement_config: "Optional[SQLConfig]" = None, **kwargs: Any
+    ) -> "Generator[BigQueryDriver, None, None]":
         """Provide a BigQuery driver session context manager.
 
         Args:
             *args: Additional arguments.
+            statement_config: Optional statement configuration override.
             **kwargs: Additional keyword arguments.
 
         Yields:
@@ -253,7 +250,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         """
 
         with self.provide_connection(*args, **kwargs) as connection:
-            statement_config = self.statement_config
+            statement_config = statement_config or self.statement_config
             # Inject parameter style info if not already set
             if statement_config.allowed_parameter_styles is None:
                 statement_config = statement_config.replace(
@@ -262,7 +259,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
                 )
             driver = self.driver_type(
                 connection=connection,
-                config=statement_config,
+                statement_config=statement_config,
                 default_query_job_config=self.connection_config.get("default_query_job_config"),
                 on_job_start=self.on_job_start,
                 on_job_complete=self.on_job_complete,

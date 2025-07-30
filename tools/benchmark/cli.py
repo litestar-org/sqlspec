@@ -47,14 +47,16 @@ def cli(ctx: click.Context, config: Optional[Path], storage: Optional[Path], ver
 @cli.command()
 @click.option(
     "--suite",
-    type=click.Choice([
-        "parameters",
-        "sql-compilation",
-        "orm-comparison",
-        "caching-comparison",
-        "caching-optimization",
-        "async-operations",
-    ]),
+    type=click.Choice(
+        [
+            "parameters",
+            "sql-compilation",
+            "orm-comparison",
+            "caching-comparison",
+            "caching-optimization",
+            "async-operations",
+        ]
+    ),
     help="Specific benchmark suite to run",
 )
 @click.option("--adapter", default="all", help="Adapter to test or 'all'")

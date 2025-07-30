@@ -183,10 +183,7 @@ class BenchmarkSummary:
                     row_data.append(f"{cache_benefit:.1f}%")
 
                 if self.display_mode == "detailed":
-                    row_data.extend([
-                        f"{no_cache.ops_per_sec:.0f}",
-                        f"{with_cache.ops_per_sec:.0f}",
-                    ])
+                    row_data.extend([f"{no_cache.ops_per_sec:.0f}", f"{with_cache.ops_per_sec:.0f}"])
 
                 table.add_row(*row_data)
 
@@ -354,7 +351,9 @@ class BenchmarkSummary:
                 # Find the best SQLSpec result
                 best_sqlspec = None
                 if sqlspec_cached and sqlspec_no_cache:
-                    best_sqlspec = sqlspec_cached if sqlspec_cached.avg_ms < sqlspec_no_cache.avg_ms else sqlspec_no_cache
+                    best_sqlspec = (
+                        sqlspec_cached if sqlspec_cached.avg_ms < sqlspec_no_cache.avg_ms else sqlspec_no_cache
+                    )
                 elif sqlspec_cached:
                     best_sqlspec = sqlspec_cached
                 elif sqlspec_no_cache:
@@ -383,7 +382,9 @@ class BenchmarkSummary:
                     ]
                 elif self.display_mode == "matrix":
                     # Calculate speedup ratios
-                    def calc_speedup(base_result: Optional[TimingResult], compare_result: Optional[TimingResult]) -> str:
+                    def calc_speedup(
+                        base_result: Optional[TimingResult], compare_result: Optional[TimingResult]
+                    ) -> str:
                         if base_result and compare_result and compare_result.avg_ms > 0:
                             return f"{base_result.avg_ms / compare_result.avg_ms:.1f}x"
                         return "N/A"
@@ -881,7 +882,7 @@ class BenchmarkSummary:
             reg_count = len(regressions) if self.show_all else min(3, len(regressions))
             for op, info, _ in regressions[:reg_count]:
                 summary_text += f"• {op}: {info}\n"
-            if not self.show_all and len(regressions) > 3:
+            if not self.show_all and len(regressions) > 3:  # noqa: PLR2004
                 summary_text += f"• ... and {len(regressions) - 3} more (use --show-all to see all)\n"
 
         if improvements:
@@ -890,7 +891,7 @@ class BenchmarkSummary:
             imp_count = len(improvements) if self.show_all else min(3, len(improvements))
             for op, info, _ in improvements[:imp_count]:
                 summary_text += f"• {op}: {info}\n"
-            if not self.show_all and len(improvements) > 3:
+            if not self.show_all and len(improvements) > 3:  # noqa: PLR2004
                 summary_text += f"• ... and {len(improvements) - 3} more (use --show-all to see all)\n"
 
         # Add system context if available
@@ -913,19 +914,13 @@ class BenchmarkSummary:
 
         # Use display options to determine count
         if count is None:
-            if self.show_all:
-                count = len(all_results)
-            else:
-                count = min(self.max_items, len(all_results))
+            count = len(all_results) if self.show_all else min(self.max_items, len(all_results))
 
         # Sort by operations per second
         sorted_results = sorted(all_results.items(), key=lambda x: x[1].ops_per_sec, reverse=True)
 
         # Adjust title based on display mode
-        if self.show_all:
-            title = "All Operations by Performance"
-        else:
-            title = f"Top {count} Fastest Operations"
+        title = "All Operations by Performance" if self.show_all else f"Top {count} Fastest Operations"
 
         table = Table(title=title, show_header=True)
         rank_width = None if self.no_truncate else 4
@@ -1215,7 +1210,12 @@ class BenchmarkSummary:
             return
 
         # Collect TPS data by adapter type
-        adapter_tps: dict[str, list[float]] = {"SQLSpec (Cached)": [], "SQLSpec (No Cache)": [], "SQLAlchemy Core": [], "SQLAlchemy ORM": []}
+        adapter_tps: dict[str, list[float]] = {
+            "SQLSpec (Cached)": [],
+            "SQLSpec (No Cache)": [],
+            "SQLAlchemy Core": [],
+            "SQLAlchemy ORM": [],
+        }
 
         database_tps: dict[str, list[float]] = {}  # Track TPS by database
 
@@ -1331,6 +1331,8 @@ class BenchmarkSummary:
 
             # Add truncation note if needed
             if not self.show_all and len(db_averages) > display_count:
-                self.console.print(f"[dim]... and {len(db_averages) - display_count} more databases (use --show-all to see all)[/dim]")
+                self.console.print(
+                    f"[dim]... and {len(db_averages) - display_count} more databases (use --show-all to see all)[/dim]"
+                )
 
             self.console.print(db_summary_table)

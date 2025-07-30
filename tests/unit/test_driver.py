@@ -276,7 +276,7 @@ def test_common_driver_attributes_initialization() -> None:
     driver = MockSyncDriver(connection, config)
 
     assert driver.connection is connection
-    assert driver.config is config
+    assert driver.statement_config is config
 
 
 def test_common_driver_attributes_default_values() -> None:
@@ -285,7 +285,7 @@ def test_common_driver_attributes_default_values() -> None:
     driver = MockSyncDriver(connection)
 
     assert driver.connection is connection
-    assert isinstance(driver.config, SQLConfig)
+    assert isinstance(driver.statement_config, SQLConfig)
 
 
 @pytest.mark.parametrize(
@@ -395,7 +395,7 @@ def test_sync_driver_build_statement() -> None:
 
     # Test with SQL string
     sql_string = "SELECT * FROM users"
-    statement = driver._prepare_sql(sql_string, config=SQLConfig())
+    statement = driver._prepare_sql(sql_string, statement_config=SQLConfig())
     assert isinstance(statement, SQL)
     assert statement.sql == sql_string
 
@@ -406,7 +406,7 @@ def test_sync_driver_build_statement_with_sql_object() -> None:
     driver = MockSyncDriver(connection)
 
     sql_obj = SQL("SELECT * FROM users WHERE id = :id", id=1)
-    statement = driver._prepare_sql(sql_obj, config=SQLConfig())
+    statement = driver._prepare_sql(sql_obj, statement_config=SQLConfig())
     # SQL objects are immutable, so a new instance is created
     assert isinstance(statement, SQL)
     assert statement._raw_sql == sql_obj._raw_sql
@@ -439,7 +439,7 @@ def test_sync_driver_build_statement_with_filters() -> None:
     test_filter.append_to_statement = Mock(side_effect=original_append)
 
     sql_string = "SELECT * FROM users"
-    statement = driver._prepare_sql(sql_string, test_filter, config=SQLConfig())
+    statement = driver._prepare_sql(sql_string, test_filter, statement_config=SQLConfig())
 
     # Access a property to trigger processing
     _ = statement.to_sql()
@@ -575,7 +575,7 @@ async def test_async_driver_build_statement() -> None:
 
     # Test with SQL string
     sql_string = "SELECT * FROM users"
-    statement = driver._prepare_sql(sql_string, config=SQLConfig())
+    statement = driver._prepare_sql(sql_string, statement_config=SQLConfig())
     assert isinstance(statement, SQL)
     assert statement.sql == sql_string
 

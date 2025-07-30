@@ -88,7 +88,6 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         pool_config: "Optional[Union[OraclePoolParams, dict[str, Any]]]" = None,
         statement_config: "Optional[SQLConfig]" = None,
         migration_config: Optional[dict[str, Any]] = None,
-        enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,
     ) -> None:
         """Initialize Oracle synchronous configuration.
@@ -98,8 +97,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
             pool_instance: Existing pool instance to use
             statement_config: Default SQL statement configuration
             migration_config: Migration configuration
-            enable_adapter_cache: Enable SQL compilation caching
-            adapter_cache_size: Max cached SQL statements
+            adapter_cache_size: Max cached SQL statements (0 to disable caching)
         """
         # Store the pool config as a dict and extract/merge extras
         self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
@@ -110,10 +108,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         self.statement_config = statement_config or SQLConfig()
 
         super().__init__(
-            pool_instance=pool_instance,
-            migration_config=migration_config,
-            enable_adapter_cache=enable_adapter_cache,
-            adapter_cache_size=adapter_cache_size,
+            pool_instance=pool_instance, migration_config=migration_config, adapter_cache_size=adapter_cache_size
         )
 
     def _create_pool(self) -> "ConnectionPool":
@@ -156,25 +151,28 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
             self.pool_instance.release(conn)
 
     @contextlib.contextmanager
-    def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[OracleSyncDriver, None, None]":
+    def provide_session(
+        self, *args: Any, statement_config: "Optional[SQLConfig]" = None, **kwargs: Any
+    ) -> "Generator[OracleSyncDriver, None, None]":
         """Provide a driver session context manager.
 
         Args:
             *args: Additional arguments.
+            statement_config: Optional statement configuration override.
             **kwargs: Additional keyword arguments.
 
         Yields:
             An OracleSyncDriver instance.
         """
         with self.provide_connection(*args, **kwargs) as conn:
-            statement_config = self.statement_config
+            statement_config = statement_config or self.statement_config
             # Inject parameter style info if not already set
             if statement_config.allowed_parameter_styles is None:
                 statement_config = statement_config.replace(
                     allowed_parameter_styles=self.supported_parameter_styles,
                     default_parameter_style=self.default_parameter_style,
                 )
-            driver = self.driver_type(connection=conn, config=statement_config)
+            driver = self.driver_type(connection=conn, statement_config=statement_config)
             yield driver
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
@@ -231,7 +229,6 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         pool_instance: "Optional[AsyncConnectionPool]" = None,
         statement_config: "Optional[SQLConfig]" = None,
         migration_config: Optional[dict[str, Any]] = None,
-        enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,
     ) -> None:
         """Initialize Oracle asynchronous configuration.
@@ -241,8 +238,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
             pool_instance: Existing pool instance to use
             statement_config: Default SQL statement configuration
             migration_config: Migration configuration
-            enable_adapter_cache: Enable SQL compilation caching
-            adapter_cache_size: Max cached SQL statements
+            adapter_cache_size: Max cached SQL statements (0 to disable caching)
         """
         # Store the pool config as a dict and extract/merge extras
         self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
@@ -253,10 +249,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         self.statement_config = statement_config or SQLConfig()
 
         super().__init__(
-            pool_instance=pool_instance,
-            migration_config=migration_config,
-            enable_adapter_cache=enable_adapter_cache,
-            adapter_cache_size=adapter_cache_size,
+            pool_instance=pool_instance, migration_config=migration_config, adapter_cache_size=adapter_cache_size
         )
 
     async def _create_pool(self) -> "AsyncConnectionPool":
@@ -299,25 +292,28 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
             await self.pool_instance.release(conn)
 
     @asynccontextmanager
-    async def provide_session(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[OracleAsyncDriver, None]":
+    async def provide_session(
+        self, *args: Any, statement_config: "Optional[SQLConfig]" = None, **kwargs: Any
+    ) -> "AsyncGenerator[OracleAsyncDriver, None]":
         """Provide an async driver session context manager.
 
         Args:
             *args: Additional arguments.
+            statement_config: Optional statement configuration override.
             **kwargs: Additional keyword arguments.
 
         Yields:
             An OracleAsyncDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as conn:
-            statement_config = self.statement_config
+            statement_config = statement_config or self.statement_config
             # Inject parameter style info if not already set
             if statement_config.allowed_parameter_styles is None:
                 statement_config = statement_config.replace(
                     allowed_parameter_styles=self.supported_parameter_styles,
                     default_parameter_style=self.default_parameter_style,
                 )
-            driver = self.driver_type(connection=conn, config=statement_config)
+            driver = self.driver_type(connection=conn, statement_config=statement_config)
             yield driver
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":

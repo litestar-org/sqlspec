@@ -41,6 +41,7 @@ DEFAULT_CACHE_MAX_SIZE: Final[int] = 1000
 DEFAULT_FRAGMENT_CACHE_SIZE: Final[int] = 5000
 DEFAULT_BASE_STATEMENT_CACHE_SIZE: Final[int] = 2000
 DEFAULT_FILTER_CACHE_SIZE: Final[int] = 1000
+DEFAULT_COMPILED_STATEMENT_CACHE_SIZE: Final[int] = 1000
 
 
 @dataclass
@@ -55,6 +56,8 @@ class CacheConfig:
     optimized_cache_enabled: bool = True
     anonymous_returns_rows_cache_size: int = DEFAULT_CACHE_MAX_SIZE
     anonymous_returns_rows_cache_enabled: bool = True
+    compiled_cache_size: int = DEFAULT_COMPILED_STATEMENT_CACHE_SIZE
+    compiled_cache_enabled: bool = True
 
     def __post_init__(self) -> None:
         """Validate configuration values."""
@@ -69,6 +72,9 @@ class CacheConfig:
             raise ValueError(msg)
         if self.anonymous_returns_rows_cache_size < 0:
             msg = "anonymous_returns_rows_cache_size must be non-negative"
+            raise ValueError(msg)
+        if self.compiled_cache_size < 0:
+            msg = "compiled_cache_size must be non-negative"
             raise ValueError(msg)
 
 
@@ -100,6 +106,12 @@ class CacheStats:
     anonymous_returns_rows_evictions: int = 0
     anonymous_returns_rows_size: int = 0
 
+    # Compiled statement cache stats
+    compiled_hits: int = 0
+    compiled_misses: int = 0
+    compiled_evictions: int = 0
+    compiled_size: int = 0
+
     # Timing stats (in seconds)
     avg_cache_lookup_time: float = 0.0
     avg_parse_time: float = 0.0
@@ -130,9 +142,21 @@ class CacheStats:
         return self.anonymous_returns_rows_hits / total if total > 0 else 0.0
 
     @property
+    def compiled_hit_rate(self) -> float:
+        """Calculate compiled statement cache hit rate."""
+        total = self.compiled_hits + self.compiled_misses
+        return self.compiled_hits / total if total > 0 else 0.0
+
+    @property
     def overall_hit_rate(self) -> float:
         """Calculate overall cache hit rate across all caches."""
-        total_hits = self.sql_hits + self.fragment_hits + self.optimized_hits + self.anonymous_returns_rows_hits
+        total_hits = (
+            self.sql_hits
+            + self.fragment_hits
+            + self.optimized_hits
+            + self.anonymous_returns_rows_hits
+            + self.compiled_hits
+        )
         total_accesses = (
             self.sql_hits
             + self.sql_misses
@@ -142,6 +166,8 @@ class CacheStats:
             + self.optimized_misses
             + self.anonymous_returns_rows_hits
             + self.anonymous_returns_rows_misses
+            + self.compiled_hits
+            + self.compiled_misses
         )
         return total_hits / total_accesses if total_accesses > 0 else 0.0
 
@@ -176,6 +202,13 @@ class CacheStats:
                 "evictions": self.anonymous_returns_rows_evictions,
                 "size": self.anonymous_returns_rows_size,
             },
+            "compiled_cache": {
+                "hits": self.compiled_hits,
+                "misses": self.compiled_misses,
+                "hit_rate": self.compiled_hit_rate,
+                "evictions": self.compiled_evictions,
+                "size": self.compiled_size,
+            },
             "performance": {
                 "avg_cache_lookup_time_ms": self.avg_cache_lookup_time * 1000,
                 "avg_parse_time_ms": self.avg_parse_time * 1000,
@@ -186,7 +219,8 @@ class CacheStats:
                 "total_size": self.sql_size
                 + self.fragment_size
                 + self.optimized_size
-                + self.anonymous_returns_rows_size,
+                + self.anonymous_returns_rows_size
+                + self.compiled_size,
             },
         }
 
@@ -745,7 +779,7 @@ def get_cache_stats() -> CacheStats:
     _cache_stats.fragment_size = ast_fragment_cache.size
     _cache_stats.optimized_size = optimized_expression_cache.size
     _cache_stats.anonymous_returns_rows_size = anonymous_returns_rows_cache.size
-
+    _cache_stats.compiled_size = base_statement_cache.size
     # Update fragment cache stats from internal counters
     _cache_stats.fragment_hits = ast_fragment_cache._hit_count
     _cache_stats.fragment_misses = ast_fragment_cache._miss_count

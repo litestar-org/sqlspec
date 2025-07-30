@@ -77,7 +77,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         statement_config: "Optional[SQLConfig]" = None,
         pool_instance: "Optional[Pool[Record]]" = None,
         migration_config: "Optional[dict[str, Any]]" = None,
-        enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,
         json_serializer: "Optional[Callable[[Any], str]]" = None,
         json_deserializer: "Optional[Callable[[str], Any]]" = None,
@@ -91,8 +90,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             json_serializer: JSON serialization function
             json_deserializer: JSON deserialization function
             migration_config: Migration configuration
-            enable_adapter_cache: Enable SQL compilation caching
-            adapter_cache_size: Max cached SQL statements
+            adapter_cache_size: Max cached SQL statements (0 to disable caching)
         """
         # Store the pool config as a dict
         self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
@@ -100,10 +98,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         self.json_serializer = json_serializer or to_json
         self.json_deserializer = json_deserializer or from_json
         super().__init__(
-            pool_instance=pool_instance,
-            migration_config=migration_config,
-            enable_adapter_cache=enable_adapter_cache,
-            adapter_cache_size=adapter_cache_size,
+            pool_instance=pool_instance, migration_config=migration_config, adapter_cache_size=adapter_cache_size
         )
 
     def _get_pool_config_dict(self) -> "dict[str, Any]":
@@ -161,7 +156,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                 await self.pool_instance.release(connection)
 
     @asynccontextmanager
-    async def provide_session(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[AsyncpgDriver, None]":
+    async def provide_session(
+        self, *args: Any, statement_config: "Optional[SQLConfig]" = None, **kwargs: Any
+    ) -> "AsyncGenerator[AsyncpgDriver, None]":
         """Provide an async driver session context manager.
 
         Args:
@@ -171,8 +168,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Yields:
             An AsyncpgDriver instance.
         """
+        statement_config = statement_config or self.statement_config
         async with self.provide_connection(*args, **kwargs) as connection:
-            statement_config = self.statement_config
             if statement_config is not None and statement_config.allowed_parameter_styles is None:
                 statement_config = statement_config.replace(
                     allowed_parameter_styles=self.supported_parameter_styles,
@@ -213,7 +210,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                 "PoolConnectionProxyMeta": PoolConnectionProxyMeta,
                 "ConnectionMeta": ConnectionMeta,
                 "Record": Record,
-                "AsyncpgConnection": type(AsyncpgConnection),
+                "AsyncpgConnection": AsyncpgConnection,
                 "AsyncpgCursor": AsyncpgCursor,
             }
         )

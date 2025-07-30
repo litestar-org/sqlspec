@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.parameters import DriverParameterConfig, ParameterStyle
+from sqlspec.parameters import ParameterStyle
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 
@@ -45,21 +45,26 @@ class SqliteDriver(SyncDriverAdapterBase):
     dialect: "DialectType" = "sqlite"
     default_parameter_style: "ClassVar[str]" = "qmark"
 
-    def __init__(self, connection: "SqliteConnection", config: "Optional[SQLConfig]" = None) -> None:
-        super().__init__(connection=connection, config=config)
-        self.parameter_config = DriverParameterConfig(
-            supported_parameter_styles=[ParameterStyle.QMARK],
-            default_parameter_style=ParameterStyle.QMARK,
-            type_coercion_map={
-                bool: int,
-                datetime.datetime: lambda v: v.isoformat(),
-                Decimal: str,
-                dict: to_json,
-                list: to_json,
-                tuple: lambda v: to_json(list(v)),
-            },
-            has_native_list_expansion=False,
-        )
+    def __init__(self, connection: "SqliteConnection", statement_config: "Optional[SQLConfig]" = None) -> None:
+        from sqlspec.statement.sql import SQLConfig
+
+        # Set default SQLite-specific configuration
+        if statement_config is None:
+            statement_config = SQLConfig(
+                supported_parameter_styles=[ParameterStyle.QMARK],
+                default_parameter_style=ParameterStyle.QMARK,
+                type_coercion_map={
+                    bool: int,
+                    datetime.datetime: lambda v: v.isoformat(),
+                    Decimal: str,
+                    dict: to_json,
+                    list: to_json,
+                    tuple: lambda v: to_json(list(v)),
+                },
+                has_native_list_expansion=False,
+            )
+
+        super().__init__(connection=connection, statement_config=statement_config)
 
     def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
         return SqliteCursor(connection)
@@ -69,7 +74,9 @@ class SqliteDriver(SyncDriverAdapterBase):
             sql = self._prepare_script_sql(statement)
             cursor.executescript(sql)
         else:
-            sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
+            sql, params = self._get_compiled_sql(
+                statement, self.statement_config.get_parameter_config().default_parameter_style
+            )
             if statement.is_many:
                 cursor.executemany(sql, self._prepare_driver_parameters_many(params))
             else:

@@ -9,7 +9,7 @@ from sqlglot import exp
 from sqlglot.tokens import TokenType
 
 from sqlspec.exceptions import NotFoundError
-from sqlspec.parameters import DriverParameterConfig, ParameterStyle, ParameterValidator
+from sqlspec.parameters import ParameterStyle, ParameterValidator
 from sqlspec.parameters.types import TypedParameter
 from sqlspec.statement.cache import SQLCache, anonymous_returns_rows_cache
 from sqlspec.statement.pipeline import SQLTransformContext, create_pipeline_from_config
@@ -20,6 +20,7 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
+    from sqlspec.parameters.config import ParameterStyleConfig
     from sqlspec.typing import T
 
 
@@ -43,13 +44,10 @@ ROW_RETURNING_TOKENS = {
 class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
-    __slots__ = ("_compiled_cache", "_prepared_counter", "_prepared_statements", "config", "connection")
-
-    # Core attributes
+    __slots__ = ("_compiled_cache", "_prepared_counter", "_prepared_statements", "connection", "statement_config")
     connection: "Any"
-    config: "SQLConfig"
+    statement_config: "SQLConfig"
     dialect: "DialectType"
-    parameter_config: "DriverParameterConfig"
     _compiled_cache: "Optional[SQLCache]"
     _prepared_statements: "dict[str, str]"
     _prepared_counter: int
@@ -58,18 +56,18 @@ class CommonDriverAttributesMixin:
     # Initialization
     # ================================================================================
 
-    def __init__(self, connection: "Any", config: "Optional[SQLConfig]" = None) -> None:
+    def __init__(self, connection: "Any", statement_config: "Optional[SQLConfig]" = None) -> None:
         """Initialize driver adapter with connection and caching support.
 
         Args:
             connection: Database connection instance
-            config: SQL configuration
+            statement_config: SQL statement configuration
         """
         self.connection = connection
-        self.config = config or SQLConfig()
+        self.statement_config = statement_config or SQLConfig()
         # Initialize cache with config cache_size if available, otherwise use default
-        if self.config.enable_caching:
-            cache_size = getattr(self.config, "cache_size", None)
+        if self.statement_config.enable_caching:
+            cache_size = getattr(self.statement_config, "cache_size", None)
             self._compiled_cache = SQLCache(max_size=cache_size) if cache_size is not None else SQLCache()
         else:
             self._compiled_cache = None
@@ -77,6 +75,19 @@ class CommonDriverAttributesMixin:
         self._prepared_counter = 0
 
         super().__init__()
+
+    # ================================================================================
+    # Configuration Properties
+    # ================================================================================
+
+    @property
+    def parameter_config(self) -> "ParameterStyleConfig":
+        """Get the parameter configuration from the SQL config.
+
+        Returns:
+            The parameter style configuration.
+        """
+        return self.statement_config.get_parameter_config()
 
     # ================================================================================
     # SQL Analysis & Detection Methods
@@ -200,14 +211,16 @@ class CommonDriverAttributesMixin:
         validator = ParameterValidator()
         param_infos = validator.extract_parameters(sql_str)
 
+        parameter_config = self.statement_config.get_parameter_config()
+
         if not param_infos:
-            return self.parameter_config.default_parameter_style
+            return parameter_config.default_parameter_style
 
         detected_styles = {p.style for p in param_infos}
         if len(detected_styles) > 1:
-            return self.parameter_config.default_parameter_style
+            return parameter_config.default_parameter_style
         detected_style = next(iter(detected_styles))
-        return detected_style or self.parameter_config.default_parameter_style
+        return detected_style or parameter_config.default_parameter_style
 
     @staticmethod
     def check_not_found(item_or_none: "Optional[T]" = None) -> "T":
@@ -266,7 +279,8 @@ class CommonDriverAttributesMixin:
             # CRITICAL FIX: For drivers using positional parameter styles,
             # convert dict to properly ordered list based on parameter ordinals.
             # This ensures compatibility across all drivers (SQLite, PostgreSQL, MySQL, etc.)
-            if self.parameter_config.default_parameter_style in {
+            parameter_config = self.statement_config.get_parameter_config()
+            if parameter_config.default_parameter_style in {
                 ParameterStyle.NUMERIC,  # PostgreSQL $1, $2
                 ParameterStyle.QMARK,  # SQLite ?, ?
                 ParameterStyle.POSITIONAL_PYFORMAT,  # MySQL %s, %s
@@ -339,7 +353,7 @@ class CommonDriverAttributesMixin:
         Returns:
             Tuple of (transformed expression, processed parameters)
         """
-        config = config or self.config
+        config = config or self.statement_config
         pipeline = create_pipeline_from_config(config, driver_adapter=self)
         context = SQLTransformContext(
             current_expression=expression,

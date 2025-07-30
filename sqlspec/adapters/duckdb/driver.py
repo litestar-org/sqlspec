@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.parameters import DriverParameterConfig, ParameterStyle
+from sqlspec.parameters import ParameterStyle
 
 if TYPE_CHECKING:
     from typing import Optional
@@ -37,17 +37,21 @@ class DuckDBDriver(SyncDriverAdapterBase):
     """DuckDB Sync Driver Adapter with modern architecture."""
 
     dialect: "DialectType" = "duckdb"
-    parameter_config: DriverParameterConfig
 
-    def __init__(self, connection: "DuckDBConnection", config: "Optional[SQLConfig]" = None) -> None:  # noqa: FA100
-        super().__init__(connection=connection, config=config)
-        self.parameter_config = DriverParameterConfig(
-            supported_parameter_styles=[ParameterStyle.QMARK, ParameterStyle.NUMERIC],
-            default_parameter_style=ParameterStyle.QMARK,
-            type_coercion_map={},
-            has_native_list_expansion=True,
-            force_style_conversion=True,  # DuckDB doesn't support mixed parameter styles
-        )
+    def __init__(self, connection: "DuckDBConnection", statement_config: "Optional[SQLConfig]" = None) -> None:  # noqa: FA100
+        from sqlspec.statement.sql import SQLConfig
+
+        # Set default DuckDB-specific configuration
+        if statement_config is None:
+            statement_config = SQLConfig(
+                supported_parameter_styles=[ParameterStyle.QMARK, ParameterStyle.NUMERIC],
+                default_parameter_style=ParameterStyle.QMARK,
+                type_coercion_map={},
+                has_native_list_expansion=True,
+                force_style_conversion=True,  # DuckDB doesn't support mixed parameter styles
+            )
+
+        super().__init__(connection=connection, statement_config=statement_config)
         self._execution_state: dict[str, Optional[int]] = {"executemany_count": None}
 
     def with_cursor(self, connection: "DuckDBConnection") -> "DuckDBCursor":
@@ -64,7 +68,9 @@ class DuckDBDriver(SyncDriverAdapterBase):
                     cursor.execute(stmt)
         else:
             # Enable intelligent parameter conversion - DuckDB supports both QMARK and NUMERIC
-            sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
+            sql, params = self._get_compiled_sql(
+                statement, self.statement_config.get_parameter_config().default_parameter_style
+            )
 
             if statement.is_many:
                 # For execute_many, params is already a list of parameter sets

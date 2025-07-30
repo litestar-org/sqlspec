@@ -206,7 +206,7 @@ def driver_attributes() -> CommonDriverAttributesMixin:
             # Create a mock connection for the test
             mock_connection = MockConnection()
             self.connection = mock_connection
-            self.config = None  # type: ignore[assignment]
+            self.statement_config = None  # type: ignore[assignment]
             self.dialect = "sqlite"
             super().__init__(connection=mock_connection)
 

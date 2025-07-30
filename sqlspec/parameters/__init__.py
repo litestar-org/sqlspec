@@ -4,7 +4,7 @@ This module provides centralized parameter handling to eliminate duplication
 across database drivers while maintaining high performance through MyPyC optimization.
 """
 
-from sqlspec.parameters.config import DriverParameterConfig
+from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.parameters.converter import ParameterConverter
 from sqlspec.parameters.core import ParameterProcessor
 from sqlspec.parameters.types import (
@@ -21,11 +21,11 @@ __all__ = (
     "MAX_32BIT_INT",
     "SQLGLOT_INCOMPATIBLE_STYLES",
     "ConvertedParameters",
-    "DriverParameterConfig",
     "ParameterConverter",
     "ParameterInfo",
     "ParameterProcessor",
     "ParameterStyle",
+    "ParameterStyleConfig",
     "ParameterStyleConversionState",
     "ParameterValidator",
 )

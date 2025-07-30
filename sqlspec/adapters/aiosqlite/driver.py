@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional
 import aiosqlite
 
 from sqlspec.driver import AsyncDriverAdapterBase
-from sqlspec.parameters import DriverParameterConfig, ParameterStyle
+from sqlspec.parameters import ParameterStyle
 from sqlspec.statement.splitter import split_sql_script
 from sqlspec.utils.serializers import to_json
 
@@ -41,23 +41,27 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
     dialect: "DialectType" = "sqlite"
     default_parameter_style: "ClassVar[str]" = "qmark"
-    parameter_config: DriverParameterConfig
 
-    def __init__(self, connection: "AiosqliteConnection", config: "Optional[SQLConfig]" = None) -> None:
-        super().__init__(connection=connection, config=config)
-        self.parameter_config = DriverParameterConfig(
-            supported_parameter_styles=[ParameterStyle.QMARK],  # Only supports ?
-            default_parameter_style=ParameterStyle.QMARK,
-            type_coercion_map={
-                bool: int,
-                datetime.datetime: lambda v: v.isoformat(),
-                Decimal: str,
-                dict: to_json,
-                list: to_json,
-                tuple: lambda v: to_json(list(v)),
-            },
-            has_native_list_expansion=False,
-        )
+    def __init__(self, connection: "AiosqliteConnection", statement_config: "Optional[SQLConfig]" = None) -> None:
+        from sqlspec.statement.sql import SQLConfig
+
+        # Set default aiosqlite-specific configuration
+        if statement_config is None:
+            statement_config = SQLConfig(
+                supported_parameter_styles=[ParameterStyle.QMARK],  # Only supports ?
+                default_parameter_style=ParameterStyle.QMARK,
+                type_coercion_map={
+                    bool: int,
+                    datetime.datetime: lambda v: v.isoformat(),
+                    Decimal: str,
+                    dict: to_json,
+                    list: to_json,
+                    tuple: lambda v: to_json(list(v)),
+                },
+                has_native_list_expansion=False,
+            )
+
+        super().__init__(connection=connection, statement_config=statement_config)
 
     def with_cursor(self, connection: "Optional[AiosqliteConnection]" = None) -> "AiosqliteCursor":
         conn_to_use = connection or self.connection
@@ -79,7 +83,9 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
     async def _perform_execute(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> None:
         # Compile with driver's parameter style
-        sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
+        sql, params = self._get_compiled_sql(
+            statement, self.statement_config.get_parameter_config().default_parameter_style
+        )
 
         if statement.is_script:
             # aiosqlite doesn't support executescript, so we need to execute statements one by one

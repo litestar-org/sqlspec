@@ -167,7 +167,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         suppress_warnings: bool = False,
         **kwargs: Any,
     ) -> "SQLResult":
-        sql_statement = self._prepare_sql(statement, *parameters, config=config or self.config, **kwargs)
+        sql_statement = self._prepare_sql(statement, *parameters, config=config or self.statement_config, **kwargs)
         return await self._dispatch_execution(statement=sql_statement, connection=self.connection)
 
     async def _dispatch_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
@@ -216,12 +216,12 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         # For execute_many, we need to handle parameters specially to preserve structure
         if parameters and len(parameters) == 1 and isinstance(parameters[0], list):
             # Direct list of parameter sets - pass to as_many
-            sql_statement = self._prepare_sql(statement, config=config or self.config, **kwargs)
+            sql_statement = self._prepare_sql(statement, config=config or self.statement_config, **kwargs)
             return await self._dispatch_execution(
                 statement=sql_statement.as_many(parameters[0]), connection=self.connection
             )
 
-        sql_statement = self._prepare_sql(statement, *parameters, config=config or self.config, **kwargs)
+        sql_statement = self._prepare_sql(statement, *parameters, config=config or self.statement_config, **kwargs)
 
         # Mark for batch execution - as_many() will use the existing positional params
         return await self._dispatch_execution(statement=sql_statement.as_many(), connection=self.connection)
@@ -240,7 +240,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         By default, validates each statement and logs warnings for dangerous
         operations. Use suppress_warnings=True for migrations and admin scripts.
         """
-        script_config = config or self.config
+        script_config = config or self.statement_config
         sql_statement = self._prepare_sql(statement, *parameters, config=script_config, **kwargs)
 
         return await self._dispatch_execution(statement=sql_statement.as_script(), connection=self.connection)
@@ -541,7 +541,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
             >>> print(f"Page data: {len(data)} rows, Total: {total} rows")
         """
         # 1. Prepare original SQL statement
-        sql_statement = self._prepare_sql(statement, *parameters, config=config or self.config, **kwargs)
+        sql_statement = self._prepare_sql(statement, *parameters, config=config or self.statement_config, **kwargs)
 
         # 2. Create optimized COUNT query
         count_sql = self._create_count_query(sql_statement)

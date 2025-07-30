@@ -369,7 +369,6 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         connection_config: "Optional[Union[DuckDBConnectionParams, dict[str, Any]]]" = None,
         statement_config: "Optional[SQLConfig]" = None,
         migration_config: Optional[dict[str, Any]] = None,
-        enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,
         extensions: "Optional[Sequence[DuckDBExtensionConfig]]" = None,
         secrets: "Optional[Sequence[DuckDBSecretConfig]]" = None,
@@ -389,8 +388,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             secrets: List of secret dicts for AI/API integrations with keys: secret_type, name, value, scope
             on_connection_create: Callback executed when connection is created
             migration_config: Migration configuration
-            enable_adapter_cache: Enable SQL compilation caching
-            adapter_cache_size: Max cached SQL statements
+            adapter_cache_size: Adapter cache size (0 to disable caching)
             min_pool: Minimum number of connections to maintain (default: 2)
             max_pool: Maximum number of connections allowed (default: 10)
             pool_timeout: Pool checkout timeout in seconds (default: 30.0)
@@ -434,6 +432,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         if database == ":memory:":
             # Basic :memory: doesn't share between connections, convert to unique named
             import uuid
+
             unique_id = str(uuid.uuid4())[:8]  # Short unique identifier
             self.connection_config["database"] = f":memory:pool_{unique_id}"
 
@@ -448,10 +447,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         self.pool_recycle = pool_recycle
 
         super().__init__(
-            pool_instance=pool_instance,
-            migration_config=migration_config,
-            enable_adapter_cache=enable_adapter_cache,
-            adapter_cache_size=adapter_cache_size,
+            pool_instance=pool_instance, migration_config=migration_config, adapter_cache_size=adapter_cache_size
         )
 
     def _get_connection_config_dict(self) -> dict[str, Any]:
@@ -618,25 +614,28 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             yield connection
 
     @contextmanager
-    def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[DuckDBDriver, None, None]":
+    def provide_session(
+        self, *args: Any, statement_config: "Optional[SQLConfig]" = None, **kwargs: Any
+    ) -> "Generator[DuckDBDriver, None, None]":
         """Provide a DuckDB driver session context manager.
 
         Args:
             *args: Additional arguments.
+            statement_config: Optional statement configuration override.
             **kwargs: Additional keyword arguments.
 
         Yields:
             A context manager that yields a DuckDBDriver instance.
         """
         with self.provide_connection(*args, **kwargs) as connection:
-            statement_config = self.statement_config
+            statement_config = statement_config or self.statement_config
             # Inject parameter style info if not already set
             if statement_config.allowed_parameter_styles is None:
                 statement_config = statement_config.replace(
                     allowed_parameter_styles=self.supported_parameter_styles,
                     default_parameter_style=self.default_parameter_style,
                 )
-            driver = self.driver_type(connection=connection, config=statement_config)
+            driver = self.driver_type(connection=connection, statement_config=statement_config)
             yield driver
 
     def _is_memory_database(self, database: str) -> bool:

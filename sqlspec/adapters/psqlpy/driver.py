@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from sqlspec.adapters.psqlpy._types import PsqlpyConnection
 from sqlspec.driver import AsyncDriverAdapterBase
-from sqlspec.parameters import DriverParameterConfig, ParameterStyle
+from sqlspec.parameters import ParameterStyle
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -32,25 +32,31 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     """Psqlpy Driver Adapter."""
 
     dialect: "DialectType" = "postgres"
-    parameter_config: DriverParameterConfig
 
-    def __init__(self, connection: PsqlpyConnection, config: "Optional[SQLConfig]" = None) -> None:
-        super().__init__(connection=connection, config=config)
-        self.parameter_config = DriverParameterConfig(
-            supported_parameter_styles=[ParameterStyle.NUMERIC],  # $1, $2
-            default_parameter_style=ParameterStyle.NUMERIC,
-            type_coercion_map={
-                # Psqlpy handles most types natively
-                # Add any specific type mappings as needed
-            },
-            has_native_list_expansion=True,  # Psqlpy handles lists natively
-        )
+    def __init__(self, connection: PsqlpyConnection, statement_config: "Optional[SQLConfig]" = None) -> None:
+        from sqlspec.statement.sql import SQLConfig
+
+        # Set default psqlpy-specific configuration
+        if statement_config is None:
+            statement_config = SQLConfig(
+                supported_parameter_styles=[ParameterStyle.NUMERIC],  # $1, $2
+                default_parameter_style=ParameterStyle.NUMERIC,
+                type_coercion_map={
+                    # Psqlpy handles most types natively
+                    # Add any specific type mappings as needed
+                },
+                has_native_list_expansion=True,  # Psqlpy handles lists natively
+            )
+
+        super().__init__(connection=connection, statement_config=statement_config)
 
     def with_cursor(self, connection: PsqlpyConnection) -> "PsqlpyCursor":
         return PsqlpyCursor(connection)
 
     async def _perform_execute(self, cursor: PsqlpyConnection, statement: "SQL") -> None:
-        sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
+        sql, params = self._get_compiled_sql(
+            statement, self.statement_config.get_parameter_config().default_parameter_style
+        )
 
         # Store compiled SQL and params to avoid re-compilation in _extract_select_data
         self._last_compiled_sql = sql

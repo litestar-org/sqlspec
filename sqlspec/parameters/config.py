@@ -4,18 +4,15 @@ from typing import Any, Callable, Optional
 
 from sqlspec.parameters.types import ParameterStyle
 
-__all__ = ("DriverParameterConfig",)
+__all__ = ("ParameterStyleConfig",)
 
 
-class DriverParameterConfig:
-    """Declarative configuration for a driver's parameter handling.
-
-    This replaces 50-100 lines of imperative parameter handling code
-    per driver with a simple declarative configuration.
-    """
+class ParameterStyleConfig:
+    """Declarative configuration for a driver's parameter handling."""
 
     __slots__ = (
         "default_parameter_style",
+        "execution_target_style",
         "force_style_conversion",
         "has_native_list_expansion",
         "output_transformer",
@@ -31,6 +28,7 @@ class DriverParameterConfig:
         output_transformer: Optional[Callable[[str, Any], tuple[str, Any]]] = None,
         supported_parameter_styles: Optional[list[ParameterStyle]] = None,
         force_style_conversion: bool = False,
+        execution_target_style: Optional[ParameterStyle] = None,
     ) -> None:
         """Initialize driver parameter configuration.
 
@@ -41,6 +39,7 @@ class DriverParameterConfig:
             output_transformer: Optional additional parameter transformations
             supported_parameter_styles: List of parameter styles the driver natively supports
             force_style_conversion: Force conversion even if style is supported (e.g., psycopg)
+            execution_target_style: Final parameter style for database execution (defaults to default_parameter_style)
         """
 
         if supported_parameter_styles is None:
@@ -52,6 +51,7 @@ class DriverParameterConfig:
 
         self.supported_parameter_styles = supported_parameter_styles
         self.default_parameter_style = default_parameter_style
+        self.execution_target_style = execution_target_style or default_parameter_style
         self.type_coercion_map = type_coercion_map or {}
         self.has_native_list_expansion = has_native_list_expansion
         self.force_style_conversion = force_style_conversion

@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
-from sqlspec.parameters import DriverParameterConfig, ParameterStyle
+from sqlspec.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, SQLConfig
 
@@ -47,30 +47,34 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
     """Psycopg Sync Driver Adapter. Refactored for new protocol."""
 
     dialect: "DialectType" = "postgres"
-    parameter_config: DriverParameterConfig
 
-    def __init__(self, connection: PsycopgSyncConnection, config: "Optional[SQLConfig]" = None) -> None:
-        super().__init__(connection=connection, config=config)
-        self.parameter_config = DriverParameterConfig(
-            supported_parameter_styles=[
-                ParameterStyle.POSITIONAL_PYFORMAT,  # %s
-                ParameterStyle.NAMED_PYFORMAT,  # %(name)s
-                ParameterStyle.NUMERIC,  # $1 (also supported!)
-            ],
-            default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-            type_coercion_map={
-                # Psycopg handles most types natively
-                # Add any specific type mappings as needed
-            },
-            has_native_list_expansion=True,  # Psycopg handles lists/tuples natively
-            force_style_conversion=False,  # Psycopg natively supports %s placeholders
-        )
+    def __init__(self, connection: PsycopgSyncConnection, statement_config: "Optional[SQLConfig]" = None) -> None:
+        # Set default Psycopg-specific configuration
+        if statement_config is None:
+            statement_config = SQLConfig(
+                supported_parameter_styles=[
+                    ParameterStyle.POSITIONAL_PYFORMAT,  # %s
+                    ParameterStyle.NAMED_PYFORMAT,  # %(name)s
+                    ParameterStyle.NUMERIC,  # $1 (also supported!)
+                ],
+                default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
+                type_coercion_map={
+                    # Psycopg handles most types natively
+                    # Add any specific type mappings as needed
+                },
+                has_native_list_expansion=True,  # Psycopg handles lists/tuples natively
+                force_style_conversion=False,  # Psycopg natively supports %s placeholders
+            )
+
+        super().__init__(connection=connection, statement_config=statement_config)
 
     def with_cursor(self, connection: PsycopgSyncConnection) -> PsycopgSyncCursor:
         return PsycopgSyncCursor(connection)
 
     def _perform_execute(self, cursor: Any, statement: "SQL") -> None:
-        sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
+        sql, params = self._get_compiled_sql(
+            statement, self.statement_config.get_parameter_config().default_parameter_style
+        )
 
         # Check if this is a COPY statement marked by the pipeline
         if statement._processing_context and statement._processing_context.metadata.get("postgres_copy_operation"):
@@ -199,27 +203,31 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
     """Psycopg Async Driver Adapter. Refactored for new protocol."""
 
     dialect: "DialectType" = "postgres"
-    parameter_config: DriverParameterConfig
 
-    def __init__(self, connection: PsycopgAsyncConnection, config: Optional[SQLConfig] = None) -> None:
-        super().__init__(connection=connection, config=config)
-        self.parameter_config = DriverParameterConfig(
-            supported_parameter_styles=[
-                ParameterStyle.POSITIONAL_PYFORMAT,
-                ParameterStyle.NAMED_PYFORMAT,
-                ParameterStyle.NUMERIC,
-            ],
-            default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-            type_coercion_map={},
-            has_native_list_expansion=True,
-            force_style_conversion=False,
-        )
+    def __init__(self, connection: PsycopgAsyncConnection, statement_config: Optional[SQLConfig] = None) -> None:
+        # Set default Psycopg-specific configuration
+        if statement_config is None:
+            statement_config = SQLConfig(
+                supported_parameter_styles=[
+                    ParameterStyle.POSITIONAL_PYFORMAT,
+                    ParameterStyle.NAMED_PYFORMAT,
+                    ParameterStyle.NUMERIC,
+                ],
+                default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
+                type_coercion_map={},
+                has_native_list_expansion=True,
+                force_style_conversion=False,
+            )
+
+        super().__init__(connection=connection, statement_config=statement_config)
 
     def with_cursor(self, connection: "PsycopgAsyncConnection") -> "PsycopgAsyncCursor":
         return PsycopgAsyncCursor(connection)
 
     async def _perform_execute(self, cursor: Any, statement: "SQL") -> None:
-        sql, params = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
+        sql, params = self._get_compiled_sql(
+            statement, self.statement_config.get_parameter_config().default_parameter_style
+        )
 
         # Check if this is a COPY statement marked by the pipeline
         if statement._processing_context and statement._processing_context.metadata.get("postgres_copy_operation"):

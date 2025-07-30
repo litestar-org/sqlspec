@@ -87,7 +87,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         statement_config: Optional[SQLConfig] = None,
         on_connection_create: Optional[Callable[[AdbcConnection], None]] = None,
         migration_config: Optional[dict[str, Any]] = None,
-        enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,
     ) -> None:
         """Initialize ADBC configuration with universal connectivity features.
@@ -97,8 +96,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             statement_config: Default SQL statement configuration
             on_connection_create: Callback executed when connection is created
             migration_config: Migration configuration
-            enable_adapter_cache: Enable SQL compilation caching
-            adapter_cache_size: Max cached SQL statements
+            adapter_cache_size: Max cached SQL statements (0 to disable caching)
             extra: Additional parameters (stored in extras)
 
         Example:
@@ -142,11 +140,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
         self.statement_config = statement_config or SQLConfig()
         self.on_connection_create = on_connection_create
-        super().__init__(
-            migration_config=migration_config,
-            enable_adapter_cache=enable_adapter_cache,
-            adapter_cache_size=adapter_cache_size,
-        )
+        super().__init__(migration_config=migration_config, adapter_cache_size=adapter_cache_size)
 
     def _resolve_driver_name(self) -> str:
         """Resolve and normalize the ADBC driver name.
@@ -226,14 +220,9 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
                 # Only default to SQLite for paths that look like file paths with clear directory separators
                 # and don't conflict with data file extensions
-                if ("/" in uri or "\\" in uri or uri.startswith(("./", "../"))) and not uri_lower.endswith((
-                    ".parquet",
-                    ".csv",
-                    ".json",
-                    ".txt",
-                    ".log",
-                    ".xml",
-                )):
+                if ("/" in uri or "\\" in uri or uri.startswith(("./", "../"))) and not uri_lower.endswith(
+                    (".parquet", ".csv", ".json", ".txt", ".log", ".xml")
+                ):
                     return "adbc_driver_sqlite.dbapi.connect"
 
         # Could not determine driver
@@ -366,11 +355,14 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         finally:
             connection.close()
 
-    def provide_session(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[AdbcDriver]":
+    def provide_session(
+        self, *args: Any, statement_config: "Optional[SQLConfig]" = None, **kwargs: Any
+    ) -> "AbstractContextManager[AdbcDriver]":
         """Provide an ADBC driver session context manager.
 
         Args:
             *args: Additional arguments.
+            statement_config: Optional statement configuration override.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -382,23 +374,25 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             with self.provide_connection(*args, **kwargs) as connection:
                 supported_styles, preferred_style = self._get_parameter_styles()
 
-                statement_config = self.statement_config
-                if statement_config is not None:
-                    if statement_config.dialect is None:
-                        statement_config = statement_config.replace(dialect=self._get_dialect())
+                statement_config_to_use = statement_config or self.statement_config
+                if statement_config_to_use is not None:
+                    if statement_config_to_use.dialect is None:
+                        statement_config_to_use = statement_config_to_use.replace(dialect=self._get_dialect())
 
-                    if statement_config.allowed_parameter_styles is None:
-                        statement_config = statement_config.replace(
+                    if statement_config_to_use.allowed_parameter_styles is None:
+                        statement_config_to_use = statement_config_to_use.replace(
                             allowed_parameter_styles=supported_styles, default_parameter_style=preferred_style
                         )
                     if self._get_dialect() == "postgres":
                         custom_pipeline_steps = [adbc_null_transform_step]
-                        if statement_config.custom_pipeline_steps:
-                            custom_pipeline_steps.extend(statement_config.custom_pipeline_steps)
+                        if statement_config_to_use.custom_pipeline_steps:
+                            custom_pipeline_steps.extend(statement_config_to_use.custom_pipeline_steps)
 
-                        statement_config = statement_config.replace(custom_pipeline_steps=custom_pipeline_steps)
+                        statement_config_to_use = statement_config_to_use.replace(
+                            custom_pipeline_steps=custom_pipeline_steps
+                        )
 
-                driver = self.driver_type(connection=connection, config=statement_config)
+                driver = self.driver_type(connection=connection, statement_config=statement_config_to_use)
                 yield driver
 
         return session_manager()

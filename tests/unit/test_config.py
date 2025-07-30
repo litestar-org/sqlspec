@@ -170,27 +170,15 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
 class MockSyncTestConfig(NoPoolSyncConfig["MockConnection", "MockSyncDriver"]):
     """Mock sync config without pooling for testing."""
 
-    __slots__ = ()
+    __slots__ = ("connection_config",)
 
     driver_type: "ClassVar[type[MockSyncDriver]]" = MockSyncDriver
     connection_type: "ClassVar[type[MockConnection]]" = MockConnection
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = False
-    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("qmark", "named")
-    default_parameter_style: "ClassVar[str]" = "qmark"
 
-    def __init__(
-        self,
-        migration_config: "Optional[dict[str, Any]]" = None,
-        enable_adapter_cache: bool = True,
-        adapter_cache_size: int = 1000,
-    ) -> None:
-        super().__init__(
-            migration_config=migration_config,
-            enable_adapter_cache=enable_adapter_cache,
-            adapter_cache_size=adapter_cache_size,
-        )
-        pass
+    def __init__(self, migration_config: "Optional[dict[str, Any]]" = None, adapter_cache_size: int = 1000) -> None:
+        super().__init__(migration_config=migration_config, adapter_cache_size=adapter_cache_size)
 
     def __hash__(self) -> int:
         return id(self)
@@ -220,27 +208,15 @@ class MockSyncTestConfig(NoPoolSyncConfig["MockConnection", "MockSyncDriver"]):
 class MockAsyncTestConfig(NoPoolAsyncConfig["MockConnection", "MockAsyncDriver"]):
     """Mock async config without pooling for testing."""
 
-    __slots__ = ()  # No additional fields beyond parent
+    __slots__ = ("connection_config",)  # Additional fields beyond parent
 
     driver_type: "ClassVar[type[MockAsyncDriver]]" = MockAsyncDriver
     connection_type: "ClassVar[type[MockConnection]]" = MockConnection
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = False
-    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("numeric",)
-    default_parameter_style: "ClassVar[str]" = "numeric"
 
-    def __init__(
-        self,
-        migration_config: "Optional[dict[str, Any]]" = None,
-        enable_adapter_cache: bool = True,
-        adapter_cache_size: int = 1000,
-    ) -> None:
-        super().__init__(
-            migration_config=migration_config,
-            enable_adapter_cache=enable_adapter_cache,
-            adapter_cache_size=adapter_cache_size,
-        )
-        pass
+    def __init__(self, migration_config: "Optional[dict[str, Any]]" = None, adapter_cache_size: int = 1000) -> None:
+        super().__init__(migration_config=migration_config, adapter_cache_size=adapter_cache_size)
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -267,29 +243,22 @@ class MockAsyncTestConfig(NoPoolAsyncConfig["MockConnection", "MockAsyncDriver"]
 class MockSyncPoolTestConfig(SyncDatabaseConfig["MockConnection", "MockPool", "MockSyncDriver"]):
     """Mock sync config with pooling for testing."""
 
-    __slots__ = ()  # No additional fields beyond parent
+    __slots__ = ("pool_config",)  # Additional fields beyond parent
 
     driver_type: "ClassVar[type[MockSyncDriver]]" = MockSyncDriver
     connection_type: "ClassVar[type[MockConnection]]" = MockConnection
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = True
-    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("qmark",)
-    default_parameter_style: "ClassVar[str]" = "qmark"
 
     def __init__(
         self,
         pool_instance: "Optional[MockPool]" = None,
         migration_config: "Optional[dict[str, Any]]" = None,
-        enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,
     ) -> None:
         super().__init__(
-            pool_instance=pool_instance,
-            migration_config=migration_config,
-            enable_adapter_cache=enable_adapter_cache,
-            adapter_cache_size=adapter_cache_size,
+            pool_instance=pool_instance, migration_config=migration_config, adapter_cache_size=adapter_cache_size
         )
-        pass
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -323,29 +292,22 @@ class MockSyncPoolTestConfig(SyncDatabaseConfig["MockConnection", "MockPool", "M
 class MockAsyncPoolTestConfig(AsyncDatabaseConfig["MockConnection", "MockPool", "MockAsyncDriver"]):
     """Mock async config with pooling for testing."""
 
-    __slots__ = ()  # No additional fields beyond parent
+    __slots__ = ("pool_config",)  # Additional fields beyond parent
 
     driver_type: "ClassVar[type[MockAsyncDriver]]" = MockAsyncDriver
     connection_type: "ClassVar[type[MockConnection]]" = MockConnection
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = True
-    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("numeric",)
-    default_parameter_style: "ClassVar[str]" = "numeric"
 
     def __init__(
         self,
         pool_instance: "Optional[MockPool]" = None,
         migration_config: "Optional[dict[str, Any]]" = None,
-        enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,
     ) -> None:
         super().__init__(
-            pool_instance=pool_instance,
-            migration_config=migration_config,
-            enable_adapter_cache=enable_adapter_cache,
-            adapter_cache_size=adapter_cache_size,
+            pool_instance=pool_instance, migration_config=migration_config, adapter_cache_size=adapter_cache_size
         )
-        pass
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -388,36 +350,24 @@ def test_database_config_protocol_hash() -> None:
     assert hash(config2) == id(config2)
 
 
-def test_database_config_dialect_property() -> None:
-    """Test dialect property lazy loading."""
+# Dialect functionality has been moved to the driver level only
+
+
+# Test statement configuration
+def test_sync_config_statement_config() -> None:
+    """Test sync config statement configuration."""
     config = MockSyncTestConfig()
-
-    # Initial state - dialect not loaded
-    assert config._dialect is None
-
-    # Access dialect - should load from driver
-    dialect = config.dialect
-    assert dialect == "mock"
-    assert config._dialect == "mock"
-
-    # Subsequent access should use cached value
-    dialect2 = config.dialect
-    assert dialect2 == "mock"
+    assert config.statement_config is not None
+    assert hasattr(config.statement_config, "enable_transformations")
+    assert hasattr(config.statement_config, "default_parameter_style")
 
 
-# Test parameter style configuration
-def test_sync_config_parameter_styles() -> None:
-    """Test sync config parameter style attributes."""
-    config = MockSyncTestConfig()
-    assert config.supported_parameter_styles == ("qmark", "named")
-    assert config.default_parameter_style == "qmark"
-
-
-def test_async_config_parameter_styles() -> None:
-    """Test async config parameter style attributes."""
+def test_async_config_statement_config() -> None:
+    """Test async config statement configuration."""
     config = MockAsyncTestConfig()
-    assert config.supported_parameter_styles == ("numeric",)
-    assert config.default_parameter_style == "numeric"
+    assert config.statement_config is not None
+    assert hasattr(config.statement_config, "enable_transformations")
+    assert hasattr(config.statement_config, "default_parameter_style")
 
 
 # Test NoPoolSyncConfig behavior

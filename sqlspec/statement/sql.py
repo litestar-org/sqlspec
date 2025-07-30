@@ -12,10 +12,10 @@ from typing_extensions import TypeAlias
 from sqlspec.exceptions import RiskLevel, SQLParsingError, SQLValidationError
 from sqlspec.parameters import (
     SQLGLOT_INCOMPATIBLE_STYLES,
-    DriverParameterConfig,
     ParameterConverter,
     ParameterProcessor,
     ParameterStyle,
+    ParameterStyleConfig,
     ParameterStyleConversionState,
     ParameterValidator,
 )
@@ -91,11 +91,17 @@ SQL_CONFIG_SLOTS = (
     "enable_parsing",
     "enable_transformations",
     "enable_validation",
+    "execution_target_style",
+    "force_style_conversion",
+    "has_native_list_expansion",
     "input_sql_had_placeholders",
+    "output_transformer",
     "parameter_converter",
     "parameter_validator",
     "parse_errors_as_warnings",
+    "supported_parameter_styles",
     "transformers",
+    "type_coercion_map",
     "validators",
 )
 
@@ -244,6 +250,13 @@ class SQLConfig:
         allow_mixed_parameter_styles: bool = False,
         analyzer_output_handler: "Optional[Callable[[Any], None]]" = None,
         custom_pipeline_steps: "Optional[list[Any]]" = None,
+        # ParameterStyleConfig integration
+        supported_parameter_styles: "Optional[list[ParameterStyle]]" = None,
+        execution_target_style: "Optional[ParameterStyle]" = None,
+        type_coercion_map: "Optional[dict[type, Callable[[Any], Any]]]" = None,
+        has_native_list_expansion: bool = False,
+        force_style_conversion: bool = False,
+        output_transformer: "Optional[Callable[[str, Any], tuple[str, Any]]]" = None,
     ) -> None:
         self.enable_parsing = enable_parsing
         self.enable_validation = enable_validation
@@ -265,6 +278,49 @@ class SQLConfig:
         self.allow_mixed_parameter_styles = allow_mixed_parameter_styles
         self.analyzer_output_handler = analyzer_output_handler
         self.custom_pipeline_steps = custom_pipeline_steps
+        # ParameterStyleConfig integration
+        self.supported_parameter_styles = supported_parameter_styles or []
+        self.execution_target_style = execution_target_style
+        self.type_coercion_map = type_coercion_map or {}
+        self.has_native_list_expansion = has_native_list_expansion
+        self.force_style_conversion = force_style_conversion
+        self.output_transformer = output_transformer
+
+    def get_parameter_config(self) -> "ParameterStyleConfig":
+        """Create a ParameterStyleConfig from the SQLConfig fields.
+
+        Returns:
+            ParameterStyleConfig instance with values from this SQLConfig.
+        """
+        # Convert string parameter style to ParameterStyle enum if needed
+        default_style = self.default_parameter_style
+        if isinstance(default_style, str):
+            # Map string to enum
+            style_map = {
+                "qmark": ParameterStyle.QMARK,
+                "numeric": ParameterStyle.NUMERIC,
+                "named": ParameterStyle.NAMED_COLON,
+                "named_at": ParameterStyle.NAMED_AT,
+                "named_colon": ParameterStyle.NAMED_COLON,
+                "positional_colon": ParameterStyle.POSITIONAL_COLON,
+                "format": ParameterStyle.POSITIONAL_PYFORMAT,
+                "pyformat": ParameterStyle.NAMED_PYFORMAT,
+                "positional_pyformat": ParameterStyle.POSITIONAL_PYFORMAT,
+                "named_pyformat": ParameterStyle.NAMED_PYFORMAT,
+            }
+            default_style = style_map.get(default_style, ParameterStyle.QMARK)
+        elif default_style is None:
+            default_style = ParameterStyle.QMARK
+
+        return ParameterStyleConfig(
+            default_parameter_style=default_style,
+            supported_parameter_styles=self.supported_parameter_styles,
+            execution_target_style=self.execution_target_style,
+            type_coercion_map=self.type_coercion_map,
+            has_native_list_expansion=self.has_native_list_expansion,
+            force_style_conversion=self.force_style_conversion,
+            output_transformer=self.output_transformer,
+        )
 
     def replace(self, **changes: Any) -> "SQLConfig":
         """Create a new SQLConfig with specified changes.
@@ -1561,7 +1617,7 @@ class SQL:
                 params = self._reorder_parameters(params, parameter_mapping)
 
         # Apply driver-aware parameter processing if driver is available
-        if driver and driver.parameter_config:
+        if driver and hasattr(driver, "config"):
             sql, params = self._apply_driver_parameter_processing(sql, params, placeholder_style, driver)
         else:
             # Fallback to current behavior
@@ -1617,7 +1673,7 @@ class SQL:
             Tuple of (processed_sql, processed_params)
         """
 
-        config = driver.parameter_config
+        config = driver.config.get_parameter_config()
 
         # Determine target style
         target_style = ParameterStyle(requested_style) if requested_style else config.default_parameter_style
@@ -1637,12 +1693,22 @@ class SQL:
             or (requested_style and ParameterStyle(requested_style) != config.default_parameter_style)
         )
 
-        if needs_conversion or config.type_coercion_map:
+        # Check if we need to convert dict parameters to list format for positional styles
+        # This happens when the SQL style already matches but parameters are in dict format
+        needs_dict_to_list_conversion = (
+            params
+            and isinstance(params, dict)
+            and target_style in {ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_PYFORMAT}
+            and detected_styles
+            and any(s == target_style for s in detected_styles)
+        )
+
+        if (needs_conversion or config.type_coercion_map) and not needs_dict_to_list_conversion:
             # Use ParameterProcessor for conversion
             processor = ParameterProcessor()
 
             # Create a temporary config for the processor
-            temp_config = DriverParameterConfig(
+            temp_config = ParameterStyleConfig(
                 supported_parameter_styles=[target_style],
                 default_parameter_style=target_style,
                 type_coercion_map=config.type_coercion_map,

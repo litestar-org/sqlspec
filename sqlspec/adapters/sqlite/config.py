@@ -245,7 +245,6 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         connection_config: "Optional[Union[SqliteConnectionParams, dict[str, Any]]]" = None,
         statement_config: "Optional[SQLConfig]" = None,
         migration_config: "Optional[dict[str, Any]]" = None,
-        enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,
         min_pool_size: int = DEFAULT_MIN_POOL,
         max_pool_size: int = DEFAULT_MAX_POOL,
@@ -259,8 +258,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             connection_config: Connection configuration parameters as TypedDict
             statement_config: Default SQL statement configuration
             migration_config: Migration configuration
-            enable_adapter_cache: Enable SQL compilation caching
-            adapter_cache_size: Max cached SQL statements
+            adapter_cache_size: Max cached SQL statements (0 to disable caching)
             min_pool_size: Minimum number of connections to maintain (default: 5)
             max_pool_size: Maximum number of connections allowed (default: 20)
             pool_timeout: Pool checkout timeout in seconds (default: 30.0)
@@ -295,10 +293,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         self.pool_recycle = pool_recycle
 
         super().__init__(
-            pool_instance=pool_instance,
-            migration_config=migration_config,
-            enable_adapter_cache=enable_adapter_cache,
-            adapter_cache_size=adapter_cache_size,
+            pool_instance=pool_instance, migration_config=migration_config, adapter_cache_size=adapter_cache_size
         )
 
     def _convert_to_shared_memory(self) -> None:

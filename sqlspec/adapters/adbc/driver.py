@@ -6,7 +6,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.parameters import DriverParameterConfig, ParameterStyle
+from sqlspec.parameters import ParameterStyle
 from sqlspec.statement.sql import SQL, SQLConfig
 from sqlspec.utils.serializers import to_json
 
@@ -62,34 +62,33 @@ DIALECT_PARAMETER_STYLES = {
 class AdbcDriver(SyncDriverAdapterBase):
     """ADBC Sync Driver Adapter with modern architecture."""
 
-    # Default parameter config - will be overridden in __init__ based on dialect
-    parameter_config: DriverParameterConfig
-
-    def __init__(self, connection: "AdbcConnection", config: "Optional[SQLConfig]" = None) -> None:
+    def __init__(self, connection: "AdbcConnection", statement_config: "Optional[SQLConfig]" = None) -> None:
         dialect = self._get_dialect(connection)
-        if config and not config.dialect:
-            config = config.replace(dialect=dialect)
-        elif not config:
-            config = SQLConfig(dialect=dialect)
 
-        super().__init__(connection=connection, config=config)
+        # Set default ADBC-specific configuration if none provided
+        if statement_config is None:
+            default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
+                dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
+            )
+            statement_config = SQLConfig(
+                dialect=dialect,
+                supported_parameter_styles=supported_styles,
+                default_parameter_style=default_style,
+                type_coercion_map=self._get_type_coercion_map(dialect),
+                has_native_list_expansion=True,  # ADBC handles lists natively
+            )
+
+        # Ensure dialect is set if not provided
+        if statement_config and not statement_config.dialect:
+            statement_config = statement_config.replace(dialect=dialect)
+
+        super().__init__(connection=connection, statement_config=statement_config)
         self.dialect: DialectType = dialect
-        default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
-            self.dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
-        )
-
-        # Override the class parameter_config for this instance
-        self.parameter_config = DriverParameterConfig(
-            supported_parameter_styles=supported_styles,
-            default_parameter_style=default_style,
-            type_coercion_map=self._get_type_coercion_map(),
-            has_native_list_expansion=True,  # ADBC handles lists natively
-        )
 
         # Type handlers can be registered if the base class supports it
         # ADBC has good native type support, so we don't need explicit type handlers
 
-    def _get_type_coercion_map(self) -> "dict[type, Any]":
+    def _get_type_coercion_map(self, dialect: str) -> "dict[type, Any]":
         """Get type coercion map for Arrow/ADBC type handling."""
         # Basic type mappings for Arrow/ADBC compatibility
         type_map = {
@@ -111,7 +110,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         }
 
         # PostgreSQL-specific type handling
-        if self.dialect == "postgres":
+        if dialect == "postgres":
             # PostgreSQL arrays need special handling
             type_map[list] = lambda x: x if x is not None else []
             # PostgreSQL JSON types - convert dict to JSON string
@@ -153,7 +152,9 @@ class AdbcDriver(SyncDriverAdapterBase):
     def _perform_execute(self, cursor: "Cursor", statement: "SQL") -> None:
         """Execute the SQL statement using the provided cursor."""
         try:
-            sql, parameters = self._get_compiled_sql(statement, self.parameter_config.default_parameter_style)
+            sql, parameters = self._get_compiled_sql(
+                statement, self.statement_config.get_parameter_config().default_parameter_style
+            )
             if statement.is_script:
                 statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
                 for stmt in statements:

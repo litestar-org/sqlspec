@@ -9,7 +9,7 @@ from typing import Any, Final, Literal
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.parameters.config import DriverParameterConfig
+from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.parameters.converter import ParameterConverter
 from sqlspec.parameters.types import ParameterInfo, ParameterStyle, TypedParameter
 from sqlspec.parameters.validator import ParameterValidator
@@ -42,62 +42,58 @@ class ParameterProcessor:
         self._validator = ParameterValidator()
         self._converter = ParameterConverter()
 
-    def process(self, sql: str, params: Any, config: DriverParameterConfig, is_parsed: bool = True) -> tuple[str, Any]:
-        """Process parameters with full transformation pipeline.
+    def process(self, sql: str, params: Any, config: ParameterStyleConfig, is_parsed: bool = True) -> tuple[str, Any]:
+        """Process parameters with simplified transformation pipeline.
 
-        Handles BOTH parsed and unparsed SQL:
-        - When is_parsed=True: Full processing including IN clause expansion
-        - When is_parsed=False: Regex-based parameter style conversion only
-
-        This ensures that even unparsable SQL can have its parameters
-        converted to the correct style for the driver.
+        Flow:
+        1. Parse parameters on the way in
+        2. Determine if transformation is needed (only if incompatible)
+        3. Run through the pipeline (expansion, coercion, style conversion)
+        4. Convert to execution target style if needed
 
         Returns:
-            Tuple of (transformed_sql, transformed_params)
+            Tuple of (execution_ready_sql, execution_ready_params)
         """
         # Fast path: check cache
         cache_key = f"{sql}:{hash(repr(params))}:{config.default_parameter_style}:{is_parsed}"
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        if is_parsed:
-            # Full processing for parsed SQL
-            # 1. Handle IN clause expansion if needed
-            if not config.has_native_list_expansion:
-                sql, params = self._expand_in_clauses(sql, params)
+        # Step 1: Parse parameters and determine if transformation is needed
+        param_info = self._validator.extract_parameters(sql)
+        needs_transformation = self._needs_transformation(param_info, config)
 
-            # 2. Apply type coercions
-            params = self._apply_type_coercions(params, config.type_coercion_map)
+        if not needs_transformation and not config.type_coercion_map and not config.output_transformer:
+            # No processing needed - return as-is
+            return sql, params
 
-            # 3. Convert parameter style
-            # Convert enum to literal for method signature
-            style_literal = self._enum_to_paramstyle(config.default_parameter_style)
-            sql, params = self._convert_parameter_style(sql, params, style_literal)
-        else:
-            # Fallback: Regex-based conversion for unparsed SQL
-            # This preserves the current behavior when parsing is disabled
-            param_info = self._validator.extract_parameters(sql)
-            if param_info:
-                style_literal = self._enum_to_paramstyle(config.default_parameter_style)
-                if self._needs_style_conversion(param_info, style_literal):
-                    # Use existing regex-based conversion
-                    sql = self._converter.convert_placeholders(sql, config.default_parameter_style, param_info)
-                    # Basic parameter format adjustment
-                    params = self._adjust_params_for_style(params, param_info, style_literal)
+        # Step 2: Apply transformations only if needed
+        processed_sql, processed_params = sql, params
 
-            # Still apply type coercions
-            params = self._apply_type_coercions(params, config.type_coercion_map)
+        if is_parsed and not config.has_native_list_expansion:
+            # Handle IN clause expansion for parsed SQL
+            processed_sql, processed_params = self._expand_in_clauses(processed_sql, processed_params)
 
-        # 4. Apply custom transformation if provided
+        if config.type_coercion_map:
+            # Apply driver-specific type coercions
+            processed_params = self._apply_type_coercions(processed_params, config.type_coercion_map)
+
+        if needs_transformation:
+            # Convert to target parameter style
+            processed_sql, processed_params = self._convert_to_execution_style(
+                processed_sql, processed_params, param_info, config
+            )
+
         if config.output_transformer:
-            sql, params = config.output_transformer(sql, params)
+            # Apply final custom transformation
+            processed_sql, processed_params = config.output_transformer(processed_sql, processed_params)
 
         # Cache result if within limits
         if self._cache_size < self.DEFAULT_CACHE_SIZE:
-            self._cache[cache_key] = (sql, params)
+            self._cache[cache_key] = (processed_sql, processed_params)
             self._cache_size += 1
 
-        return sql, params
+        return processed_sql, processed_params
 
     def _enum_to_paramstyle(self, style: ParameterStyle) -> ParamStyle:
         """Convert ParameterStyle enum to ParamStyle literal."""
@@ -120,6 +116,61 @@ class ParameterProcessor:
             "pyformat": ParameterStyle.NAMED_PYFORMAT,
         }
         return mapping.get(style, ParameterStyle.QMARK)
+
+    def _needs_transformation(self, param_info: list[ParameterInfo], config: ParameterStyleConfig) -> bool:
+        """Determine if parameter transformation is needed.
+
+        Args:
+            param_info: Parameter information from SQL
+            config: Parameter style configuration
+
+        Returns:
+            True if parameters need transformation to target style.
+        """
+        if not param_info:
+            return False
+
+        # Check if any style conversion is needed
+        detected_styles = {p.style for p in param_info}
+        target_style = config.default_parameter_style
+
+        # Force conversion if configured
+        if config.force_style_conversion:
+            return True
+
+        # Convert if target style is not in detected styles
+        if target_style not in detected_styles:
+            return True
+
+        # Convert if we have mixed styles (need normalization)
+        return len(detected_styles) > 1
+
+    def _convert_to_execution_style(
+        self, sql: str, params: Any, param_info: list[ParameterInfo], config: ParameterStyleConfig
+    ) -> tuple[str, Any]:
+        """Convert SQL and parameters to execution target style.
+
+        This is the final conversion step that prepares the SQL and parameters
+        for execution by the database driver.
+
+        Args:
+            sql: SQL string with parameters
+            params: Parameter values
+            param_info: Parameter information from SQL parsing
+            config: Parameter style configuration
+
+        Returns:
+            Tuple of (execution_sql, execution_params) ready for database execution
+        """
+        # Use the execution target style for final conversion
+        execution_style = config.execution_target_style
+        converted_sql = self._converter.convert_placeholders(sql, execution_style, param_info)
+
+        # Adjust parameters to match the execution style
+        target_style = self._enum_to_paramstyle(execution_style)
+        converted_params = self._adjust_params_for_style(params, param_info, target_style)
+
+        return converted_sql, converted_params
 
     def _needs_style_conversion(self, param_info: list[ParameterInfo], target_style: ParamStyle) -> bool:
         """Check if parameter style conversion is needed."""

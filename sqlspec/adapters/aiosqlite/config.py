@@ -235,7 +235,6 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
         connection_config: "Optional[Union[AiosqliteConnectionParams, dict[str, Any]]]" = None,
         statement_config: "Optional[SQLConfig]" = None,
         migration_config: "Optional[dict[str, Any]]" = None,
-        enable_adapter_cache: bool = True,
         adapter_cache_size: int = 1000,
         min_pool: int = DEFAULT_MIN_POOL,
         max_pool: int = DEFAULT_MAX_POOL,
@@ -249,8 +248,7 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
             connection_config: Connection configuration parameters (TypedDict or dict)
             statement_config: Default SQL statement configuration
             migration_config: Migration configuration
-            enable_adapter_cache: Enable SQL compilation caching
-            adapter_cache_size: Max cached SQL statements
+            adapter_cache_size: Max cached SQL statements (0 to disable caching)
             min_pool: Minimum number of connections to maintain (default: 5)
             max_pool: Maximum number of connections allowed (default: 20)
             pool_timeout: Pool checkout timeout in seconds (default: 30.0)
@@ -285,10 +283,7 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
         self.pool_recycle = pool_recycle
 
         super().__init__(
-            pool_instance=pool_instance,
-            migration_config=migration_config,
-            enable_adapter_cache=enable_adapter_cache,
-            adapter_cache_size=adapter_cache_size,
+            pool_instance=pool_instance, migration_config=migration_config, adapter_cache_size=adapter_cache_size
         )
 
     def _get_connection_config_dict(self) -> "dict[str, Any]":
