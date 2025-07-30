@@ -10,7 +10,7 @@ from typing_extensions import NotRequired
 
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
 from sqlspec.config import AsyncDatabaseConfig
-from sqlspec.statement.sql import SQLConfig
+from sqlspec.statement.sql import StatementConfig
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -100,10 +100,9 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         self,
         *,
         pool_config: Optional[Union[PsqlpyPoolParams, dict[str, Any]]] = None,
-        statement_config: Optional[SQLConfig] = None,
+        statement_config: Optional[StatementConfig] = None,
         pool_instance: Optional[ConnectionPool] = None,
         migration_config: Optional[dict[str, Any]] = None,
-        adapter_cache_size: int = 1000,
     ) -> None:
         """Initialize Psqlpy asynchronous configuration.
 
@@ -112,7 +111,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             pool_instance: Existing connection pool instance to use
             statement_config: Default SQL statement configuration
             migration_config: Migration configuration
-            adapter_cache_size: Max cached SQL statements (0 to disable caching)
         """
         # Store pool config as dict and extract/merge extras
         self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
@@ -120,12 +118,24 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             extras = self.pool_config.pop("extra")
             self.pool_config.update(extras)
 
-        # Store other config
-        self.statement_config = statement_config or SQLConfig()
+        super().__init__(pool_instance=pool_instance, migration_config=migration_config)
 
-        super().__init__(
-            pool_instance=pool_instance, migration_config=migration_config, adapter_cache_size=adapter_cache_size
-        )
+        # Override parent's empty StatementConfig with Psqlpy-specific configuration
+        if statement_config is None:
+            from sqlspec.parameters import ParameterStyle
+
+            self.statement_config = StatementConfig(
+                supported_parameter_styles=(ParameterStyle.NUMERIC.value,),
+                default_parameter_style=ParameterStyle.NUMERIC.value,
+                type_coercion_map={
+                    # Psqlpy handles most PostgreSQL types natively
+                    dict: lambda v: v,  # Psqlpy handles JSON natively
+                    list: lambda v: v,  # Psqlpy handles arrays natively
+                },
+                has_native_list_expansion=True,
+            )
+        else:
+            self.statement_config = statement_config
 
     def _get_pool_config_dict(self) -> dict[str, Any]:
         """Get pool configuration as plain dict for external library.
@@ -195,7 +205,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
     @asynccontextmanager
     async def provide_session(
-        self, *args: Any, statement_config: "Optional[SQLConfig]" = None, **kwargs: Any
+        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
     ) -> AsyncGenerator[PsqlpyDriver, None]:
         """Provide an async driver session context manager.
 
@@ -208,15 +218,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             A PsqlpyDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as conn:
-            statement_config = statement_config or self.statement_config
-            # Inject parameter style info if not already set
-            if statement_config.allowed_parameter_styles is None:
-                statement_config = statement_config.replace(
-                    allowed_parameter_styles=self.supported_parameter_styles,
-                    default_parameter_style=self.default_parameter_style,
-                )
-            driver = self.driver_type(connection=conn, statement_config=statement_config)
-            yield driver
+            yield self.driver_type(connection=conn, statement_config=statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> ConnectionPool:
         """Provide async pool instance.

@@ -45,12 +45,12 @@ Set default caching behavior for all statements executed by a driver:
 
 ```python
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.statement.sql import SQLConfig
+from sqlspec.statement.sql import StatementConfig
 
 # Configure driver with custom statement defaults
 config = SqliteConfig(
     connection_config={"database": "mydb.db"},
-    statement_config=SQLConfig(
+    statement_config=StatementConfig(
         enable_caching=True,        # Enable statement caching
         enable_parsing=True,        # Enable SQL parsing
         enable_validation=True,     # Enable validation
@@ -69,19 +69,19 @@ with config.provide_session() as driver:
 Override caching for specific statements:
 
 ```python
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQL, StatementConfig
 
 # Method 1: Create SQL object with custom config
 sql = SQL(
     "SELECT * FROM users WHERE id = ?",
-    config=SQLConfig(enable_caching=False)  # Disable caching for this statement
+    config=StatementConfig(enable_caching=False)  # Disable caching for this statement
 )
 result = driver.execute(sql, (123,))
 
 # Method 2: Override at execution time
 result = driver.execute(
     "SELECT * FROM products",
-    _config=SQLConfig(enable_caching=False)  # Override driver's default
+    _config=StatementConfig(enable_caching=False)  # Override driver's default
 )
 
 # Method 3: Using query builders
@@ -90,7 +90,7 @@ from sqlspec.statement.builder import Select
 query = Select("id", "name").from_("users").where("active = ?", True)
 result = driver.execute(
     query,
-    _config=SQLConfig(enable_caching=True)  # Force caching even if driver default is False
+    _config=StatementConfig(enable_caching=True)  # Force caching even if driver default is False
 )
 ```
 
@@ -132,7 +132,7 @@ log_cache_stats()
 
 ```python
 # Development: Disable caching for easier debugging
-dev_config = SQLConfig(enable_caching=False)
+dev_config = StatementConfig(enable_caching=False)
 
 # Production: Enable all caches with appropriate sizes
 prod_config = CacheConfig(
@@ -183,7 +183,7 @@ def should_cache(sql: str) -> bool:
 
 # Use conditional caching
 sql = "SELECT COUNT(*) FROM orders JOIN users ON orders.user_id = users.id"
-config = SQLConfig(enable_caching=should_cache(sql))
+config = StatementConfig(enable_caching=should_cache(sql))
 result = driver.execute(sql, _config=config)
 ```
 

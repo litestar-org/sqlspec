@@ -5,7 +5,7 @@ import time
 from unittest.mock import MagicMock, patch
 
 from sqlspec.statement.cache import SQLCache, sql_cache
-from sqlspec.statement.sql import SQL, SQLConfig, _ProcessedState
+from sqlspec.statement.sql import SQL, StatementConfig, _ProcessedState
 
 
 class TestSQLCache:
@@ -135,14 +135,14 @@ class TestSQLCaching:
 
     def test_sql_cache_hit(self) -> None:
         """Test cache hit for identical SQL statements."""
-        config = SQLConfig(enable_caching=True)
+        config = StatementConfig(enable_caching=True)
 
         # Clear cache
         sql_cache.clear()
 
         # Create two identical SQL objects
-        sql1 = SQL("SELECT * FROM users", _config=config)
-        sql2 = SQL("SELECT * FROM users", _config=config)
+        sql1 = SQL("SELECT * FROM users", statement_config=config)
+        sql2 = SQL("SELECT * FROM users", statement_config=config)
 
         # Access sql property to trigger processing
         result1 = sql1.sql
@@ -165,29 +165,29 @@ class TestSQLCaching:
 
     def test_sql_cache_miss_different_queries(self) -> None:
         """Test cache miss for different SQL queries."""
-        config = SQLConfig(enable_caching=True)
+        config = StatementConfig(enable_caching=True)
 
-        sql1 = SQL("SELECT * FROM users", _config=config)
-        sql2 = SQL("SELECT * FROM products", _config=config)
+        sql1 = SQL("SELECT * FROM users", statement_config=config)
+        sql2 = SQL("SELECT * FROM products", statement_config=config)
 
         # These should have different cache keys
         assert sql1._cache_key() != sql2._cache_key()
 
     def test_sql_cache_miss_different_parameters(self) -> None:
         """Test cache miss for same query with different parameters."""
-        config = SQLConfig(enable_caching=True)
+        config = StatementConfig(enable_caching=True)
 
-        sql1 = SQL("SELECT * FROM users WHERE id = :id", id=1, _config=config)
-        sql2 = SQL("SELECT * FROM users WHERE id = :id", id=2, _config=config)
+        sql1 = SQL("SELECT * FROM users WHERE id = :id", id=1, statement_config=config)
+        sql2 = SQL("SELECT * FROM users WHERE id = :id", id=2, statement_config=config)
 
         # Different parameters should result in different cache keys
         assert sql1._cache_key() != sql2._cache_key()
 
     def test_sql_cache_disabled(self) -> None:
         """Test that caching can be disabled."""
-        config = SQLConfig(enable_caching=False)
+        config = StatementConfig(enable_caching=False)
 
-        sql = SQL("SELECT * FROM users", _config=config)
+        sql = SQL("SELECT * FROM users", statement_config=config)
 
         # Mock sql_cache to verify it's not accessed
         with patch("sqlspec.statement.sql.sql_cache") as mock_cache:
@@ -199,9 +199,9 @@ class TestSQLCaching:
 
     def test_sql_cache_with_filters(self) -> None:
         """Test caching with filters applied."""
-        config = SQLConfig(enable_caching=True)
+        config = StatementConfig(enable_caching=True)
 
-        sql1 = SQL("SELECT * FROM users", _config=config)
+        sql1 = SQL("SELECT * FROM users", statement_config=config)
         sql2 = sql1.where("active = true")
 
         # Different filters should result in different cache keys
@@ -209,30 +209,32 @@ class TestSQLCaching:
 
     def test_sql_cache_with_dialect(self) -> None:
         """Test caching with different dialects."""
-        config = SQLConfig(enable_caching=True)
+        config = StatementConfig(enable_caching=True)
 
-        sql1 = SQL("SELECT * FROM users", _dialect="mysql", _config=config)
-        sql2 = SQL("SELECT * FROM users", _dialect="postgres", _config=config)
+        sql1 = SQL("SELECT * FROM users", _dialect="mysql", statement_config=config)
+        sql2 = SQL("SELECT * FROM users", _dialect="postgres", statement_config=config)
 
         # Different dialects should result in different cache keys
         assert sql1._cache_key() != sql2._cache_key()
 
     def test_cache_key_generation(self) -> None:
         """Test cache key generation includes all relevant state."""
-        config = SQLConfig(enable_caching=True)
+        config = StatementConfig(enable_caching=True)
 
         # Test with positional parameters
-        sql1 = SQL("SELECT * FROM users WHERE id = ?", 1, _config=config)
+        sql1 = SQL("SELECT * FROM users WHERE id = ?", 1, statement_config=config)
         key1 = sql1._cache_key()
         assert "sql:" in key1
 
         # Test with named parameters
-        sql2 = SQL("SELECT * FROM users WHERE id = :id", id=1, _config=config)
+        sql2 = SQL("SELECT * FROM users WHERE id = :id", id=1, statement_config=config)
         key2 = sql2._cache_key()
         assert key1 != key2  # Different parameter styles
 
         # Test with mixed parameters
-        sql3 = SQL("SELECT * FROM users WHERE id = ? AND name = :name", 1, name="test", _config=config)
+        sql3 = SQL(
+            "SELECT * FROM users WHERE id = ? AND name = :name", 1, name="test", statement_config=config
+        )
         key3 = sql3._cache_key()
         assert key3 != key1
         assert key3 != key2

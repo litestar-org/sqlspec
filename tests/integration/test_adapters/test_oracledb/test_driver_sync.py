@@ -238,7 +238,7 @@ def test_oracle_ddl_script_parsing(oracle_sync_session: OracleSyncConfig) -> Non
     """Test that the Oracle 23AI DDL script can be parsed and prepared for execution."""
     from pathlib import Path
 
-    from sqlspec.statement.sql import SQL, SQLConfig
+    from sqlspec.statement.sql import SQL, StatementConfig
 
     # Load the Oracle DDL script
     fixture_path = Path(__file__).parent.parent.parent.parent / "fixtures" / "oracle.ddl.sql"
@@ -248,7 +248,7 @@ def test_oracle_ddl_script_parsing(oracle_sync_session: OracleSyncConfig) -> Non
         oracle_ddl = f.read()
 
     # Configure for Oracle dialect with parsing enabled
-    config = SQLConfig(
+    config = StatementConfig(
         enable_parsing=True,
         enable_validation=False,  # Disable validation to focus on script handling
     )

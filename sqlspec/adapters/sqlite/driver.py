@@ -2,11 +2,11 @@
 import contextlib
 import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.parameters import ParameterStyle
-from sqlspec.utils.logging import get_logger
+from sqlspec.statement.sql import StatementConfig
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
@@ -15,11 +15,8 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.adapters.sqlite._types import SqliteConnection
-    from sqlspec.statement.sql import SQL, SQLConfig
 
 __all__ = ("SqliteCursor", "SqliteDriver")
-
-logger = get_logger("adapters.sqlite")
 
 
 class SqliteCursor:
@@ -43,15 +40,13 @@ class SqliteDriver(SyncDriverAdapterBase):
     """Reference implementation for a synchronous SQLite driver."""
 
     dialect: "DialectType" = "sqlite"
-    default_parameter_style: "ClassVar[str]" = "qmark"
 
-    def __init__(self, connection: "SqliteConnection", statement_config: "Optional[SQLConfig]" = None) -> None:
-        from sqlspec.statement.sql import SQLConfig
-
-        # Set default SQLite-specific configuration
+    def __init__(self, connection: "SqliteConnection", statement_config: "Optional[StatementConfig]" = None, driver_features: "Optional[dict[str, Any]]" = None) -> None:
+        # Set default sqlite-specific configuration
         if statement_config is None:
-            statement_config = SQLConfig(
-                supported_parameter_styles=[ParameterStyle.QMARK],
+            statement_config = StatementConfig(
+                dialect="sqlite",
+                supported_parameter_styles={ParameterStyle.QMARK},
                 default_parameter_style=ParameterStyle.QMARK,
                 type_coercion_map={
                     bool: int,
@@ -62,25 +57,30 @@ class SqliteDriver(SyncDriverAdapterBase):
                     tuple: lambda v: to_json(list(v)),
                 },
                 has_native_list_expansion=False,
+                needs_static_script_compilation=True,
             )
 
-        super().__init__(connection=connection, statement_config=statement_config)
+        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
         return SqliteCursor(connection)
 
-    def _perform_execute(self, cursor: "sqlite3.Cursor", statement: "SQL") -> None:
-        if statement.is_script:
-            sql = self._prepare_script_sql(statement)
-            cursor.executescript(sql)
-        else:
-            sql, params = self._get_compiled_sql(
-                statement, self.statement_config.get_parameter_config().default_parameter_style
-            )
-            if statement.is_many:
-                cursor.executemany(sql, self._prepare_driver_parameters_many(params))
-            else:
-                cursor.execute(sql, self._prepare_driver_parameters(params) or ())
+    def _execute_script(
+        self, cursor: "sqlite3.Cursor", sql: str, prepared_params: Optional[Any], statement_config: "StatementConfig"
+    ) -> None:
+        """Execute SQL script using SQLite's native executescript (parameters embedded as static values)."""
+        # SQLite's executescript doesn't support parameters, so we use static compilation
+        # The base class _perform_execute will have already prepared static SQL for scripts
+        # prepared_params will be None for static compilation
+        cursor.executescript(sql)
+
+    def _execute_many(self, cursor: "sqlite3.Cursor", sql: str, prepared_params: Any) -> None:
+        """Execute SQL with multiple parameter sets using SQLite executemany."""
+        cursor.executemany(sql, prepared_params)
+
+    def _execute_statement(self, cursor: "sqlite3.Cursor", sql: str, prepared_params: Any) -> None:
+        """Execute single SQL statement using SQLite execute."""
+        cursor.execute(sql, prepared_params or ())
 
     def begin(self) -> None:
         """Begin a database transaction."""

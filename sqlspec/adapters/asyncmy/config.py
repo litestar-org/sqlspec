@@ -13,7 +13,7 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.asyncmy._types import AsyncmyConnection
 from sqlspec.adapters.asyncmy.driver import AsyncmyCursor, AsyncmyDriver
 from sqlspec.config import AsyncDatabaseConfig
-from sqlspec.statement.sql import SQLConfig
+from sqlspec.statement.sql import StatementConfig
 
 if TYPE_CHECKING:
     from asyncmy.cursors import Cursor, DictCursor
@@ -61,26 +61,20 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
 
     driver_type: ClassVar[type[AsyncmyDriver]] = AsyncmyDriver
     connection_type: "ClassVar[type[AsyncmyConnection]]" = AsyncmyConnection  # pyright: ignore
-    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional",)
-    default_parameter_style: ClassVar[str] = "pyformat_positional"
 
     def __init__(
         self,
         *,
         pool_config: "Optional[Union[AsyncmyPoolParams, dict[str, Any]]]" = None,
         pool_instance: "Optional[Pool]" = None,
-        statement_config: "Optional[SQLConfig]" = None,
         migration_config: Optional[dict[str, Any]] = None,
-        adapter_cache_size: int = 1000,
     ) -> None:
         """Initialize Asyncmy configuration.
 
         Args:
             pool_config: Pool configuration parameters
             pool_instance: Existing pool instance to use
-            statement_config: Default SQL statement configuration
             migration_config: Migration configuration
-            adapter_cache_size: Max cached SQL statements (0 to disable caching)
         """
         # Store the pool config as a dict and extract/merge extras
         self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
@@ -88,11 +82,8 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             extras = self.pool_config.pop("extra")
             self.pool_config.update(extras)
 
-        super().__init__(
-            pool_instance=pool_instance, migration_config=migration_config, adapter_cache_size=adapter_cache_size
-        )
+        super().__init__(pool_instance=pool_instance, migration_config=migration_config)
 
-        self.statement_config = statement_config or SQLConfig(dialect="mysql")
 
     async def _create_pool(self) -> "Pool":  # pyright: ignore
         """Create the actual async connection pool."""
@@ -131,7 +122,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
 
     @asynccontextmanager
     async def provide_session(
-        self, *args: Any, statement_config: "Optional[SQLConfig]" = None, **kwargs: Any
+        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
     ) -> AsyncGenerator[AsyncmyDriver, None]:
         """Provide an async driver session context manager.
 
@@ -144,13 +135,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             An AsyncmyDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as connection:
-            statement_config = statement_config or self.statement_config
-            # Inject parameter style info if not already set
-            if statement_config.allowed_parameter_styles is None:
-                statement_config = statement_config.replace(
-                    allowed_parameter_styles=self.supported_parameter_styles,
-                    default_parameter_style=self.default_parameter_style,
-                )
             yield self.driver_type(connection=connection, statement_config=statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool":  # pyright: ignore
@@ -174,7 +158,9 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update(
-            {"AsyncmyConnection": AsyncmyConnection, "AsyncmyPool": AsyncmyPool, "AsyncmyCursor": AsyncmyCursor}
-        )
+        namespace.update({
+            "AsyncmyConnection": AsyncmyConnection,
+            "AsyncmyPool": AsyncmyPool,
+            "AsyncmyCursor": AsyncmyCursor,
+        })
         return namespace

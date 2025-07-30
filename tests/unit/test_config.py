@@ -7,7 +7,7 @@ import pytest
 
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQL, StatementConfig
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
@@ -41,8 +41,8 @@ class MockSyncDriver(SyncDriverAdapterBase):
 
     dialect = "mock"
 
-    def __init__(self, connection: "MockConnection", config: "Optional[SQLConfig]" = None) -> None:
-        super().__init__(connection=connection, config=config)
+    def __init__(self, connection: "MockConnection", statement_config: "Optional[StatementConfig]" = None) -> None:
+        super().__init__(connection=connection, statement_config=statement_config)
 
     def _execute_sql(self, statement: "Any", connection: "Optional[MockConnection]" = None, **kwargs: "Any") -> "Any":
         return {"rows": [], "rowcount": 0}
@@ -105,8 +105,8 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
 
     dialect = "mock"
 
-    def __init__(self, connection: "MockConnection", config: "Optional[SQLConfig]" = None) -> None:
-        super().__init__(connection=connection, config=config)
+    def __init__(self, connection: "MockConnection", statement_config: "Optional[StatementConfig]" = None) -> None:
+        super().__init__(connection=connection, statement_config=statement_config)
 
     async def _execute_sql(self, statement: "Any", connection: "Optional[Any]" = None, **kwargs: "Any") -> "Any":
         return {"rows": [], "rowcount": 0}
@@ -177,8 +177,8 @@ class MockSyncTestConfig(NoPoolSyncConfig["MockConnection", "MockSyncDriver"]):
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = False
 
-    def __init__(self, migration_config: "Optional[dict[str, Any]]" = None, adapter_cache_size: int = 1000) -> None:
-        super().__init__(migration_config=migration_config, adapter_cache_size=adapter_cache_size)
+    def __init__(self, migration_config: "Optional[dict[str, Any]]" = None) -> None:
+        super().__init__(migration_config=migration_config)
 
     def __hash__(self) -> int:
         return id(self)
@@ -215,8 +215,8 @@ class MockAsyncTestConfig(NoPoolAsyncConfig["MockConnection", "MockAsyncDriver"]
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = False
 
-    def __init__(self, migration_config: "Optional[dict[str, Any]]" = None, adapter_cache_size: int = 1000) -> None:
-        super().__init__(migration_config=migration_config, adapter_cache_size=adapter_cache_size)
+    def __init__(self, migration_config: "Optional[dict[str, Any]]" = None) -> None:
+        super().__init__(migration_config=migration_config)
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -251,14 +251,9 @@ class MockSyncPoolTestConfig(SyncDatabaseConfig["MockConnection", "MockPool", "M
     supports_connection_pooling: "ClassVar[bool]" = True
 
     def __init__(
-        self,
-        pool_instance: "Optional[MockPool]" = None,
-        migration_config: "Optional[dict[str, Any]]" = None,
-        adapter_cache_size: int = 1000,
+        self, pool_instance: "Optional[MockPool]" = None, migration_config: "Optional[dict[str, Any]]" = None
     ) -> None:
-        super().__init__(
-            pool_instance=pool_instance, migration_config=migration_config, adapter_cache_size=adapter_cache_size
-        )
+        super().__init__(pool_instance=pool_instance, migration_config=migration_config)
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":
@@ -300,14 +295,9 @@ class MockAsyncPoolTestConfig(AsyncDatabaseConfig["MockConnection", "MockPool", 
     supports_connection_pooling: "ClassVar[bool]" = True
 
     def __init__(
-        self,
-        pool_instance: "Optional[MockPool]" = None,
-        migration_config: "Optional[dict[str, Any]]" = None,
-        adapter_cache_size: int = 1000,
+        self, pool_instance: "Optional[MockPool]" = None, migration_config: "Optional[dict[str, Any]]" = None
     ) -> None:
-        super().__init__(
-            pool_instance=pool_instance, migration_config=migration_config, adapter_cache_size=adapter_cache_size
-        )
+        super().__init__(pool_instance=pool_instance, migration_config=migration_config)
 
     @property
     def connection_config_dict(self) -> "dict[str, Any]":

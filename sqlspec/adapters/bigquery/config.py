@@ -11,7 +11,7 @@ from sqlspec.adapters.bigquery._types import BigQueryConnection
 from sqlspec.adapters.bigquery.driver import BigQueryCursor, BigQueryDriver
 from sqlspec.config import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.statement.sql import SQLConfig
+from sqlspec.statement.sql import StatementConfig
 from sqlspec.typing import Empty
 
 if TYPE_CHECKING:
@@ -80,32 +80,26 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
     driver_type: ClassVar[type[BigQueryDriver]] = BigQueryDriver
     connection_type: "ClassVar[type[BigQueryConnection]]" = BigQueryConnection
-    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_at",)
-    default_parameter_style: ClassVar[str] = "named_at"
 
     def __init__(
         self,
         *,
         connection_instance: "Optional[BigQueryConnection]" = None,
         connection_config: "Optional[Union[BigQueryConnectionParams, dict[str, Any]]]" = None,
-        statement_config: "Optional[SQLConfig]" = None,
         on_connection_create: Optional[Callable[[BigQueryConnection], None]] = None,
         on_job_start: Optional[Callable[[str], None]] = None,
         on_job_complete: Optional[Callable[[str, Any], None]] = None,
         migration_config: Optional[dict[str, Any]] = None,
-        adapter_cache_size: int = 1000,
     ) -> None:
         """Initialize BigQuery configuration with comprehensive feature support.
 
         Args:
             connection_config: Connection configuration parameters
             connection_instance: Existing connection instance to use
-            statement_config: Default SQL statement configuration
             on_connection_create: Callback executed when connection is created
             on_job_start: Callback executed when a BigQuery job starts
             on_job_complete: Callback executed when a BigQuery job completes
             migration_config: Migration configuration
-            adapter_cache_size: Max cached SQL statements (0 to disable caching)
 
         Example:
             >>> # Basic BigQuery connection
@@ -150,7 +144,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         self._connection_instance = connection_instance
 
         # Store other config
-        self.statement_config = statement_config or SQLConfig(dialect="bigquery")
         self.on_connection_create = on_connection_create
         self.on_job_start = on_job_start
         self.on_job_complete = on_job_complete
@@ -158,7 +151,8 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         if self.connection_config.get("default_query_job_config") is None:
             self._setup_default_job_config()
 
-        super().__init__(migration_config=migration_config, adapter_cache_size=adapter_cache_size)
+        super().__init__(migration_config=migration_config)
+
 
     def _setup_default_job_config(self) -> None:
         """Set up default job configuration based on connection settings."""
@@ -236,7 +230,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
     @contextlib.contextmanager
     def provide_session(
-        self, *args: Any, statement_config: "Optional[SQLConfig]" = None, **kwargs: Any
+        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
     ) -> "Generator[BigQueryDriver, None, None]":
         """Provide a BigQuery driver session context manager.
 
@@ -250,13 +244,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         """
 
         with self.provide_connection(*args, **kwargs) as connection:
-            statement_config = statement_config or self.statement_config
-            # Inject parameter style info if not already set
-            if statement_config.allowed_parameter_styles is None:
-                statement_config = statement_config.replace(
-                    allowed_parameter_styles=self.supported_parameter_styles,
-                    default_parameter_style=self.default_parameter_style,
-                )
             driver = self.driver_type(
                 connection=connection,
                 statement_config=statement_config,

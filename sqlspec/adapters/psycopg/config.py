@@ -9,9 +9,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.psycopg.pipeline_steps import postgres_copy_pipeline_step
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
-from sqlspec.statement.sql import SQLConfig
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
@@ -26,6 +24,7 @@ if TYPE_CHECKING:
         PsycopgSyncCursor,
         PsycopgSyncDriver,
     )
+    from sqlspec.statement.sql import StatementConfig
 
     PsycopgSyncConnection: TypeAlias = Connection[PsycopgDictRow]
     PsycopgAsyncConnection: TypeAlias = AsyncConnection[PsycopgDictRow]
@@ -97,17 +96,14 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
     driver_type: "ClassVar[type[PsycopgSyncDriver]]" = PsycopgSyncDriver
     connection_type: "ClassVar[type[PsycopgSyncConnection]]" = PsycopgSyncConnection
-    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional", "pyformat_named")
-    default_parameter_style: ClassVar[str] = "pyformat_positional"
 
     def __init__(
         self,
         *,
         pool_config: "Optional[Union[PsycopgPoolParams, dict[str, Any]]]" = None,
         pool_instance: Optional["ConnectionPool"] = None,
-        statement_config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         migration_config: Optional[dict[str, Any]] = None,
-        adapter_cache_size: int = 1000,
     ) -> None:
         """Initialize Psycopg synchronous configuration.
 
@@ -116,7 +112,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             pool_instance: Existing pool instance to use
             statement_config: Default SQL statement configuration
             migration_config: Migration configuration
-            adapter_cache_size: Max cached SQL statements (0 to disable caching)
 
         """
         # Store the pool config as a dict and extract/merge extras
@@ -125,12 +120,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             extras = self.pool_config.pop("extra")
             self.pool_config.update(extras)
 
-        # Store other config
-        self.statement_config = statement_config or SQLConfig()
-
-        super().__init__(
-            pool_instance=pool_instance, migration_config=migration_config, adapter_cache_size=adapter_cache_size
-        )
+        super().__init__(pool_instance=pool_instance, migration_config=migration_config)
 
     def _create_pool(self) -> "ConnectionPool":
         """Create the actual connection pool."""
@@ -235,7 +225,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
     @contextlib.contextmanager
     def provide_session(
-        self, *args: Any, statement_config: "Optional[SQLConfig]" = None, **kwargs: Any
+        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
     ) -> "Generator[PsycopgSyncDriver, None, None]":
         """Provide a driver session context manager.
 
@@ -248,25 +238,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             A PsycopgSyncDriver instance.
         """
         with self.provide_connection(*args, **kwargs) as conn:
-            statement_config = statement_config or self.statement_config
-            # Inject parameter style info if not already set
-            if statement_config.allowed_parameter_styles is None:
-                statement_config = statement_config.replace(
-                    allowed_parameter_styles=self.supported_parameter_styles,
-                    default_parameter_style=self.default_parameter_style,
-                )
-
-            # Add the COPY pipeline step
-            custom_pipeline_steps = [postgres_copy_pipeline_step]
-
-            # If user has custom steps, append them after psycopg step
-            if statement_config.custom_pipeline_steps:
-                custom_pipeline_steps.extend(statement_config.custom_pipeline_steps)
-
-            statement_config = statement_config.replace(custom_pipeline_steps=custom_pipeline_steps)
-
-            driver = self.driver_type(connection=conn, statement_config=statement_config)
-            yield driver
+            yield self.driver_type(connection=conn, statement_config=statement_config)
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
         """Provide pool instance.
@@ -297,17 +269,13 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
     driver_type: ClassVar[type[PsycopgAsyncDriver]] = PsycopgAsyncDriver
     connection_type: "ClassVar[type[PsycopgAsyncConnection]]" = PsycopgAsyncConnection
-    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional", "pyformat_named")
-    default_parameter_style: ClassVar[str] = "pyformat_positional"
 
     def __init__(
         self,
         *,
         pool_config: "Optional[Union[PsycopgPoolParams, dict[str, Any]]]" = None,
-        statement_config: "Optional[SQLConfig]" = None,
         pool_instance: "Optional[AsyncConnectionPool]" = None,
         migration_config: "Optional[dict[str, Any]]" = None,
-        adapter_cache_size: int = 1000,
     ) -> None:
         """Initialize Psycopg asynchronous configuration.
 
@@ -316,7 +284,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             pool_instance: Existing pool instance to use
             statement_config: Default SQL statement configuration
             migration_config: Migration configuration
-            adapter_cache_size: Max cached SQL statements (0 to disable caching)
         """
         # Store the pool config as a dict and extract/merge extras
         self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
@@ -324,12 +291,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             extras = self.pool_config.pop("extra")
             self.pool_config.update(extras)
 
-        # Store other config
-        self.statement_config = statement_config or SQLConfig()
-
-        super().__init__(
-            pool_instance=pool_instance, migration_config=migration_config, adapter_cache_size=adapter_cache_size
-        )
+        super().__init__(pool_instance=pool_instance, migration_config=migration_config)
 
     async def _create_pool(self) -> "AsyncConnectionPool":
         """Create the actual async connection pool."""
@@ -424,7 +386,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
     @asynccontextmanager
     async def provide_session(
-        self, *args: Any, statement_config: "Optional[SQLConfig]" = None, **kwargs: Any
+        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
     ) -> "AsyncGenerator[PsycopgAsyncDriver, None]":
         """Provide an async driver session context manager.
 
@@ -437,25 +399,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             A PsycopgAsyncDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as conn:
-            statement_config = statement_config or self.statement_config
-            # Inject parameter style info if not already set
-            if statement_config.allowed_parameter_styles is None:
-                statement_config = statement_config.replace(
-                    allowed_parameter_styles=self.supported_parameter_styles,
-                    default_parameter_style=self.default_parameter_style,
-                )
-
-            # Add the COPY pipeline step
-            custom_pipeline_steps = [postgres_copy_pipeline_step]
-
-            # If user has custom steps, append them after psycopg step
-            if statement_config.custom_pipeline_steps:
-                custom_pipeline_steps.extend(statement_config.custom_pipeline_steps)
-
-            statement_config = statement_config.replace(custom_pipeline_steps=custom_pipeline_steps)
-
-            driver = self.driver_type(connection=conn, statement_config=statement_config)
-            yield driver
+            yield self.driver_type(connection=conn, statement_config=statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":
         """Provide async pool instance.

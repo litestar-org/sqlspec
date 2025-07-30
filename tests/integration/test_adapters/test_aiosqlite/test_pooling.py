@@ -10,7 +10,7 @@ async def test_shared_memory_pooling() -> None:
     """Test that shared memory databases allow pooling."""
     # Create config with shared memory database
     config = AiosqliteConfig(
-        connection_config={"database": "file::memory:?cache=shared", "uri": True}, min_pool=2, max_pool=5
+        pool_config={"database": "file::memory:?cache=shared", "uri": True, "pool_min_size": 2, "pool_max_size": 5}
     )
 
     # Verify pooling is not disabled
@@ -51,9 +51,7 @@ async def test_regular_memory_auto_converted_pooling() -> None:
     """Test that regular memory databases are auto-converted and pooling works."""
     # Create config with regular memory database
     config = AiosqliteConfig(
-        connection_config={"database": ":memory:"},
-        min_pool=5,  # Try to set pool size
-        max_pool=10,
+        pool_config={"database": ":memory:", "pool_min_size": 5, "pool_max_size": 10}
     )
 
     # Verify pooling is enabled (no longer forced to 1)

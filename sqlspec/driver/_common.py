@@ -1,6 +1,7 @@
 """Common driver attributes and utilities."""
 
 import contextlib
+from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import sqlglot
@@ -11,17 +12,16 @@ from sqlglot.tokens import TokenType
 from sqlspec.exceptions import NotFoundError
 from sqlspec.parameters import ParameterStyle, ParameterValidator
 from sqlspec.parameters.types import TypedParameter
-from sqlspec.statement.cache import SQLCache, anonymous_returns_rows_cache
+from sqlspec.statement import SQLResult, Statement, StatementFilter
+from sqlspec.statement.builder import QueryBuilder
+from sqlspec.statement.cache import anonymous_returns_rows_cache
 from sqlspec.statement.pipeline import SQLTransformContext, create_pipeline_from_config
 from sqlspec.statement.splitter import split_sql_script
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQL, StatementConfig
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from sqlglot.dialects.dialect import DialectType
-
-    from sqlspec.parameters.config import ParameterStyleConfig
-    from sqlspec.typing import T
+    from sqlspec.typing import StatementParameters, T
 
 
 __all__ = ("CommonDriverAttributesMixin",)
@@ -44,50 +44,33 @@ ROW_RETURNING_TOKENS = {
 class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
-    __slots__ = ("_compiled_cache", "_prepared_counter", "_prepared_statements", "connection", "statement_config")
+    __slots__ = ("connection", "driver_features", "statement_config")
     connection: "Any"
-    statement_config: "SQLConfig"
-    dialect: "DialectType"
-    _compiled_cache: "Optional[SQLCache]"
-    _prepared_statements: "dict[str, str]"
-    _prepared_counter: int
+    statement_config: "StatementConfig"
+    driver_features: "dict[str, Any]"
+
+    @property
+    @abstractmethod
+    def dialect(self) -> "Optional[str]":
+        """Database dialect for this driver."""
 
     # ================================================================================
     # Initialization
     # ================================================================================
 
-    def __init__(self, connection: "Any", statement_config: "Optional[SQLConfig]" = None) -> None:
+    def __init__(
+        self, connection: "Any", statement_config: "StatementConfig", driver_features: "Optional[dict[str, Any]]" = None
+    ) -> None:
         """Initialize driver adapter with connection and caching support.
 
         Args:
             connection: Database connection instance
-            statement_config: SQL statement configuration
+            statement_config: Statement configuration for the driver
+            driver_features: Driver-specific features like extensions, secrets, and connection callbacks
         """
         self.connection = connection
-        self.statement_config = statement_config or SQLConfig()
-        # Initialize cache with config cache_size if available, otherwise use default
-        if self.statement_config.enable_caching:
-            cache_size = getattr(self.statement_config, "cache_size", None)
-            self._compiled_cache = SQLCache(max_size=cache_size) if cache_size is not None else SQLCache()
-        else:
-            self._compiled_cache = None
-        self._prepared_statements = {}
-        self._prepared_counter = 0
-
-        super().__init__()
-
-    # ================================================================================
-    # Configuration Properties
-    # ================================================================================
-
-    @property
-    def parameter_config(self) -> "ParameterStyleConfig":
-        """Get the parameter configuration from the SQL config.
-
-        Returns:
-            The parameter style configuration.
-        """
-        return self.statement_config.get_parameter_config()
+        self.statement_config = statement_config
+        self.driver_features = driver_features or {}
 
     # ================================================================================
     # SQL Analysis & Detection Methods
@@ -124,6 +107,63 @@ class CommonDriverAttributesMixin:
 
             return result
         return False
+
+    def _build_select_result_from_data(
+        self, statement: "SQL", data: "list[dict[str, Any]]", column_names: "list[str]", row_count: int
+    ) -> "SQLResult":
+        """Build SQLResult for SELECT operations from extracted data."""
+        return SQLResult(
+            statement=statement, data=data, column_names=column_names, rows_affected=row_count, operation_type="SELECT"
+        )
+
+    def _build_execute_result_from_data(
+        self, statement: "SQL", row_count: int, metadata: "Optional[dict[str, Any]]" = None
+    ) -> "SQLResult":
+        """Build SQLResult for non-SELECT operations from extracted data."""
+        return SQLResult(
+            statement=statement,
+            data=[],
+            rows_affected=row_count,
+            operation_type="EXECUTE",
+            metadata=metadata or {"status_message": "OK"},
+        )
+
+    def prepare_statement(
+        self,
+        statement: "Union[Statement, QueryBuilder]",
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        statement_config: "StatementConfig",
+        **kwargs: Any,
+    ) -> "SQL":
+        """Build SQL statement from various input types.
+
+        Ensures dialect is set and preserves existing state when rebuilding SQL objects.
+        """
+        if isinstance(statement, QueryBuilder):
+            return statement.to_statement(config=statement_config)
+        if isinstance(statement, SQL):
+            if parameters or kwargs:
+                new_config = statement_config
+                if self.dialect and new_config and not new_config.dialect:
+                    new_config = new_config.replace(dialect=self.dialect)
+                return statement.copy(
+                    parameters=(*statement._positional_params, *parameters)
+                    if parameters
+                    else statement._positional_params,
+                    config=new_config,
+                    **kwargs,
+                )
+            if self.dialect and (
+                not statement.statement_config.dialect or statement.statement_config.dialect != self.dialect
+            ):
+                new_config = statement.statement_config.replace(dialect=self.dialect)
+                if statement.parameters:
+                    return statement.copy(config=new_config, dialect=self.dialect)
+                return statement.copy(config=new_config, dialect=self.dialect)
+            return statement
+        if self.dialect and statement_config and not statement_config.dialect:
+            statement_config = statement_config.replace(dialect=self.dialect)
+        return SQL(statement, *parameters, config=statement_config, **kwargs)
 
     def _check_anonymous_returns_rows(self, sql_text: str) -> bool:
         """Uncached implementation of anonymous expression checking."""
@@ -240,7 +280,9 @@ class CommonDriverAttributesMixin:
             raise NotFoundError(msg)
         return item_or_none
 
-    def _split_script_statements(self, script: str, strip_trailing_semicolon: bool = False) -> list[str]:
+    def split_script_statements(
+        self, script: str, statement_config: "StatementConfig", strip_trailing_semicolon: bool = False
+    ) -> list[str]:
         """Split a SQL script into individual statements.
 
         Uses a robust lexer-driven state machine to handle multi-statement scripts,
@@ -250,36 +292,62 @@ class CommonDriverAttributesMixin:
 
         Args:
             script: The SQL script to split
+            statement_config: Statement configuration containing dialect information
             strip_trailing_semicolon: If True, remove trailing semicolons from statements
 
         Returns:
             A list of individual SQL statements
         """
-        return split_sql_script(script, dialect=str(self.dialect), strip_trailing_semicolon=strip_trailing_semicolon)
+        return [
+            sql_script.strip()
+            for sql_script in split_sql_script(
+                script, dialect=str(statement_config.dialect), strip_trailing_semicolon=strip_trailing_semicolon
+            )
+            if sql_script.strip()
+        ]
 
-    def _prepare_driver_parameters(self, parameters: Any) -> Any:
+    def prepare_driver_parameters(
+        self, parameters: Any, statement_config: "StatementConfig", is_many: bool = False
+    ) -> Any:
         """Prepare parameters for database driver consumption.
 
         Normalizes parameter structure and unwraps TypedParameter objects
         to their underlying values, which database drivers expect.
-        TypeCoercionMixin handles parameter normalization.
+        Consolidates both single and many parameter handling.
 
         Args:
             parameters: Parameters in any format (dict, list, tuple, scalar, TypedParameter)
+            statement_config: Statement configuration for parameter style detection
+            is_many: If True, handle as executemany parameter sequence
 
         Returns:
             Parameters with TypedParameter objects unwrapped to primitive values
         """
         if not parameters:
             return []
+
+        if is_many:
+            return [self._format_parameter_set(param_set, statement_config) for param_set in parameters]
+
+        return self._format_parameter_set(parameters, statement_config)
+
+    def _format_parameter_set(self, parameters: Any, statement_config: "StatementConfig") -> Any:
+        """Prepare a single parameter set for database driver consumption.
+
+        Args:
+            parameters: Single parameter set in any format
+            statement_config: Statement configuration for parameter style detection
+
+        Returns:
+            Processed parameter set with TypedParameter objects unwrapped
+        """
+        if not parameters:
+            return []
+
         if isinstance(parameters, dict):
             if not parameters:
                 return []
-
-            # CRITICAL FIX: For drivers using positional parameter styles,
-            # convert dict to properly ordered list based on parameter ordinals.
-            # This ensures compatibility across all drivers (SQLite, PostgreSQL, MySQL, etc.)
-            parameter_config = self.statement_config.get_parameter_config()
+            parameter_config = statement_config.get_parameter_config()
             if parameter_config.default_parameter_style in {
                 ParameterStyle.NUMERIC,  # PostgreSQL $1, $2
                 ParameterStyle.QMARK,  # SQLite ?, ?
@@ -294,31 +362,17 @@ class CommonDriverAttributesMixin:
                     if item[0].isdigit()
                     else (int(item[0][6:]) if item[0].startswith("param_") and item[0][6:].isdigit() else float("inf")),
                 )
-                for _key, value in sorted_items:
+                for _, value in sorted_items:
                     ordered_params.append(value.value if isinstance(value, TypedParameter) else value)
                 return ordered_params
 
             # For named parameter styles, keep as dict
             return {k: (v.value if isinstance(v, TypedParameter) else v) for k, v in parameters.items()}
+
         if isinstance(parameters, (list, tuple)):
             return [p.value if isinstance(p, TypedParameter) else p for p in parameters]
+
         return [parameters.value if isinstance(parameters, TypedParameter) else parameters]
-
-    def _prepare_driver_parameters_many(self, parameters: Any) -> "list[Any]":
-        """Prepare parameter sequences for executemany operations.
-
-        Handles sequences of parameter sets, unwrapping TypedParameter
-        objects in each set for database driver consumption.
-
-        Args:
-            parameters: Sequence of parameter sets for executemany
-
-        Returns:
-            List of parameter sets with TypedParameter objects unwrapped
-        """
-        if not parameters:
-            return []
-        return [self._prepare_driver_parameters(param_set) for param_set in parameters]
 
     def _prepare_script_sql(self, statement: "SQL") -> str:
         """Prepare SQL script for execution by embedding parameters as static values.
@@ -337,7 +391,7 @@ class CommonDriverAttributesMixin:
         return sql
 
     def _apply_pipeline_transformations(
-        self, expression: "exp.Expression", parameters: Any = None, config: "Optional[SQLConfig]" = None
+        self, expression: "exp.Expression", parameters: Any = None, config: "Optional[StatementConfig]" = None
     ) -> tuple["exp.Expression", Any]:
         """Apply pipeline transformations to SQL expression.
 
@@ -367,65 +421,124 @@ class CommonDriverAttributesMixin:
         return result_context.current_expression, result_context.merged_parameters
 
     # ================================================================================
-    # Caching Methods
+    # SQL Compilation Methods
     # ================================================================================
 
-    def _get_compiled_sql(self, statement: "SQL", target_style: ParameterStyle) -> tuple[str, Any]:
-        """Get compiled SQL with caching.
+    def _get_compiled_sql(self, statement: "SQL", statement_config: "StatementConfig") -> tuple[str, Any]:
+        """Get compiled SQL with optimal parameter style (only converts when needed).
 
         Args:
             statement: SQL statement to compile
-            target_style: Target parameter style for compilation
+            statement_config: Complete statement configuration including parameter config, dialect, etc.
 
         Returns:
             Tuple of (compiled_sql, parameters)
         """
-        if self._compiled_cache is None:
+        parameter_config = statement_config.get_parameter_config()
+        target_style = parameter_config.execution_target_style
+
+        # Optimization: Only pass target_style if it's set and different from current statement's style
+        if target_style and target_style != parameter_config.default_parameter_style:
             return statement.compile(placeholder_style=target_style)
-        cache_key = self._adapter_cache_key(statement, target_style)
-        cached = self._compiled_cache.get(cache_key)
-        if cached is not None:
-            return cached  # type: ignore[no-any-return]
-        result = statement.compile(placeholder_style=target_style)
-        self._compiled_cache.set(cache_key, result)
-        return result
 
-    def _adapter_cache_key(self, statement: "SQL", style: ParameterStyle) -> str:
-        """Generate adapter-specific cache key.
+        # No conversion needed - use default compilation
+        return statement.compile()
 
-        Args:
-            statement: SQL statement
-            style: Parameter style
+    # ================================================================================
+    # Unified Execution Methods
+    # ================================================================================
 
-        Returns:
-            Cache key string
-        """
-        # Use statement's internal cache key which includes SQL hash, params, and dialect
-        base_key = statement._cache_key()
-        # Add adapter-specific context
-        return f"{self.__class__.__name__}:{style.value}:{base_key}"
+    def _perform_execute(self, cursor: Any, statement: "SQL") -> Any:
+        """Unified execution logic that delegates to driver-specific methods.
 
-    def _get_or_create_prepared_statement_name(self, sql_hash: str) -> str:
-        """Get or create a prepared statement name for the given SQL.
-
-        Used by PostgreSQL and other databases that support prepared statements.
+        This method implements the common execution pattern shared by all drivers:
+        1. Compile SQL with driver's parameter style
+        2. Route to appropriate execution method based on statement type
+        3. Let driver implement the specific database execution logic
 
         Args:
-            sql_hash: Hash of the SQL statement
+            cursor: Database cursor/connection object
+            statement: SQL statement to execute
 
         Returns:
-            Prepared statement name
+            Whatever the driver-specific execution method returns
         """
-        if sql_hash in self._prepared_statements:
-            return self._prepared_statements[sql_hash]
-        self._prepared_counter += 1
-        stmt_name = f"sqlspec_ps_{self._prepared_counter}"
-        self._prepared_statements[sql_hash] = stmt_name
-        return stmt_name
+        # Compile with driver's parameter style
+        sql, params = self._get_compiled_sql(statement, self.statement_config)
 
-    def _clear_adapter_cache(self) -> None:
-        """Clear all adapter-level caches."""
-        if self._compiled_cache is not None:
-            self._compiled_cache.clear()
-        self._prepared_statements.clear()
-        self._prepared_counter = 0
+        if statement.is_script:
+            # Check if driver needs static compilation (e.g., SQLite executescript)
+            if self.statement_config.needs_static_script_compilation:
+                # Use static compilation for databases that don't support parameters in scripts
+                static_sql = self._prepare_script_sql(statement)
+                return self._execute_script(cursor, static_sql, None, self.statement_config)
+            # Prepare parameters for script execution
+            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
+            return self._execute_script(cursor, sql, prepared_params, self.statement_config)
+        if statement.is_many:
+            # Prepare parameters for executemany
+            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=True)
+            return self._execute_many(cursor, sql, prepared_params)
+        # Prepare parameters for single execution
+        prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
+        return self._execute_statement(cursor, sql, prepared_params)
+
+    def _execute_script(self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig") -> Any:
+        """Execute a SQL script (multiple statements).
+
+        Default implementation splits script and executes statements individually.
+        Drivers can override for database-specific script execution methods.
+
+        Args:
+            cursor: Database cursor/connection object
+            sql: Compiled SQL script
+            prepared_params: Prepared parameters
+            statement_config: Statement configuration for dialect information
+
+        Returns:
+            Driver-specific result
+        """
+        statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
+        last_result = None
+        for stmt in statements:
+            # split_script_statements already removes empty strings, no need to check again
+            last_result = self._execute_statement(cursor, stmt, prepared_params)
+        return last_result
+
+    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+        """Execute SQL with multiple parameter sets (executemany).
+
+        Must be implemented by each driver for database-specific executemany logic.
+
+        Args:
+            cursor: Database cursor/connection object
+            sql: Compiled SQL statement
+            prepared_params: List of prepared parameter sets
+
+        Returns:
+            Driver-specific result
+
+        Raises:
+            NotImplementedError: Must be implemented by driver subclasses
+        """
+        msg = f"{type(self).__name__} must implement _execute_many"
+        raise NotImplementedError(msg)
+
+    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+        """Execute a single SQL statement.
+
+        Must be implemented by each driver for database-specific execution logic.
+
+        Args:
+            cursor: Database cursor/connection object
+            sql: Compiled SQL statement
+            prepared_params: Prepared parameters
+
+        Returns:
+            Driver-specific result
+
+        Raises:
+            NotImplementedError: Must be implemented by driver subclasses
+        """
+        msg = f"{type(self).__name__} must implement _execute_single"
+        raise NotImplementedError(msg)

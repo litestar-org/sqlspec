@@ -18,7 +18,7 @@ from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.cache import optimized_expression_cache
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQL, StatementConfig
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.statement_hashing import hash_optimized_expression
 from sqlspec.utils.type_guards import has_sql_method, has_with_method
@@ -326,7 +326,7 @@ class QueryBuilder(ABC):
         else:
             return optimized
 
-    def to_statement(self, config: "Optional[SQLConfig]" = None) -> "SQL":
+    def to_statement(self, config: "Optional[StatementConfig]" = None) -> "SQL":
         """Converts the built query into a SQL statement object.
 
         Args:
@@ -351,9 +351,9 @@ class QueryBuilder(ABC):
             )
 
         if config is None:
-            from sqlspec.statement.sql import SQLConfig
+            from sqlspec.statement.sql import StatementConfig
 
-            config = SQLConfig(dialect=safe_query.dialect)
+            config = StatementConfig(dialect=safe_query.dialect)
 
         # SQL expects parameters as variadic args, not as a keyword
         if kwargs:

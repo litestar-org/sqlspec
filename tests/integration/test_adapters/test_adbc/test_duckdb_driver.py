@@ -8,7 +8,7 @@ import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQLConfig
+from sqlspec.statement.sql import StatementConfig
 
 # Import the decorator
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
@@ -19,7 +19,7 @@ def adbc_duckdb_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC DuckDB session with test table."""
     config = AdbcConfig(
         connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"},
-        statement_config=SQLConfig(),  # Allow DDL statements for tests
+        statement_config=StatementConfig(),  # Allow DDL statements for tests
     )
 
     with config.provide_session() as session:

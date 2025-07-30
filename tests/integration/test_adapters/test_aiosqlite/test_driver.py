@@ -9,7 +9,7 @@ import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQLConfig
+from sqlspec.statement.sql import StatementConfig
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -443,7 +443,7 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDr
     except Exception:
         # JSON1 extension might not be available
         pass
-    non_strict_config = SQLConfig(enable_parsing=False, enable_validation=False)
+    non_strict_config = StatementConfig(enable_parsing=False, enable_validation=False)
 
     await aiosqlite_session.execute("ATTACH DATABASE ':memory:' AS temp_db", _config=non_strict_config)
     await aiosqlite_session.execute(

@@ -5,7 +5,7 @@ from asyncmy.cursors import Cursor, DictCursor
 
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.parameters import ParameterStyle
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQL, StatementConfig
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -34,16 +34,17 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
     dialect: "DialectType" = "mysql"
 
-    def __init__(self, connection: "AsyncmyConnection", statement_config: Optional[SQLConfig] = None) -> None:
-        from sqlspec.statement.sql import SQLConfig
+    def __init__(self, connection: "AsyncmyConnection", statement_config: Optional[StatementConfig] = None, driver_features: "Optional[dict[str, Any]]" = None) -> None:
+        from sqlspec.statement.sql import StatementConfig
 
         # Set default asyncmy-specific configuration
         if statement_config is None:
-            statement_config = SQLConfig(
-                supported_parameter_styles=[
+            statement_config = StatementConfig(
+                dialect="mysql",
+                supported_parameter_styles={
                     ParameterStyle.POSITIONAL_PYFORMAT,  # %s
                     ParameterStyle.NAMED_PYFORMAT,  # %(name)s
-                ],
+                },
                 default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
                 type_coercion_map={
                     # MySQL has good native type support
@@ -52,7 +53,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
                 has_native_list_expansion=False,  # MySQL doesn't handle arrays natively
             )
 
-        super().__init__(connection=connection, statement_config=statement_config)
+        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         # MySQL type conversions
         # MySQL 5.7+ has native JSON support and handles most types well
         # Type handlers can be registered if the base class supports it
@@ -82,22 +83,20 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             # Scripts use STATIC compilation to transpile parameters automatically
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             # MySQL doesn't have executescript - execute statements one by one
-            statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
+            statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
             for stmt in statements:
                 if stmt.strip():  # Skip empty statements
                     await cursor.execute(stmt)
         else:
             # Enable intelligent parameter conversion - MySQL supports both POSITIONAL_PYFORMAT and NAMED_PYFORMAT
-            sql, params = self._get_compiled_sql(
-                statement, self.statement_config.get_parameter_config().default_parameter_style
-            )
+            sql, params = self._get_compiled_sql(statement, self.statement_config)
 
             if statement.is_many:
                 # For execute_many, params is already a list of parameter sets
-                prepared_params = self._prepare_driver_parameters_many(params) if params else []
+                prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=True)
                 await cursor.executemany(sql, prepared_params)
             else:
-                prepared_params = self._prepare_driver_parameters(params)
+                prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
                 await cursor.execute(sql, prepared_params or None)
 
     async def _extract_select_data(

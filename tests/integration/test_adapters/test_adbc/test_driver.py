@@ -11,7 +11,7 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQLConfig
+from sqlspec.statement.sql import StatementConfig
 
 # Import the decorator
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
@@ -27,7 +27,7 @@ def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[Adbc
             "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
             "driver_name": "adbc_driver_postgresql",
         },
-        statement_config=SQLConfig(),  # Allow DDL statements for tests
+        statement_config=StatementConfig(),  # Allow DDL statements for tests
     )
 
     with config.provide_session() as session:
@@ -59,7 +59,7 @@ def adbc_sqlite_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session with test table."""
     config = AdbcConfig(
         connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"},
-        statement_config=SQLConfig(),  # Allow DDL statements for tests
+        statement_config=StatementConfig(),  # Allow DDL statements for tests
     )
 
     with config.provide_session() as session:
@@ -81,7 +81,7 @@ def adbc_duckdb_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC DuckDB session with test table."""
     config = AdbcConfig(
         connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"},
-        statement_config=SQLConfig(),  # Allow DDL statements for tests
+        statement_config=StatementConfig(),  # Allow DDL statements for tests
     )
 
     with config.provide_session() as session:
@@ -113,7 +113,7 @@ def adbc_bigquery_session(bigquery_service: BigQueryService) -> Generator[AdbcDr
                 "credentials": None,
             },
         },
-        statement_config=SQLConfig(),
+        statement_config=StatementConfig(),
     )
 
     with config.provide_session() as session:

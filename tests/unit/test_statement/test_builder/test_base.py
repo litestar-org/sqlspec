@@ -38,7 +38,7 @@ from sqlspec.statement.builder._ddl import (
 from sqlspec.statement.builder._select import Select
 from sqlspec.statement.builder.mixins._where_clause import WhereClauseMixin
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQL, StatementConfig
 
 
 # Test implementation of abstract QueryBuilder for testing
@@ -399,7 +399,7 @@ def test_query_builder_to_statement_basic(test_builder: MockQueryBuilder) -> Non
 
 def test_query_builder_to_statement_with_config(test_builder: MockQueryBuilder) -> None:
     """Test to_statement method with custom config."""
-    config = SQLConfig()
+    config = StatementConfig()
     statement = test_builder.to_statement(config)
 
     assert isinstance(statement, SQL)

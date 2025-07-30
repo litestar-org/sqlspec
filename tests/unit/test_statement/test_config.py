@@ -10,7 +10,7 @@ from sqlspec.base import SQLSpec
 from sqlspec.config import NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
 from sqlspec.driver import CommonDriverAttributesMixin
 from sqlspec.parameters import ParameterStyle
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQL, StatementConfig
 
 
 class MockConnection:
@@ -206,9 +206,8 @@ def driver_attributes() -> CommonDriverAttributesMixin:
             # Create a mock connection for the test
             mock_connection = MockConnection()
             self.connection = mock_connection
-            self.statement_config = None  # type: ignore[assignment]
-            self.dialect = "sqlite"
-            super().__init__(connection=mock_connection)
+            self.statement_config = StatementConfig(dialect="sqlite")
+            super().__init__(connection=mock_connection, statement_config=self.statement_config)
 
         def _get_placeholder_style(self) -> ParameterStyle:
             return ParameterStyle.NAMED_COLON
@@ -304,7 +303,7 @@ def test_returns_rows(
     """
     try:
         # Create a permissive configuration for testing that allows DDL, risky DML, and UNION operations
-        test_config = SQLConfig()
+        test_config = StatementConfig()
         statement = SQL(sql, config=test_config)
         expression = statement.expression
         actual_returns_rows = driver_attributes.returns_rows(expression)
@@ -323,7 +322,7 @@ def test_returns_rows_with_invalid_expression(driver_attributes: CommonDriverAtt
     assert result is False, "Should return False for None expression"
 
     # Create a permissive configuration for testing
-    test_config = SQLConfig()
+    test_config = StatementConfig()
 
     try:
         empty_stmt = SQL("", config=test_config)

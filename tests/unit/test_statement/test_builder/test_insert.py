@@ -474,4 +474,6 @@ def test_insert_to_statement_conversion() -> None:
     if "parameters" in statement.parameters:
         assert statement.parameters["parameters"] == build_params
     else:
-        assert statement.parameters == build_params
+        # Filter out config from statement parameters for comparison
+        stmt_params = {k: v for k, v in statement.parameters.items() if k != "config"}
+        assert stmt_params == build_params

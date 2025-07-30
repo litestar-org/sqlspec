@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.asyncpg._types import AsyncpgConnection
     from sqlspec.statement.result import SQLResult
-    from sqlspec.statement.sql import SQL, SQLConfig
+    from sqlspec.statement.sql import SQL, StatementConfig
 
 
 __all__ = ("AsyncpgCursor", "AsyncpgDriver")
@@ -55,29 +55,31 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     dialect: "DialectType" = "postgres"
     _execution_state: dict[str, "Optional[Union[str, Any]]"]
 
-    def __init__(self, connection: "AsyncpgConnection", statement_config: "Optional[SQLConfig]" = None) -> None:
-        from sqlspec.statement.sql import SQLConfig
-
-        # Set default asyncpg-specific configuration
+    def __init__(self, connection: "AsyncpgConnection", statement_config: "Optional[StatementConfig]" = None, driver_features: "Optional[dict[str, Any]]" = None) -> None:
+        from sqlspec.statement.sql import StatementConfig
+        
+        # Set default AsyncPG-specific configuration
         if statement_config is None:
-            statement_config = SQLConfig(
-                supported_parameter_styles=[ParameterStyle.NUMERIC],
+            statement_config = StatementConfig(
+                dialect="postgres",
+                supported_parameter_styles={ParameterStyle.NUMERIC},
                 default_parameter_style=ParameterStyle.NUMERIC,
-                type_coercion_map={},
+                type_coercion_map={
+                    # AsyncPG handles most types natively
+                    # Add any specific type mappings as needed
+                },
                 has_native_list_expansion=True,
-                force_style_conversion=True,
+                execution_target_style=ParameterStyle.NUMERIC,  # Force conversion for optimization
             )
-
-        super().__init__(connection=connection, statement_config=statement_config)
+        
+        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._execution_state = {"last_status": None, "compiled_sql": None, "prepared_params": None}
 
     def with_cursor(self, connection: "AsyncpgConnection") -> "AsyncpgCursor":
         return AsyncpgCursor(connection)
 
     async def _perform_execute(self, cursor: "AsyncpgConnection", statement: "SQL") -> None:
-        sql, params = self._get_compiled_sql(
-            statement, self.statement_config.get_parameter_config().default_parameter_style
-        )
+        sql, params = self._get_compiled_sql(statement, self.statement_config)
 
         # Check if this is a COPY statement marked by the pipeline
         if statement._processing_context and statement._processing_context.metadata.get("postgres_copy_operation"):
@@ -87,18 +89,18 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         if statement.is_script:
             # AsyncPG doesn't have executescript - execute statements one by one
             # But we can still use parameters since we're using regular execute()
-            prepared_params = self._prepare_driver_parameters(params)
+            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
             # Use the proper script splitter to handle complex cases
-            statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
+            statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
             last_status = "UNKNOWN 0"
             for stmt in statements:
                 if stmt.strip():  # Skip empty statements
-                    last_status = await cursor.execute(stmt, *(prepared_params or []))
+                    last_status = await cursor.execute(stmt, *prepared_params)
             # Store the last statement's status for row count
             self._execution_state["last_status"] = last_status
         elif statement.is_many:
             # For execute_many, params is already a list of parameter sets
-            prepared_params = self._prepare_driver_parameters_many(params) if params else []
+            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=True)
             # executemany doesn't return status in asyncpg, approximate row count
             await cursor.executemany(sql, prepared_params)
             # For executemany, we can't get exact row count from asyncpg
@@ -106,7 +108,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             row_count = len(prepared_params) if prepared_params else 0
             self._execution_state["last_status"] = f"EXECUTE_MANY {row_count}"
         else:
-            prepared_params = self._prepare_driver_parameters(params)
+            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
             # For row-returning queries (including CTEs with INSERT...RETURNING),
             # we need to use fetch() directly instead of execute() to get the results
             if self.returns_rows(statement.expression):
@@ -116,7 +118,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                 # For CTEs with RETURNING, we'll fetch the data in _extract_select_data
             else:
                 # For non-row-returning queries, use execute() and store status
-                status = await cursor.execute(sql, *(prepared_params or []))
+                status = await cursor.execute(sql, *prepared_params)
                 self._execution_state["last_status"] = status
 
     async def _extract_select_data(self, cursor: "AsyncpgConnection") -> "tuple[list[dict[str, Any]], list[str], int]":
@@ -130,7 +132,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         prepared_params = self._execution_state.get("prepared_params")
         records: list[Any]
         if sql is not None:
-            records = await cursor.fetch(sql, *(prepared_params or []))
+            records = await cursor.fetch(sql, *prepared_params)
         else:
             records = []
 

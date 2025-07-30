@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypeVar, Union, cast
 
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQL, StatementConfig
 from sqlspec.typing import AIOSQL_INSTALLED
 
 if TYPE_CHECKING:
@@ -110,7 +110,7 @@ class _AiosqlAdapterBase:
 
     def _create_sql_object(self, sql: str, parameters: "Any" = None) -> SQL:
         """Create SQL object with proper configuration."""
-        config = SQLConfig(enable_validation=False)
+        config = StatementConfig(enable_validation=False)
         converted_dialect = _normalize_dialect(self.driver.dialect)
         return SQL(sql, parameters, config=config, dialect=converted_dialect)
 

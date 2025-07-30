@@ -16,7 +16,7 @@ from sqlspec.parameters.types import TypedParameter
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from sqlspec.statement.sql import SQLConfig
+    from sqlspec.statement.sql import StatementConfig
 
 logger = get_logger(__name__)
 
@@ -117,7 +117,7 @@ def compose_pipeline(steps: list[PipelineStep]) -> PipelineStep:
     return composed
 
 
-def create_pipeline_from_config(config: "SQLConfig", driver_adapter: "Any" = None) -> PipelineStep:
+def create_pipeline_from_config(config: "StatementConfig", driver_adapter: "Any" = None) -> PipelineStep:
     """Create a pipeline based on SQL configuration.
 
     This function creates a pipeline that respects the configuration
@@ -137,8 +137,8 @@ def create_pipeline_from_config(config: "SQLConfig", driver_adapter: "Any" = Non
             steps.append(optimize_step)
     if config.enable_validation:
         steps.extend((validate_step, validate_dml_safety_step))
-    if config.custom_pipeline_steps:
-        steps.extend(config.custom_pipeline_steps)
+    if config.user_defined_pipeline_steps:
+        steps.extend(config.user_defined_pipeline_steps)
     return compose_pipeline(steps)
 
 

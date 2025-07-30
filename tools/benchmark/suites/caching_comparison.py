@@ -22,7 +22,7 @@ class CachingComparisonBenchmark(BaseBenchmarkSuite):
     def run(self, adapter: str = "all", **kwargs: Any) -> dict[str, TimingResult]:
         """Run caching comparison benchmarks."""
         from sqlspec.statement.cache import sql_cache
-        from sqlspec.statement.sql import SQL, SQLConfig
+        from sqlspec.statement.sql import SQL, StatementConfig
 
         results = {}
 
@@ -77,7 +77,7 @@ class CachingComparisonBenchmark(BaseBenchmarkSuite):
                 sql_cache.clear()
 
                 def no_cache_operation(text: str = sql_text) -> tuple[str, Any]:
-                    stmt = SQL(text, config=SQLConfig(enable_caching=False))
+                    stmt = SQL(text, config=StatementConfig(enable_caching=False))
                     return stmt.compile()
 
                 times = BenchmarkMetrics.time_operation(
@@ -96,11 +96,11 @@ class CachingComparisonBenchmark(BaseBenchmarkSuite):
                 sql_cache.clear()
 
                 def with_cache_operation(text: str = sql_text) -> tuple[str, Any]:
-                    stmt = SQL(text, config=SQLConfig(enable_caching=True))
+                    stmt = SQL(text, config=StatementConfig(enable_caching=True))
                     return stmt.compile()
 
                 # Warmup cache first
-                warmup_stmt = SQL(sql_text, config=SQLConfig(enable_caching=True))
+                warmup_stmt = SQL(sql_text, config=StatementConfig(enable_caching=True))
                 warmup_stmt.compile()
 
                 times = BenchmarkMetrics.time_operation(

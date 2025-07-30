@@ -1,9 +1,11 @@
 """SQLite database configuration with QueuePool-like connection pooling."""
 
+import datetime
 import sqlite3
 import threading
 import time
 from contextlib import contextmanager, suppress
+from decimal import Decimal
 from queue import Empty, Full, Queue
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, TypedDict, Union
 
@@ -12,7 +14,9 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.sqlite._types import SqliteConnection
 from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver
 from sqlspec.config import SyncDatabaseConfig
-from sqlspec.statement.sql import SQLConfig
+from sqlspec.parameters import ParameterStyle
+from sqlspec.statement.sql import StatementConfig
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -42,7 +46,20 @@ class SqliteConnectionParams(TypedDict, total=False):
     extra: "NotRequired[dict[str, Any]]"
 
 
-__all__ = ("SqliteConfig", "SqliteConnectionParams", "SqliteConnectionPool", "sqlite3")
+class SqlitePoolParams(SqliteConnectionParams, total=False):
+    """Complete pool configuration for SQLite adapter.
+
+    Combines standardized pool parameters with SQLite-specific connection parameters.
+    """
+
+    # Standardized pool parameters (consistent across ALL adapters)
+    pool_min_size: NotRequired[int]
+    pool_max_size: NotRequired[int]
+    pool_timeout: NotRequired[float]
+    pool_recycle_seconds: NotRequired[int]
+
+
+__all__ = ("SqliteConfig", "SqliteConnectionParams", "SqliteConnectionPool", "SqlitePoolParams", "sqlite3")
 
 
 class SqliteConnectionPool:
@@ -242,41 +259,39 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
     def __init__(
         self,
         *,
-        connection_config: "Optional[Union[SqliteConnectionParams, dict[str, Any]]]" = None,
-        statement_config: "Optional[SQLConfig]" = None,
-        migration_config: "Optional[dict[str, Any]]" = None,
-        adapter_cache_size: int = 1000,
-        min_pool_size: int = DEFAULT_MIN_POOL,
-        max_pool_size: int = DEFAULT_MAX_POOL,
-        pool_timeout: float = POOL_TIMEOUT,
-        pool_recycle: int = POOL_RECYCLE,
+        pool_config: "Optional[Union[SqlitePoolParams, dict[str, Any]]]" = None,
         pool_instance: "Optional[SqliteConnectionPool]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        migration_config: "Optional[dict[str, Any]]" = None,
     ) -> None:
         """Initialize SQLite pooled configuration.
 
         Args:
-            connection_config: Connection configuration parameters as TypedDict
+            pool_config: Pool configuration parameters including connection settings
+            pool_instance: Pre-created pool instance
             statement_config: Default SQL statement configuration
             migration_config: Migration configuration
-            adapter_cache_size: Max cached SQL statements (0 to disable caching)
-            min_pool_size: Minimum number of connections to maintain (default: 5)
-            max_pool_size: Maximum number of connections allowed (default: 20)
-            pool_timeout: Pool checkout timeout in seconds (default: 30.0)
-            pool_recycle: Connection recycle time in seconds (default: 3600)
-            pool_instance: Pre-created pool instance
         """
-        # Store configuration
-        self.connection_config: "dict[str, Any]" = (  # noqa: UP037
-            dict(connection_config) if connection_config else {"database": ":memory:"}
-        )
-        extras = self.connection_config.pop("extra", {})
-        self.connection_config.update(extras)
+        # Store and parse the unified pool configuration
+        self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
+        if "extra" in self.pool_config:
+            extras = self.pool_config.pop("extra")
+            self.pool_config.update(extras)
 
-        # Handle default database setting - ensure empty string or None becomes :memory:
-        database = self.connection_config.get("database")
-        if not database:  # None, empty string, or other falsy values
-            self.connection_config["database"] = ":memory:"
-            database = ":memory:"
+        # Extract connection parameters from pool_config
+        connection_params = {
+            key: value
+            for key, value in self.pool_config.items()
+            if key
+            not in {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds", "pool_max_overflow"}
+        }
+
+        # Set default database if not provided
+        if "database" not in connection_params or not connection_params["database"]:
+            connection_params["database"] = ":memory:"
+
+        self.connection_config: dict[str, Any] = connection_params
+        database = self.connection_config["database"]
 
         # Check if this is an in-memory database and auto-convert to shared memory
         if self._is_memory_database(database):
@@ -286,15 +301,29 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             # Ensure uri=True is set for all file::memory: databases
             self.connection_config["uri"] = True
 
-        self.statement_config = statement_config or SQLConfig()
-        self.min_pool_size = min_pool_size
-        self.max_pool_size = max_pool_size
-        self.pool_timeout = pool_timeout
-        self.pool_recycle = pool_recycle
+        # Extract pool parameters with defaults
+        self.min_pool_size = self.pool_config.get("pool_min_size", DEFAULT_MIN_POOL)
+        self.max_pool_size = self.pool_config.get("pool_max_size", DEFAULT_MAX_POOL)
+        self.pool_timeout = self.pool_config.get("pool_timeout", POOL_TIMEOUT)
+        self.pool_recycle = self.pool_config.get("pool_recycle_seconds", POOL_RECYCLE)
 
-        super().__init__(
-            pool_instance=pool_instance, migration_config=migration_config, adapter_cache_size=adapter_cache_size
-        )
+        super().__init__(pool_instance=pool_instance, migration_config=migration_config)
+
+        # Use provided StatementConfig or create a minimal one (driver will override with its own defaults)
+        self.statement_config = statement_config or StatementConfig()
+
+    def _optimize_memory_database(self) -> None:
+        """Optimize in-memory databases for concurrent access."""
+        database = self.pool_config.get("database", ":memory:")
+
+        if self._is_memory_database(database):
+            # Convert to shared cache for concurrency
+            shared_name = f"shared_cache_{id(self)}"
+            self.pool_config["database"] = f"file:{shared_name}?mode=memory&cache=shared"
+            self.pool_config["uri"] = True
+        elif "file::memory:" in database:
+            # Ensure URI mode is enabled for file-based memory databases
+            self.pool_config["uri"] = True
 
     def _convert_to_shared_memory(self) -> None:
         """Convert in-memory database to shared memory for connection pooling.
@@ -324,10 +353,9 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         return {k: v for k, v in config.items() if v is not None}
 
     def _create_pool(self) -> SqliteConnectionPool:
-        """Create the SQLite connection pool."""
-        connection_params = self._get_connection_config_dict()
+        """Create optimized connection pool from unified configuration."""
         return SqliteConnectionPool(
-            connection_params=connection_params,
+            connection_params=self.connection_config,
             min_pool_size=self.min_pool_size,
             max_pool_size=self.max_pool_size,
             timeout=self.pool_timeout,
@@ -377,12 +405,8 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         """Provide a SQLite driver session using pooled connections."""
         with self.provide_connection(*args, **kwargs) as connection:
             statement_config = self.statement_config
-            if statement_config.allowed_parameter_styles is None:
-                statement_config = statement_config.replace(
-                    allowed_parameter_styles=self.supported_parameter_styles,
-                    default_parameter_style=self.default_parameter_style,
-                )
-            yield self.driver_type(connection=connection, config=statement_config)
+            # No need to replace since we now create complete StatementConfig in __init__
+            yield self.driver_type(connection=connection, statement_config=statement_config)
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":
         """Get the signature namespace for SQLite types.

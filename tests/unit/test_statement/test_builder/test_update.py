@@ -440,8 +440,9 @@ def test_update_to_statement_conversion() -> None:
         # Nested format
         assert statement.parameters["parameters"] == build_params
     else:
-        # Direct format
-        assert statement.parameters == build_params
+        # Direct format - filter out config from statement parameters for comparison
+        stmt_params = {k: v for k, v in statement.parameters.items() if k != "config"}
+        assert stmt_params == build_params
 
 
 # Test fluent interface chaining

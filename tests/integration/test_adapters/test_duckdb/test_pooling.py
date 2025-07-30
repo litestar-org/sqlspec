@@ -12,7 +12,7 @@ from sqlspec.adapters.duckdb import DuckDBConfig
 def test_shared_memory_pooling() -> None:
     """Test that shared memory databases allow pooling."""
     # Create config with shared memory database
-    config = DuckDBConfig(connection_config={"database": ":memory:shared_test"}, min_pool=2, max_pool=5)
+    config = DuckDBConfig(pool_config={"database": ":memory:shared_test", "pool_min_size": 2, "pool_max_size": 5})
 
     # Verify pooling is not disabled
     assert config.min_pool == 2
@@ -43,7 +43,7 @@ def test_shared_memory_pooling() -> None:
 def test_regular_memory_auto_conversion() -> None:
     """Test that regular memory databases are auto-converted to shared memory with pooling enabled."""
     # Create config with regular memory database
-    config = DuckDBConfig(connection_config={"database": ":memory:"}, min_pool=5, max_pool=10)
+    config = DuckDBConfig(pool_config={"database": ":memory:", "pool_min_size": 5, "pool_max_size": 10})
 
     # Verify pooling is not disabled (no more pool size overrides)
     assert config.min_pool == 5
@@ -79,7 +79,7 @@ def test_file_database_pooling() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp_file:
         db_path = tmp_file.name
 
-    config = DuckDBConfig(connection_config={"database": db_path}, min_pool=2, max_pool=4)
+    config = DuckDBConfig(pool_config={"database": db_path, "pool_min_size": 2, "pool_max_size": 4})
 
     # Verify pooling works normally
     assert config.min_pool == 2
@@ -105,7 +105,7 @@ def test_file_database_pooling() -> None:
 @pytest.mark.xdist_group("duckdb")
 def test_connection_pool_health_checks() -> None:
     """Test that the connection pool performs health checks correctly."""
-    config = DuckDBConfig(connection_config={"database": ":memory:health_test"}, min_pool=1, max_pool=3)
+    config = DuckDBConfig(pool_config={"database": ":memory:health_test", "pool_min_size": 1, "pool_max_size": 3})
     pool = config.provide_pool()
 
     # Test that we can get a connection and it passes health check

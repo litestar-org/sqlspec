@@ -13,7 +13,7 @@ from sqlspec.statement.result import SQLResult
 
 if TYPE_CHECKING:
     from sqlspec.statement.builder._column import ColumnExpression
-    from sqlspec.statement.sql import SQL, SQLConfig
+    from sqlspec.statement.sql import SQL, StatementConfig
 
 __all__ = (
     "AlterOperation",
@@ -62,7 +62,7 @@ class DDLBuilder(QueryBuilder):
             self._expression = self._create_base_expression()
         return super().build()
 
-    def to_statement(self, config: "Optional[SQLConfig]" = None) -> "SQL":
+    def to_statement(self, config: "Optional[StatementConfig]" = None) -> "SQL":
         return super().to_statement(config=config)
 
 

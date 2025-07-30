@@ -6,12 +6,11 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 from sqlglot import exp
 
 from sqlspec.driver._common import CommonDriverAttributesMixin
-from sqlspec.driver.context import set_current_driver
 from sqlspec.driver.mixins import SQLTranslatorMixin, ToSchemaMixin
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
 from sqlspec.statement.builder import QueryBuilder
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL, SQLConfig, Statement
+from sqlspec.statement.sql import SQL, Statement, StatementConfig
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_dict_row, is_indexable_row
 
@@ -50,14 +49,9 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
             The result of the SQL execution.
         """
 
-        # Set current driver in context for SQL compilation
-        set_current_driver(self)
-        try:
-            with self.with_cursor(connection) as cursor:
-                self._perform_execute(cursor, statement)
-                return self._build_result(cursor, statement)
-        finally:
-            set_current_driver(None)
+        with self.with_cursor(connection) as cursor:
+            self._perform_execute(cursor, statement)
+            return self._build_result(cursor, statement)
 
     @abstractmethod
     def with_cursor(self, connection: Any) -> Any:
@@ -111,7 +105,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
             row_count = self._extract_execute_rowcount(cursor)
             # Count statements in the script
             sql, _ = statement.compile()
-            statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
+            statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
             statement_count = len([stmt for stmt in statements if stmt.strip()])
             return SQLResult(
                 statement=statement,
@@ -156,7 +150,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         self,
         statement: "Union[Statement, QueryBuilder]",
         *parameters: "Union[StatementParameters, StatementFilter]",
-        config: "SQLConfig",
+        config: "StatementConfig",
         **kwargs: Any,
     ) -> "SQL":
         """Build SQL statement from various input types.
@@ -177,8 +171,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
                     config=new_config,
                     **kwargs,
                 )
-            if self.dialect and (not statement._config.dialect or statement._config.dialect != self.dialect):
-                new_config = statement._config.replace(dialect=self.dialect)
+            if self.dialect and (
+                not statement.statement_config.dialect or statement.statement_config.dialect != self.dialect
+            ):
+                new_config = statement.statement_config.replace(dialect=self.dialect)
                 if statement.parameters:
                     return statement.copy(config=new_config, dialect=self.dialect)
                 return statement.copy(config=new_config, dialect=self.dialect)
@@ -192,7 +188,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         statement: "Union[SQL, Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
-        config: "Optional[SQLConfig]" = None,
+        config: "Optional[StatementConfig]" = None,
         suppress_warnings: bool = False,
         **kwargs: Any,
     ) -> "SQLResult":
@@ -204,7 +200,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         statement: "Union[SQL, Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
-        config: "Optional[SQLConfig]" = None,
+        config: "Optional[StatementConfig]" = None,
         suppress_warnings: bool = False,
         **kwargs: Any,
     ) -> "SQLResult":
@@ -227,7 +223,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         statement: "Union[str, SQL]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
-        config: "Optional[SQLConfig]" = None,
+        config: "Optional[StatementConfig]" = None,
         suppress_warnings: bool = False,
         **kwargs: Any,
     ) -> "SQLResult":
@@ -251,7 +247,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
-        config: "Optional[SQLConfig]" = None,
+        config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "ModelDTOT": ...
 
@@ -262,7 +258,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
-        config: "Optional[SQLConfig]" = None,
+        config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "Union[ModelT, RowT, dict[str, Any]]": ...  # pyright: ignore[reportInvalidTypeVarUse]
 
@@ -272,7 +268,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,
-        config: "Optional[SQLConfig]" = None,
+        config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "Union[ModelT, RowT, ModelDTOT]":  # pyright: ignore[reportInvalidTypeVarUse]
         """Execute a select statement and return exactly one row.
@@ -299,7 +295,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
-        config: "Optional[SQLConfig]" = None,
+        config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "Optional[ModelDTOT]": ...
 
@@ -310,7 +306,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
-        config: "Optional[SQLConfig]" = None,
+        config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "Optional[ModelT]": ...  # pyright: ignore[reportInvalidTypeVarUse]
 
@@ -320,7 +316,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,
-        config: "Optional[SQLConfig]" = None,
+        config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[ModelT, ModelDTOT]]":  # pyright: ignore[reportInvalidTypeVarUse]
         """Execute a select statement and return at most one row.
@@ -344,7 +340,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
-        config: "Optional[SQLConfig]" = None,
+        config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "list[ModelDTOT]": ...
 
@@ -355,7 +351,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
-        config: "Optional[SQLConfig]" = None,
+        config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "list[ModelT]": ...  # pyright: ignore[reportInvalidTypeVarUse]
 
@@ -365,7 +361,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,
-        config: "Optional[SQLConfig]" = None,
+        config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "Union[list[ModelT], list[ModelDTOT]]":  # pyright: ignore[reportInvalidTypeVarUse]
         """Execute a select statement and return all rows."""
@@ -380,7 +376,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         statement: "Union[Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
-        config: "Optional[SQLConfig]" = None,
+        config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> Any:
         """Execute a select statement and return a single scalar value.
@@ -411,7 +407,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         statement: "Union[Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
-        config: "Optional[SQLConfig]" = None,
+        config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> Any:
         """Execute a select statement and return a single scalar value or None.
@@ -476,13 +472,13 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
             count_expr.set("offset", None)
 
             # Create new SQL with same parameters and config as original
-            return SQL(count_expr, *original_sql._positional_params, config=original_sql._config)
+            return SQL(count_expr, *original_sql._positional_params, config=original_sql.statement_config)
 
         # Handle other query types (UNION, etc.) - wrap in subquery
         subquery = cast("exp.Select", expr).subquery(alias="total_query")
         count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
         # Create new SQL with same parameters and config as original
-        return SQL(count_expr, *original_sql._positional_params, config=original_sql._config)
+        return SQL(count_expr, *original_sql._positional_params, config=original_sql.statement_config)
 
     @overload
     def select_with_total(
@@ -491,7 +487,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
-        config: "Optional[SQLConfig]" = None,
+        config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "tuple[list[ModelDTOT], int]": ...
 
@@ -502,7 +498,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
-        config: "Optional[SQLConfig]" = None,
+        config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "tuple[list[dict[str, Any]], int]": ...
 
@@ -512,7 +508,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,
-        config: "Optional[SQLConfig]" = None,
+        config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "tuple[Union[list[dict[str, Any]], list[ModelDTOT]], int]":
         """Execute a select statement and return both the data and total count.

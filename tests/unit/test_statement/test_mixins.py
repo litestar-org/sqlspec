@@ -12,7 +12,7 @@ from sqlglot import exp, parse_one
 
 from sqlspec.driver.mixins import SQLTranslatorMixin, ToSchemaMixin
 from sqlspec.exceptions import SQLConversionError
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQL, StatementConfig
 
 if TYPE_CHECKING:
     pass
@@ -47,7 +47,7 @@ def test_sql_translator_convert_to_dialect(
     driver = MockDriverWithTranslator(from_dialect)
 
     # Create SQL object
-    statement = SQL(input_sql, config=SQLConfig(dialect=from_dialect))
+    statement = SQL(input_sql, config=StatementConfig(dialect=from_dialect))
 
     # Convert
     result = driver.convert_to_dialect(statement, to_dialect=to_dialect)
@@ -70,7 +70,7 @@ def test_sql_translator_handles_complex_queries() -> None:
     SELECT * FROM ranked_users WHERE rn = 1
     """
 
-    statement = SQL(complex_sql, config=SQLConfig(dialect="sqlite"))
+    statement = SQL(complex_sql, config=StatementConfig(dialect="sqlite"))
     result = driver.convert_to_dialect(statement, to_dialect="postgres")
 
     # Should contain CTE and window function
@@ -161,7 +161,7 @@ def test_multiple_mixin_inheritance() -> None:
     assert hasattr(driver, "config")
 
     # Test that SQLTranslator method works
-    statement = SQL("SELECT * FROM users", config=SQLConfig(dialect="sqlite"))
+    statement = SQL("SELECT * FROM users", config=StatementConfig(dialect="sqlite"))
     result = driver.convert_to_dialect(statement, to_dialect="postgres")
     assert isinstance(result, str)
     assert "SELECT" in result

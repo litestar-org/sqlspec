@@ -19,7 +19,7 @@ def execute(
     *parameters: Union[StatementParameters, StatementFilter],
     schema_type: type[ModelDTOT],
     _connection: Optional[ConnectionT] = None,
-    _config: Optional[SQLConfig] = None,
+    _config: Optional[StatementConfig] = None,
     **kwargs: Any,
 ) -> SQLResult[ModelDTOT]: ...
 
@@ -31,7 +31,7 @@ def execute(
     *parameters: Union[StatementParameters, StatementFilter],
     schema_type: None = None,
     _connection: Optional[ConnectionT] = None,
-    _config: Optional[SQLConfig] = None,
+    _config: Optional[StatementConfig] = None,
     **kwargs: Any,
 ) -> SQLResult: ...
 ```
@@ -45,7 +45,7 @@ def execute_many(
     /,
     *parameters: Union[StatementParameters, StatementFilter],
     _connection: Optional[ConnectionT] = None,
-    _config: Optional[SQLConfig] = None,
+    _config: Optional[StatementConfig] = None,
     **kwargs: Any,
 ) -> SQLResult:
     """Execute statement multiple times with different parameters."""
@@ -60,7 +60,7 @@ def execute_script(
     /,
     *parameters: Union[StatementParameters, StatementFilter],
     _connection: Optional[ConnectionT] = None,
-    _config: Optional[SQLConfig] = None,
+    _config: Optional[StatementConfig] = None,
     _suppress_warnings: bool = False,
     **kwargs: Any,
 ) -> SQLResult:
@@ -353,7 +353,7 @@ from sqlspec.adapters.mydb import MyDbConfig
 
 config = MyDbConfig(
     connection_config={"host": "localhost"},
-    statement_config=SQLConfig(enable_transformations=True)
+    statement_config=StatementConfig(enable_transformations=True)
 )
 
 with config.provide_session() as session:

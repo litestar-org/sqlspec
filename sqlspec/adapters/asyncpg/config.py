@@ -12,14 +12,14 @@ from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncpg._types import AsyncpgConnection
 from sqlspec.adapters.asyncpg.driver import AsyncpgCursor, AsyncpgDriver
-from sqlspec.adapters.asyncpg.pipeline_steps import postgres_copy_pipeline_step
 from sqlspec.config import AsyncDatabaseConfig
-from sqlspec.statement.sql import SQLConfig
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from asyncio.events import AbstractEventLoop
     from collections.abc import AsyncGenerator, Awaitable, Callable
+
+    from sqlspec.statement.sql import StatementConfig
 
 
 __all__ = ("AsyncpgConfig", "AsyncpgConnectionConfig", "AsyncpgPoolConfig")
@@ -67,17 +67,13 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
     driver_type: "ClassVar[type[AsyncpgDriver]]" = AsyncpgDriver
     connection_type: "ClassVar[type[AsyncpgConnection]]" = type(AsyncpgConnection)  # type: ignore[assignment]
-    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("numeric",)
-    default_parameter_style: "ClassVar[str]" = "numeric"
 
     def __init__(
         self,
         *,
         pool_config: "Optional[Union[AsyncpgPoolConfig, dict[str, Any]]]" = None,
-        statement_config: "Optional[SQLConfig]" = None,
         pool_instance: "Optional[Pool[Record]]" = None,
         migration_config: "Optional[dict[str, Any]]" = None,
-        adapter_cache_size: int = 1000,
         json_serializer: "Optional[Callable[[Any], str]]" = None,
         json_deserializer: "Optional[Callable[[str], Any]]" = None,
     ) -> None:
@@ -86,20 +82,16 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Args:
             pool_config: Pool configuration parameters (TypedDict or dict)
             pool_instance: Existing pool instance to use
-            statement_config: SQL statement configuration
             json_serializer: JSON serialization function
             json_deserializer: JSON deserialization function
             migration_config: Migration configuration
-            adapter_cache_size: Max cached SQL statements (0 to disable caching)
         """
         # Store the pool config as a dict
         self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
-        self.statement_config = statement_config or SQLConfig()
+
         self.json_serializer = json_serializer or to_json
         self.json_deserializer = json_deserializer or from_json
-        super().__init__(
-            pool_instance=pool_instance, migration_config=migration_config, adapter_cache_size=adapter_cache_size
-        )
+        super().__init__(pool_instance=pool_instance, migration_config=migration_config)
 
     def _get_pool_config_dict(self) -> "dict[str, Any]":
         """Get pool configuration as plain dict for external library.
@@ -157,29 +149,20 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
     @asynccontextmanager
     async def provide_session(
-        self, *args: Any, statement_config: "Optional[SQLConfig]" = None, **kwargs: Any
+        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
     ) -> "AsyncGenerator[AsyncpgDriver, None]":
         """Provide an async driver session context manager.
 
         Args:
             *args: Additional arguments.
+            statement_config: Optional statement configuration override.
             **kwargs: Additional keyword arguments.
 
         Yields:
             An AsyncpgDriver instance.
         """
-        statement_config = statement_config or self.statement_config
         async with self.provide_connection(*args, **kwargs) as connection:
-            if statement_config is not None and statement_config.allowed_parameter_styles is None:
-                statement_config = statement_config.replace(
-                    allowed_parameter_styles=self.supported_parameter_styles,
-                    default_parameter_style=self.default_parameter_style,
-                )
-            custom_pipeline_steps = [postgres_copy_pipeline_step]
-            if statement_config.custom_pipeline_steps:
-                custom_pipeline_steps.extend(statement_config.custom_pipeline_steps)
-            statement_config = statement_config.replace(custom_pipeline_steps=custom_pipeline_steps)
-            yield self.driver_type(connection=connection, config=statement_config)
+            yield self.driver_type(connection=connection, statement_config=statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool[Record]":
         """Provide async pool instance.
@@ -202,16 +185,14 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update(
-            {
-                "Connection": Connection,
-                "Pool": Pool,
-                "PoolConnectionProxy": PoolConnectionProxy,
-                "PoolConnectionProxyMeta": PoolConnectionProxyMeta,
-                "ConnectionMeta": ConnectionMeta,
-                "Record": Record,
-                "AsyncpgConnection": AsyncpgConnection,
-                "AsyncpgCursor": AsyncpgCursor,
-            }
-        )
+        namespace.update({
+            "Connection": Connection,
+            "Pool": Pool,
+            "PoolConnectionProxy": PoolConnectionProxy,
+            "PoolConnectionProxyMeta": PoolConnectionProxyMeta,
+            "ConnectionMeta": ConnectionMeta,
+            "Record": Record,
+            "AsyncpgConnection": AsyncpgConnection,
+            "AsyncpgCursor": AsyncpgCursor,
+        })
         return namespace

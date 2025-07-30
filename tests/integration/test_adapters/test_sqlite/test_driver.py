@@ -15,7 +15,7 @@ ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 @pytest.fixture
 def sqlite_session() -> Generator[SqliteDriver, None, None]:
     """Create a SQLite session with test table."""
-    config = SqliteConfig(connection_config={"database": ":memory:"})
+    config = SqliteConfig(pool_config={"database": ":memory:"})
 
     with config.provide_session() as session:
         # Create test table

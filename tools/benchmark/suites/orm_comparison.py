@@ -15,7 +15,7 @@ from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQL, StatementConfig
 from tools.benchmark.core.metrics import TimingResult
 from tools.benchmark.infrastructure.containers import ContainerManager
 from tools.benchmark.suites.base import BaseBenchmarkSuite
@@ -141,90 +141,88 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         """Add container-based databases to the list of databases to test."""
         try:
             host, port = self.container_manager.start_postgres(self.config.keep_containers)
-            databases.extend(
-                [
-                    {
-                        "name": "Psycopg Sync",
-                        "type": "sync",
-                        "get_sqlspec_config": lambda: self._get_psycopg_configs(host, port),
-                        "get_sqlalchemy_engine": lambda: create_engine(
-                            f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
-                            poolclass=QueuePool,
-                            pool_size=20,
-                            max_overflow=0,
-                            pool_pre_ping=True,
-                        ),
-                        "setup_func": self._setup_sync_db,
-                        "requires_container": True,
-                    },
-                    {
-                        "name": "Asyncpg",
-                        "type": "async",
-                        "get_sqlspec_config": lambda: self._get_asyncpg_configs(host, port),
-                        "get_sqlalchemy_engine": lambda: create_async_engine(
-                            f"postgresql+asyncpg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
-                            poolclass=pool.AsyncAdaptedQueuePool,
-                            pool_size=20,
-                            max_overflow=0,
-                            pool_pre_ping=True,
-                        ),
-                        "setup_func": self._setup_async_db,
-                        "requires_container": True,
-                    },
-                    {
-                        "name": "Psqlpy",
-                        "type": "async",
-                        "get_sqlspec_config": lambda: self._get_psqlpy_configs(host, port),
-                        "get_sqlalchemy_engine": lambda: create_async_engine(
-                            f"postgresql+asyncpg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
-                            poolclass=pool.AsyncAdaptedQueuePool,
-                            pool_size=20,
-                            max_overflow=0,
-                            pool_pre_ping=True,
-                        ),
-                        "setup_func": self._setup_async_db,
-                        "requires_container": True,
-                    },
-                    {
-                        "name": "AdbcPostgres",
-                        "type": "sync",
-                        "get_sqlspec_config": lambda: self._get_adbc_postgres_configs(host, port),
-                        "get_sqlalchemy_engine": lambda: create_engine(
-                            f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
-                            poolclass=QueuePool,
-                            pool_size=20,
-                            max_overflow=0,
-                            pool_pre_ping=True,
-                        ),
-                        "setup_func": self._setup_sync_db,
-                        "requires_container": True,
-                    },
-                    {
-                        "name": "PsycopgAsync",
-                        "type": "async",
-                        "get_sqlspec_config": lambda: self._get_psycopg_async_configs(host, port),
-                        "get_sqlalchemy_engine": lambda: create_async_engine(
-                            f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
-                            poolclass=pool.AsyncAdaptedQueuePool,
-                            pool_size=20,
-                            max_overflow=0,
-                            pool_pre_ping=True,
-                        ),
-                        "setup_func": self._setup_async_db,
-                        "requires_container": True,
-                    },
-                ]
-            )
+            databases.extend([
+                {
+                    "name": "Psycopg Sync",
+                    "type": "sync",
+                    "get_sqlspec_config": lambda: self._get_psycopg_configs(host, port),
+                    "get_sqlalchemy_engine": lambda: create_engine(
+                        f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
+                        poolclass=QueuePool,
+                        pool_size=20,
+                        max_overflow=0,
+                        pool_pre_ping=True,
+                    ),
+                    "setup_func": self._setup_sync_db,
+                    "requires_container": True,
+                },
+                {
+                    "name": "Asyncpg",
+                    "type": "async",
+                    "get_sqlspec_config": lambda: self._get_asyncpg_configs(host, port),
+                    "get_sqlalchemy_engine": lambda: create_async_engine(
+                        f"postgresql+asyncpg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
+                        poolclass=pool.AsyncAdaptedQueuePool,
+                        pool_size=20,
+                        max_overflow=0,
+                        pool_pre_ping=True,
+                    ),
+                    "setup_func": self._setup_async_db,
+                    "requires_container": True,
+                },
+                {
+                    "name": "Psqlpy",
+                    "type": "async",
+                    "get_sqlspec_config": lambda: self._get_psqlpy_configs(host, port),
+                    "get_sqlalchemy_engine": lambda: create_async_engine(
+                        f"postgresql+asyncpg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
+                        poolclass=pool.AsyncAdaptedQueuePool,
+                        pool_size=20,
+                        max_overflow=0,
+                        pool_pre_ping=True,
+                    ),
+                    "setup_func": self._setup_async_db,
+                    "requires_container": True,
+                },
+                {
+                    "name": "AdbcPostgres",
+                    "type": "sync",
+                    "get_sqlspec_config": lambda: self._get_adbc_postgres_configs(host, port),
+                    "get_sqlalchemy_engine": lambda: create_engine(
+                        f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
+                        poolclass=QueuePool,
+                        pool_size=20,
+                        max_overflow=0,
+                        pool_pre_ping=True,
+                    ),
+                    "setup_func": self._setup_sync_db,
+                    "requires_container": True,
+                },
+                {
+                    "name": "PsycopgAsync",
+                    "type": "async",
+                    "get_sqlspec_config": lambda: self._get_psycopg_async_configs(host, port),
+                    "get_sqlalchemy_engine": lambda: create_async_engine(
+                        f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
+                        poolclass=pool.AsyncAdaptedQueuePool,
+                        pool_size=20,
+                        max_overflow=0,
+                        pool_pre_ping=True,
+                    ),
+                    "setup_func": self._setup_async_db,
+                    "requires_container": True,
+                },
+            ])
         except Exception as e:
             self.console.print(f"[yellow]Skipping PostgreSQL tests: {e}[/yellow]")
 
@@ -234,15 +232,13 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         return (
             SqliteConfig(
                 connection_config={"database": ".benchmark/test_sync_no_cache.db"},
-                statement_config=SQLConfig(enable_caching=False),
-                min_pool_size=1,
-                max_pool_size=1,  # Reduce pool size to avoid concurrent access
+                statement_config=StatementConfig(enable_caching=False),
+                pool_config={"pool_min_size": 1, "pool_max_size": 1},  # Reduce pool size to avoid concurrent access
             ),
             SqliteConfig(
                 connection_config={"database": ".benchmark/test_sync_with_cache.db"},
-                statement_config=SQLConfig(enable_caching=True),
-                min_pool_size=1,
-                max_pool_size=1,  # Reduce pool size to avoid concurrent access
+                statement_config=StatementConfig(enable_caching=True),
+                pool_config={"pool_min_size": 1, "pool_max_size": 1},  # Reduce pool size to avoid concurrent access
             ),
         )
 
@@ -252,15 +248,13 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         return (
             AiosqliteConfig(
                 connection_config={"database": ".benchmark/test_async_no_cache.db"},
-                statement_config=SQLConfig(enable_caching=False),
-                min_pool=1,
-                max_pool=1,  # Reduce pool size to avoid concurrent access
+                statement_config=StatementConfig(enable_caching=False),
+                pool_config={"pool_min_size": 1, "pool_max_size": 1},  # Reduce pool size to avoid concurrent access
             ),
             AiosqliteConfig(
                 connection_config={"database": ".benchmark/test_async_with_cache.db"},
-                statement_config=SQLConfig(enable_caching=True),
-                min_pool=1,
-                max_pool=1,  # Reduce pool size to avoid concurrent access
+                statement_config=StatementConfig(enable_caching=True),
+                pool_config={"pool_min_size": 1, "pool_max_size": 1},  # Reduce pool size to avoid concurrent access
             ),
         )
 
@@ -276,8 +270,8 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             "max_size": 20,
         }
         return (
-            PsycopgSyncConfig(pool_config=pool_params, statement_config=SQLConfig(enable_caching=False)),
-            PsycopgSyncConfig(pool_config=pool_params, statement_config=SQLConfig(enable_caching=True)),
+            PsycopgSyncConfig(pool_config=pool_params, statement_config=StatementConfig(enable_caching=False)),
+            PsycopgSyncConfig(pool_config=pool_params, statement_config=StatementConfig(enable_caching=True)),
         )
 
     def _get_asyncpg_configs(self, host: str, port: int) -> tuple[Any, Any]:
@@ -294,8 +288,8 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             "max_size": 20,
         }
         return (
-            AsyncpgConfig(pool_config=pool_params, statement_config=SQLConfig(enable_caching=False)),
-            AsyncpgConfig(pool_config=pool_params, statement_config=SQLConfig(enable_caching=True)),
+            AsyncpgConfig(pool_config=pool_params, statement_config=StatementConfig(enable_caching=False)),
+            AsyncpgConfig(pool_config=pool_params, statement_config=StatementConfig(enable_caching=True)),
         )
 
     def _get_psqlpy_configs(self, host: str, port: int) -> tuple[PsqlpyConfig, PsqlpyConfig]:
@@ -309,8 +303,8 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             "max_db_pool_size": 20,
         }
         return (
-            PsqlpyConfig(pool_config=pool_params, statement_config=SQLConfig(enable_caching=False)),
-            PsqlpyConfig(pool_config=pool_params, statement_config=SQLConfig(enable_caching=True)),
+            PsqlpyConfig(pool_config=pool_params, statement_config=StatementConfig(enable_caching=False)),
+            PsqlpyConfig(pool_config=pool_params, statement_config=StatementConfig(enable_caching=True)),
         )
 
     def _get_adbc_postgres_configs(self, host: str, port: int) -> tuple[AdbcConfig, AdbcConfig]:
@@ -320,8 +314,8 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             "driver_name": "adbc_driver_postgresql",
         }
         return (
-            AdbcConfig(connection_config=connection_params, statement_config=SQLConfig(enable_caching=False)),
-            AdbcConfig(connection_config=connection_params, statement_config=SQLConfig(enable_caching=True)),
+            AdbcConfig(connection_config=connection_params, statement_config=StatementConfig(enable_caching=False)),
+            AdbcConfig(connection_config=connection_params, statement_config=StatementConfig(enable_caching=True)),
         )
 
     def _get_psycopg_async_configs(self, host: str, port: int) -> tuple[PsycopgAsyncConfig, PsycopgAsyncConfig]:
@@ -336,8 +330,8 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             "max_size": 20,
         }
         return (
-            PsycopgAsyncConfig(pool_config=pool_params, statement_config=SQLConfig(enable_caching=False)),
-            PsycopgAsyncConfig(pool_config=pool_params, statement_config=SQLConfig(enable_caching=True)),
+            PsycopgAsyncConfig(pool_config=pool_params, statement_config=StatementConfig(enable_caching=False)),
+            PsycopgAsyncConfig(pool_config=pool_params, statement_config=StatementConfig(enable_caching=True)),
         )
 
     def _run_sync_benchmarks(self, db_config: dict[str, Any]) -> dict[str, TimingResult]:

@@ -5,18 +5,17 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from sqlglot import exp
 
-from sqlspec.exceptions import SQLParsingError
 from sqlspec.statement.filters import LimitOffsetFilter, SearchFilter
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQL, StatementConfig
 
 # Create a default test config
-TEST_CONFIG = SQLConfig()
+TEST_CONFIG = StatementConfig()
 
 if TYPE_CHECKING:
     from sqlspec.typing import StatementParameters
 
 
-# Test SQLConfig
+# Test StatementConfig
 @pytest.mark.parametrize(
     "config_kwargs,expected_values",
     [
@@ -29,8 +28,8 @@ if TYPE_CHECKING:
     ids=["defaults", "custom"],
 )
 def test_sql_config_initialization(config_kwargs: "dict[str, Any]", expected_values: "dict[str, Any]") -> None:
-    """Test SQLConfig initialization with different parameters."""
-    config = SQLConfig(**config_kwargs)
+    """Test StatementConfig initialization with different parameters."""
+    config = StatementConfig(**config_kwargs)
 
     for attr, expected in expected_values.items():
         assert getattr(config, attr) == expected
@@ -49,8 +48,8 @@ def test_sql_initialization_with_string() -> None:
     assert stmt.sql == sql_str
     assert stmt.parameters == {}
     assert stmt._filters == []
-    assert stmt._config is not None
-    assert isinstance(stmt._config, SQLConfig)
+    assert stmt.statement_config is not None
+    assert isinstance(stmt.statement_config, StatementConfig)
 
 
 def test_sql_initialization_with_parameters() -> None:
@@ -93,11 +92,11 @@ def test_sql_initialization_with_expression() -> None:
 
 def test_sql_initialization_with_custom_config() -> None:
     """Test SQL initialization with custom config."""
-    config = SQLConfig(dialect="sqlite")
+    config = StatementConfig(dialect="sqlite")
     stmt = SQL("SELECT * FROM users", config=config)
 
-    assert stmt._config == config
-    assert stmt._config.dialect == "sqlite"
+    assert stmt.statement_config == config
+    assert stmt.statement_config.dialect == "sqlite"
 
 
 # Test SQL immutability
@@ -174,7 +173,7 @@ def test_sql_expression_property() -> None:
 
 def test_sql_expression_with_parsing_disabled() -> None:
     """Test SQL.expression returns None when parsing disabled."""
-    # SQLConfig no longer has enable_parsing flag - parsing is always enabled
+    # StatementConfig no longer has enable_parsing flag - parsing is always enabled
     # This test can be removed or updated to test something else
     stmt = SQL("SELECT * FROM users")
     assert stmt.expression is not None
@@ -193,17 +192,17 @@ def test_sql_validate_method() -> None:
     stmt2 = SQL("UPDATE users SET name = 'test'")  # No WHERE clause
     errors2 = stmt2.validate()
     assert isinstance(errors2, list)
-    # The actual validation happens in the pipeline validators
+    # The actual validation happens in the pipeline
 
 
 def test_sql_validation_disabled() -> None:
     """Test SQL validation behavior."""
-    # SQLConfig no longer has enable_validation flag
-    # Validation happens in the pipeline based on configured validators
+    # StatementConfig no longer has enable_validation flag
+    # Validation happens in the pipeline
     stmt = SQL("UPDATE users SET name = 'test'")
     errors = stmt.validate()
     assert isinstance(errors, list)
-    # The actual validation happens in the pipeline validators
+    # The actual validation happens in the pipeline
 
 
 def test_sql_parse_errors_warn_by_default() -> None:
@@ -216,13 +215,13 @@ def test_sql_parse_errors_warn_by_default() -> None:
 
 def test_sql_parse_errors_can_raise_explicitly() -> None:
     """Test SQL can still raise on parse errors when explicitly configured."""
-    # Invalid SQL that can't be parsed with explicit config
-    config = SQLConfig(parse_errors_as_warnings=False)
-    with pytest.raises(SQLParsingError) as exc_info:
-        stmt = SQL("INVALID SQL SYNTAX !@#$%^&*()", config=config)
-        _ = stmt.sql  # Trigger processing
+    # Invalid SQL that can't be parsed - SQL class handles this gracefully now
+    # by preserving the original SQL when parsing fails
+    stmt = SQL("INVALID SQL SYNTAX !@#$%^&*()")
+    sql = stmt.sql  # This should not raise, but preserve the invalid SQL
 
-    assert "parse" in str(exc_info.value).lower()
+    # The invalid SQL is preserved when parsing fails
+    assert "INVALID" in sql
 
 
 # Test SQL filtering
@@ -287,13 +286,16 @@ def test_sql_with_literal_parameterization() -> None:
     sql = stmt.sql
     params = stmt.parameters
 
-    # With default transformers enabled, literal should be parameterized
+    # With default processing enabled, literal should be parameterized
     assert sql == "SELECT * FROM users WHERE id = ?"
     # The extracted parameters are returned as a list
     assert isinstance(params, list)
     assert len(params) == 1
-    # Parameters are unwrapped to their actual values
-    assert params[0] == 1
+    # Parameters are wrapped with type information by default
+    from sqlspec.parameters.types import TypedParameter
+
+    assert isinstance(params[0], TypedParameter)
+    assert params[0].value == 1
 
 
 def test_sql_comment_removal() -> None:
@@ -318,7 +320,7 @@ def test_sql_comment_removal() -> None:
 )
 def test_sql_with_dialect(dialect: str, expected_sql: str) -> None:
     """Test SQL respects dialect setting."""
-    config = SQLConfig(dialect=dialect)
+    config = StatementConfig(dialect=dialect)
     stmt = SQL("SELECT * FROM users", config=config)
     assert stmt.sql == expected_sql
 
@@ -326,19 +328,17 @@ def test_sql_with_dialect(dialect: str, expected_sql: str) -> None:
 # Test SQL error handling
 def test_sql_parsing_error() -> None:
     """Test SQL handles parsing errors gracefully."""
-    # Test with parse_errors_as_warnings=True
-    config = SQLConfig(parse_errors_as_warnings=True)
-    stmt = SQL("INVALID SQL SYNTAX !", config=config)
+    # SQL class handles parsing errors gracefully by preserving original SQL
+    stmt = SQL("INVALID SQL SYNTAX !")
     sql = stmt.sql
 
-    # The invalid SQL is preserved (sqlglot wraps it)
+    # The invalid SQL is preserved when parsing fails
     assert "INVALID" in sql
 
 
 def test_sql_transformation_error() -> None:
     """Test SQL handles transformation errors."""
-    # The new SQL class doesn't support custom transformers in config
-    # Transformers are configured in the pipeline
+    # Transformers are configured in the pipeline, not in StatementConfig
     stmt = SQL("SELECT * FROM users")
 
     # Without pipeline configuration, no transformations occur
@@ -363,7 +363,7 @@ def test_sql_whitespace_only() -> None:
 # Test SQL caching behavior
 def test_sql_expression_caching() -> None:
     """Test SQL expression caching when enabled."""
-    config = SQLConfig(enable_caching=True)
+    config = StatementConfig(enable_caching=True)
     stmt = SQL("SELECT * FROM users", config=config)
 
     # First access
@@ -376,7 +376,7 @@ def test_sql_expression_caching() -> None:
 
 def test_sql_no_expression_caching() -> None:
     """Test SQL expression not cached when disabled."""
-    config = SQLConfig(enable_caching=False)
+    config = StatementConfig(enable_caching=False)
     stmt = SQL("SELECT * FROM users", config=config)
 
     # Access expression multiple times
@@ -414,10 +414,10 @@ def test_sql_copy() -> None:
     stmt1 = SQL("SELECT * FROM users", id=1)
 
     # Create new instance with different config
-    new_config = SQLConfig(dialect="sqlite")
+    new_config = StatementConfig(dialect="sqlite")
     stmt2 = SQL(stmt1, config=new_config)
 
     assert stmt2._raw_sql == stmt1._raw_sql
     assert stmt2._raw_parameters == stmt1._raw_parameters
-    assert stmt2._config == new_config
-    assert stmt2._config != stmt1._config
+    assert stmt2.statement_config == new_config
+    assert stmt2.statement_config != stmt1.statement_config

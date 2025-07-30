@@ -19,7 +19,7 @@ from sqlspec.utils.serializers import to_json
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.statement.sql import SQL, SQLConfig
+    from sqlspec.statement.sql import SQL, StatementConfig
 
 
 __all__ = ("BigQueryCursor", "BigQueryDriver")
@@ -64,18 +64,20 @@ class BigQueryDriver(SyncDriverAdapterBase):
     def __init__(
         self,
         connection: BigQueryConnection,
-        statement_config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        driver_features: "Optional[dict[str, Any]]" = None,
         default_query_job_config: Optional[QueryJobConfig] = None,
         on_job_start: Optional[Callable[[str], None]] = None,
         on_job_complete: Optional[Callable[[str, Any], None]] = None,
     ) -> None:
         """Initialize BigQuery driver with comprehensive feature support."""
-        from sqlspec.statement.sql import SQLConfig
+        from sqlspec.statement.sql import StatementConfig
 
         # Set default BigQuery-specific configuration
         if statement_config is None:
-            statement_config = SQLConfig(
-                supported_parameter_styles=[ParameterStyle.NAMED_AT],  # Only supports @name
+            statement_config = StatementConfig(
+                dialect="bigquery",
+                supported_parameter_styles={ParameterStyle.NAMED_AT},  # Only supports @name
                 default_parameter_style=ParameterStyle.NAMED_AT,
                 type_coercion_map={
                     # BigQuery has good native type support
@@ -84,7 +86,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 has_native_list_expansion=True,  # BigQuery handles arrays natively
             )
 
-        super().__init__(connection=connection, statement_config=statement_config)
+        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self.on_job_start = on_job_start
         self.on_job_complete = on_job_complete
         conn_default_config = getattr(connection, "default_query_job_config", None)
@@ -246,9 +248,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
     def _perform_execute(self, cursor: "Any", statement: "SQL") -> None:
         """Execute the SQL statement using BigQuery."""
-        sql, params = self._get_compiled_sql(
-            statement, self.statement_config.get_parameter_config().default_parameter_style
-        )
+        sql, params = self._get_compiled_sql(statement, self.statement_config)
 
         if statement.is_many:
             # BigQuery doesn't support executemany directly, create script
@@ -257,7 +257,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             param_counter = 0
 
             # For execute_many, params is already a list of parameter sets
-            param_list = self._prepare_driver_parameters_many(params) if params else []
+            param_list = self.prepare_driver_parameters(params, self.statement_config, is_many=True)
 
             for param_set in param_list:
                 if isinstance(param_set, dict):
@@ -285,8 +285,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
             cursor.job = self._run_query_job(full_script, bq_params, connection=cursor.connection)
         elif statement.is_script:
             # Execute script - BigQuery can handle parameters in scripts
-            prepared_params = self._prepare_driver_parameters(params)
-            statements = self._split_script_statements(sql)
+            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
+            statements = self.split_script_statements(sql)
             jobs = []
 
             # Convert params to BigQuery format
@@ -300,7 +300,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             cursor.jobs = jobs
         else:
             # Regular execute
-            prepared_params = self._prepare_driver_parameters(params)
+            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
 
             bq_params = self._prepare_bq_query_parameters(self._convert_params_to_dict(prepared_params))
             cursor.job = self._run_query_job(sql, bq_params, connection=cursor.connection)

@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.statement.result import SQLResult
-    from sqlspec.statement.sql import SQL, SQLConfig
+    from sqlspec.statement.sql import SQL, StatementConfig
 
 
 __all__ = ("PsqlpyCursor", "PsqlpyDriver")
@@ -33,13 +33,14 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
     dialect: "DialectType" = "postgres"
 
-    def __init__(self, connection: PsqlpyConnection, statement_config: "Optional[SQLConfig]" = None) -> None:
-        from sqlspec.statement.sql import SQLConfig
+    def __init__(self, connection: PsqlpyConnection, statement_config: "Optional[StatementConfig]" = None, driver_features: "Optional[dict[str, Any]]" = None) -> None:
+        from sqlspec.statement.sql import StatementConfig
 
         # Set default psqlpy-specific configuration
         if statement_config is None:
-            statement_config = SQLConfig(
-                supported_parameter_styles=[ParameterStyle.NUMERIC],  # $1, $2
+            statement_config = StatementConfig(
+                dialect="postgres",
+                supported_parameter_styles={ParameterStyle.NUMERIC},  # $1, $2
                 default_parameter_style=ParameterStyle.NUMERIC,
                 type_coercion_map={
                     # Psqlpy handles most types natively
@@ -48,35 +49,33 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                 has_native_list_expansion=True,  # Psqlpy handles lists natively
             )
 
-        super().__init__(connection=connection, statement_config=statement_config)
+        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: PsqlpyConnection) -> "PsqlpyCursor":
         return PsqlpyCursor(connection)
 
     async def _perform_execute(self, cursor: PsqlpyConnection, statement: "SQL") -> None:
-        sql, params = self._get_compiled_sql(
-            statement, self.statement_config.get_parameter_config().default_parameter_style
-        )
+        sql, params = self._get_compiled_sql(statement, self.statement_config)
 
         # Store compiled SQL and params to avoid re-compilation in _extract_select_data
         self._last_compiled_sql = sql
-        self._last_prepared_params = self._prepare_driver_parameters(params)
+        self._last_prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
 
         if statement.is_script:
             # PsqlPy doesn't have executescript - execute statements one by one
             # But we can still use parameters since we're using regular execute()
             prepared_params = self._last_prepared_params
             # Use the proper script splitter to handle complex cases
-            statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
+            statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
             for stmt in statements:
                 if stmt.strip():  # Skip empty statements
-                    await cursor.execute(stmt, prepared_params or [])
+                    await cursor.execute(stmt, prepared_params)
         elif statement.is_many:
             # For execute_many, params is already a list of parameter sets
-            prepared_params = self._prepare_driver_parameters_many(params) if params else []
+            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=True)
             await cursor.execute_many(sql, prepared_params)
         else:
-            await cursor.execute(sql, self._last_prepared_params or [])
+            await cursor.execute(sql, self._last_prepared_params)
 
     async def _extract_select_data(self, cursor: PsqlpyConnection) -> "tuple[list[dict[str, Any]], list[str], int]":
         """Extract data from cursor after SELECT execution.
@@ -88,7 +87,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         if hasattr(self, "_last_compiled_sql") and hasattr(self, "_last_prepared_params"):
             sql = self._last_compiled_sql
             prepared_params = self._last_prepared_params
-            query_result = await cursor.fetch(sql, prepared_params or [])
+            query_result = await cursor.fetch(sql, prepared_params)
             dict_rows: list[dict[str, Any]] = []
             if query_result:
                 dict_rows = query_result.result()

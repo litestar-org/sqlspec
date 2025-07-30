@@ -8,10 +8,8 @@ from sqlspec.parameters import ParameterStyle
 if TYPE_CHECKING:
     from typing import Optional
 
-    from sqlglot.dialects.dialect import DialectType
-
     from sqlspec.adapters.duckdb._types import DuckDBConnection
-    from sqlspec.statement.sql import SQL, SQLConfig
+    from sqlspec.statement.sql import SQL, StatementConfig
 
 
 __all__ = ("DuckDBCursor", "DuckDBDriver")
@@ -36,22 +34,24 @@ class DuckDBCursor:
 class DuckDBDriver(SyncDriverAdapterBase):
     """DuckDB Sync Driver Adapter with modern architecture."""
 
-    dialect: "DialectType" = "duckdb"
+    def __init__(
+        self,
+        connection: "DuckDBConnection",
+        statement_config: "Optional[StatementConfig]" = None,
+        driver_features: "Optional[dict[str, Any]]" = None,
+    ) -> None:
+        from sqlspec.statement.sql import StatementConfig
 
-    def __init__(self, connection: "DuckDBConnection", statement_config: "Optional[SQLConfig]" = None) -> None:  # noqa: FA100
-        from sqlspec.statement.sql import SQLConfig
-
-        # Set default DuckDB-specific configuration
         if statement_config is None:
-            statement_config = SQLConfig(
-                supported_parameter_styles=[ParameterStyle.QMARK, ParameterStyle.NUMERIC],
+            statement_config = StatementConfig(
+                dialect="duckdb",
+                supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC},
                 default_parameter_style=ParameterStyle.QMARK,
                 type_coercion_map={},
                 has_native_list_expansion=True,
-                force_style_conversion=True,  # DuckDB doesn't support mixed parameter styles
             )
 
-        super().__init__(connection=connection, statement_config=statement_config)
+        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._execution_state: dict[str, Optional[int]] = {"executemany_count": None}
 
     def with_cursor(self, connection: "DuckDBConnection") -> "DuckDBCursor":
@@ -62,19 +62,17 @@ class DuckDBDriver(SyncDriverAdapterBase):
             # Scripts use STATIC compilation to transpile parameters automatically
             sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
             # DuckDB doesn't have a dedicated executescript method, so split and execute
-            statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
+            statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
             for stmt in statements:
                 if stmt.strip():  # Skip empty statements
                     cursor.execute(stmt)
         else:
             # Enable intelligent parameter conversion - DuckDB supports both QMARK and NUMERIC
-            sql, params = self._get_compiled_sql(
-                statement, self.statement_config.get_parameter_config().default_parameter_style
-            )
+            sql, params = self._get_compiled_sql(statement, self.statement_config)
 
             if statement.is_many:
                 # For execute_many, params is already a list of parameter sets
-                prepared_params = self._prepare_driver_parameters_many(params) if params else []
+                prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=True)
 
                 # DuckDB requires non-empty parameter sets for executemany
                 if prepared_params:
@@ -90,8 +88,8 @@ class DuckDBDriver(SyncDriverAdapterBase):
                     # Set executemany_count to 0 to indicate no rows were affected
                     self._execution_state["executemany_count"] = 0
             else:
-                prepared_params = self._prepare_driver_parameters(params)
-                cursor.execute(sql, prepared_params or [])
+                prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
+                cursor.execute(sql, prepared_params)
                 self._execution_state["executemany_count"] = None
 
     def _extract_select_data(self, cursor: "DuckDBConnection") -> "tuple[list[dict[str, Any]], list[str], int]":

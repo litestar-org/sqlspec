@@ -18,7 +18,7 @@ from sqlspec.loader import SQLFile, SQLFileLoader
 from sqlspec.statement.builder import Column, ColumnExpression, Delete, FunctionColumn, Insert, Merge, Select, Update
 from sqlspec.statement.cache import CacheConfig, CacheStats
 from sqlspec.statement.result import ArrowResult, SQLResult
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQL, StatementConfig
 from sqlspec.typing import ConnectionT, DictRow, ModelDTOT, ModelT, RowT, StatementParameters
 
 sql = SQLFactory()
@@ -43,7 +43,6 @@ __all__ = (
     "ParameterError",
     "RowT",
     "SQLBuilderError",
-    "SQLConfig",
     "SQLFile",
     "SQLFileLoader",
     "SQLFileNotFoundError",
@@ -53,6 +52,7 @@ __all__ = (
     "SQLSpec",
     "SQLValidationError",
     "Select",
+    "StatementConfig",
     "StatementParameters",
     "SyncDatabaseConfig",
     "Update",

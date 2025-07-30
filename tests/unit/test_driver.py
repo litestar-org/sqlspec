@@ -11,7 +11,7 @@ from sqlglot import exp
 from sqlspec.driver import AsyncDriverAdapterBase, CommonDriverAttributesMixin, SyncDriverAdapterBase
 from sqlspec.parameters import ParameterStyle
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQL, StatementConfig
 
 # Test Fixtures and Mock Classes
 
@@ -64,11 +64,10 @@ class MockAsyncConnection:
 class MockSyncDriver(SyncDriverAdapterBase):
     """Test sync driver implementation."""
 
-    dialect = "sqlite"  # Use valid SQLGlot dialect
-    parameter_style = ParameterStyle.NAMED_COLON
-
-    def __init__(self, connection: MockConnection, config: SQLConfig | None = None) -> None:
-        super().__init__(connection, config)
+    def __init__(self, connection: MockConnection, statement_config: StatementConfig | None = None) -> None:
+        if statement_config is None:
+            statement_config = StatementConfig()
+        super().__init__(connection, statement_config)
 
     def _perform_execute(self, cursor: Any, statement: SQL) -> None:
         """Mock implementation of _perform_execute."""
@@ -168,7 +167,9 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
     dialect = "postgres"  # Use valid SQLGlot dialect
     parameter_style = ParameterStyle.NAMED_COLON
 
-    def __init__(self, connection: MockAsyncConnection, config: SQLConfig | None = None) -> None:
+    def __init__(self, connection: MockAsyncConnection, config: StatementConfig | None = None) -> None:
+        if config is None:
+            config = StatementConfig()
         super().__init__(connection, config)
 
     async def _perform_execute(self, cursor: Any, statement: SQL) -> None:
@@ -271,7 +272,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
 def test_common_driver_attributes_initialization() -> None:
     """Test CommonDriverAttributes initialization."""
     connection = MockConnection()
-    config = SQLConfig()
+    config = StatementConfig()
 
     driver = MockSyncDriver(connection, config)
 
@@ -285,7 +286,7 @@ def test_common_driver_attributes_default_values() -> None:
     driver = MockSyncDriver(connection)
 
     assert driver.connection is connection
-    assert isinstance(driver.statement_config, SQLConfig)
+    assert isinstance(driver.statement_config, StatementConfig)
 
 
 @pytest.mark.parametrize(
@@ -395,7 +396,7 @@ def test_sync_driver_build_statement() -> None:
 
     # Test with SQL string
     sql_string = "SELECT * FROM users"
-    statement = driver._prepare_sql(sql_string, statement_config=SQLConfig())
+    statement = driver._prepare_sql(sql_string, config=StatementConfig())
     assert isinstance(statement, SQL)
     assert statement.sql == sql_string
 
@@ -406,7 +407,7 @@ def test_sync_driver_build_statement_with_sql_object() -> None:
     driver = MockSyncDriver(connection)
 
     sql_obj = SQL("SELECT * FROM users WHERE id = :id", id=1)
-    statement = driver._prepare_sql(sql_obj, statement_config=SQLConfig())
+    statement = driver._prepare_sql(sql_obj, config=StatementConfig())
     # SQL objects are immutable, so a new instance is created
     assert isinstance(statement, SQL)
     assert statement._raw_sql == sql_obj._raw_sql
@@ -439,7 +440,7 @@ def test_sync_driver_build_statement_with_filters() -> None:
     test_filter.append_to_statement = Mock(side_effect=original_append)
 
     sql_string = "SELECT * FROM users"
-    statement = driver._prepare_sql(sql_string, test_filter, statement_config=SQLConfig())
+    statement = driver._prepare_sql(sql_string, test_filter, config=StatementConfig())
 
     # Access a property to trigger processing
     _ = statement.to_sql()
@@ -497,7 +498,7 @@ def test_sync_driver_execute_many() -> None:
         mock_execute.return_value = mock_result
 
         # Use a non-strict config to avoid validation issues
-        config = SQLConfig()
+        config = StatementConfig()
         result = driver.execute_many("INSERT INTO users (name) VALUES (:name)", parameters, _config=config)
 
         mock_execute.assert_called_once()
@@ -520,7 +521,7 @@ def test_sync_driver_execute_script() -> None:
         mock_execute.return_value = mock_result
 
         # Use a non-strict config to avoid DDL validation issues
-        config = SQLConfig(enable_validation=False)
+        config = StatementConfig(enable_validation=False)
         result = driver.execute_script(script, _config=config)
 
         mock_execute.assert_called_once()
@@ -551,7 +552,7 @@ def test_sync_driver_execute_with_parameters() -> None:
         mock_execute.return_value = mock_result
 
         # Use a non-strict config to avoid validation issues
-        config = SQLConfig()
+        config = StatementConfig()
         # Pass named parameters as keyword arguments
         result = driver.execute("SELECT * FROM users WHERE id = :id", id=1, _config=config)
 
@@ -575,7 +576,7 @@ async def test_async_driver_build_statement() -> None:
 
     # Test with SQL string
     sql_string = "SELECT * FROM users"
-    statement = driver._prepare_sql(sql_string, statement_config=SQLConfig())
+    statement = driver.prepare_statement(sql_string, statement_config=StatementConfig())
     assert isinstance(statement, SQL)
     assert statement.sql == sql_string
 
@@ -639,8 +640,10 @@ async def test_async_driver_execute_many() -> None:
         mock_execute.return_value = mock_result
 
         # Use a non-strict config to avoid validation issues
-        config = SQLConfig()
-        result = await driver.execute_many("INSERT INTO users (name) VALUES (:name)", parameters, config=config)
+        config = StatementConfig()
+        result = await driver.execute_many(
+            "INSERT INTO users (name) VALUES (:name)", parameters, statement_config=config
+        )
 
         mock_execute.assert_called_once()
         assert result == mock_result
@@ -659,7 +662,7 @@ async def test_async_driver_execute_script() -> None:
         mock_execute.return_value = mock_result
 
         # Use a non-strict config to avoid DDL validation issues
-        config = SQLConfig(enable_validation=False)
+        config = StatementConfig(enable_validation=False)
         result = await driver.execute_script(script, _config=config)
 
         mock_execute.assert_called_once()
@@ -757,7 +760,7 @@ def test_driver_returns_rows_detection(statement_type: str, expected_returns_row
         mock_execute.return_value = mock_result
 
         # Use a non-strict config to avoid DDL validation issues
-        config = SQLConfig(enable_validation=False)
+        config = StatementConfig(enable_validation=False)
         result = driver.execute(statement_type, _config=config)
 
         mock_execute.assert_called_once()
@@ -796,7 +799,7 @@ async def test_async_driver_concurrent_execution() -> None:
 def test_driver_full_execution_flow() -> None:
     """Test complete driver execution flow."""
     connection = MockConnection()
-    config = SQLConfig()  # Use non-strict config
+    config = StatementConfig()  # Use non-strict config
     driver = MockSyncDriver(connection, config)
 
     # Test actual execution with MockSyncDriver's built-in logic
@@ -813,7 +816,7 @@ def test_driver_full_execution_flow() -> None:
 async def test_async_driver_full_execution_flow() -> None:
     """Test complete async driver execution flow."""
     connection = MockAsyncConnection()
-    config = SQLConfig()  # Use non-strict config
+    config = StatementConfig()  # Use non-strict config
 
     driver = MockAsyncDriver(connection, config)
 

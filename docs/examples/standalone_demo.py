@@ -39,7 +39,7 @@ from rich.table import Table
 from sqlspec import sql
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.statement.filters import LimitOffsetFilter, OrderByFilter, SearchFilter
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQL, StatementConfig
 
 # Display constants
 MAX_ROWS_TO_DISPLAY = 5
@@ -349,7 +349,7 @@ def analysis() -> None:
     )
 
     # Create analyzer with custom config
-    config = SQLConfig(enable_analysis=True, enable_validation=True, enable_transformations=True)
+    config = StatementConfig(enable_analysis=True, enable_validation=True, enable_transformations=True)
 
     # Demo queries with different complexity levels
     queries = [

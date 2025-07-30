@@ -652,9 +652,7 @@ class StatementSplitter:
         return False
 
 
-def split_sql_script(
-    script: str, dialect: Optional[str] = "generic", strip_trailing_semicolon: bool = False
-) -> list[str]:
+def split_sql_script(script: str, dialect: Optional[str] = None, strip_trailing_semicolon: bool = False) -> list[str]:
     """Split a SQL script into statements using the appropriate dialect.
 
     Args:

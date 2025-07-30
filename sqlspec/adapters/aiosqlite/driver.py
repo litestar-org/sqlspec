@@ -8,14 +8,13 @@ import aiosqlite
 
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.parameters import ParameterStyle
-from sqlspec.statement.splitter import split_sql_script
+from sqlspec.statement.sql import StatementConfig
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
-    from sqlspec.statement.sql import SQL, SQLConfig
 
 
 __all__ = ("AiosqliteCursor", "AiosqliteDriver")
@@ -42,13 +41,12 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     dialect: "DialectType" = "sqlite"
     default_parameter_style: "ClassVar[str]" = "qmark"
 
-    def __init__(self, connection: "AiosqliteConnection", statement_config: "Optional[SQLConfig]" = None) -> None:
-        from sqlspec.statement.sql import SQLConfig
-
+    def __init__(self, connection: "AiosqliteConnection", statement_config: "Optional[StatementConfig]" = None, driver_features: "Optional[dict[str, Any]]" = None) -> None:
         # Set default aiosqlite-specific configuration
         if statement_config is None:
-            statement_config = SQLConfig(
-                supported_parameter_styles=[ParameterStyle.QMARK],  # Only supports ?
+            statement_config = StatementConfig(
+                dialect="sqlite",
+                supported_parameter_styles={ParameterStyle.QMARK},
                 default_parameter_style=ParameterStyle.QMARK,
                 type_coercion_map={
                     bool: int,
@@ -59,9 +57,10 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                     tuple: lambda v: to_json(list(v)),
                 },
                 has_native_list_expansion=False,
+                needs_static_script_compilation=False,  # aiosqlite supports parameters in execute() calls
             )
 
-        super().__init__(connection=connection, statement_config=statement_config)
+        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: "Optional[AiosqliteConnection]" = None) -> "AiosqliteCursor":
         conn_to_use = connection or self.connection
@@ -81,28 +80,15 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """Commit the current transaction."""
         await self.connection.commit()
 
-    async def _perform_execute(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> None:
-        # Compile with driver's parameter style
-        sql, params = self._get_compiled_sql(
-            statement, self.statement_config.get_parameter_config().default_parameter_style
-        )
+    # Use default _execute_script implementation from base class
 
-        if statement.is_script:
-            # aiosqlite doesn't support executescript, so we need to execute statements one by one
-            # But we can still use parameters since we're using regular execute()
-            prepared_params = self._prepare_driver_parameters(params)
-            statements = split_sql_script(sql, dialect=str(self.dialect) if self.dialect else None)
-            for stmt in statements:
-                if stmt.strip():  # Skip empty statements
-                    await cursor.execute(stmt, prepared_params or ())
-        elif statement.is_many:
-            # For execute_many, params is already a list of parameter sets
-            prepared_params = self._prepare_driver_parameters_many(params) if params else []
-            await cursor.executemany(sql, prepared_params)
-        else:
-            # Prepare parameters for driver consumption
-            prepared_params = self._prepare_driver_parameters(params)
-            await cursor.execute(sql, prepared_params or ())
+    async def _execute_many(self, cursor: "aiosqlite.Cursor", sql: str, prepared_params: Any) -> None:
+        """Execute SQL with multiple parameter sets using aiosqlite executemany."""
+        await cursor.executemany(sql, prepared_params)
+
+    async def _execute_statement(self, cursor: "aiosqlite.Cursor", sql: str, prepared_params: Any) -> None:
+        """Execute single SQL statement using aiosqlite execute."""
+        await cursor.execute(sql, prepared_params or ())
 
     async def _extract_select_data(self, cursor: "aiosqlite.Cursor") -> "tuple[list[dict[str, Any]], list[str], int]":
         """Extract data from cursor after SELECT execution."""

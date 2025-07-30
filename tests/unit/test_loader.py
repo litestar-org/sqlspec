@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from sqlspec import SQL, SQLConfig, SQLFile, SQLFileLoader
+from sqlspec import SQL, SQLFile, SQLFileLoader, StatementConfig
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
 
 if TYPE_CHECKING:
@@ -472,7 +472,7 @@ class TestSQLFileLoaderWithFixtures:
         assert "VECTOR(768, FLOAT32)" in content
 
         stmt = SQL(
-            content, config=SQLConfig(enable_parsing=False, enable_validation=False, dialect="oracle")
+            content, config=StatementConfig(enable_parsing=False, enable_validation=False, dialect="oracle")
         ).as_script()
         assert stmt.is_script is True
 

@@ -7,12 +7,11 @@ from typing import TYPE_CHECKING, Any, Optional, cast
 
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.parameters import ParameterStyle
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQL, StatementConfig
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from adbc_driver_manager.dbapi import Cursor
-    from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.adapters.adbc._types import AdbcConnection
 
@@ -62,28 +61,27 @@ DIALECT_PARAMETER_STYLES = {
 class AdbcDriver(SyncDriverAdapterBase):
     """ADBC Sync Driver Adapter with modern architecture."""
 
-    def __init__(self, connection: "AdbcConnection", statement_config: "Optional[SQLConfig]" = None) -> None:
-        dialect = self._get_dialect(connection)
+    def __init__(self, connection: "AdbcConnection", statement_config: "Optional[StatementConfig]" = None, driver_features: "Optional[dict[str, Any]]" = None) -> None:
+        self.dialect = self._get_dialect(connection)
 
         # Set default ADBC-specific configuration if none provided
         if statement_config is None:
             default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
-                dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
+                self.dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
             )
-            statement_config = SQLConfig(
-                dialect=dialect,
+            statement_config = StatementConfig(
+                dialect=self.dialect,
                 supported_parameter_styles=supported_styles,
                 default_parameter_style=default_style,
-                type_coercion_map=self._get_type_coercion_map(dialect),
+                type_coercion_map=self._get_type_coercion_map(self.dialect),
                 has_native_list_expansion=True,  # ADBC handles lists natively
             )
 
         # Ensure dialect is set if not provided
         if statement_config and not statement_config.dialect:
-            statement_config = statement_config.replace(dialect=dialect)
+            statement_config = statement_config.replace(dialect=self.dialect)
 
-        super().__init__(connection=connection, statement_config=statement_config)
-        self.dialect: DialectType = dialect
+        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
         # Type handlers can be registered if the base class supports it
         # ADBC has good native type support, so we don't need explicit type handlers
@@ -152,20 +150,18 @@ class AdbcDriver(SyncDriverAdapterBase):
     def _perform_execute(self, cursor: "Cursor", statement: "SQL") -> None:
         """Execute the SQL statement using the provided cursor."""
         try:
-            sql, parameters = self._get_compiled_sql(
-                statement, self.statement_config.get_parameter_config().default_parameter_style
-            )
+            sql, parameters = self._get_compiled_sql(statement, self.statement_config)
             if statement.is_script:
-                statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
+                statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
                 for stmt in statements:
                     if stmt.strip():
                         cursor.execute(
                             stmt,
-                            parameters=self._prepare_driver_parameters(self._handle_postgres_empty_params(parameters)),
+                            parameters=self.prepare_driver_parameters(self._handle_postgres_empty_params(parameters), self.statement_config, is_many=False),
                         )
             elif statement.is_many:
                 # Use the proper parameter preparation for execute_many
-                prepared_params = self._prepare_driver_parameters_many(parameters) if parameters else []
+                prepared_params = self.prepare_driver_parameters(parameters, self.statement_config, is_many=True)
                 # ADBC requires at least one parameter set for executemany with parameterized queries
                 # Use AST-based parameter detection instead of naive string searching
                 if not prepared_params and self.has_parameters(statement.expression or statement.sql):
@@ -175,7 +171,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                     cursor.executemany(sql, prepared_params)
             else:
                 # For single execution, prepare parameters intelligently
-                prepared_params = self._prepare_driver_parameters(self._handle_postgres_empty_params(parameters))
+                prepared_params = self.prepare_driver_parameters(self._handle_postgres_empty_params(parameters), self.statement_config, is_many=False)
                 # Handle special case where a single-element list is passed for a single parameter
                 prepared_params = self._handle_single_param_list(sql, prepared_params)
 

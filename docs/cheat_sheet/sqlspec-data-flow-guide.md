@@ -34,7 +34,7 @@ When a `SQL` object is initialized, the following happens:
 
 1. **Statement Normalization**: The input (string, `QueryBuilder`, or `sqlglot` expression) is converted into a `sqlglot` expression tree. This is the Abstract Syntax Tree (AST) that represents the SQL query. This is handled by the `_to_expression` method in the `SQL` class.
 2. **Parameter and Filter Processing**: Any parameters and filters provided to the `SQL` object are processed and stored internally. Positional arguments become `_positional_params`, and keyword arguments become `_named_params`. `StatementFilter` objects are stored in `_filters`.
-3. **Configuration**: A `SQLConfig` object is associated with the `SQL` object, which controls aspects like dialect, validation, and transformation.
+3. **Configuration**: A `StatementConfig` object is associated with the `SQL` object, which controls aspects like dialect, validation, and transformation.
 
 ### 2. The `Driver.execute()` Method
 

@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from sqlspec.parameters import ParameterConverter, ParameterInfo, ParameterStyle
 from sqlspec.parameters.types import TypedParameter
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQL, StatementConfig
 
 
 def test_typed_parameter_hashable() -> None:
@@ -139,10 +139,15 @@ def test_wrap_parameters_with_types_already_wrapped() -> None:
 
 def test_sql_with_typed_parameters() -> None:
     """Test SQL execution with TypedParameter wrapping."""
-    config = SQLConfig(enable_parameter_type_wrapping=True)
+    config = StatementConfig(enable_parameter_type_wrapping=True)
 
     # Test with datetime parameter
-    sql = SQL("SELECT * FROM users WHERE created > ? AND active = ?", datetime(2024, 1, 1), True, _config=config)
+    sql = SQL(
+        "SELECT * FROM users WHERE created > ? AND active = ?",
+        datetime(2024, 1, 1),
+        True,
+        statement_config=statement_config,
+    )
 
     # Process the SQL (this will wrap parameters internally)
     _, params = sql.compile()

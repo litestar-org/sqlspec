@@ -74,12 +74,12 @@ sql._ensure_processed() # -> None
 sql._build_final_state() # -> (expression, params)
 ```
 
-### `SQLConfig` (`sqlspec.statement.sql.SQLConfig`)
+### `StatementConfig` (`sqlspec.statement.sql.StatementConfig`)
 
 Configuration for SQL processing behavior.
 
 ```python
-SQLConfig(
+StatementConfig(
     enable_parsing=True,           # Use SQLGlot parsing
     enable_validation=True,        # Run security validators
     enable_transformations=True,   # Apply transformers

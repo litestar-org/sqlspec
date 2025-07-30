@@ -6,16 +6,15 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 from sqlglot import exp
 
 from sqlspec.driver._common import CommonDriverAttributesMixin
-from sqlspec.driver.context import set_current_driver
 from sqlspec.driver.mixins import SQLTranslatorMixin, ToSchemaMixin
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
-from sqlspec.statement.builder import QueryBuilder
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL, SQLConfig, Statement
+from sqlspec.statement.sql import SQL, Statement, StatementConfig
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_dict_row, is_indexable_row
 
 if TYPE_CHECKING:
+    from sqlspec.statement.builder import QueryBuilder
     from sqlspec.statement.filters import StatementFilter
     from sqlspec.typing import ModelDTOT, ModelT, RowT, StatementParameters
 
@@ -51,9 +50,123 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
     async def commit(self) -> None:
         """Commit the current transaction on the current connection."""
 
+    def _get_compiled_sql_and_params(self, statement: "SQL") -> tuple[str, Any]:
+        """Get compiled SQL and driver-ready parameters in one call.
+
+        This method handles all SQL compilation and parameter preparation:
+        1. Compiles SQL with optimal parameter style (only converts when needed)
+        2. Handles script compilation for databases that need static SQL
+        3. Prepares parameters for driver-specific execution (single/many/script)
+
+        Args:
+            statement: SQL statement to compile
+
+        Returns:
+            Tuple of (driver_ready_sql, driver_ready_parameters)
+        """
+        # Handle script compilation first
+        if statement.is_script:
+            if self.statement_config.needs_static_script_compilation:
+                # Use static compilation for databases that don't support parameters in scripts
+                static_sql = self._prepare_script_sql(statement)
+                return static_sql, None
+            # Regular script compilation
+            sql, params = self._get_compiled_sql(statement, self.statement_config)
+            return sql, self.prepare_driver_parameters(params, self.statement_config, is_many=False)
+
+        # Regular statement compilation
+        sql, params = self._get_compiled_sql(statement, self.statement_config)
+
+        # Prepare parameters based on execution type
+        if statement.is_many:
+            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=True)
+        else:
+            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
+
+        return sql, prepared_params
+
+    async def _perform_execute(self, cursor: Any, statement: "SQL") -> Any:
+        """Unified async execution logic that delegates to driver-specific methods.
+
+        This method implements the common execution pattern shared by all async drivers:
+        1. Get fully compiled SQL and driver-ready parameters in one call
+        2. Route to appropriate execution method based on statement type
+
+        Args:
+            cursor: Database cursor/connection object
+            statement: SQL statement to execute
+
+        Returns:
+            Whatever the driver-specific execution method returns
+        """
+        # Get fully compiled SQL and driver-ready parameters
+        sql, prepared_params = self._get_compiled_sql_and_params(statement)
+
+        if statement.is_script:
+            return await self._execute_script(cursor, sql, prepared_params, self.statement_config)
+        if statement.is_many:
+            return await self._execute_many(cursor, sql, prepared_params)
+        return await self._execute_statement(cursor, sql, prepared_params)
+
+    async def _execute_script(
+        self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig"
+    ) -> Any:
+        """Execute a SQL script (multiple statements).
+
+        Default implementation splits script and executes statements individually.
+        Drivers can override for database-specific script execution methods.
+
+        Args:
+            cursor: Database cursor/connection object
+            sql: Compiled SQL script
+            prepared_params: Prepared parameters
+            statement_config: Statement configuration for dialect information
+
+        Returns:
+            Driver-specific result
+        """
+        statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
+        last_result = None
+        for stmt in statements:
+            # split_script_statements already removes empty strings, no need to check again
+            last_result = await self._execute_statement(cursor, stmt, prepared_params)
+        return last_result
+
     @abstractmethod
-    async def _perform_execute(self, cursor: Any, statement: "SQL") -> None:
-        """Execute the SQL statement using the provided cursor."""
+    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+        """Execute SQL with multiple parameter sets (executemany).
+
+        Must be implemented by each driver for database-specific executemany logic.
+
+        Args:
+            cursor: Database cursor/connection object
+            sql: Compiled SQL statement
+            prepared_params: List of prepared parameter sets
+
+        Returns:
+            Driver-specific result
+
+        Raises:
+            NotImplementedError: Must be implemented by driver subclasses
+        """
+
+    @abstractmethod
+    async def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+        """Execute a single SQL statement.
+
+        Must be implemented by each driver for database-specific execution logic.
+
+        Args:
+            cursor: Database cursor/connection object
+            sql: Compiled SQL statement
+            prepared_params: Prepared parameters
+
+        Returns:
+            Driver-specific result
+
+        Raises:
+            NotImplementedError: Must be implemented by driver subclasses
+        """
 
     # New abstract methods for data extraction
     @abstractmethod
@@ -82,7 +195,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
             row_count = self._extract_execute_rowcount(cursor)
             # Count statements in the script
             sql, _ = statement.compile()
-            statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
+            statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
             statement_count = len([stmt for stmt in statements if stmt.strip()])
             return SQLResult(
                 statement=statement,
@@ -103,71 +216,18 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         row_count = self._extract_execute_rowcount(cursor)
         return self._build_execute_result_from_data(statement=statement, row_count=row_count)
 
-    def _build_select_result_from_data(
-        self, statement: "SQL", data: "list[dict[str, Any]]", column_names: "list[str]", row_count: int
-    ) -> "SQLResult":
-        """Build SQLResult for SELECT operations from extracted data."""
-        return SQLResult(
-            statement=statement, data=data, column_names=column_names, rows_affected=row_count, operation_type="SELECT"
-        )
-
-    def _build_execute_result_from_data(
-        self, statement: "SQL", row_count: int, metadata: "Optional[dict[str, Any]]" = None
-    ) -> "SQLResult":
-        """Build SQLResult for non-SELECT operations from extracted data."""
-        return SQLResult(
-            statement=statement,
-            data=[],
-            rows_affected=row_count,
-            operation_type=self._determine_operation_type(statement),
-            metadata=metadata or {"status_message": "OK"},
-        )
-
-    def _prepare_sql(
-        self,
-        statement: "Union[Statement, QueryBuilder]",
-        *parameters: "Union[StatementParameters, StatementFilter]",
-        config: "SQLConfig",
-        **kwargs: Any,
-    ) -> "SQL":
-        """Build SQL statement from various input types.
-
-        Ensures dialect is set and preserves existing state when rebuilding SQL objects.
-        """
-        if isinstance(statement, QueryBuilder):
-            return statement.to_statement(config=config)
-        if isinstance(statement, SQL):
-            if parameters or kwargs:
-                new_config = config
-                if self.dialect and new_config and not new_config.dialect:
-                    new_config = new_config.replace(dialect=self.dialect)
-                return statement.copy(
-                    parameters=(*statement._positional_params, *parameters)
-                    if parameters
-                    else statement._positional_params,
-                    config=new_config,
-                    **kwargs,
-                )
-            if self.dialect and (not statement._config.dialect or statement._config.dialect != self.dialect):
-                new_config = statement._config.replace(dialect=self.dialect)
-                if statement.parameters:
-                    return statement.copy(config=new_config, dialect=self.dialect)
-                return statement.copy(config=new_config, dialect=self.dialect)
-            return statement
-        if self.dialect and config and not config.dialect:
-            config = config.replace(dialect=self.dialect)
-        return SQL(statement, *parameters, config=config, **kwargs)
-
     async def execute(
         self,
         statement: "Union[SQL, Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
-        config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         suppress_warnings: bool = False,
         **kwargs: Any,
     ) -> "SQLResult":
-        sql_statement = self._prepare_sql(statement, *parameters, config=config or self.statement_config, **kwargs)
+        sql_statement = self.prepare_statement(
+            statement, *parameters, statement_config=statement_config or self.statement_config, **kwargs
+        )
         return await self._dispatch_execution(statement=sql_statement, connection=self.connection)
 
     async def _dispatch_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
@@ -190,22 +250,16 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
             The result of the SQL execution.
         """
 
-        # Set current driver in context for SQL compilation
-        set_current_driver(self)
-        try:
-            async with self.with_cursor(connection) as cursor:
-                await self._perform_execute(cursor, statement)
-                return await self._build_result(cursor, statement)
-        finally:
-            # Clear driver context
-            set_current_driver(None)
+        async with self.with_cursor(connection) as cursor:
+            await self._perform_execute(cursor, statement)
+            return await self._build_result(cursor, statement)
 
     async def execute_many(
         self,
         statement: "Union[SQL, Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
-        config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         suppress_warnings: bool = False,
         **kwargs: Any,
     ) -> "SQLResult":
@@ -216,12 +270,16 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         # For execute_many, we need to handle parameters specially to preserve structure
         if parameters and len(parameters) == 1 and isinstance(parameters[0], list):
             # Direct list of parameter sets - pass to as_many
-            sql_statement = self._prepare_sql(statement, config=config or self.statement_config, **kwargs)
+            sql_statement = self.prepare_statement(
+                statement, statement_config=statement_config or self.statement_config, **kwargs
+            )
             return await self._dispatch_execution(
                 statement=sql_statement.as_many(parameters[0]), connection=self.connection
             )
 
-        sql_statement = self._prepare_sql(statement, *parameters, config=config or self.statement_config, **kwargs)
+        sql_statement = self.prepare_statement(
+            statement, *parameters, statement_config=statement_config or self.statement_config, **kwargs
+        )
 
         # Mark for batch execution - as_many() will use the existing positional params
         return await self._dispatch_execution(statement=sql_statement.as_many(), connection=self.connection)
@@ -231,7 +289,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement: "Union[str, SQL]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
-        config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         suppress_warnings: bool = False,
         **kwargs: Any,
     ) -> "SQLResult":
@@ -240,8 +298,8 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         By default, validates each statement and logs warnings for dangerous
         operations. Use suppress_warnings=True for migrations and admin scripts.
         """
-        script_config = config or self.statement_config
-        sql_statement = self._prepare_sql(statement, *parameters, config=script_config, **kwargs)
+        script_config = statement_config or self.statement_config
+        sql_statement = self.prepare_statement(statement, *parameters, statement_config=script_config, **kwargs)
 
         return await self._dispatch_execution(statement=sql_statement.as_script(), connection=self.connection)
 
@@ -253,7 +311,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
-        config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "ModelDTOT": ...
 
@@ -264,7 +322,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
-        config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "Union[ModelT, RowT, dict[str, Any]]": ...  # pyright: ignore[reportInvalidTypeVarUse]
 
@@ -274,14 +332,14 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,
-        config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "Union[ModelT, RowT,ModelDTOT]":  # pyright: ignore[reportInvalidTypeVarUse]
         """Execute a select statement and return exactly one row.
 
         Raises an exception if no rows or more than one row is returned.
         """
-        result = await self.execute(statement, *parameters, config=config, **kwargs)
+        result = await self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         data = result.get_data()
         if not data:
             msg = "No rows found"
@@ -301,7 +359,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
-        config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "Optional[ModelDTOT]": ...
 
@@ -312,7 +370,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
-        config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "Optional[ModelT]": ...  # pyright: ignore[reportInvalidTypeVarUse]
 
@@ -322,7 +380,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,
-        config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[ModelT, ModelDTOT]]":  # pyright: ignore[reportInvalidTypeVarUse]
         """Execute a select statement and return at most one row.
@@ -330,7 +388,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         Returns None if no rows are found.
         Raises an exception if more than one row is returned.
         """
-        result = await self.execute(statement, *parameters, config=config, **kwargs)
+        result = await self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         data = result.get_data()
         if not data:
             return None
@@ -346,7 +404,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
-        config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "list[ModelDTOT]": ...
 
@@ -357,7 +415,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
-        config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "list[ModelT]": ...  # pyright: ignore[reportInvalidTypeVarUse]
     async def select(
@@ -366,11 +424,11 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,
-        config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "Union[list[ModelT], list[ModelDTOT]]":  # pyright: ignore[reportInvalidTypeVarUse]
         """Execute a select statement and return all rows."""
-        result = await self.execute(statement, *parameters, config=config, **kwargs)
+        result = await self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         return cast(
             "Union[list[ModelT], list[ModelDTOT]]",
             self.to_schema(cast("list[ModelT]", result.get_data()), schema_type=schema_type),  # type: ignore[arg-type]
@@ -381,7 +439,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement: "Union[Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
-        config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> Any:
         """Execute a select statement and return a single scalar value.
@@ -389,7 +447,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         Expects exactly one row with one column.
         Raises an exception if no rows or more than one row/column is returned.
         """
-        result = await self.execute(statement, *parameters, config=config, **kwargs)
+        result = await self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         row = result.one()
         if not row:
             msg = "No rows found"
@@ -412,7 +470,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement: "Union[Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
-        config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> Any:
         """Execute a select statement and return a single scalar value or None.
@@ -421,7 +479,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         Expects at most one row with one column.
         Raises an exception if more than one row is returned.
         """
-        result = await self.execute(statement, *parameters, config=config, **kwargs)
+        result = await self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         data = result.get_data()
         if not data:
             return None
@@ -477,13 +535,13 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
             count_expr.set("offset", None)
 
             # Create new SQL with same parameters and config as original
-            return SQL(count_expr, *original_sql._positional_params, config=original_sql._config)
+            return SQL(count_expr, *original_sql._positional_params, config=original_sql.statement_config)
 
         # Handle other query types (UNION, etc.) - wrap in subquery
         subquery = cast("exp.Select", expr).subquery(alias="total_query")
         count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
         # Create new SQL with same parameters and config as original
-        return SQL(count_expr, *original_sql._positional_params, config=original_sql._config)
+        return SQL(count_expr, *original_sql._positional_params, config=original_sql.statement_config)
 
     @overload
     async def select_with_total(
@@ -492,7 +550,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "type[ModelDTOT]",
-        config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "tuple[list[ModelDTOT], int]": ...
 
@@ -503,7 +561,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: None = None,
-        config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "tuple[list[dict[str, Any]], int]": ...
 
@@ -513,7 +571,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
         schema_type: "Optional[type[ModelDTOT]]" = None,
-        config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "tuple[Union[list[dict[str, Any]], list[ModelDTOT]], int]":
         """Execute a select statement and return both the data and total count.
@@ -541,7 +599,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
             >>> print(f"Page data: {len(data)} rows, Total: {total} rows")
         """
         # 1. Prepare original SQL statement
-        sql_statement = self._prepare_sql(statement, *parameters, config=config or self.statement_config, **kwargs)
+        sql_statement = self.prepare_statement(
+            statement, *parameters, statement_config=statement_config or self.statement_config, **kwargs
+        )
 
         # 2. Create optimized COUNT query
         count_sql = self._create_count_query(sql_statement)

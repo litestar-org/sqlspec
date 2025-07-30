@@ -3,14 +3,14 @@
 from sqlspec.statement import builder, filters, result, sql
 from sqlspec.statement.filters import StatementFilter
 from sqlspec.statement.result import ArrowResult, SQLResult, StatementResult
-from sqlspec.statement.sql import SQL, SQLConfig, Statement
+from sqlspec.statement.sql import SQL, Statement, StatementConfig
 
 __all__ = (
     "SQL",
     "ArrowResult",
-    "SQLConfig",
     "SQLResult",
     "Statement",
+    "StatementConfig",
     "StatementFilter",
     "StatementResult",
     "builder",

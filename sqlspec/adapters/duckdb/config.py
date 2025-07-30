@@ -15,7 +15,7 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.duckdb._types import DuckDBConnection
 from sqlspec.adapters.duckdb.driver import DuckDBCursor, DuckDBDriver
 from sqlspec.config import SyncDatabaseConfig
-from sqlspec.statement.sql import SQLConfig
+from sqlspec.statement.sql import StatementConfig
 from sqlspec.typing import Empty
 
 if TYPE_CHECKING:
@@ -36,6 +36,7 @@ __all__ = (
     "DuckDBConnectionParams",
     "DuckDBConnectionPool",
     "DuckDBExtensionConfig",
+    "DuckDBPoolParams",
     "DuckDBSecretConfig",
 )
 
@@ -312,6 +313,19 @@ class DuckDBConnectionParams(TypedDict, total=False):
     extra: NotRequired[dict[str, Any]]
 
 
+class DuckDBPoolParams(DuckDBConnectionParams, total=False):
+    """Complete pool configuration for DuckDB adapter.
+
+    Combines standardized pool parameters with DuckDB-specific connection parameters.
+    """
+
+    # Standardized pool parameters (consistent across ALL adapters)
+    pool_min_size: NotRequired[int]
+    pool_max_size: NotRequired[int]
+    pool_timeout: NotRequired[float]
+    pool_recycle_seconds: NotRequired[int]
+
+
 class DuckDBExtensionConfig(TypedDict, total=False):
     """DuckDB extension configuration for auto-management."""
 
@@ -360,48 +374,39 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
     driver_type: "ClassVar[type[DuckDBDriver]]" = DuckDBDriver
     connection_type: "ClassVar[type[DuckDBConnection]]" = DuckDBConnection
-    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("qmark", "numeric")
-    default_parameter_style: "ClassVar[str]" = "qmark"
     supports_connection_pooling: "ClassVar[bool]" = True
 
     def __init__(
         self,
-        connection_config: "Optional[Union[DuckDBConnectionParams, dict[str, Any]]]" = None,
-        statement_config: "Optional[SQLConfig]" = None,
+        *,
+        pool_config: "Optional[Union[DuckDBPoolParams, dict[str, Any]]]" = None,
         migration_config: Optional[dict[str, Any]] = None,
-        adapter_cache_size: int = 1000,
+        pool_instance: "Optional[DuckDBConnectionPool]" = None,
         extensions: "Optional[Sequence[DuckDBExtensionConfig]]" = None,
         secrets: "Optional[Sequence[DuckDBSecretConfig]]" = None,
         on_connection_create: "Optional[Callable[[DuckDBConnection], Optional[DuckDBConnection]]]" = None,
-        min_pool: int = DEFAULT_MIN_POOL,
-        max_pool: int = DEFAULT_MAX_POOL,
-        pool_timeout: float = POOL_TIMEOUT,
-        pool_recycle: int = POOL_RECYCLE,
-        pool_instance: "Optional[DuckDBConnectionPool]" = None,
     ) -> None:
         """Initialize DuckDB configuration with intelligent features.
 
         Args:
-            connection_config: Connection configuration parameters
-            statement_config: Default SQL statement configuration
+            pool_config: Pool configuration parameters (TypedDict or dict) including connection params
+            migration_config: Migration configuration
+            pool_instance: Pre-created pool instance
             extensions: List of extension dicts to auto-install/load with keys: name, version, repository, force_install
             secrets: List of secret dicts for AI/API integrations with keys: secret_type, name, value, scope
             on_connection_create: Callback executed when connection is created
-            migration_config: Migration configuration
-            adapter_cache_size: Adapter cache size (0 to disable caching)
-            min_pool: Minimum number of connections to maintain (default: 2)
-            max_pool: Maximum number of connections allowed (default: 10)
-            pool_timeout: Pool checkout timeout in seconds (default: 30.0)
-            pool_recycle: Connection recycle time in seconds (default: 3600)
-            pool_instance: Pre-created pool instance
 
         Example:
             >>> config = DuckDBConfig(
-            ...     connection_config={
+            ...     pool_config={
             ...         "database": ":memory:",
             ...         "memory_limit": "1GB",
             ...         "threads": 4,
             ...         "autoload_known_extensions": True,
+            ...         "pool_min_size": 2,
+            ...         "pool_max_size": 10,
+            ...         "pool_timeout": 30.0,
+            ...         "pool_recycle_seconds": 3600,
             ...     },
             ...     extensions=[
             ...         {"name": "spatial", "repository": "core"},
@@ -416,15 +421,24 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             ...     ],
             ... )
         """
-        # Store connection parameters and extract/merge extras
-        self.connection_config: dict[str, Any] = dict(connection_config) if connection_config else {}
+        # Convert to dict and extract configuration
+        pool_config_dict: dict[str, Any] = dict(pool_config) if pool_config else {}
+
+        # Set defaults for connection config
+        if not any(key in pool_config_dict for key in ["database"]):
+            pool_config_dict["database"] = ":memory:"
+
+        # Extract pool parameters with unified names
+        self.min_pool = pool_config_dict.pop("pool_min_size", DEFAULT_MIN_POOL)
+        self.max_pool = pool_config_dict.pop("pool_max_size", DEFAULT_MAX_POOL)
+        self.pool_timeout = pool_config_dict.pop("pool_timeout", POOL_TIMEOUT)
+        self.pool_recycle = pool_config_dict.pop("pool_recycle_seconds", POOL_RECYCLE)
+
+        # Remaining config is connection configuration
+        self.connection_config = pool_config_dict
         if "extra" in self.connection_config:
             extras = self.connection_config.pop("extra")
             self.connection_config.update(extras)
-
-        # Set default database if not provided or empty
-        if "database" not in self.connection_config or not self.connection_config["database"]:
-            self.connection_config["database"] = ":memory:"
 
         # Convert basic :memory: to unique named memory database for pooling
         # Named memory databases already work with sharing
@@ -436,19 +450,13 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             unique_id = str(uuid.uuid4())[:8]  # Short unique identifier
             self.connection_config["database"] = f":memory:pool_{unique_id}"
 
-        # Store other config
-        self.statement_config = statement_config or SQLConfig()
+        # Store DuckDB-specific config
         self.extensions = list(extensions) if extensions else []
         self.secrets = list(secrets) if secrets else []
         self.on_connection_create = on_connection_create
-        self.min_pool = min_pool
-        self.max_pool = max_pool
-        self.pool_timeout = pool_timeout
-        self.pool_recycle = pool_recycle
 
-        super().__init__(
-            pool_instance=pool_instance, migration_config=migration_config, adapter_cache_size=adapter_cache_size
-        )
+        super().__init__(pool_instance=pool_instance, migration_config=migration_config)
+
 
     def _get_connection_config_dict(self) -> dict[str, Any]:
         """Get connection configuration as plain dict for external library.
@@ -615,7 +623,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
     @contextmanager
     def provide_session(
-        self, *args: Any, statement_config: "Optional[SQLConfig]" = None, **kwargs: Any
+        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
     ) -> "Generator[DuckDBDriver, None, None]":
         """Provide a DuckDB driver session context manager.
 
@@ -628,13 +636,6 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             A context manager that yields a DuckDBDriver instance.
         """
         with self.provide_connection(*args, **kwargs) as connection:
-            statement_config = statement_config or self.statement_config
-            # Inject parameter style info if not already set
-            if statement_config.allowed_parameter_styles is None:
-                statement_config = statement_config.replace(
-                    allowed_parameter_styles=self.supported_parameter_styles,
-                    default_parameter_style=self.default_parameter_style,
-                )
             driver = self.driver_type(connection=connection, statement_config=statement_config)
             yield driver
 

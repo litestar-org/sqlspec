@@ -50,43 +50,7 @@ SQL_STARTERS = {
 
 
 class SQLFactory:
-    """Unified factory for creating SQL builders and column expressions with a fluent API.
-
-    Provides both statement builders and column expressions through a single, clean interface.
-    Now supports parsing raw SQL strings into appropriate builders for enhanced flexibility.
-
-    Example:
-        ```python
-        from sqlspec import sql
-
-        # Traditional builder usage (unchanged)
-        query = (
-            sql.select(sql.id, sql.name)
-            .from_("users")
-            .where("age > 18")
-        )
-
-        # New: Raw SQL parsing
-        insert_sql = sql.insert(
-            "INSERT INTO users (name, email) VALUES ('John', 'john@example.com')"
-        )
-        select_sql = sql.select(
-            "SELECT * FROM users WHERE active = 1"
-        )
-
-        # RETURNING clause detection
-        returning_insert = sql.insert(
-            "INSERT INTO users (name) VALUES ('John') RETURNING id"
-        )
-        # → When executed, will return SelectResult instead of ExecuteResult
-
-        # Smart INSERT FROM SELECT
-        insert_from_select = sql.insert(
-            "SELECT id, name FROM source WHERE active = 1"
-        )
-        # → Will prompt for target table or convert to INSERT FROM SELECT pattern
-        ```
-    """
+    """Unified factory for creating SQL builders and column expressions with a fluent API."""
 
     @classmethod
     def detect_sql_type(cls, sql: str, dialect: DialectType = None) -> str:
@@ -120,15 +84,7 @@ class SQLFactory:
     # ===================
     # Callable Interface
     # ===================
-    def __call__(
-        self,
-        statement: str,
-        parameters: Optional[Any] = None,
-        *filters: Any,
-        config: Optional[Any] = None,
-        dialect: DialectType = None,
-        **kwargs: Any,
-    ) -> "Any":
+    def __call__(self, statement: str, dialect: DialectType = None) -> "Any":
         """Create a SelectBuilder from a SQL string, only allowing SELECT/CTE queries.
 
         Args:

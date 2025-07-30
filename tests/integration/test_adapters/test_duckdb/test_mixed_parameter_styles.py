@@ -5,13 +5,13 @@ from collections.abc import Generator
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.statement.sql import SQL, StatementConfig
 
 
 @pytest.fixture
 def duckdb_session() -> Generator[DuckDBDriver, None, None]:
     """Create a DuckDB session for testing."""
-    config = DuckDBConfig(connection_config={"database": ":memory:"}, statement_config=SQLConfig())
+    config = DuckDBConfig(connection_config={"database": ":memory:"}, statement_config=StatementConfig())
 
     with config.provide_session() as session:
         # Create test table

@@ -4,7 +4,7 @@ import pytest
 from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyConnectionParams, AsyncmyDriver, AsyncmyPoolParams
-from sqlspec.statement.sql import SQLConfig
+from sqlspec.statement.sql import StatementConfig
 
 
 def test_asyncmy_typed_dict_structure() -> None:
@@ -72,10 +72,10 @@ def test_asyncmy_config_initialization() -> None:
         "database": "test_db",
     }
     config = AsyncmyConfig(pool_config=pool_config)
-    assert isinstance(config.statement_config, SQLConfig)
+    assert isinstance(config.statement_config, StatementConfig)
 
     # Test with custom parameters
-    custom_statement_config = SQLConfig()
+    custom_statement_config = StatementConfig()
     config = AsyncmyConfig(pool_config=pool_config, statement_config=custom_statement_config)
     assert config.statement_config is custom_statement_config
 
@@ -99,7 +99,7 @@ async def test_asyncmy_config_provide_session(mysql_service: MySQLService) -> No
         assert isinstance(session, AsyncmyDriver)
         # Check that parameter styles were set
         assert session.statement_config is not None
-        assert session.statement_config.allowed_parameter_styles == ("pyformat_positional",)
+        assert session.statement_config.supported_parameter_styles == ("pyformat_positional",)
         assert session.statement_config.default_parameter_style == "pyformat_positional"
 
 

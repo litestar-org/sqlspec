@@ -10,7 +10,7 @@ def test_shared_memory_pooling() -> None:
     """Test that shared memory databases allow pooling."""
     # Create config with shared memory database
     config = SqliteConfig(
-        connection_config={"database": "file::memory:?cache=shared", "uri": True}, min_pool_size=2, max_pool_size=5
+        pool_config={"database": "file::memory:?cache=shared", "uri": True, "pool_min_size": 2, "pool_max_size": 5}
     )
 
     # Verify pooling is not disabled
@@ -41,7 +41,7 @@ def test_shared_memory_pooling() -> None:
 def test_regular_memory_auto_conversion() -> None:
     """Test that regular memory databases are auto-converted to shared memory with pooling enabled."""
     # Create config with regular memory database
-    config = SqliteConfig(connection_config={"database": ":memory:"}, min_pool_size=5, max_pool_size=10)
+    config = SqliteConfig(pool_config={"database": ":memory:", "pool_min_size": 5, "pool_max_size": 10})
 
     # Verify pooling is enabled with requested sizes
     assert config.min_pool_size == 5
@@ -81,7 +81,7 @@ def test_file_database_pooling_enabled() -> None:
 
     try:
         # Create config with file database
-        config = SqliteConfig(connection_config={"database": db_path}, min_pool_size=3, max_pool_size=8)
+        config = SqliteConfig(pool_config={"database": db_path, "pool_min_size": 3, "pool_max_size": 8})
 
         # Verify pooling is enabled
         assert config.min_pool_size == 3
