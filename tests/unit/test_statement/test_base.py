@@ -304,9 +304,9 @@ def test_returns_rows(
     try:
         # Create a permissive configuration for testing that allows DDL, risky DML, and UNION operations
         test_config = StatementConfig()
-        statement = SQL(sql, config=test_config)
+        statement = SQL(sql, statement_config=test_config)
         expression = statement.expression
-        actual_returns_rows = driver_attributes.returns_rows(expression)
+        actual_returns_rows = statement.returns_rows()
 
         assert actual_returns_rows == expected_returns_rows, (
             f"{description}: Expected {expected_returns_rows}, got {actual_returns_rows} for SQL: {sql}"
@@ -317,16 +317,17 @@ def test_returns_rows(
 
 def test_returns_rows_with_invalid_expression(driver_attributes: CommonDriverAttributesMixin) -> None:
     """Test that returns_rows handles invalid expressions gracefully."""
-    # Test with None expression
-    result = driver_attributes.returns_rows(None)
-    assert result is False, "Should return False for None expression"
-
     # Create a permissive configuration for testing
     test_config = StatementConfig()
 
+    # Test with empty SQL - should return False since it's not a valid SELECT
+    empty_statement = SQL("", statement_config=test_config)
+    result = empty_statement.returns_rows()
+    assert result is False, "Empty SQL should not return rows"
+
     try:
-        empty_stmt = SQL("", config=test_config)
-        result = driver_attributes.returns_rows(empty_stmt.expression)
+        empty_stmt = SQL("", statement_config=test_config)
+        result = empty_stmt.returns_rows()
         # The result doesn't matter as much as not crashing
         assert isinstance(result, bool), "Should return a boolean value"
     except Exception:
@@ -336,67 +337,73 @@ def test_returns_rows_with_invalid_expression(driver_attributes: CommonDriverAtt
 
 def test_returns_rows_expression_types(driver_attributes: CommonDriverAttributesMixin) -> None:
     """Test specific sqlglot expression types to ensure comprehensive coverage."""
+    # Create a SQL object to test returns_rows method
+    config = StatementConfig()
+
+    # Test by passing expressions directly to returns_rows
+    sql_dummy = SQL("SELECT 1", statement_config=config)
+
     select_expr = exp.Select()
-    assert driver_attributes.returns_rows(select_expr) is True, "Select expression should return rows"
+    assert sql_dummy.returns_rows(select_expr) is True, "Select expression should return rows"
 
     insert_expr = exp.Insert()
-    assert driver_attributes.returns_rows(insert_expr) is False, "Insert without RETURNING should not return rows"
+    assert sql_dummy.returns_rows(insert_expr) is False, "Insert without RETURNING should not return rows"
 
     # Test INSERT with RETURNING
     insert_with_returning = exp.Insert()
     insert_with_returning = insert_with_returning.returning(exp.Returning())
-    assert driver_attributes.returns_rows(insert_with_returning) is True, "Insert with RETURNING should return rows"
+    assert sql_dummy.returns_rows(insert_with_returning) is True, "Insert with RETURNING should return rows"
 
     update_expr = exp.Update()
-    assert driver_attributes.returns_rows(update_expr) is False, "Update without RETURNING should not return rows"
+    assert sql_dummy.returns_rows(update_expr) is False, "Update without RETURNING should not return rows"
 
     # Test UPDATE with RETURNING
     update_with_returning = exp.Update()
     update_with_returning = update_with_returning.returning(exp.Returning())
-    assert driver_attributes.returns_rows(update_with_returning) is True, "Update with RETURNING should return rows"
+    assert sql_dummy.returns_rows(update_with_returning) is True, "Update with RETURNING should return rows"
 
     delete_expr = exp.Delete()
-    assert driver_attributes.returns_rows(delete_expr) is False, "Delete without RETURNING should not return rows"
+    assert sql_dummy.returns_rows(delete_expr) is False, "Delete without RETURNING should not return rows"
 
     # Test DELETE with RETURNING
     delete_with_returning = exp.Delete()
     delete_with_returning = delete_with_returning.returning(exp.Returning())
-    assert driver_attributes.returns_rows(delete_with_returning) is True, "Delete with RETURNING should return rows"
+    assert sql_dummy.returns_rows(delete_with_returning) is True, "Delete with RETURNING should return rows"
 
     # Test empty WITH expression (should not return rows)
     with_expr = exp.With()
-    assert driver_attributes.returns_rows(with_expr) is False, "Empty WITH expression should not return rows"
+    assert sql_dummy.returns_rows(with_expr) is False, "Empty WITH expression should not return rows"
 
     # Test WITH expression with SELECT (should return rows)
     with_select = exp.With(expressions=[exp.Select()])
-    assert driver_attributes.returns_rows(with_select) is True, "WITH expression with SELECT should return rows"
+    assert sql_dummy.returns_rows(with_select) is True, "WITH expression with SELECT should return rows"
 
     show_expr = exp.Show()
-    assert driver_attributes.returns_rows(show_expr) is True, "SHOW expression should return rows"
+    assert sql_dummy.returns_rows(show_expr) is True, "SHOW expression should return rows"
 
     describe_expr = exp.Describe()
-    assert driver_attributes.returns_rows(describe_expr) is True, "DESCRIBE expression should return rows"
+    assert sql_dummy.returns_rows(describe_expr) is True, "DESCRIBE expression should return rows"
 
     # EXPLAIN statements are parsed as exp.Command in sqlglot
     explain_expr = exp.Command()
-    assert driver_attributes.returns_rows(explain_expr) is True, "EXPLAIN expression should return rows"
+    assert sql_dummy.returns_rows(explain_expr) is True, "EXPLAIN expression should return rows"
 
     pragma_expr = exp.Pragma()
-    assert driver_attributes.returns_rows(pragma_expr) is True, "PRAGMA expression should return rows"
+    assert sql_dummy.returns_rows(pragma_expr) is True, "PRAGMA expression should return rows"
 
     # Test expressions that should not return rows
     create_expr = exp.Create()
-    assert driver_attributes.returns_rows(create_expr) is False, "CREATE expression should not return rows"
+    assert sql_dummy.returns_rows(create_expr) is False, "CREATE expression should not return rows"
 
     drop_expr = exp.Drop()
-    assert driver_attributes.returns_rows(drop_expr) is False, "DROP expression should not return rows"
+    assert sql_dummy.returns_rows(drop_expr) is False, "DROP expression should not return rows"
 
     # Test unknown expression type
     class UnknownExpression(exp.Expression):
         pass
 
     unknown_expr = UnknownExpression()
-    assert driver_attributes.returns_rows(unknown_expr) is False, "Unknown expression should not return rows"
+    assert sql_dummy.returns_rows(unknown_expr) is False, "Unknown expression should not return rows"
 
 
 def test_add_config(sql_spec: SQLSpec, pool_config: MockDatabaseConfig, non_pool_config: MockNonPoolConfig) -> None:

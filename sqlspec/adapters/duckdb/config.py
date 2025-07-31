@@ -4,6 +4,7 @@
 import logging
 import threading
 import time
+from collections.abc import Sequence
 from contextlib import contextmanager, suppress
 from queue import Empty as QueueEmpty
 from queue import Full, Queue
@@ -15,17 +16,17 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.duckdb._types import DuckDBConnection
 from sqlspec.adapters.duckdb.driver import DuckDBCursor, DuckDBDriver
 from sqlspec.config import SyncDatabaseConfig
-from sqlspec.statement.sql import StatementConfig
 from sqlspec.typing import Empty
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Sequence
+    from collections.abc import Generator
     from typing import Callable, ClassVar, Union
+
+    from sqlspec.statement.sql import StatementConfig
 
 
 logger = logging.getLogger(__name__)
 
-# Performance constants for DuckDB pooling
 DEFAULT_MIN_POOL: Final[int] = 2
 DEFAULT_MAX_POOL: Final[int] = 10
 POOL_TIMEOUT: Final[float] = 30.0
@@ -35,6 +36,7 @@ __all__ = (
     "DuckDBConfig",
     "DuckDBConnectionParams",
     "DuckDBConnectionPool",
+    "DuckDBDriverFeatures",
     "DuckDBExtensionConfig",
     "DuckDBPoolParams",
     "DuckDBSecretConfig",
@@ -358,6 +360,13 @@ class DuckDBSecretConfig(TypedDict, total=False):
     """Scope of the secret (LOCAL or PERSISTENT)."""
 
 
+class DuckDBDriverFeatures(TypedDict, total=False):
+    extensions: NotRequired[Sequence[DuckDBExtensionConfig]]
+    """List of extensions to install/load on connection creation."""
+    secrets: NotRequired[Sequence[DuckDBSecretConfig]]
+    """List of secrets to create for AI/API integrations."""
+
+
 class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, DuckDBDriver]):
     """Enhanced DuckDB configuration with connection pooling and intelligent features.
 
@@ -374,7 +383,6 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
     driver_type: "ClassVar[type[DuckDBDriver]]" = DuckDBDriver
     connection_type: "ClassVar[type[DuckDBConnection]]" = DuckDBConnection
-    supports_connection_pooling: "ClassVar[bool]" = True
 
     def __init__(
         self,
@@ -382,6 +390,8 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         pool_config: "Optional[Union[DuckDBPoolParams, dict[str, Any]]]" = None,
         migration_config: Optional[dict[str, Any]] = None,
         pool_instance: "Optional[DuckDBConnectionPool]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        driver_features: "Optional[dict[str, Any]]" = None,
         extensions: "Optional[Sequence[DuckDBExtensionConfig]]" = None,
         secrets: "Optional[Sequence[DuckDBSecretConfig]]" = None,
         on_connection_create: "Optional[Callable[[DuckDBConnection], Optional[DuckDBConnection]]]" = None,
@@ -455,8 +465,12 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         self.secrets = list(secrets) if secrets else []
         self.on_connection_create = on_connection_create
 
-        super().__init__(pool_instance=pool_instance, migration_config=migration_config)
-
+        super().__init__(
+            pool_instance=pool_instance,
+            migration_config=migration_config,
+            statement_config=statement_config,
+            driver_features=driver_features,
+        )
 
     def _get_connection_config_dict(self) -> dict[str, Any]:
         """Get connection configuration as plain dict for external library.

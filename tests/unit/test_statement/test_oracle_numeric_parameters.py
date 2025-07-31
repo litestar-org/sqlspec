@@ -266,7 +266,7 @@ def test_positional_colon_parameter_validation(
 ) -> None:
     """Test parameter validation for Oracle numeric style."""
     # Enable parameter validation by setting supported_parameter_styles
-    config = StatementConfig(supported_parameter_styles=("positional_colon", "positional_colon"))
+    statement_config = StatementConfig(supported_parameter_styles=("positional_colon", "positional_colon"))
     stmt = SQL(sql, parameters=parameters, statement_config=statement_config)
 
     if should_fail:
@@ -291,7 +291,7 @@ def test_positional_colon_in_strings_and_comments() -> None:
         :5 as real_param
     FROM dual
     """
-    config = StatementConfig()
+    statement_config = StatementConfig()
     stmt = SQL(sql, parameters=[42], statement_config=statement_config)
 
     # Should only find :5 as a real parameter

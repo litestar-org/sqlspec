@@ -11,7 +11,6 @@ from sqlspec.adapters.bigquery._types import BigQueryConnection
 from sqlspec.adapters.bigquery.driver import BigQueryCursor, BigQueryDriver
 from sqlspec.config import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.statement.sql import StatementConfig
 from sqlspec.typing import Empty
 
 if TYPE_CHECKING:
@@ -20,6 +19,8 @@ if TYPE_CHECKING:
     from google.api_core.client_info import ClientInfo
     from google.api_core.client_options import ClientOptions
     from google.auth.credentials import Credentials
+
+    from sqlspec.statement.sql import StatementConfig
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +153,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             self._setup_default_job_config()
 
         super().__init__(migration_config=migration_config)
-
 
     def _setup_default_job_config(self) -> None:
         """Set up default job configuration based on connection settings."""

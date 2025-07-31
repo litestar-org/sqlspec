@@ -93,7 +93,7 @@ def test_sql_initialization_with_expression() -> None:
 def test_sql_initialization_with_custom_config() -> None:
     """Test SQL initialization with custom config."""
     config = StatementConfig(dialect="sqlite")
-    stmt = SQL("SELECT * FROM users", config=config)
+    stmt = SQL("SELECT * FROM users", statement_config=config)
 
     assert stmt.statement_config == config
     assert stmt.statement_config.dialect == "sqlite"
@@ -138,7 +138,7 @@ def test_sql_lazy_processing() -> None:
 )
 def test_sql_property(sql_input: "str | exp.Expression", expected_sql: str) -> None:
     """Test SQL.sql property returns processed SQL string."""
-    stmt = SQL(sql_input, config=TEST_CONFIG)
+    stmt = SQL(sql_input, statement_config=TEST_CONFIG)
     assert stmt.sql == expected_sql
 
 
@@ -321,7 +321,7 @@ def test_sql_comment_removal() -> None:
 def test_sql_with_dialect(dialect: str, expected_sql: str) -> None:
     """Test SQL respects dialect setting."""
     config = StatementConfig(dialect=dialect)
-    stmt = SQL("SELECT * FROM users", config=config)
+    stmt = SQL("SELECT * FROM users", statement_config=config)
     assert stmt.sql == expected_sql
 
 
@@ -364,7 +364,7 @@ def test_sql_whitespace_only() -> None:
 def test_sql_expression_caching() -> None:
     """Test SQL expression caching when enabled."""
     config = StatementConfig(enable_caching=True)
-    stmt = SQL("SELECT * FROM users", config=config)
+    stmt = SQL("SELECT * FROM users", statement_config=config)
 
     # First access
     expr1 = stmt.expression
@@ -377,7 +377,7 @@ def test_sql_expression_caching() -> None:
 def test_sql_no_expression_caching() -> None:
     """Test SQL expression not cached when disabled."""
     config = StatementConfig(enable_caching=False)
-    stmt = SQL("SELECT * FROM users", config=config)
+    stmt = SQL("SELECT * FROM users", statement_config=config)
 
     # Access expression multiple times
     expr1 = stmt.expression
@@ -415,7 +415,7 @@ def test_sql_copy() -> None:
 
     # Create new instance with different config
     new_config = StatementConfig(dialect="sqlite")
-    stmt2 = SQL(stmt1, config=new_config)
+    stmt2 = SQL(stmt1, statement_config=new_config)
 
     assert stmt2._raw_sql == stmt1._raw_sql
     assert stmt2._raw_parameters == stmt1._raw_parameters

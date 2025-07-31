@@ -6,13 +6,12 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.parameters import ParameterStyle
+from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.sql import StatementConfig
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     import sqlite3
-
-    from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.adapters.sqlite._types import SqliteConnection
 
@@ -39,15 +38,20 @@ class SqliteCursor:
 class SqliteDriver(SyncDriverAdapterBase):
     """Reference implementation for a synchronous SQLite driver."""
 
-    dialect: "DialectType" = "sqlite"
+    dialect = "sqlite"
 
-    def __init__(self, connection: "SqliteConnection", statement_config: "Optional[StatementConfig]" = None, driver_features: "Optional[dict[str, Any]]" = None) -> None:
+    def __init__(
+        self,
+        connection: "SqliteConnection",
+        statement_config: "Optional[StatementConfig]" = None,
+        driver_features: "Optional[dict[str, Any]]" = None,
+    ) -> None:
         # Set default sqlite-specific configuration
         if statement_config is None:
-            statement_config = StatementConfig(
-                dialect="sqlite",
-                supported_parameter_styles={ParameterStyle.QMARK},
+            # Create parameter configuration for SQLite
+            parameter_config = ParameterStyleConfig(
                 default_parameter_style=ParameterStyle.QMARK,
+                supported_parameter_styles={ParameterStyle.QMARK},
                 type_coercion_map={
                     bool: int,
                     datetime.datetime: lambda v: v.isoformat(),
@@ -60,18 +64,34 @@ class SqliteDriver(SyncDriverAdapterBase):
                 needs_static_script_compilation=True,
             )
 
+            statement_config = StatementConfig(dialect="sqlite", parameter_config=parameter_config)
+
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
         return SqliteCursor(connection)
 
+    def _try_special_handling(
+        self, cursor: "sqlite3.Cursor", statement: "Any"
+    ) -> "Optional[tuple[Any, Optional[int], Any]]":
+        """Hook for SQLite-specific special operations.
+
+        SQLite doesn't have special operations like PostgreSQL COPY,
+        so this always returns None to proceed with standard execution.
+
+        Args:
+            cursor: SQLite cursor object
+            statement: SQL statement to analyze
+
+        Returns:
+            None - always proceeds with standard execution
+        """
+        return None
+
     def _execute_script(
         self, cursor: "sqlite3.Cursor", sql: str, prepared_params: Optional[Any], statement_config: "StatementConfig"
     ) -> None:
         """Execute SQL script using SQLite's native executescript (parameters embedded as static values)."""
-        # SQLite's executescript doesn't support parameters, so we use static compilation
-        # The base class _perform_execute will have already prepared static SQL for scripts
-        # prepared_params will be None for static compilation
         cursor.executescript(sql)
 
     def _execute_many(self, cursor: "sqlite3.Cursor", sql: str, prepared_params: Any) -> None:

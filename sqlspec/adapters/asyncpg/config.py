@@ -185,14 +185,16 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update({
-            "Connection": Connection,
-            "Pool": Pool,
-            "PoolConnectionProxy": PoolConnectionProxy,
-            "PoolConnectionProxyMeta": PoolConnectionProxyMeta,
-            "ConnectionMeta": ConnectionMeta,
-            "Record": Record,
-            "AsyncpgConnection": AsyncpgConnection,
-            "AsyncpgCursor": AsyncpgCursor,
-        })
+        namespace.update(
+            {
+                "Connection": Connection,
+                "Pool": Pool,
+                "PoolConnectionProxy": PoolConnectionProxy,
+                "PoolConnectionProxyMeta": PoolConnectionProxyMeta,
+                "ConnectionMeta": ConnectionMeta,
+                "Record": Record,
+                "AsyncpgConnection": AsyncpgConnection,
+                "AsyncpgCursor": AsyncpgCursor,
+            }
+        )
         return namespace

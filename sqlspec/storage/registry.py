@@ -163,12 +163,23 @@ class StorageRegistry:
         """Resolve backend from URI, trying ObStore first, then FSSpec."""
         scheme = self._get_scheme(uri)
 
+        # Try ObStore first if available and scheme is not FSSpec-only
         if scheme not in FSSPEC_ONLY_SCHEMES and OBSTORE_INSTALLED:
-            return self._create_backend("obstore", uri, **kwargs)
-        if FSSPEC_INSTALLED:
-            return self._create_backend("fsspec", uri, **kwargs)
+            try:
+                return self._create_backend("obstore", uri, **kwargs)
+            except (ValueError, ImportError, NotImplementedError):
+                # If ObStore fails, try FSSpec as fallback
+                pass
 
-        # Neither backend is available
+        # Try FSSpec if available
+        if FSSPEC_INSTALLED:
+            try:
+                return self._create_backend("fsspec", uri, **kwargs)
+            except (ValueError, ImportError, NotImplementedError):
+                # If FSSpec also fails, continue to error
+                pass
+
+        # Neither backend is available or both failed
         msg = f"No storage backend available for scheme '{scheme}'. Install obstore or fsspec."
         raise MissingDependencyError(msg)
 

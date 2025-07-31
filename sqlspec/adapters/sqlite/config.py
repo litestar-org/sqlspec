@@ -1,11 +1,9 @@
 """SQLite database configuration with QueuePool-like connection pooling."""
 
-import datetime
 import sqlite3
 import threading
 import time
 from contextlib import contextmanager, suppress
-from decimal import Decimal
 from queue import Empty, Full, Queue
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, TypedDict, Union
 
@@ -14,9 +12,7 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.sqlite._types import SqliteConnection
 from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver
 from sqlspec.config import SyncDatabaseConfig
-from sqlspec.parameters import ParameterStyle
 from sqlspec.statement.sql import StatementConfig
-from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -57,6 +53,10 @@ class SqlitePoolParams(SqliteConnectionParams, total=False):
     pool_max_size: NotRequired[int]
     pool_timeout: NotRequired[float]
     pool_recycle_seconds: NotRequired[int]
+
+
+class SqliteDriverFeatures(TypedDict, total=False):
+    json_serializer: str
 
 
 __all__ = ("SqliteConfig", "SqliteConnectionParams", "SqliteConnectionPool", "SqlitePoolParams", "sqlite3")
@@ -252,9 +252,6 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
 
     driver_type: "ClassVar[type[SqliteDriver]]" = SqliteDriver
     connection_type: "ClassVar[type[SqliteConnection]]" = SqliteConnection
-    supports_connection_pooling: "ClassVar[bool]" = True
-    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ("qmark", "named_colon")
-    default_parameter_style: "ClassVar[str]" = "qmark"
 
     def __init__(
         self,
@@ -300,12 +297,6 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         elif "file::memory:" in database:
             # Ensure uri=True is set for all file::memory: databases
             self.connection_config["uri"] = True
-
-        # Extract pool parameters with defaults
-        self.min_pool_size = self.pool_config.get("pool_min_size", DEFAULT_MIN_POOL)
-        self.max_pool_size = self.pool_config.get("pool_max_size", DEFAULT_MAX_POOL)
-        self.pool_timeout = self.pool_config.get("pool_timeout", POOL_TIMEOUT)
-        self.pool_recycle = self.pool_config.get("pool_recycle_seconds", POOL_RECYCLE)
 
         super().__init__(pool_instance=pool_instance, migration_config=migration_config)
 
@@ -354,12 +345,16 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
 
     def _create_pool(self) -> SqliteConnectionPool:
         """Create optimized connection pool from unified configuration."""
+        min_pool_size = self.pool_config.pop("pool_min_size", DEFAULT_MIN_POOL)
+        max_pool_size = self.pool_config.pop("pool_max_size", DEFAULT_MAX_POOL)
+        timeout = self.pool_config.pop("pool_timeout", POOL_TIMEOUT)
+        recycle = self.pool_config.pop("pool_recycle_seconds", POOL_RECYCLE)
         return SqliteConnectionPool(
             connection_params=self.connection_config,
-            min_pool_size=self.min_pool_size,
-            max_pool_size=self.max_pool_size,
-            timeout=self.pool_timeout,
-            recycle=self.pool_recycle,
+            min_pool_size=min_pool_size,
+            max_pool_size=max_pool_size,
+            timeout=timeout,
+            recycle=recycle,
         )
 
     def _is_memory_database(self, database: "Optional[str]") -> bool:

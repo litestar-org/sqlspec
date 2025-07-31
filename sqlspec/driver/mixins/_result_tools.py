@@ -11,7 +11,6 @@ from uuid import UUID
 from mypy_extensions import trait
 
 from sqlspec.exceptions import SQLSpecError, wrap_exceptions
-from sqlspec.statement.result import OperationType
 from sqlspec.typing import ModelDTOT, ModelT, convert, get_type_adapter
 from sqlspec.utils.type_guards import is_dataclass, is_msgspec_struct, is_pydantic_model
 
@@ -58,41 +57,6 @@ def _default_msgspec_deserializer(
 @trait
 class ToSchemaMixin:
     __slots__ = ()
-
-    def _determine_operation_type(self, statement: "Any") -> OperationType:
-        """Determine operation type from SQL statement expression.
-
-        Examines the statement's expression type to determine if it's
-        INSERT, UPDATE, DELETE, SELECT, SCRIPT, or generic EXECUTE.
-
-        Args:
-            statement: SQL statement object with expression attribute
-
-        Returns:
-            OperationType literal value
-        """
-        # Check if it's a script first
-        if hasattr(statement, "is_script") and statement.is_script:
-            return "SCRIPT"
-
-        try:
-            expression = statement.expression
-        except AttributeError:
-            return "EXECUTE"
-
-        if not expression:
-            return "EXECUTE"
-
-        expr_type = type(expression).__name__.upper()
-        if "INSERT" in expr_type:
-            return "INSERT"
-        if "UPDATE" in expr_type:
-            return "UPDATE"
-        if "DELETE" in expr_type:
-            return "DELETE"
-        if "SELECT" in expr_type:
-            return "SELECT"
-        return "EXECUTE"
 
     @overload
     @staticmethod

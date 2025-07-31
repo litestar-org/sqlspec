@@ -40,7 +40,7 @@ def create_permissive_config(**kwargs: Any) -> DuckDBConfig:
     if "database" not in connection_config:
         connection_config["database"] = ":memory:"
 
-    kwargs["connection_config"] = connection_config
+    kwargs["pool_config"] = connection_config
     return DuckDBConfig(**kwargs)
 
 
@@ -135,7 +135,7 @@ def test_connection_with_data_processing_settings() -> None:
 def test_connection_with_instrumentation() -> None:
     """Test DuckDB connection with instrumentation configuration."""
     statement_config = StatementConfig(enable_validation=False)
-    config = DuckDBConfig(connection_config={"database": ":memory:"}, statement_config=statement_config)
+    config = DuckDBConfig(pool_config={"database": ":memory:"}, statement_config=statement_config)
 
     with config.provide_session() as session:
         # Test that instrumentation doesn't interfere with operations
@@ -157,7 +157,7 @@ def test_connection_with_hook() -> None:
 
     statement_config = StatementConfig(enable_validation=False)
     config = DuckDBConfig(
-        connection_config={"database": ":memory:"},
+        pool_config={"database": ":memory:"},
         statement_config=statement_config,
         on_connection_create=connection_hook,
     )

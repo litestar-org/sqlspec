@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Callable, Union
 
 import sqlglot.expressions as exp
 from sqlglot.optimizer.normalize import normalize
+from sqlglot.optimizer.simplify import simplify
 
 from sqlspec.parameters import ParameterValidator
 from sqlspec.parameters.types import TypedParameter
@@ -137,8 +138,8 @@ def create_pipeline_from_config(config: "StatementConfig", driver_adapter: "Any"
             steps.append(optimize_step)
     if config.enable_validation:
         steps.extend((validate_step, validate_dml_safety_step))
-    if config.user_defined_pipeline_steps:
-        steps.extend(config.user_defined_pipeline_steps)
+    if config.custom_pipeline_steps:
+        steps.extend(config.custom_pipeline_steps)
     return compose_pipeline(steps)
 
 
@@ -248,7 +249,6 @@ def optimize_step(context: SQLTransformContext) -> SQLTransformContext:
     Runs SQLGlot's optimization passes to simplify and improve
     the SQL expression for better performance.
     """
-    from sqlglot.optimizer.simplify import simplify
 
     try:
         context.current_expression = simplify(context.current_expression)

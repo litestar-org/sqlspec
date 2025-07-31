@@ -139,7 +139,7 @@ def test_wrap_parameters_with_types_already_wrapped() -> None:
 
 def test_sql_with_typed_parameters() -> None:
     """Test SQL execution with TypedParameter wrapping."""
-    config = StatementConfig(enable_parameter_type_wrapping=True)
+    statement_config = StatementConfig(enable_parameter_type_wrapping=True)
 
     # Test with datetime parameter
     sql = SQL(

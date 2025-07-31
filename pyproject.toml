@@ -157,6 +157,7 @@ exclude = [
 ]
 include = [
   "sqlspec/statement/**/*.py", # All statement-related modules
+
   "sqlspec/loader.py",
 
   # === DRIVER CORE ===
@@ -171,19 +172,7 @@ include = [
   "sqlspec/storage/backends/fsspec.py",
 
   # === CORE ADAPTERS ===
-  "sqlspec/adapters/sqlite/driver.py",
-  "sqlspec/adapters/psycopg/driver.py",
-  "sqlspec/adapters/psycopg/pipeline_steps.py",
-  "sqlspec/adapters/asyncpg/driver.py",
-  "sqlspec/adapters/asyncpg/pipeline_steps.py",
-  "sqlspec/adapters/duckdb/driver.py",
-  "sqlspec/adapters/aiosqlite/driver.py",
-  "sqlspec/adapters/oracledb/driver.py",
-  "sqlspec/adapters/psqlpy/driver.py",
-  "sqlspec/adapters/adbc/driver.py",
-  "sqlspec/adapters/adbc/pipeline_steps.py",
-  "sqlspec/adapters/bigquery/driver.py",
-  "sqlspec/adapters/asyncmy/driver.py",
+  "sqlspec/adapters/*/*.py", # All adapters
 
   # === UTILITY MODULES ===
   "sqlspec/utils/statement_hashing.py",

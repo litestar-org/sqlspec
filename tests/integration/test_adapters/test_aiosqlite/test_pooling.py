@@ -50,9 +50,7 @@ async def test_shared_memory_pooling() -> None:
 async def test_regular_memory_auto_converted_pooling() -> None:
     """Test that regular memory databases are auto-converted and pooling works."""
     # Create config with regular memory database
-    config = AiosqliteConfig(
-        pool_config={"database": ":memory:", "pool_min_size": 5, "pool_max_size": 10}
-    )
+    config = AiosqliteConfig(pool_config={"database": ":memory:", "pool_min_size": 5, "pool_max_size": 10})
 
     # Verify pooling is enabled (no longer forced to 1)
     assert config.min_pool == 5

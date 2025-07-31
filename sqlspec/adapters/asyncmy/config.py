@@ -13,11 +13,12 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.asyncmy._types import AsyncmyConnection
 from sqlspec.adapters.asyncmy.driver import AsyncmyCursor, AsyncmyDriver
 from sqlspec.config import AsyncDatabaseConfig
-from sqlspec.statement.sql import StatementConfig
 
 if TYPE_CHECKING:
     from asyncmy.cursors import Cursor, DictCursor
     from asyncmy.pool import Pool
+
+    from sqlspec.statement.sql import StatementConfig
 
 
 __all__ = ("AsyncmyConfig", "AsyncmyConnectionParams", "AsyncmyPoolParams")
@@ -83,7 +84,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             self.pool_config.update(extras)
 
         super().__init__(pool_instance=pool_instance, migration_config=migration_config)
-
 
     async def _create_pool(self) -> "Pool":  # pyright: ignore
         """Create the actual async connection pool."""
@@ -158,9 +158,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update({
-            "AsyncmyConnection": AsyncmyConnection,
-            "AsyncmyPool": AsyncmyPool,
-            "AsyncmyCursor": AsyncmyCursor,
-        })
+        namespace.update(
+            {"AsyncmyConnection": AsyncmyConnection, "AsyncmyPool": AsyncmyPool, "AsyncmyCursor": AsyncmyCursor}
+        )
         return namespace

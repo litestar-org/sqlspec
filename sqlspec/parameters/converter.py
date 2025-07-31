@@ -6,6 +6,7 @@ This module handles the conversion between different parameter styles.
 from typing import Any, Optional
 
 from sqlspec.parameters.types import (
+    SQLGLOT_INCOMPATIBLE_STYLES,
     ConvertedParameters,
     ParameterInfo,
     ParameterStyle,
@@ -380,7 +381,6 @@ class ParameterConverter:
         Returns:
             ConvertedParameters with transformed SQL and parameters
         """
-        from sqlspec.parameters.types import SQLGLOT_INCOMPATIBLE_STYLES
 
         # Extract parameter info from SQL
         param_info = self.validator.extract_parameters(sql)

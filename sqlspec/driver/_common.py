@@ -1,43 +1,71 @@
 """Common driver attributes and utilities."""
 
-import contextlib
-from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
-import sqlglot
 from mypy_extensions import trait
-from sqlglot import exp
-from sqlglot.tokens import TokenType
 
 from sqlspec.exceptions import NotFoundError
-from sqlspec.parameters import ParameterStyle, ParameterValidator
+from sqlspec.parameters import ParameterStyle
 from sqlspec.parameters.types import TypedParameter
 from sqlspec.statement import SQLResult, Statement, StatementFilter
 from sqlspec.statement.builder import QueryBuilder
-from sqlspec.statement.cache import anonymous_returns_rows_cache
 from sqlspec.statement.pipeline import SQLTransformContext, create_pipeline_from_config
+from sqlspec.statement.result import OperationType
 from sqlspec.statement.splitter import split_sql_script
 from sqlspec.statement.sql import SQL, StatementConfig
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from sqlglot import exp
+
     from sqlspec.typing import StatementParameters, T
 
 
-__all__ = ("CommonDriverAttributesMixin",)
+__all__ = (
+    "DEFAULT_EXECUTION_RESULT",
+    "EXEC_CURSOR_RESULT",
+    "EXEC_ROWCOUNT_OVERRIDE",
+    "EXEC_SPECIAL_DATA",
+    "CommonDriverAttributesMixin",
+    "create_execution_result",
+)
 
 
 logger = get_logger("driver")
 
-ROW_RETURNING_TOKENS = {
-    TokenType.SELECT,
-    TokenType.WITH,
-    TokenType.VALUES,
-    TokenType.TABLE,
-    TokenType.SHOW,
-    TokenType.DESCRIBE,
-    TokenType.PRAGMA,
-}
+EXEC_CURSOR_RESULT = 0
+EXEC_ROWCOUNT_OVERRIDE = 1
+EXEC_SPECIAL_DATA = 2
+DEFAULT_EXECUTION_RESULT: Final[tuple[Any, Optional[int], Any]] = (None, None, None)
+
+
+def create_execution_result(
+    cursor_result: Any, rowcount_override: "Optional[int]" = None, special_data: Any = None
+) -> "tuple[Any, Optional[int], Any]":
+    """Create execution result tuple with explicit data flow.
+
+    This function creates a standardized execution result tuple that provides
+    explicit data flow for adapter refactoring. The tuple structure eliminates
+    the need for fragile dictionary-based state management and ensures MyPyC
+    compatibility through native tuple usage.
+
+    Args:
+        cursor_result: The primary result from cursor execution (cursor, rows, etc.)
+        rowcount_override: Optional override for row count when driver provides incorrect values
+        special_data: Any additional data specific to the execution context
+
+    Returns:
+        A tuple containing (cursor_result, rowcount_override, special_data)
+
+    Example:
+        >>> result = create_execution_result(
+        ...     cursor, rowcount_override=5
+        ... )
+        >>> cursor_data = result[EXEC_CURSOR_RESULT]
+        >>> override_count = result[EXEC_ROWCOUNT_OVERRIDE]
+        >>> special = result[EXEC_SPECIAL_DATA]
+    """
+    return (cursor_result, rowcount_override, special_data)
 
 
 @trait
@@ -49,15 +77,9 @@ class CommonDriverAttributesMixin:
     statement_config: "StatementConfig"
     driver_features: "dict[str, Any]"
 
-    @property
-    @abstractmethod
-    def dialect(self) -> "Optional[str]":
-        """Database dialect for this driver."""
-
     # ================================================================================
     # Initialization
     # ================================================================================
-
     def __init__(
         self, connection: "Any", statement_config: "StatementConfig", driver_features: "Optional[dict[str, Any]]" = None
     ) -> None:
@@ -75,39 +97,6 @@ class CommonDriverAttributesMixin:
     # ================================================================================
     # SQL Analysis & Detection Methods
     # ================================================================================
-
-    def returns_rows(self, expression: "Optional[exp.Expression]") -> bool:
-        """Check if the SQL expression is expected to return rows.
-
-        Args:
-            expression: The SQL expression.
-
-        Returns:
-            True if the expression is a SELECT, VALUES, WITH (not CTE definition),
-            INSERT/UPDATE/DELETE with RETURNING, or certain command types.
-        """
-        if expression is None:
-            return False
-        if isinstance(expression, (exp.Select, exp.Values, exp.Table, exp.Show, exp.Describe, exp.Pragma, exp.Command)):
-            return True
-        if isinstance(expression, exp.With) and expression.expressions:
-            return self.returns_rows(expression.expressions[-1])
-        if isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):
-            return bool(expression.find(exp.Returning))
-        if isinstance(expression, exp.Anonymous):
-            sql_text = str(expression.this) if expression.this else ""
-            if not sql_text.strip():
-                return False
-            cache_key = f"returns_rows:{hash(sql_text)}"
-            cached_result = anonymous_returns_rows_cache.get(cache_key)
-            if cached_result is not None:
-                return bool(cached_result)
-            result = self._check_anonymous_returns_rows(sql_text)
-            anonymous_returns_rows_cache.set(cache_key, result)
-
-            return result
-        return False
-
     def _build_select_result_from_data(
         self, statement: "SQL", data: "list[dict[str, Any]]", column_names: "list[str]", row_count: int
     ) -> "SQLResult":
@@ -115,6 +104,41 @@ class CommonDriverAttributesMixin:
         return SQLResult(
             statement=statement, data=data, column_names=column_names, rows_affected=row_count, operation_type="SELECT"
         )
+
+    def _determine_operation_type(self, statement: "Any") -> OperationType:
+        """Determine operation type from SQL statement expression.
+
+        Examines the statement's expression type to determine if it's
+        INSERT, UPDATE, DELETE, SELECT, SCRIPT, or generic EXECUTE.
+
+        Args:
+            statement: SQL statement object with expression attribute
+
+        Returns:
+            OperationType literal value
+        """
+        # Check if it's a script first
+        if hasattr(statement, "is_script") and statement.is_script:
+            return "SCRIPT"
+
+        try:
+            expression = statement.expression
+        except AttributeError:
+            return "EXECUTE"
+
+        if not expression:
+            return "EXECUTE"
+
+        expr_type = type(expression).__name__.upper()
+        if "INSERT" in expr_type:
+            return "INSERT"
+        if "UPDATE" in expr_type:
+            return "UPDATE"
+        if "DELETE" in expr_type:
+            return "DELETE"
+        if "SELECT" in expr_type:
+            return "SELECT"
+        return "EXECUTE"
 
     def _build_execute_result_from_data(
         self, statement: "SQL", row_count: int, metadata: "Optional[dict[str, Any]]" = None
@@ -124,7 +148,7 @@ class CommonDriverAttributesMixin:
             statement=statement,
             data=[],
             rows_affected=row_count,
-            operation_type="EXECUTE",
+            operation_type=self._determine_operation_type(statement),
             metadata=metadata or {"status_message": "OK"},
         )
 
@@ -143,14 +167,11 @@ class CommonDriverAttributesMixin:
             return statement.to_statement(config=statement_config)
         if isinstance(statement, SQL):
             if parameters or kwargs:
-                new_config = statement_config
-                if self.dialect and new_config and not new_config.dialect:
-                    new_config = new_config.replace(dialect=self.dialect)
                 return statement.copy(
                     parameters=(*statement._positional_params, *parameters)
                     if parameters
                     else statement._positional_params,
-                    config=new_config,
+                    statement_config=statement_config,
                     **kwargs,
                 )
             if self.dialect and (
@@ -158,109 +179,10 @@ class CommonDriverAttributesMixin:
             ):
                 new_config = statement.statement_config.replace(dialect=self.dialect)
                 if statement.parameters:
-                    return statement.copy(config=new_config, dialect=self.dialect)
-                return statement.copy(config=new_config, dialect=self.dialect)
+                    return statement.copy(statement_config=new_config, dialect=self.dialect)
+                return statement.copy(statement_config=new_config, dialect=self.dialect)
             return statement
-        if self.dialect and statement_config and not statement_config.dialect:
-            statement_config = statement_config.replace(dialect=self.dialect)
         return SQL(statement, *parameters, config=statement_config, **kwargs)
-
-    def _check_anonymous_returns_rows(self, sql_text: str) -> bool:
-        """Uncached implementation of anonymous expression checking."""
-        with contextlib.suppress(Exception):
-            parsed = sqlglot.parse_one(sql_text, read=None)
-            if isinstance(parsed, (exp.Select, exp.Values, exp.Table, exp.Show, exp.Describe, exp.Pragma, exp.Command)):
-                return True
-            if isinstance(parsed, exp.With) and parsed.expressions:
-                return self.returns_rows(parsed.expressions[-1])
-            if isinstance(parsed, (exp.Insert, exp.Update, exp.Delete)):
-                return bool(parsed.find(exp.Returning))
-
-        try:
-            tokens = list(sqlglot.tokenize(sql_text, read=None))
-            for token in tokens:
-                if token.token_type in {TokenType.COMMENT, TokenType.SEMICOLON}:
-                    continue
-                return token.token_type in ROW_RETURNING_TOKENS
-        except Exception:
-            return False
-
-        return False
-
-    def has_parameters(self, expression: "Union[exp.Expression, str]") -> bool:
-        """Check if a SQL expression contains any parameter placeholders using AST analysis.
-
-        This method uses SQLGlot's AST to detect parameter placeholders rather than
-        naive string searching. It supports all parameter styles including:
-        - Placeholder expressions (?, :name, $1, etc.)
-        - Parameter expressions ({param})
-        - Any other parameterized constructs
-
-        Args:
-            expression: SQLGlot expression or SQL string to analyze
-
-        Returns:
-            True if the expression contains parameter placeholders
-        """
-        # Parse string to expression if needed
-        if isinstance(expression, str):
-            original_sql = expression
-            try:
-                expression = sqlglot.maybe_parse(expression, read=self.dialect or None)
-            except Exception:
-                # If parsing fails, fall back to token analysis
-                return self._has_parameters_by_tokens(original_sql)
-
-        # Walk the AST looking for placeholder nodes
-        return any(isinstance(node, (exp.Placeholder, exp.Parameter)) for node in expression.walk())
-
-    def _has_parameters_by_tokens(self, sql_text: str) -> bool:
-        """Fallback parameter detection using token analysis.
-
-        Used when AST parsing fails, this method tokenizes the SQL and looks
-        for parameter-related tokens.
-
-        Args:
-            sql_text: SQL string to analyze
-
-        Returns:
-            True if parameter tokens are found
-        """
-        try:
-            tokens = list(sqlglot.tokenize(sql_text, read=self.dialect or None))
-            return any(token.token_type in {TokenType.PLACEHOLDER, TokenType.PARAMETER} for token in tokens)
-        except Exception:
-            # Last resort: look for common parameter patterns
-            # But only as absolute fallback when tokenization fails
-            return any(marker in sql_text for marker in ["?", "$", ":"])
-
-    def _select_parameter_style(self, statement: "Union[SQL, exp.Expression]") -> "ParameterStyle":
-        """Select the best parameter style based on detected styles in SQL.
-
-        This method examines the SQL statement for existing parameter placeholders
-        and selects an appropriate style that the driver supports. If mixed or
-        unsupported styles are detected, it falls back to the default style.
-
-        Args:
-            statement: SQL statement to analyze
-
-        Returns:
-            The selected parameter style to use for this statement
-        """
-        sql_str = statement.to_sql(placeholder_style=None) if isinstance(statement, SQL) else str(statement)
-        validator = ParameterValidator()
-        param_infos = validator.extract_parameters(sql_str)
-
-        parameter_config = self.statement_config.get_parameter_config()
-
-        if not param_infos:
-            return parameter_config.default_parameter_style
-
-        detected_styles = {p.style for p in param_infos}
-        if len(detected_styles) > 1:
-            return parameter_config.default_parameter_style
-        detected_style = next(iter(detected_styles))
-        return detected_style or parameter_config.default_parameter_style
 
     @staticmethod
     def check_not_found(item_or_none: "Optional[T]" = None) -> "T":
@@ -347,7 +269,7 @@ class CommonDriverAttributesMixin:
         if isinstance(parameters, dict):
             if not parameters:
                 return []
-            parameter_config = statement_config.get_parameter_config()
+            parameter_config = statement_config.parameter_config
             if parameter_config.default_parameter_style in {
                 ParameterStyle.NUMERIC,  # PostgreSQL $1, $2
                 ParameterStyle.QMARK,  # SQLite ?, ?
@@ -434,14 +356,10 @@ class CommonDriverAttributesMixin:
         Returns:
             Tuple of (compiled_sql, parameters)
         """
-        parameter_config = statement_config.get_parameter_config()
-        target_style = parameter_config.execution_target_style
-
-        # Optimization: Only pass target_style if it's set and different from current statement's style
+        parameter_config = statement_config.parameter_config
+        target_style = parameter_config.execution_parameter_style
         if target_style and target_style != parameter_config.default_parameter_style:
             return statement.compile(placeholder_style=target_style)
-
-        # No conversion needed - use default compilation
         return statement.compile()
 
     # ================================================================================
@@ -468,8 +386,7 @@ class CommonDriverAttributesMixin:
 
         if statement.is_script:
             # Check if driver needs static compilation (e.g., SQLite executescript)
-            if self.statement_config.needs_static_script_compilation:
-                # Use static compilation for databases that don't support parameters in scripts
+            if self.statement_config.parameter_config.needs_static_script_compilation:
                 static_sql = self._prepare_script_sql(statement)
                 return self._execute_script(cursor, static_sql, None, self.statement_config)
             # Prepare parameters for script execution

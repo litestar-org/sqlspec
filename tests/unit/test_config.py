@@ -157,11 +157,11 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         """Mock execute statement."""
         cursor.rowcount = 0
 
-    async def _extract_select_data(self, cursor: "Any") -> "tuple[list[dict[str, Any]], list[str], int]":
+    async def _get_selected_data(self, cursor: "Any") -> "tuple[list[dict[str, Any]], list[str], int]":
         """Mock extract select data."""
         return [], [], 0
 
-    def _extract_execute_rowcount(self, cursor: "Any") -> int:
+    def _get_row_count(self, cursor: "Any") -> int:
         """Mock extract execute rowcount."""
         return 0
 
@@ -349,7 +349,8 @@ def test_sync_config_statement_config() -> None:
     config = MockSyncTestConfig()
     assert config.statement_config is not None
     assert hasattr(config.statement_config, "enable_transformations")
-    assert hasattr(config.statement_config, "default_parameter_style")
+    assert hasattr(config.statement_config, "parameter_config")
+    assert hasattr(config.statement_config.parameter_config, "default_parameter_style")
 
 
 def test_async_config_statement_config() -> None:
@@ -357,7 +358,8 @@ def test_async_config_statement_config() -> None:
     config = MockAsyncTestConfig()
     assert config.statement_config is not None
     assert hasattr(config.statement_config, "enable_transformations")
-    assert hasattr(config.statement_config, "default_parameter_style")
+    assert hasattr(config.statement_config, "parameter_config")
+    assert hasattr(config.statement_config.parameter_config, "default_parameter_style")
 
 
 # Test NoPoolSyncConfig behavior

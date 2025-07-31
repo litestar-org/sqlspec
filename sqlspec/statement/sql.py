@@ -7,6 +7,7 @@ import sqlglot
 import sqlglot.expressions as exp
 from mypy_extensions import mypyc_attr
 from sqlglot.errors import ParseError
+from sqlglot.tokens import TokenType
 from typing_extensions import TypeAlias
 
 from sqlspec.parameters import (
@@ -17,7 +18,7 @@ from sqlspec.parameters import (
     ParameterStyleConversionState,
     ParameterValidator,
 )
-from sqlspec.statement.cache import ast_fragment_cache, base_statement_cache, sql_cache
+from sqlspec.statement.cache import anonymous_returns_rows_cache, ast_fragment_cache, base_statement_cache, sql_cache
 from sqlspec.statement.filters import StatementFilter
 from sqlspec.statement.pipeline import (
     SQLTransformContext,
@@ -61,6 +62,17 @@ ARG_PREFIX: Final[str] = "arg_"
 # Cache and limit constants
 DEFAULT_CACHE_SIZE: Final[int] = 1000
 
+# Row-returning token types for SQL analysis
+ROW_RETURNING_TOKENS = {
+    TokenType.SELECT,
+    TokenType.WITH,
+    TokenType.VALUES,
+    TokenType.TABLE,
+    TokenType.SHOW,
+    TokenType.DESCRIBE,
+    TokenType.PRAGMA,
+}
+
 # Oracle/Colon style parameter constants
 COLON_PARAM_ONE: Final[str] = "1"
 COLON_PARAM_MIN_INDEX: Final[int] = 1
@@ -74,9 +86,7 @@ PROCESSED_STATE_SLOTS = (
 )
 # StatementConfig slots definition for mypyc compatibility
 SQL_CONFIG_SLOTS = (
-    "allow_mixed_parameter_styles",
     "custom_pipeline_steps",
-    "default_parameter_style",
     "dialect",
     "enable_analysis",
     "enable_caching",
@@ -85,15 +95,10 @@ SQL_CONFIG_SLOTS = (
     "enable_parsing",
     "enable_transformations",
     "enable_validation",
-    "execution_parameter_style",
-    "execution_target_style",
-    "has_native_list_expansion",
-    "needs_static_script_compilation",
     "output_transformer",
+    "parameter_config",
     "parameter_converter",
     "parameter_validator",
-    "supported_parameter_styles",
-    "type_coercion_map",
 )
 
 
@@ -211,10 +216,6 @@ class StatementConfig:
             self.enable_parameter_type_wrapping,
             self.enable_caching,
             self.dialect,
-            self.default_parameter_style,
-            tuple(style.value for style in self.supported_parameter_styles)
-            if self.supported_parameter_styles
-            else None,
         ))
 
     def __init__(
@@ -228,12 +229,12 @@ class StatementConfig:
         enable_caching: bool = True,
         parameter_converter: "Optional[ParameterConverter]" = None,
         parameter_validator: "Optional[ParameterValidator]" = None,
+        parameter_config: "Optional[ParameterStyleConfig]" = None,
         dialect: "Optional[DialectType]" = None,
         custom_pipeline_steps: "Optional[list[Any]]" = None,
         allow_mixed_parameter_styles: bool = False,
         default_parameter_style: "Optional[ParameterStyle]" = None,
         supported_parameter_styles: "Optional[set[ParameterStyle]]" = None,
-        execution_target_style: "Optional[ParameterStyle]" = None,
         type_coercion_map: "Optional[dict[type, Callable[[Any], Any]]]" = None,
         has_native_list_expansion: bool = False,
         needs_static_script_compilation: bool = False,
@@ -249,33 +250,26 @@ class StatementConfig:
         self.enable_caching = enable_caching
         self.parameter_converter = parameter_converter or ParameterConverter()
         self.parameter_validator = parameter_validator or ParameterValidator()
+        
+        # Use parameter_config if provided, otherwise create from individual parameters
+        if parameter_config is not None:
+            self.parameter_config = parameter_config
+        else:
+            default_parameter_style = default_parameter_style or ParameterStyle.POSITIONAL_COLON
+            self.parameter_config = ParameterStyleConfig(
+                default_parameter_style=default_parameter_style,
+                supported_parameter_styles=supported_parameter_styles or {default_parameter_style},
+                execution_parameter_style=execution_parameter_style,
+                type_coercion_map=type_coercion_map or {},
+                has_native_list_expansion=has_native_list_expansion,
+                output_transformer=output_transformer,
+                needs_static_script_compilation=needs_static_script_compilation,
+                allow_mixed_parameter_styles=allow_mixed_parameter_styles,
+            )
+        
         self.dialect = dialect
-        self.default_parameter_style = default_parameter_style or ParameterStyle.POSITIONAL_COLON
-        self.allow_mixed_parameter_styles = allow_mixed_parameter_styles
         self.custom_pipeline_steps = custom_pipeline_steps
-        self.supported_parameter_styles = supported_parameter_styles or {self.default_parameter_style}
-        self.execution_target_style = execution_target_style
-        self.type_coercion_map = type_coercion_map or {}
-        self.has_native_list_expansion = has_native_list_expansion
-        self.needs_static_script_compilation = needs_static_script_compilation
-        self.execution_parameter_style = execution_parameter_style
         self.output_transformer = output_transformer
-
-    def get_parameter_config(self) -> "ParameterStyleConfig":
-        """Create a ParameterStyleConfig from the StatementConfig fields.
-
-        Returns:
-            ParameterStyleConfig instance with values from this StatementConfig.
-        """
-
-        return ParameterStyleConfig(
-            default_parameter_style=self.default_parameter_style,
-            supported_parameter_styles=self.supported_parameter_styles,
-            execution_target_style=self.execution_target_style,
-            type_coercion_map=self.type_coercion_map,
-            has_native_list_expansion=self.has_native_list_expansion,
-            output_transformer=self.output_transformer,
-        )
 
     def replace(self, **changes: Any) -> "StatementConfig":
         """Create a new StatementConfig with specified changes.
@@ -304,20 +298,6 @@ class StatementConfig:
         if not isinstance(other, type(self)):
             return False
         return all(getattr(self, slot) == getattr(other, slot) for slot in SQL_CONFIG_SLOTS)
-
-    def validate_parameter_style(self, style: "Union[ParameterStyle, str]") -> bool:
-        """Check if a parameter style is allowed.
-
-        Args:
-            style: Parameter style to validate (can be ParameterStyle enum or string)
-
-        Returns:
-            True if the style is allowed, False otherwise
-        """
-        if not self.supported_parameter_styles:
-            return True
-        style_str = str(style)
-        return any(style.value == style_str for style in self.supported_parameter_styles)
 
     def get_pipeline_steps(self) -> list:
         """Get the configured pipeline steps.
@@ -1110,20 +1090,19 @@ class SQL:
         statement: "Optional[Union[str, exp.Expression]]" = None,
         parameters: "Optional[Any]" = None,
         dialect: "DialectType" = None,
-        config: "Optional[StatementConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "SQL":
         """Create a copy with optional modifications.
 
         This is the primary method for creating modified SQL objects.
         """
-        # If we have a new statement, we need to create a fresh SQL object
         if statement is not None and statement != self._statement:
             return SQL(
                 statement,
                 parameters if parameters is not None else (self._positional_params, self._named_params),
                 _dialect=dialect if dialect is not None else self._dialect,
-                statement_config=statement_config if config is not None else self.statement_config,
+                statement_config=statement_config if statement_config is not None else self.statement_config,
                 _builder_result_type=self._builder_result_type,
                 **kwargs,
             )
@@ -1132,8 +1111,8 @@ class SQL:
 
         if dialect is not None:
             overrides["_dialect"] = dialect
-        if config is not None:
-            overrides["_config"] = config
+        if statement_config is not None:
+            overrides["_config"] = statement_config
 
         # Handle parameters if provided
         if parameters is not None:
@@ -1160,7 +1139,7 @@ class SQL:
         return self._copy_with(_named_params=new_params)
 
     def get_unique_parameter_name(
-        self, base_name: "str", namespace: "Optional[str]" = None, preserve_original: bool = False
+        self, base_name: "str", namespace: "Optional[str]" = None, preserve_original: bool = True
     ) -> str:
         """Generate a unique parameter name.
 
@@ -1423,6 +1402,72 @@ class SQL:
     def dialect(self) -> "Optional[DialectType]":
         """Get the SQL dialect."""
         return self._dialect
+
+    def returns_rows(self, expression: "Optional[exp.Expression]" = None) -> bool:
+        """Check if the SQL expression is expected to return rows.
+
+        Args:
+            expression: The SQL expression to check. If None, uses this SQL's expression.
+
+        Returns:
+            True if the expression is a SELECT, VALUES, WITH (not CTE definition),
+            INSERT/UPDATE/DELETE with RETURNING, or certain command types.
+        """
+        if expression is None:
+            # Check for empty SQL strings - they should not return rows
+            if not self._raw_sql or not self._raw_sql.strip():
+                return False
+            expression = self.expression
+
+        if expression is None:
+            return False
+
+        if isinstance(expression, (exp.Select, exp.Values, exp.Table, exp.Show, exp.Describe, exp.Pragma, exp.Command)):
+            return True
+
+        if isinstance(expression, exp.With) and expression.expressions:
+            return self.returns_rows(expression.expressions[-1])
+
+        if isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):
+            return bool(expression.find(exp.Returning))
+
+        if isinstance(expression, exp.Anonymous):
+            sql_text = str(expression.this) if expression.this else ""
+            if not sql_text.strip():
+                return False
+            cache_key = f"returns_rows:{hash(sql_text)}"
+            cached_result = anonymous_returns_rows_cache.get(cache_key)
+            if cached_result is not None:
+                return bool(cached_result)
+            result = self._check_anonymous_returns_rows(sql_text)
+            anonymous_returns_rows_cache.set(cache_key, result)
+            return result
+
+        return False
+
+    def _check_anonymous_returns_rows(self, sql_text: str) -> bool:
+        """Uncached implementation of anonymous expression checking."""
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            parsed = sqlglot.parse_one(sql_text, read=None)
+            if isinstance(parsed, (exp.Select, exp.Values, exp.Table, exp.Show, exp.Describe, exp.Pragma, exp.Command)):
+                return True
+            if isinstance(parsed, exp.With) and parsed.expressions:
+                return self.returns_rows(parsed.expressions[-1])
+            if isinstance(parsed, (exp.Insert, exp.Update, exp.Delete)):
+                return bool(parsed.find(exp.Returning))
+
+        try:
+            tokens = list(sqlglot.tokenize(sql_text, read=None))
+            for token in tokens:
+                if token.token_type in {TokenType.COMMENT, TokenType.SEMICOLON}:
+                    continue
+                return token.token_type in ROW_RETURNING_TOKENS
+        except Exception:
+            return False
+
+        return False
 
     def to_sql(self, placeholder_style: "Optional[str]" = None) -> "str":
         """Convert to SQL string with given placeholder style."""

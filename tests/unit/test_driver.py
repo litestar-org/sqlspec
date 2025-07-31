@@ -64,16 +64,26 @@ class MockAsyncConnection:
 class MockSyncDriver(SyncDriverAdapterBase):
     """Test sync driver implementation."""
 
+    dialect = "sqlite"  # Use valid SQLGlot dialect
+
     def __init__(self, connection: MockConnection, statement_config: StatementConfig | None = None) -> None:
         if statement_config is None:
             statement_config = StatementConfig()
         super().__init__(connection, statement_config)
 
-    def _perform_execute(self, cursor: Any, statement: SQL) -> None:
-        """Mock implementation of _perform_execute."""
-        cursor.execute(statement.sql, statement.parameters or ())
+    def _try_special_handling(self, cursor: Any, statement: SQL) -> "Optional[tuple[Any, Optional[int], Any]]":
+        """Hook for mock-specific special operations - none needed."""
+        return None
 
-    def _extract_select_data(self, cursor: Any) -> tuple[list[dict[str, Any]], list[str], int]:
+    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+        """Execute single SQL statement using mock cursor."""
+        return cursor.execute(sql, prepared_params or ())
+
+    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+        """Execute SQL with multiple parameter sets using mock cursor."""
+        return cursor.executemany(sql, prepared_params)
+
+    def _get_selected_data(self, cursor: Any) -> tuple[list[dict[str, Any]], list[str], int]:
         """Extract data from cursor after SELECT execution."""
         result_data = cursor.fetchall() if hasattr(cursor, "fetchall") else []
         # If cursor.fetchall returns a non-list (e.g., Mock return value), use it directly
@@ -85,6 +95,9 @@ class MockSyncDriver(SyncDriverAdapterBase):
     def _extract_execute_rowcount(self, cursor: Any) -> int:
         """Extract row count from cursor after INSERT/UPDATE/DELETE."""
         return 1  # Mock always returns 1 affected row
+
+    def with_cursor(self, connection: MockConnection) -> MockCursor:
+        return MockCursor(connection)
 
     def begin(self) -> None:
         """Mock begin transaction."""
@@ -114,6 +127,28 @@ class MockSyncDriver(SyncDriverAdapterBase):
 
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.NAMED_COLON
+
+    def returns_rows(self, expression: Any) -> bool:
+        """Mock implementation of returns_rows from CommonDriverAttributesMixin."""
+        from sqlglot import expressions as exp
+        
+        if expression is None:
+            return False
+        
+        # Row-returning expressions
+        if isinstance(expression, (exp.Select, exp.Values, exp.Table, exp.Show, exp.Describe, exp.Pragma)):
+            return True
+        
+        # Handle WITH clauses
+        if isinstance(expression, exp.With):
+            if expression.expressions:
+                return self.returns_rows(expression.expressions[0])
+        
+        # Handle RETURNING clause
+        if hasattr(expression, 'find') and expression.find(exp.Returning):
+            return True
+        
+        return False
 
     def _execute_sql(self, statement: SQL, connection: Any | None = None, **kwargs: Any) -> SQLResult:
         conn = connection or self.connection
@@ -167,16 +202,24 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
     dialect = "postgres"  # Use valid SQLGlot dialect
     parameter_style = ParameterStyle.NAMED_COLON
 
-    def __init__(self, connection: MockAsyncConnection, config: StatementConfig | None = None) -> None:
-        if config is None:
-            config = StatementConfig()
-        super().__init__(connection, config)
+    def __init__(self, connection: MockAsyncConnection, statement_config: StatementConfig | None = None) -> None:
+        if statement_config is None:
+            statement_config = StatementConfig()
+        super().__init__(connection, statement_config)
 
-    async def _perform_execute(self, cursor: Any, statement: SQL) -> None:
-        """Mock implementation of async _perform_execute."""
-        await cursor.execute(statement.sql, statement.parameters or ())
+    async def _try_special_handling(self, cursor: Any, statement: SQL) -> "Optional[tuple[Any, Optional[int], Any]]":
+        """Hook for mock-specific special operations - none needed."""
+        return None
 
-    async def _extract_select_data(self, cursor: Any) -> tuple[list[dict[str, Any]], list[str], int]:
+    async def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+        """Execute single SQL statement using mock cursor."""
+        return await cursor.execute(sql, prepared_params or ())
+
+    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+        """Execute SQL with multiple parameter sets using mock cursor."""
+        return await cursor.executemany(sql, prepared_params)
+
+    async def _get_selected_data(self, cursor: Any) -> tuple[list[dict[str, Any]], list[str], int]:
         """Extract data from cursor after SELECT execution."""
         result_data = await cursor.fetchall() if hasattr(cursor, "fetchall") else []
         # If cursor.fetchall returns a non-list (e.g., Mock return value), use it directly
@@ -220,6 +263,28 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
 
     def _get_placeholder_style(self) -> ParameterStyle:
         return ParameterStyle.NAMED_COLON
+
+    def returns_rows(self, expression: Any) -> bool:
+        """Mock implementation of returns_rows from CommonDriverAttributesMixin."""
+        from sqlglot import expressions as exp
+        
+        if expression is None:
+            return False
+        
+        # Row-returning expressions
+        if isinstance(expression, (exp.Select, exp.Values, exp.Table, exp.Show, exp.Describe, exp.Pragma)):
+            return True
+        
+        # Handle WITH clauses
+        if isinstance(expression, exp.With):
+            if expression.expressions:
+                return self.returns_rows(expression.expressions[0])
+        
+        # Handle RETURNING clause
+        if hasattr(expression, 'find') and expression.find(exp.Returning):
+            return True
+        
+        return False
 
     async def _execute_sql(self, statement: SQL, connection: Any | None = None, **kwargs: Any) -> SQLResult:
         conn = connection or self.connection
@@ -396,7 +461,7 @@ def test_sync_driver_build_statement() -> None:
 
     # Test with SQL string
     sql_string = "SELECT * FROM users"
-    statement = driver._prepare_sql(sql_string, config=StatementConfig())
+    statement = driver.prepare_statement(sql_string, statement_config=StatementConfig())
     assert isinstance(statement, SQL)
     assert statement.sql == sql_string
 
@@ -407,7 +472,7 @@ def test_sync_driver_build_statement_with_sql_object() -> None:
     driver = MockSyncDriver(connection)
 
     sql_obj = SQL("SELECT * FROM users WHERE id = :id", id=1)
-    statement = driver._prepare_sql(sql_obj, config=StatementConfig())
+    statement = driver.prepare_statement(sql_obj, statement_config=StatementConfig())
     # SQL objects are immutable, so a new instance is created
     assert isinstance(statement, SQL)
     assert statement._raw_sql == sql_obj._raw_sql
@@ -440,7 +505,7 @@ def test_sync_driver_build_statement_with_filters() -> None:
     test_filter.append_to_statement = Mock(side_effect=original_append)
 
     sql_string = "SELECT * FROM users"
-    statement = driver._prepare_sql(sql_string, test_filter, config=StatementConfig())
+    statement = driver.prepare_statement(sql_string, test_filter, statement_config=StatementConfig())
 
     # Access a property to trigger processing
     _ = statement.to_sql()

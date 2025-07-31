@@ -5,21 +5,18 @@ per driver while improving performance by 30-50% through MyPyC compilation.
 """
 
 from collections.abc import Mapping
-from typing import Any, Final, Literal
+from typing import Any, Final
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.parameters.config import ParameterStyleConfig
-from sqlspec.parameters.converter import ParameterConverter
 from sqlspec.parameters.types import ParameterInfo, ParameterStyle, TypedParameter
-from sqlspec.parameters.validator import ParameterValidator
 from sqlspec.utils.type_guards import is_iterable_parameters
 
 __all__ = ("ParameterProcessor",)
 
 
-# Type alias for parameter styles
-ParamStyle = Literal["qmark", "numeric", "named", "format", "pyformat"]
+# Use ParameterStyle enum directly instead of string literals
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -31,18 +28,23 @@ class ParameterProcessor:
     styles using regex-based transformation on the raw SQL string.
     """
 
-    __slots__ = ("_cache", "_cache_size", "_converter", "_validator")
+    __slots__ = ("_cache", "_cache_size")
 
     DEFAULT_CACHE_SIZE: Final[int] = 1000
 
     def __init__(self) -> None:
         self._cache: dict[str, tuple[str, Any]] = {}
         self._cache_size = 0
-        # Reuse existing regex-based components
-        self._validator = ParameterValidator()
-        self._converter = ParameterConverter()
 
-    def process(self, sql: str, params: Any, config: ParameterStyleConfig, is_parsed: bool = True) -> tuple[str, Any]:
+    def process(
+        self,
+        sql: str,
+        params: Any,
+        config: ParameterStyleConfig,
+        validator: "Any",  # ParameterValidator
+        converter: "Any",  # ParameterConverter
+        is_parsed: bool = True,
+    ) -> tuple[str, Any]:
         """Process parameters with simplified transformation pipeline.
 
         Flow:
@@ -60,7 +62,7 @@ class ParameterProcessor:
             return self._cache[cache_key]
 
         # Step 1: Parse parameters and determine if transformation is needed
-        param_info = self._validator.extract_parameters(sql)
+        param_info = validator.extract_parameters(sql)
         needs_transformation = self._needs_transformation(param_info, config)
 
         if not needs_transformation and not config.type_coercion_map and not config.output_transformer:
@@ -81,7 +83,7 @@ class ParameterProcessor:
         if needs_transformation:
             # Convert to target parameter style
             processed_sql, processed_params = self._convert_to_execution_style(
-                processed_sql, processed_params, param_info, config
+                processed_sql, processed_params, param_info, config, converter
             )
 
         if config.output_transformer:
@@ -94,28 +96,6 @@ class ParameterProcessor:
             self._cache_size += 1
 
         return processed_sql, processed_params
-
-    def _enum_to_paramstyle(self, style: ParameterStyle) -> ParamStyle:
-        """Convert ParameterStyle enum to ParamStyle literal."""
-        mapping: dict[ParameterStyle, ParamStyle] = {
-            ParameterStyle.QMARK: "qmark",
-            ParameterStyle.NUMERIC: "numeric",
-            ParameterStyle.NAMED_COLON: "named",
-            ParameterStyle.NAMED_PYFORMAT: "pyformat",
-            ParameterStyle.POSITIONAL_PYFORMAT: "format",
-        }
-        return mapping.get(style, "qmark")
-
-    def _paramstyle_to_enum(self, style: ParamStyle) -> ParameterStyle:
-        """Convert string literal to ParameterStyle enum."""
-        mapping = {
-            "qmark": ParameterStyle.QMARK,
-            "numeric": ParameterStyle.NUMERIC,
-            "named": ParameterStyle.NAMED_COLON,
-            "format": ParameterStyle.POSITIONAL_PYFORMAT,
-            "pyformat": ParameterStyle.NAMED_PYFORMAT,
-        }
-        return mapping.get(style, ParameterStyle.QMARK)
 
     def _needs_transformation(self, param_info: list[ParameterInfo], config: ParameterStyleConfig) -> bool:
         """Determine if parameter transformation is needed.
@@ -134,10 +114,6 @@ class ParameterProcessor:
         detected_styles = {p.style for p in param_info}
         target_style = config.default_parameter_style
 
-        # Force conversion if configured
-        if config.force_style_conversion:
-            return True
-
         # Convert if target style is not in detected styles
         if target_style not in detected_styles:
             return True
@@ -146,7 +122,7 @@ class ParameterProcessor:
         return len(detected_styles) > 1
 
     def _convert_to_execution_style(
-        self, sql: str, params: Any, param_info: list[ParameterInfo], config: ParameterStyleConfig
+        self, sql: str, params: Any, param_info: list[ParameterInfo], config: ParameterStyleConfig, converter: "Any"
     ) -> tuple[str, Any]:
         """Convert SQL and parameters to execution target style.
 
@@ -158,31 +134,29 @@ class ParameterProcessor:
             params: Parameter values
             param_info: Parameter information from SQL parsing
             config: Parameter style configuration
+            converter: ParameterConverter instance
 
         Returns:
             Tuple of (execution_sql, execution_params) ready for database execution
         """
-        # Use the execution target style for final conversion
-        execution_style = config.execution_target_style
-        converted_sql = self._converter.convert_placeholders(sql, execution_style, param_info)
+        # Use the execution parameter style for final conversion
+        execution_style = config.execution_parameter_style
+        converted_sql = converter.convert_placeholders(sql, execution_style, param_info)
 
         # Adjust parameters to match the execution style
-        target_style = self._enum_to_paramstyle(execution_style)
-        converted_params = self._adjust_params_for_style(params, param_info, target_style)
+        converted_params = self._adjust_params_for_style(params, param_info, execution_style)
 
         return converted_sql, converted_params
 
-    def _needs_style_conversion(self, param_info: list[ParameterInfo], target_style: ParamStyle) -> bool:
+    def _needs_style_conversion(self, param_info: list[ParameterInfo], target_style: ParameterStyle) -> bool:
         """Check if parameter style conversion is needed."""
         if not param_info:
             return False
 
-        # Map target style to expected ParameterStyle enum values
-        target_enum = self._paramstyle_to_enum(target_style)
         detected_styles = {p.style for p in param_info}
 
         # Special handling for positional colon (Oracle numeric parameters)
-        if target_style == "named" and ParameterStyle.POSITIONAL_COLON in detected_styles:
+        if target_style == ParameterStyle.NAMED_COLON and ParameterStyle.POSITIONAL_COLON in detected_styles:
             return False  # :1, :2 are valid for named style in Oracle
 
         # CRITICAL FIX: Always convert when we have mixed parameter styles
@@ -190,7 +164,7 @@ class ParameterProcessor:
         if len(detected_styles) > 1:
             return True
 
-        return target_enum not in detected_styles
+        return target_style not in detected_styles
 
     def _expand_in_clauses(self, sql: str, params: Any) -> tuple[str, Any]:
         """Expand list parameters for IN clauses (only for parsed SQL).
@@ -206,7 +180,13 @@ class ParameterProcessor:
         if not isinstance(params, (list, tuple)):
             return sql, params
 
-        param_info = self._validator.extract_parameters(sql)
+        # This method is only called internally, so we need to create a validator instance
+        # TODO: Refactor to pass validator as parameter or remove this method if not needed
+        from sqlspec.parameters.validator import ParameterValidator
+
+        validator = ParameterValidator()
+
+        param_info = validator.extract_parameters(sql)
         if not param_info:
             return sql, params
 
@@ -278,29 +258,38 @@ class ParameterProcessor:
             return [coerce_value(v) for v in params]
         return coerce_value(params)
 
-    def _convert_parameter_style(self, sql: str, params: Any, target_style: ParamStyle) -> tuple[str, Any]:
+    def _convert_parameter_style(
+        self, sql: str, params: Any, target_style: ParameterStyle, validator: "Any", converter: "Any"
+    ) -> tuple[str, Any]:
         """Convert parameters to target style using existing converter."""
-        param_info = self._validator.extract_parameters(sql)
+        param_info = validator.extract_parameters(sql)
         if not param_info:
             return sql, params
 
-        target_enum = self._paramstyle_to_enum(target_style)
-
         # Convert SQL placeholders
-        converted_sql = self._converter.convert_placeholders(sql, target_enum, param_info)
+        converted_sql = converter.convert_placeholders(sql, target_style, param_info)
 
         # Adjust parameters to match new style
         converted_params = self._adjust_params_for_style(params, param_info, target_style)
 
         return converted_sql, converted_params
 
-    def _adjust_params_for_style(self, params: Any, param_info: list[ParameterInfo], target_style: ParamStyle) -> Any:
+    def _adjust_params_for_style(
+        self, params: Any, param_info: list[ParameterInfo], target_style: ParameterStyle
+    ) -> Any:
         """Adjust parameter format to match the target style."""
         if not param_info:
             return params
 
         # Determine if target expects dict or sequence
-        expects_dict = target_style in {"named", "pyformat"}
+        # Named styles (NAMED_COLON, NAMED_PYFORMAT, etc.) expect dict format
+        # Positional styles (QMARK, NUMERIC, POSITIONAL_PYFORMAT) expect sequence format
+        expects_dict = target_style in {
+            ParameterStyle.NAMED_COLON,
+            ParameterStyle.NAMED_PYFORMAT,
+            ParameterStyle.NAMED_AT,
+            ParameterStyle.NAMED_DOLLAR,
+        }
         params_are_dict = isinstance(params, (dict, Mapping))
         params_are_sequence = is_iterable_parameters(params)
 

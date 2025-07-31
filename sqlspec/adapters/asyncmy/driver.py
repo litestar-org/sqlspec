@@ -34,23 +34,26 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
     dialect: "DialectType" = "mysql"
 
-    def __init__(self, connection: "AsyncmyConnection", statement_config: Optional[StatementConfig] = None, driver_features: "Optional[dict[str, Any]]" = None) -> None:
+    def __init__(
+        self,
+        connection: "AsyncmyConnection",
+        statement_config: Optional[StatementConfig] = None,
+        driver_features: "Optional[dict[str, Any]]" = None,
+    ) -> None:
         from sqlspec.statement.sql import StatementConfig
 
         # Set default asyncmy-specific configuration
         if statement_config is None:
             statement_config = StatementConfig(
                 dialect="mysql",
+                default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
                 supported_parameter_styles={
                     ParameterStyle.POSITIONAL_PYFORMAT,  # %s
                     ParameterStyle.NAMED_PYFORMAT,  # %(name)s
                 },
-                default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-                type_coercion_map={
-                    # MySQL has good native type support
-                    # Add any specific type mappings as needed
-                },
+                type_coercion_map={},  # MySQL has good native type support
                 has_native_list_expansion=False,  # MySQL doesn't handle arrays natively
+                needs_static_script_compilation=True,  # MySQL requires static compilation for scripts
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
@@ -77,31 +80,25 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
     def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncmyCursor":
         return AsyncmyCursor(connection)
 
-    async def _perform_execute(self, cursor: "Union[Cursor, DictCursor]", statement: "SQL") -> None:
-        """Execute the SQL statement using the provided cursor."""
-        if statement.is_script:
-            # Scripts use STATIC compilation to transpile parameters automatically
-            sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
-            # MySQL doesn't have executescript - execute statements one by one
-            statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
-            for stmt in statements:
-                if stmt.strip():  # Skip empty statements
-                    await cursor.execute(stmt)
-        else:
-            # Enable intelligent parameter conversion - MySQL supports both POSITIONAL_PYFORMAT and NAMED_PYFORMAT
-            sql, params = self._get_compiled_sql(statement, self.statement_config)
+    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[tuple[Any, Optional[int], Any]]":
+        """Hook for AsyncMy-specific special operations.
+        
+        AsyncMy doesn't have special operations like PostgreSQL COPY,
+        so this always returns None to proceed with standard execution.
+        """
+        return None
 
-            if statement.is_many:
-                # For execute_many, params is already a list of parameter sets
-                prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=True)
-                await cursor.executemany(sql, prepared_params)
-            else:
-                prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-                await cursor.execute(sql, prepared_params or None)
+    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+        """AsyncMy executemany implementation."""
+        await cursor.executemany(sql, prepared_params)
+        return cursor
 
-    async def _extract_select_data(
-        self, cursor: "Union[Cursor, DictCursor]"
-    ) -> "tuple[list[dict[str, Any]], list[str], int]":
+    async def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+        """AsyncMy single execution."""
+        await cursor.execute(sql, prepared_params or None)
+        return cursor
+
+    async def _get_selected_data(self, cursor: Any) -> "tuple[list[dict[str, Any]], list[str], int]":
         """Extract data from cursor after SELECT execution."""
         data = await cursor.fetchall()
         column_names = [desc[0] for desc in cursor.description or []]
@@ -111,10 +108,6 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             data = [dict(zip(column_names, row)) for row in data]
         return data, column_names, len(data)
 
-    def _extract_execute_rowcount(self, cursor: "Union[Cursor, DictCursor]") -> int:
+    def _get_row_count(self, cursor: Any) -> int:
         """Extract row count from cursor after INSERT/UPDATE/DELETE."""
         return cursor.rowcount if cursor.rowcount is not None else -1
-
-    def _prepare_driver_parameters(self, parameters: "Any") -> "Any":
-        """Prepare parameters for the AsyncMy driver."""
-        return parameters
