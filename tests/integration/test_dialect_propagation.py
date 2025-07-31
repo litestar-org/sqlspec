@@ -23,7 +23,7 @@ from tests.integration.test_adapters.test_adbc.conftest import PostgresService
 # Sync dialect propagation tests
 def test_sqlite_dialect_propagation_through_execute() -> None:
     """Test that SQLite dialect propagates through execute calls."""
-    config = SqliteConfig(connection_config={"database": ":memory:"})
+    config = SqliteConfig(pool_config={"database": ":memory:"})
 
     # Verify config has correct dialect
     assert config.dialect == "sqlite"
@@ -63,7 +63,7 @@ def test_sqlite_dialect_propagation_through_execute() -> None:
 
 def test_duckdb_dialect_propagation_with_query_builder() -> None:
     """Test that DuckDB dialect propagates through query builder."""
-    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    config = DuckDBConfig(pool_config={"database": ":memory:"})
 
     # Verify config has correct dialect
     assert config.dialect == "duckdb"
@@ -203,7 +203,7 @@ async def test_asyncmy_dialect_propagation_with_filters(mysql_service: MySQLServ
     # Create a real connection
     async with config.provide_connection() as connection:
         # Create driver - use the statement config from the database config to preserve dialect
-        driver = AsyncmyDriver(connection=connection, config=config.statement_config)
+        driver = AsyncmyDriver(connection=connection, statement_config=config.statement_config)
 
         # Create temp table and execute a query with filter
         await driver.execute_script("CREATE TEMPORARY TABLE test_users (id INT, name VARCHAR(100))")

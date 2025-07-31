@@ -8,7 +8,7 @@ from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.bigquery._types import BigQueryConnection
-from sqlspec.adapters.bigquery.driver import BigQueryCursor, BigQueryDriver
+from sqlspec.adapters.bigquery.driver import BigQueryCursor, BigQueryDriver, bigquery_statement_config
 from sqlspec.config import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import Empty
@@ -247,9 +247,11 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         """
 
         with self.provide_connection(*args, **kwargs) as connection:
+            # Use shared config or user-provided config or instance default
+            final_statement_config = statement_config or self.statement_config or bigquery_statement_config
             driver = self.driver_type(
                 connection=connection,
-                statement_config=statement_config,
+                statement_config=final_statement_config,
                 default_query_job_config=self.connection_config.get("default_query_job_config"),
                 on_job_start=self.on_job_start,
                 on_job_complete=self.on_job_complete,

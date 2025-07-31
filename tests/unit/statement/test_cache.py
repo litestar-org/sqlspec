@@ -4,6 +4,8 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
+from sqlspec.parameters import ParameterStyle
+from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.cache import SQLCache, sql_cache
 from sqlspec.statement.sql import SQL, StatementConfig, _ProcessedState
 
@@ -135,7 +137,8 @@ class TestSQLCaching:
 
     def test_sql_cache_hit(self) -> None:
         """Test cache hit for identical SQL statements."""
-        config = StatementConfig(enable_caching=True)
+        param_config = ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
+        config = StatementConfig(parameter_config=param_config, enable_caching=True)
 
         # Clear cache
         sql_cache.clear()
@@ -165,7 +168,8 @@ class TestSQLCaching:
 
     def test_sql_cache_miss_different_queries(self) -> None:
         """Test cache miss for different SQL queries."""
-        config = StatementConfig(enable_caching=True)
+        param_config = ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
+        config = StatementConfig(parameter_config=param_config, enable_caching=True)
 
         sql1 = SQL("SELECT * FROM users", statement_config=config)
         sql2 = SQL("SELECT * FROM products", statement_config=config)
@@ -175,7 +179,8 @@ class TestSQLCaching:
 
     def test_sql_cache_miss_different_parameters(self) -> None:
         """Test cache miss for same query with different parameters."""
-        config = StatementConfig(enable_caching=True)
+        param_config = ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
+        config = StatementConfig(parameter_config=param_config, enable_caching=True)
 
         sql1 = SQL("SELECT * FROM users WHERE id = :id", id=1, statement_config=config)
         sql2 = SQL("SELECT * FROM users WHERE id = :id", id=2, statement_config=config)
@@ -199,7 +204,8 @@ class TestSQLCaching:
 
     def test_sql_cache_with_filters(self) -> None:
         """Test caching with filters applied."""
-        config = StatementConfig(enable_caching=True)
+        param_config = ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
+        config = StatementConfig(parameter_config=param_config, enable_caching=True)
 
         sql1 = SQL("SELECT * FROM users", statement_config=config)
         sql2 = sql1.where("active = true")
@@ -209,7 +215,8 @@ class TestSQLCaching:
 
     def test_sql_cache_with_dialect(self) -> None:
         """Test caching with different dialects."""
-        config = StatementConfig(enable_caching=True)
+        param_config = ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
+        config = StatementConfig(parameter_config=param_config, enable_caching=True)
 
         sql1 = SQL("SELECT * FROM users", _dialect="mysql", statement_config=config)
         sql2 = SQL("SELECT * FROM users", _dialect="postgres", statement_config=config)
@@ -219,7 +226,8 @@ class TestSQLCaching:
 
     def test_cache_key_generation(self) -> None:
         """Test cache key generation includes all relevant state."""
-        config = StatementConfig(enable_caching=True)
+        param_config = ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
+        config = StatementConfig(parameter_config=param_config, enable_caching=True)
 
         # Test with positional parameters
         sql1 = SQL("SELECT * FROM users WHERE id = ?", 1, statement_config=config)

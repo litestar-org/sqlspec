@@ -1,13 +1,74 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.statement.result import SQLResult
 
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.adapters.psycopg.mixins import PsycopgCopyMixin
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.parameters import ParameterStyle
+from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
 
-__all__ = ("PsycopgAsyncCursor", "PsycopgAsyncDriver", "PsycopgSyncCursor", "PsycopgSyncDriver")
+# Shared Psycopg statement configurations
+psycopg_sync_statement_config = StatementConfig(
+    dialect="postgres",
+    parameter_config=ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
+        supported_parameter_styles={
+            ParameterStyle.POSITIONAL_PYFORMAT,  # %s
+            ParameterStyle.NAMED_PYFORMAT,  # %(name)s
+            ParameterStyle.NUMERIC,  # $1 (also supported!)
+        },
+        type_coercion_map={
+            # Psycopg handles most types natively
+            # Add any specific type mappings as needed
+        },
+        has_native_list_expansion=True,  # Psycopg handles lists/tuples natively
+        needs_static_script_compilation=False,  # Psycopg supports parameters in scripts
+    ),
+    custom_pipeline_steps=None,  # Will be set after import
+)
+
+psycopg_async_statement_config = StatementConfig(
+    dialect="postgres",
+    parameter_config=ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
+        supported_parameter_styles={
+            ParameterStyle.POSITIONAL_PYFORMAT,
+            ParameterStyle.NAMED_PYFORMAT,
+            ParameterStyle.NUMERIC,
+        },
+        type_coercion_map={},
+        has_native_list_expansion=True,
+        needs_static_script_compilation=False,  # Psycopg supports parameters in scripts
+    ),
+)
+
+# Initialize pipeline steps after imports
+try:
+    from sqlspec.adapters.psycopg.pipeline_steps import postgres_copy_pipeline_step
+
+    # Update the sync config with pipeline steps
+    psycopg_sync_statement_config = StatementConfig(
+        dialect="postgres",
+        parameter_config=psycopg_sync_statement_config.parameter_config,
+        custom_pipeline_steps=[postgres_copy_pipeline_step],
+    )
+except ImportError:
+    # Fallback if pipeline steps are not available
+    pass
+
+__all__ = (
+    "PsycopgAsyncCursor",
+    "PsycopgAsyncDriver",
+    "PsycopgSyncCursor",
+    "PsycopgSyncDriver",
+    "psycopg_async_statement_config",
+    "psycopg_sync_statement_config",
+)
 
 
 class PsycopgSyncCursor:
@@ -53,30 +114,14 @@ class PsycopgSyncDriver(PsycopgCopyMixin, SyncDriverAdapterBase):
     ) -> None:
         # Set default Psycopg-specific configuration
         if statement_config is None:
-            from sqlspec.parameters.config import ParameterStyleConfig
-
-            parameter_config = ParameterStyleConfig(
-                default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-                supported_parameter_styles={
-                    ParameterStyle.POSITIONAL_PYFORMAT,  # %s
-                    ParameterStyle.NAMED_PYFORMAT,  # %(name)s
-                    ParameterStyle.NUMERIC,  # $1 (also supported!)
-                },
-                type_coercion_map={
-                    # Psycopg handles most types natively
-                    # Add any specific type mappings as needed
-                },
-                has_native_list_expansion=True,  # Psycopg handles lists/tuples natively
-                needs_static_script_compilation=False,  # Psycopg supports parameters in scripts
-            )
-            statement_config = StatementConfig(dialect="postgres", parameter_config=parameter_config)
+            statement_config = psycopg_sync_statement_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: PsycopgSyncConnection) -> PsycopgSyncCursor:
         return PsycopgSyncCursor(connection)
 
-    def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[tuple[Any, Optional[int], Any]]":
+    def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
         """Hook for PostgreSQL-specific special operations (COPY commands).
 
         Args:
@@ -84,16 +129,16 @@ class PsycopgSyncDriver(PsycopgCopyMixin, SyncDriverAdapterBase):
             statement: SQL statement to analyze
 
         Returns:
-            Tuple of (cursor_result, rowcount_override, special_data) if handled,
+            SQLResult if the special operation was handled and completed,
             None if standard execution should proceed
         """
         # Check if this is a COPY statement marked by the pipeline
         if statement._processing_context and statement._processing_context.metadata.get("postgres_copy_operation"):
             result = self._handle_copy_operation_from_pipeline(cursor, statement)
-            # Return execution result tuple - COPY operations typically don't return data
-            from sqlspec.driver._common import create_execution_result
 
-            return create_execution_result(result)
+            # Create ExecutionResult and build SQLResult directly
+            execution_result = self.create_execution_result(result)
+            return self.build_statement_result(statement, execution_result)
 
         return None
 
@@ -107,25 +152,57 @@ class PsycopgSyncDriver(PsycopgCopyMixin, SyncDriverAdapterBase):
         with cursor.copy(sql_text):
             pass  # Just execute the COPY command
 
-    def _execute_script(self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig") -> Any:
+    def _execute_script(
+        self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig"
+    ) -> "ExecutionResult":
         """Execute SQL script by splitting and executing statements individually.
 
         Psycopg doesn't have executescript but supports parameters in all statements.
         """
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
+        statement_count = len(statements)  # Script splitter already filters empty statements
+
         last_result = None
         for stmt in statements:
-            if stmt.strip():  # Skip empty statements
-                last_result = cursor.execute(stmt, prepared_params or ())
-        return last_result
+            last_result = cursor.execute(stmt, prepared_params or ())
 
-    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(
+            last_result,
+            statement_count=statement_count,
+            successful_statements=statement_count,  # Assume all successful if no exception
+            rowcount_override=row_count,
+            is_script_result=True,
+        )
+
+    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using Psycopg executemany."""
-        return cursor.executemany(sql, prepared_params)
+        result = cursor.executemany(sql, prepared_params)
 
-    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(result, rowcount_override=row_count, is_many_result=True)
+
+    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
         """Execute single SQL statement using Psycopg execute."""
-        return cursor.execute(sql, prepared_params or ())
+        result = cursor.execute(sql, prepared_params or ())
+
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(result, rowcount_override=row_count)
 
     def _get_selected_data(self, cursor: Any) -> "tuple[list[dict[str, Any]], list[str], int]":
         """Extract data from cursor after SELECT execution."""
@@ -164,27 +241,14 @@ class PsycopgAsyncDriver(PsycopgCopyMixin, AsyncDriverAdapterBase):
     ) -> None:
         # Set default Psycopg-specific configuration
         if statement_config is None:
-            from sqlspec.parameters.config import ParameterStyleConfig
-
-            parameter_config = ParameterStyleConfig(
-                default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-                supported_parameter_styles={
-                    ParameterStyle.POSITIONAL_PYFORMAT,
-                    ParameterStyle.NAMED_PYFORMAT,
-                    ParameterStyle.NUMERIC,
-                },
-                type_coercion_map={},
-                has_native_list_expansion=True,
-                needs_static_script_compilation=False,  # Psycopg supports parameters in scripts
-            )
-            statement_config = StatementConfig(dialect="postgres", parameter_config=parameter_config)
+            statement_config = psycopg_async_statement_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: "PsycopgAsyncConnection") -> "PsycopgAsyncCursor":
         return PsycopgAsyncCursor(connection)
 
-    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[tuple[Any, Optional[int], Any]]":
+    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
         """Hook for PostgreSQL-specific special operations (COPY commands).
 
         Args:
@@ -192,16 +256,16 @@ class PsycopgAsyncDriver(PsycopgCopyMixin, AsyncDriverAdapterBase):
             statement: SQL statement to analyze
 
         Returns:
-            Tuple of (cursor_result, rowcount_override, special_data) if handled,
+            SQLResult if the special operation was handled and completed,
             None if standard execution should proceed
         """
         # Check if this is a COPY statement marked by the pipeline
         if statement._processing_context and statement._processing_context.metadata.get("postgres_copy_operation"):
             result = await self._handle_copy_operation_from_pipeline(cursor, statement)
-            # Return execution result tuple - COPY operations typically don't return data
-            from sqlspec.driver._common import create_execution_result
 
-            return create_execution_result(result)
+            # Create ExecutionResult and build SQLResult directly
+            execution_result = self.create_execution_result(result)
+            return self.build_statement_result(statement, execution_result)
 
         return None
 
@@ -247,24 +311,55 @@ class PsycopgAsyncDriver(PsycopgCopyMixin, AsyncDriverAdapterBase):
 
     async def _execute_script(
         self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig"
-    ) -> Any:
+    ) -> "ExecutionResult":
         """Execute SQL script by splitting and executing statements individually.
 
         Psycopg doesn't have executescript but supports parameters in all statements.
         """
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
+        statement_count = len(statements)  # Script splitter already filters empty statements
+
         last_result = None
         for stmt in statements:
             last_result = await cursor.execute(stmt, prepared_params or ())
-        return last_result
 
-    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(
+            last_result,
+            statement_count=statement_count,
+            successful_statements=statement_count,  # Assume all successful if no exception
+            rowcount_override=row_count,
+            is_script_result=True,
+        )
+
+    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using Psycopg executemany."""
-        return await cursor.executemany(sql, prepared_params)
+        result = await cursor.executemany(sql, prepared_params)
 
-    async def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(result, rowcount_override=row_count, is_many_result=True)
+
+    async def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
         """Execute single SQL statement using Psycopg execute."""
-        return await cursor.execute(sql, prepared_params or ())
+        result = await cursor.execute(sql, prepared_params or ())
+
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(result, rowcount_override=row_count)
 
     async def _get_selected_data(self, cursor: Any) -> "tuple[list[dict[str, Any]], list[str], int]":
         """Extract data from cursor after SELECT execution."""

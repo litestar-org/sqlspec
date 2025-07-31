@@ -5,14 +5,32 @@ from asyncmy.cursors import Cursor, DictCursor
 
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.parameters import ParameterStyle
+from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.adapters.asyncmy._types import AsyncmyConnection
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.statement.result import SQLResult
 
-__all__ = ("AsyncmyCursor", "AsyncmyDriver")
+# Shared AsyncMy statement configuration
+asyncmy_statement_config = StatementConfig(
+    dialect="mysql",
+    parameter_config=ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
+        supported_parameter_styles={
+            ParameterStyle.POSITIONAL_PYFORMAT,  # %s
+            ParameterStyle.NAMED_PYFORMAT,  # %(name)s
+        },
+        type_coercion_map={},  # MySQL has good native type support
+        has_native_list_expansion=False,  # MySQL doesn't handle arrays natively
+        needs_static_script_compilation=True,  # MySQL requires static compilation for scripts
+    ),
+)
+
+__all__ = ("AsyncmyCursor", "AsyncmyDriver", "asyncmy_statement_config")
 
 
 class AsyncmyCursor:
@@ -40,21 +58,9 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         statement_config: Optional[StatementConfig] = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        from sqlspec.statement.sql import StatementConfig
-
         # Set default asyncmy-specific configuration
         if statement_config is None:
-            statement_config = StatementConfig(
-                dialect="mysql",
-                default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-                supported_parameter_styles={
-                    ParameterStyle.POSITIONAL_PYFORMAT,  # %s
-                    ParameterStyle.NAMED_PYFORMAT,  # %(name)s
-                },
-                type_coercion_map={},  # MySQL has good native type support
-                has_native_list_expansion=False,  # MySQL doesn't handle arrays natively
-                needs_static_script_compilation=True,  # MySQL requires static compilation for scripts
-            )
+            statement_config = asyncmy_statement_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         # MySQL type conversions
@@ -80,7 +86,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
     def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncmyCursor":
         return AsyncmyCursor(connection)
 
-    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[tuple[Any, Optional[int], Any]]":
+    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
         """Hook for AsyncMy-specific special operations.
 
         AsyncMy doesn't have special operations like PostgreSQL COPY,
@@ -88,15 +94,29 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """
         return None
 
-    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
         """AsyncMy executemany implementation."""
         await cursor.executemany(sql, prepared_params)
-        return cursor
 
-    async def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
+
+    async def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
         """AsyncMy single execution."""
         await cursor.execute(sql, prepared_params or None)
-        return cursor
+
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(cursor, rowcount_override=row_count)
 
     async def _get_selected_data(self, cursor: Any) -> "tuple[list[dict[str, Any]], list[str], int]":
         """Extract data from cursor after SELECT execution."""

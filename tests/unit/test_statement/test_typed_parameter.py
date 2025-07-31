@@ -5,6 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from sqlspec.parameters import ParameterConverter, ParameterInfo, ParameterStyle
+from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.parameters.types import TypedParameter
 from sqlspec.statement.sql import SQL, StatementConfig
 
@@ -139,7 +140,10 @@ def test_wrap_parameters_with_types_already_wrapped() -> None:
 
 def test_sql_with_typed_parameters() -> None:
     """Test SQL execution with TypedParameter wrapping."""
-    statement_config = StatementConfig(enable_parameter_type_wrapping=True)
+    parameter_config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+    )
+    statement_config = StatementConfig(parameter_config=parameter_config, enable_parameter_type_wrapping=True)
 
     # Test with datetime parameter
     sql = SQL(

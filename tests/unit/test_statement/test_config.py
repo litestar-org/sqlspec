@@ -9,7 +9,13 @@ from sqlspec.base import SQLSpec
 from sqlspec.config import NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
 from sqlspec.driver import CommonDriverAttributesMixin
 from sqlspec.parameters import ParameterStyle
+from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
+
+# Create a default parameter config for tests
+DEFAULT_PARAMETER_CONFIG = ParameterStyleConfig(
+    default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+)
 
 
 class MockConnection:
@@ -205,7 +211,7 @@ def driver_attributes() -> CommonDriverAttributesMixin:
             # Create a mock connection for the test
             mock_connection = MockConnection()
             self.connection = mock_connection
-            self.statement_config = StatementConfig(dialect="sqlite")
+            self.statement_config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, dialect="sqlite")
             super().__init__(connection=mock_connection, statement_config=self.statement_config)
 
         def _get_placeholder_style(self) -> ParameterStyle:
@@ -302,7 +308,7 @@ def test_returns_rows(
     """
     try:
         # Create a permissive configuration for testing that allows DDL, risky DML, and UNION operations
-        test_config = StatementConfig()
+        test_config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
         statement = SQL(sql, config=test_config)
         actual_returns_rows = statement.returns_rows()
 
@@ -316,7 +322,7 @@ def test_returns_rows(
 def test_returns_rows_with_invalid_expression(driver_attributes: CommonDriverAttributesMixin) -> None:
     """Test that returns_rows handles invalid expressions gracefully."""
     # Create a permissive configuration for testing
-    test_config = StatementConfig()
+    test_config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
 
     try:
         empty_stmt = SQL("", config=test_config)
@@ -330,7 +336,7 @@ def test_returns_rows_with_invalid_expression(driver_attributes: CommonDriverAtt
 
 def test_returns_rows_expression_types(driver_attributes: CommonDriverAttributesMixin) -> None:
     """Test returns_rows with various SQL statement types."""
-    test_config = StatementConfig()
+    test_config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
 
     # Test statements that should return rows
     select_sql = SQL("SELECT 1", config=test_config)

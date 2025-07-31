@@ -23,6 +23,8 @@ if TYPE_CHECKING:
         PsycopgAsyncDriver,
         PsycopgSyncCursor,
         PsycopgSyncDriver,
+        psycopg_async_statement_config,
+        psycopg_sync_statement_config,
     )
     from sqlspec.statement.sql import StatementConfig
 
@@ -36,6 +38,8 @@ else:
         PsycopgAsyncDriver,
         PsycopgSyncCursor,
         PsycopgSyncDriver,
+        psycopg_async_statement_config,
+        psycopg_sync_statement_config,
     )
 
     PsycopgSyncConnection = Connection
@@ -238,7 +242,9 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             A PsycopgSyncDriver instance.
         """
         with self.provide_connection(*args, **kwargs) as conn:
-            yield self.driver_type(connection=conn, statement_config=statement_config)
+            # Use shared config or user-provided config
+            final_statement_config = statement_config or psycopg_sync_statement_config
+            yield self.driver_type(connection=conn, statement_config=final_statement_config)
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
         """Provide pool instance.
@@ -399,7 +405,9 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             A PsycopgAsyncDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as conn:
-            yield self.driver_type(connection=conn, statement_config=statement_config)
+            # Use shared config or user-provided config
+            final_statement_config = statement_config or psycopg_async_statement_config
+            yield self.driver_type(connection=conn, statement_config=final_statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":
         """Provide async pool instance.

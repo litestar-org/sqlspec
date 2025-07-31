@@ -9,17 +9,23 @@ import oracledb
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.oracledb._types import OracleAsyncConnection, OracleSyncConnection
-from sqlspec.adapters.oracledb.driver import OracleAsyncCursor, OracleAsyncDriver, OracleSyncCursor, OracleSyncDriver
+from sqlspec.adapters.oracledb.driver import (
+    OracleAsyncCursor,
+    OracleAsyncDriver,
+    OracleSyncCursor,
+    OracleSyncDriver,
+    oracledb_async_statement_config,
+    oracledb_sync_statement_config,
+)
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
-from sqlspec.statement.sql import StatementConfig
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
 
     from oracledb import AuthMode
     from oracledb.pool import AsyncConnectionPool, ConnectionPool
+
+    from sqlspec.statement.sql import StatementConfig
 
 
 __all__ = ("OracleAsyncConfig", "OracleConnectionParams", "OraclePoolParams", "OracleSyncConfig")
@@ -70,18 +76,8 @@ class OraclePoolParams(OracleConnectionParams, total=False):
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool", OracleSyncDriver]):
     """Configuration for Oracle synchronous database connections with direct field-based configuration."""
 
-    is_async: ClassVar[bool] = False
-    supports_connection_pooling: ClassVar[bool] = True
-
     driver_type: ClassVar[type[OracleSyncDriver]] = OracleSyncDriver
     connection_type: "ClassVar[type[OracleSyncConnection]]" = OracleSyncConnection
-
-    # Parameter style support information
-    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("named_colon", "positional_colon")
-    """OracleDB supports :name (named_colon) and :1 (positional_colon) parameter styles."""
-
-    default_parameter_style: ClassVar[str] = "named_colon"
-    """OracleDB's preferred parameter style is :name (named_colon)."""
 
     def __init__(
         self,
@@ -104,27 +100,10 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         if "extra" in self.pool_config:
             extras = self.pool_config.pop("extra")
             self.pool_config.update(extras)
-
-        super().__init__(pool_instance=pool_instance, migration_config=migration_config)
-
-        # Override parent's empty StatementConfig with Oracle-specific configuration
-        if statement_config is None:
-            parameter_config = ParameterStyleConfig(
-                default_parameter_style=ParameterStyle.NAMED_COLON,
-                supported_parameter_styles={
-                    ParameterStyle.POSITIONAL_COLON,  # :1, :2
-                    ParameterStyle.NAMED_COLON,  # :name
-                },
-                type_coercion_map={
-                    # Oracle has good native type support
-                    # Add any specific type mappings as needed
-                },
-                has_native_list_expansion=False,  # Oracle doesn't handle lists natively
-                needs_static_script_compilation=False,
-            )
-            self.statement_config = StatementConfig(dialect="oracle", parameter_config=parameter_config)
-        else:
-            self.statement_config = statement_config
+        statement_config = statement_config or oracledb_sync_statement_config
+        super().__init__(
+            pool_instance=pool_instance, migration_config=migration_config, statement_config=statement_config
+        )
 
     def _create_pool(self) -> "ConnectionPool":
         """Create the actual connection pool."""
@@ -180,7 +159,9 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
             An OracleSyncDriver instance.
         """
         with self.provide_connection(*args, **kwargs) as conn:
-            yield self.driver_type(connection=conn, statement_config=statement_config)
+            # Use shared config or user-provided config or instance default
+            final_statement_config = statement_config or self.statement_config or oracledb_sync_statement_config
+            yield self.driver_type(connection=conn, statement_config=final_statement_config)
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
         """Provide pool instance.
@@ -253,22 +234,17 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
 
         super().__init__(pool_instance=pool_instance, migration_config=migration_config)
 
-        # Override parent's empty StatementConfig with Oracle-specific configuration
+        # Handle statement_config - use provided value or create default
         if statement_config is None:
-            parameter_config = ParameterStyleConfig(
+            from sqlspec.parameters import ParameterStyle
+            from sqlspec.parameters.config import ParameterStyleConfig
+            from sqlspec.statement.sql import StatementConfig
+
+            default_parameter_config = ParameterStyleConfig(
                 default_parameter_style=ParameterStyle.NAMED_COLON,
-                supported_parameter_styles={
-                    ParameterStyle.POSITIONAL_COLON,  # :1, :2
-                    ParameterStyle.NAMED_COLON,  # :name
-                },
-                type_coercion_map={
-                    # Oracle has good native type support
-                    # Add any specific type mappings as needed
-                },
-                has_native_list_expansion=False,  # Oracle doesn't handle lists natively
-                needs_static_script_compilation=False,
+                supported_parameter_styles={ParameterStyle.NAMED_COLON},
             )
-            self.statement_config = StatementConfig(dialect="oracle", parameter_config=parameter_config)
+            self.statement_config = StatementConfig(parameter_config=default_parameter_config)
         else:
             self.statement_config = statement_config
 
@@ -326,7 +302,9 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
             An OracleAsyncDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as conn:
-            yield self.driver_type(connection=conn, statement_config=statement_config)
+            # Use shared config or user-provided config or instance default
+            final_statement_config = statement_config or self.statement_config or oracledb_async_statement_config
+            yield self.driver_type(connection=conn, statement_config=final_statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":
         """Provide async pool instance.

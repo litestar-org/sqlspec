@@ -424,7 +424,7 @@ class SQLFactory:
             ```
         """
         try:
-            parsed = exp.maybe_parse(sql_fragment)
+            parsed: Optional[exp.Expression] = exp.maybe_parse(sql_fragment)
             if parsed is not None:
                 return parsed
             if sql_fragment.strip().replace("_", "").replace(".", "").isalnum():

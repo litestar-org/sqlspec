@@ -13,16 +13,30 @@ from sqlspec.adapters.bigquery._types import BigQueryConnection
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.parameters import ParameterStyle
-from sqlspec.statement.result import SQLResult
+from sqlspec.parameters.config import ParameterStyleConfig
+from sqlspec.statement.sql import StatementConfig
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.statement.sql import SQL, StatementConfig
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.statement.result import SQLResult
+    from sqlspec.statement.sql import SQL
 
 
-__all__ = ("BigQueryCursor", "BigQueryDriver")
+bigquery_statement_config = StatementConfig(
+    dialect="bigquery",
+    parameter_config=ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_AT,
+        supported_parameter_styles={ParameterStyle.NAMED_AT},
+        type_coercion_map={},
+        has_native_list_expansion=True,
+        needs_static_script_compilation=True,
+    ),
+)
+
+__all__ = ("BigQueryCursor", "BigQueryDriver", "bigquery_statement_config")
 
 
 logger = logging.getLogger("sqlspec.adapters.bigquery")
@@ -71,21 +85,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
         on_job_complete: Optional[Callable[[str, Any], None]] = None,
     ) -> None:
         """Initialize BigQuery driver with comprehensive feature support."""
-        from sqlspec.statement.sql import StatementConfig
-
         # Set default BigQuery-specific configuration
         if statement_config is None:
-            statement_config = StatementConfig(
-                dialect="bigquery",
-                default_parameter_style=ParameterStyle.NAMED_AT,
-                supported_parameter_styles={ParameterStyle.NAMED_AT},  # Only supports @name
-                type_coercion_map={
-                    # BigQuery has good native type support
-                    # Type coercion is handled in _get_bq_param_type method
-                },
-                has_native_list_expansion=True,  # BigQuery handles arrays natively
-                needs_static_script_compilation=True,  # BigQuery requires static compilation for scripts
-            )
+            statement_config = bigquery_statement_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self.on_job_start = on_job_start
@@ -247,7 +249,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """Commit transaction - BigQuery doesn't support transactions."""
         # BigQuery doesn't support transactions
 
-    def _try_special_handling(self, cursor: "Any", statement: "SQL") -> "Optional[tuple[Any, Optional[int], Any]]":
+    def _try_special_handling(self, cursor: "Any", statement: "SQL") -> "Optional[SQLResult]":
         """Hook for BigQuery-specific special operations.
 
         BigQuery handles scripts differently by running multiple jobs.
@@ -255,26 +257,43 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if statement.is_script:
             sql, params = statement.compile()
             prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-            statements = self.split_script_statements(sql)
+            statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
             jobs = []
 
             # Convert params to BigQuery format
             bq_params = self._prepare_bq_query_parameters(self._convert_params_to_dict(prepared_params))
 
             for stmt in statements:
-                if stmt:
+                if stmt.strip():  # Skip empty statements
                     job = self._run_query_job(stmt, bq_params, connection=cursor.connection)
                     jobs.append(job)
 
-            # Store all jobs for result building
+            # Store all jobs for result building and calculate script results
             cursor.jobs = jobs
-            from sqlspec.driver._common import create_execution_result
+            statement_count = len(statements)
+            successful = 0
+            total_rows = 0
 
-            return create_execution_result(cursor)
+            # Wait for all jobs to complete and collect results
+            for job in jobs:
+                job.result()  # Wait for completion
+                successful += 1
+                total_rows += job.num_dml_affected_rows or 0
+
+            # Create ExecutionResult with script-specific data and build SQLResult directly
+            execution_result = self.create_execution_result(
+                cursor,
+                statement_count=statement_count,
+                successful_statements=successful,
+                rowcount_override=total_rows,
+                is_script_result=True,
+                special_data=jobs,  # Store jobs for potential future use
+            )
+            return self.build_statement_result(statement, execution_result)
 
         return None
 
-    def _execute_many(self, cursor: "Any", sql: str, prepared_params: Any) -> Any:
+    def _execute_many(self, cursor: "Any", sql: str, prepared_params: Any) -> "ExecutionResult":
         """BigQuery doesn't support executemany directly, create script instead."""
         # BigQuery doesn't support executemany directly, create script
         script_parts = []
@@ -305,13 +324,25 @@ class BigQueryDriver(SyncDriverAdapterBase):
         full_script = ";\n".join(script_parts)
         bq_params = self._prepare_bq_query_parameters(all_params)
         cursor.job = self._run_query_job(full_script, bq_params, connection=cursor.connection)
-        return cursor
 
-    def _execute_statement(self, cursor: "Any", sql: str, prepared_params: Any) -> Any:
+        # Wait for job completion and get row count
+        cursor.job.result()
+        total_rowcount = cursor.job.num_dml_affected_rows or 0
+
+        return self.create_execution_result(cursor, rowcount_override=total_rowcount, is_many_result=True)
+
+    def _execute_statement(self, cursor: "Any", sql: str, prepared_params: Any) -> "ExecutionResult":
         """BigQuery single execution."""
         bq_params = self._prepare_bq_query_parameters(self._convert_params_to_dict(prepared_params))
         cursor.job = self._run_query_job(sql, bq_params, connection=cursor.connection)
-        return cursor
+
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(cursor, rowcount_override=row_count)
 
     def _get_selected_data(self, cursor: "Any") -> "tuple[list[dict[str, Any]], list[str], int]":
         """Extract data from cursor after SELECT execution."""
@@ -350,55 +381,3 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if isinstance(prepared_params, (list, tuple)):
             return {f"param_{i}": val for i, val in enumerate(prepared_params)}
         return {"param_0": prepared_params}
-
-    def _build_result(
-        self, cursor: "Any", statement: "SQL", execution_result: "tuple[Any, Optional[int], Any]"
-    ) -> "SQLResult":
-        """Build result with BigQuery-specific handling for script execution."""
-        cursor_result, rowcount_override, special_data = execution_result
-
-        # Handle script execution special case
-        if hasattr(cursor, "jobs"):
-            # Script execution
-            successful = 0
-            total_rows = 0
-            for job in cursor.jobs:
-                job.result()
-                successful += 1
-                total_rows += job.num_dml_affected_rows or 0
-
-            return SQLResult(
-                statement=statement,
-                data=[],
-                rows_affected=total_rows,
-                operation_type="SCRIPT",
-                metadata={"status_message": "SCRIPT EXECUTED"},
-                total_statements=len(cursor.jobs),
-                successful_statements=successful,
-            )
-
-        # Check if it's a SELECT query by looking at statement type
-        query_job = cursor.job
-        query_schema = getattr(query_job, "schema", None)
-
-        if query_job.statement_type == "SELECT" or (query_schema is not None and len(query_schema) > 0):
-            # Override returns_rows check for BigQuery
-            data, column_names, row_count = self._get_selected_data(cursor)
-            return self._build_select_result_from_data(
-                statement=statement, data=data, column_names=column_names, row_count=row_count
-            )
-
-        if statement.is_many:
-            query_job.result()
-            total_rowcount = query_job.num_dml_affected_rows or 0
-            return SQLResult(
-                statement=statement,
-                data=[],
-                rows_affected=total_rowcount,
-                operation_type="EXECUTE",
-                metadata={"status_message": f"OK - executed batch job {query_job.job_id}"},
-            )
-
-        # Use standard row count from base class
-        row_count = self._get_row_count(cursor)
-        return self._build_execute_result_from_data(statement=statement, row_count=row_count)

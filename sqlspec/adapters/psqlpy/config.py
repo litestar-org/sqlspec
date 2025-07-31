@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union
 from psqlpy import Connection, ConnectionPool
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
+from sqlspec.adapters.psqlpy.driver import PsqlpyDriver, psqlpy_statement_config
 from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.statement.sql import StatementConfig
 
@@ -90,11 +90,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
 
     driver_type: ClassVar[type[PsqlpyDriver]] = PsqlpyDriver
     connection_type: "ClassVar[type[PsqlpyConnection]]" = PsqlpyConnection
-    # Parameter style support information
-    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("numeric",)
-    """Psqlpy only supports $1, $2, ... (numeric) parameter style."""
-
-    default_parameter_style: ClassVar[str] = "numeric"
 
     def __init__(
         self,
@@ -117,25 +112,10 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         if "extra" in self.pool_config:
             extras = self.pool_config.pop("extra")
             self.pool_config.update(extras)
-
-        super().__init__(pool_instance=pool_instance, migration_config=migration_config)
-
-        # Override parent's empty StatementConfig with Psqlpy-specific configuration
-        if statement_config is None:
-            from sqlspec.parameters import ParameterStyle
-
-            self.statement_config = StatementConfig(
-                supported_parameter_styles=(ParameterStyle.NUMERIC.value,),
-                default_parameter_style=ParameterStyle.NUMERIC.value,
-                type_coercion_map={
-                    # Psqlpy handles most PostgreSQL types natively
-                    dict: lambda v: v,  # Psqlpy handles JSON natively
-                    list: lambda v: v,  # Psqlpy handles arrays natively
-                },
-                has_native_list_expansion=True,
-            )
-        else:
-            self.statement_config = statement_config
+        statement_config = statement_config or psqlpy_statement_config
+        super().__init__(
+            pool_instance=pool_instance, migration_config=migration_config, statement_config=statement_config
+        )
 
     def _get_pool_config_dict(self) -> dict[str, Any]:
         """Get pool configuration as plain dict for external library.
@@ -218,7 +198,8 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             A PsqlpyDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as conn:
-            yield self.driver_type(connection=conn, statement_config=statement_config)
+            # Use shared config or user-provided config or instance default
+            yield self.driver_type(connection=conn, statement_config=statement_config or self.statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> ConnectionPool:
         """Provide async pool instance.

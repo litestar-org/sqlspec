@@ -14,7 +14,7 @@ import duckdb
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.duckdb._types import DuckDBConnection
-from sqlspec.adapters.duckdb.driver import DuckDBCursor, DuckDBDriver
+from sqlspec.adapters.duckdb.driver import DuckDBCursor, DuckDBDriver, duckdb_statement_config
 from sqlspec.config import SyncDatabaseConfig
 from sqlspec.typing import Empty
 
@@ -361,10 +361,14 @@ class DuckDBSecretConfig(TypedDict, total=False):
 
 
 class DuckDBDriverFeatures(TypedDict, total=False):
+    """TypedDict for DuckDB driver features configuration."""
+
     extensions: NotRequired[Sequence[DuckDBExtensionConfig]]
     """List of extensions to install/load on connection creation."""
     secrets: NotRequired[Sequence[DuckDBSecretConfig]]
     """List of secrets to create for AI/API integrations."""
+    on_connection_create: NotRequired["Callable[[DuckDBConnection], Optional[DuckDBConnection]]"]
+    """Callback executed when connection is created."""
 
 
 class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, DuckDBDriver]):
@@ -391,10 +395,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         migration_config: Optional[dict[str, Any]] = None,
         pool_instance: "Optional[DuckDBConnectionPool]" = None,
         statement_config: "Optional[StatementConfig]" = None,
-        driver_features: "Optional[dict[str, Any]]" = None,
-        extensions: "Optional[Sequence[DuckDBExtensionConfig]]" = None,
-        secrets: "Optional[Sequence[DuckDBSecretConfig]]" = None,
-        on_connection_create: "Optional[Callable[[DuckDBConnection], Optional[DuckDBConnection]]]" = None,
+        driver_features: "Optional[Union[DuckDBDriverFeatures, dict[str, Any]]]" = None,
     ) -> None:
         """Initialize DuckDB configuration with intelligent features.
 
@@ -402,9 +403,8 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             pool_config: Pool configuration parameters (TypedDict or dict) including connection params
             migration_config: Migration configuration
             pool_instance: Pre-created pool instance
-            extensions: List of extension dicts to auto-install/load with keys: name, version, repository, force_install
-            secrets: List of secret dicts for AI/API integrations with keys: secret_type, name, value, scope
-            on_connection_create: Callback executed when connection is created
+            statement_config: Default SQL statement configuration
+            driver_features: Driver features configuration (TypedDict or dict) with extensions, secrets, callbacks
 
         Example:
             >>> config = DuckDBConfig(
@@ -418,17 +418,20 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             ...         "pool_timeout": 30.0,
             ...         "pool_recycle_seconds": 3600,
             ...     },
-            ...     extensions=[
-            ...         {"name": "spatial", "repository": "core"},
-            ...         {"name": "aws", "repository": "core"},
-            ...     ],
-            ...     secrets=[
-            ...         {
-            ...             "secret_type": "openai",
-            ...             "name": "my_openai_secret",
-            ...             "value": {"api_key": "sk-..."},
-            ...         }
-            ...     ],
+            ...     driver_features={
+            ...         "extensions": [
+            ...             {"name": "spatial", "repository": "core"},
+            ...             {"name": "aws", "repository": "core"},
+            ...         ],
+            ...         "secrets": [
+            ...             {
+            ...                 "secret_type": "openai",
+            ...                 "name": "my_openai_secret",
+            ...                 "value": {"api_key": "sk-..."},
+            ...             }
+            ...         ],
+            ...         "on_connection_create": my_callback_function,
+            ...     },
             ... )
         """
         # Convert to dict and extract configuration
@@ -460,11 +463,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             unique_id = str(uuid.uuid4())[:8]  # Short unique identifier
             self.connection_config["database"] = f":memory:pool_{unique_id}"
 
-        # Store DuckDB-specific config
-        self.extensions = list(extensions) if extensions else []
-        self.secrets = list(secrets) if secrets else []
-        self.on_connection_create = on_connection_create
-
+        statement_config = statement_config or duckdb_statement_config
         super().__init__(
             pool_instance=pool_instance,
             migration_config=migration_config,
@@ -512,17 +511,22 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         """Create the DuckDB connection pool."""
         connection_config = self._get_connection_config_dict()
 
+        # Get extensions and secrets from driver_features
+        features_dict = dict(self.driver_features) if self.driver_features else {}
+        extensions = features_dict.get("extensions", [])
+        secrets = features_dict.get("secrets", [])
+        on_connection_create = features_dict.get("on_connection_create")
+
         # Convert extension and secret configs to plain dicts for pool compatibility
-        extensions_dicts = [dict(ext) for ext in self.extensions] if self.extensions else None
-        secrets_dicts = [dict(secret) for secret in self.secrets] if self.secrets else None
+        extensions_dicts = [dict(ext) for ext in extensions] if extensions else None
+        secrets_dicts = [dict(secret) for secret in secrets] if secrets else None
 
         # Wrap callback to match expected signature (ignore return value)
         pool_callback = None
-        if self.on_connection_create:
-            original_callback = self.on_connection_create
+        if on_connection_create:
 
             def wrapped_callback(conn: DuckDBConnection) -> None:
-                original_callback(conn)
+                on_connection_create(conn)
 
             pool_callback = wrapped_callback
 
@@ -553,8 +557,11 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             connection = duckdb.connect(**connect_params)
             logger.info("DuckDB connection created successfully", extra={"adapter": "duckdb"})
 
-            # Install and load extensions
-            for ext_config in self.extensions:
+            # Get extensions from driver_features and install/load them
+            features_dict = dict(self.driver_features) if self.driver_features else {}
+            extensions = features_dict.get("extensions", [])
+
+            for ext_config in extensions:
                 ext_name = ext_config.get("name")
                 if not ext_name:
                     continue
@@ -577,7 +584,10 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
                         "Failed to load DuckDB extension: %s", ext_name, extra={"adapter": "duckdb", "error": str(e)}
                     )
 
-            for secret_config in self.secrets:
+            # Get secrets from driver_features and configure them
+            secrets = features_dict.get("secrets", [])
+
+            for secret_config in secrets:
                 secret_type = secret_config.get("secret_type")
                 secret_name = secret_config.get("name")
                 secret_value = secret_config.get("value")
@@ -608,9 +618,11 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
                     logger.warning(
                         "Failed to create DuckDB secret: %s", secret_name, extra={"adapter": "duckdb", "error": str(e)}
                     )
-            if self.on_connection_create:
+            # Execute connection creation callback from driver_features
+            on_connection_create = features_dict.get("on_connection_create")
+            if on_connection_create:
                 try:
-                    self.on_connection_create(connection)
+                    on_connection_create(connection)
                     logger.debug("Executed connection creation hook", extra={"adapter": "duckdb"})
                 except Exception as e:  # noqa: BLE001
                     logger.warning("Connection creation hook failed", extra={"adapter": "duckdb", "error": str(e)})
@@ -650,7 +662,9 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             A context manager that yields a DuckDBDriver instance.
         """
         with self.provide_connection(*args, **kwargs) as connection:
-            driver = self.driver_type(connection=connection, statement_config=statement_config)
+            # Use shared config or user-provided config or instance default
+            final_statement_config = statement_config or self.statement_config
+            driver = self.driver_type(connection=connection, statement_config=final_statement_config)
             yield driver
 
     def _is_memory_database(self, database: str) -> bool:

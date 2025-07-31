@@ -5,8 +5,10 @@ import decimal
 import logging
 from typing import TYPE_CHECKING, Any, Optional, cast
 
+from sqlspec.adapters.adbc.pipeline_steps import adbc_null_transform_step
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.parameters import ParameterStyle
+from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
 from sqlspec.utils.serializers import to_json
 
@@ -14,8 +16,74 @@ if TYPE_CHECKING:
     from adbc_driver_manager.dbapi import Cursor
 
     from sqlspec.adapters.adbc._types import AdbcConnection
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.statement.result import SQLResult
 
-__all__ = ("AdbcCursor", "AdbcDriver")
+
+def create_adbc_statement_config(detected_dialect: str) -> StatementConfig:
+    """Create ADBC statement configuration for a specific dialect."""
+    default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
+        detected_dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
+    )
+
+    # Get type coercion map for this dialect
+    type_map = get_type_coercion_map(detected_dialect)
+
+    parameter_config = ParameterStyleConfig(
+        default_parameter_style=default_style,
+        supported_parameter_styles=set(supported_styles),
+        type_coercion_map=type_map,
+        has_native_list_expansion=True,  # ADBC handles lists natively
+        needs_static_script_compilation=True,  # ADBC requires static compilation for scripts
+    )
+
+    # Add PostgreSQL null transform step if needed
+    custom_pipeline_steps = None
+    if detected_dialect in {"postgres", "postgresql"}:
+        try:
+            from sqlspec.adapters.adbc.pipeline_steps import adbc_null_transform_step
+
+            custom_pipeline_steps = [adbc_null_transform_step]
+        except ImportError:
+            pass
+
+    return StatementConfig(
+        dialect=detected_dialect, parameter_config=parameter_config, custom_pipeline_steps=custom_pipeline_steps
+    )
+
+
+def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
+    """Get type coercion map for Arrow/ADBC type handling."""
+    # Basic type mappings for Arrow/ADBC compatibility
+    type_map = {
+        # Handle None/NULL values explicitly
+        type(None): lambda _: None,
+        # Date/Time types - DO NOT convert to strings, PostgreSQL expects actual date/time objects
+        datetime.datetime: lambda x: x,
+        datetime.date: lambda x: x,
+        datetime.time: lambda x: x,
+        decimal.Decimal: float,
+        bool: lambda x: x,
+        int: lambda x: x,
+        float: lambda x: x,
+        str: lambda x: x,
+        bytes: lambda x: x,
+        list: lambda x: x,
+        tuple: list,
+        dict: lambda x: x,
+    }
+
+    # PostgreSQL-specific type handling
+    if dialect == "postgres":
+        # PostgreSQL arrays need special handling
+        type_map[list] = lambda x: x if x is not None else []
+        # PostgreSQL JSON types - convert dict to JSON string
+        type_map[dict] = lambda x: to_json(x) if x is not None else None
+
+    return type_map
+
+
+__all__ = ("AdbcCursor", "AdbcDriver", "create_adbc_statement_config")
 
 logger = logging.getLogger("sqlspec")
 
@@ -72,32 +140,9 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         # Create default config if none provided
         if statement_config is None:
-            from sqlspec.parameters.config import ParameterStyleConfig
-
-            default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
-                detected_dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
-            )
-            parameter_config = ParameterStyleConfig(
-                default_parameter_style=default_style,
-                supported_parameter_styles=set(supported_styles),
-                type_coercion_map=self._get_type_coercion_map(detected_dialect),
-                has_native_list_expansion=True,  # ADBC handles lists natively
-                needs_static_script_compilation=True,  # ADBC requires static compilation for scripts
-            )
-
-            # Add PostgreSQL null transform step if needed
-            custom_pipeline_steps = None
-            if detected_dialect in {"postgres", "postgresql"}:
-                from sqlspec.adapters.adbc.pipeline_steps import adbc_null_transform_step
-
-                custom_pipeline_steps = [adbc_null_transform_step]
-
-            statement_config = StatementConfig(
-                dialect=detected_dialect, parameter_config=parameter_config, custom_pipeline_steps=custom_pipeline_steps
-            )
+            statement_config = create_adbc_statement_config(detected_dialect)
         elif detected_dialect in {"postgres", "postgresql"} and not statement_config.custom_pipeline_steps:
             # If PostgreSQL config provided without null transform, we need to add it
-            from sqlspec.adapters.adbc.pipeline_steps import adbc_null_transform_step
 
             statement_config = statement_config.replace(custom_pipeline_steps=[adbc_null_transform_step])
 
@@ -105,36 +150,6 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         # Set dialect attribute for compatibility
         self.dialect = statement_config.dialect
-
-    def _get_type_coercion_map(self, dialect: str) -> "dict[type, Any]":
-        """Get type coercion map for Arrow/ADBC type handling."""
-        # Basic type mappings for Arrow/ADBC compatibility
-        type_map = {
-            # Handle None/NULL values explicitly
-            type(None): lambda _: None,
-            # Date/Time types - DO NOT convert to strings, PostgreSQL expects actual date/time objects
-            datetime.datetime: lambda x: x,
-            datetime.date: lambda x: x,
-            datetime.time: lambda x: x,
-            decimal.Decimal: float,
-            bool: lambda x: x,
-            int: lambda x: x,
-            float: lambda x: x,
-            str: lambda x: x,
-            bytes: lambda x: x,
-            list: lambda x: x,
-            tuple: list,
-            dict: lambda x: x,
-        }
-
-        # PostgreSQL-specific type handling
-        if dialect == "postgres":
-            # PostgreSQL arrays need special handling
-            type_map[list] = lambda x: x if x is not None else []
-            # PostgreSQL JSON types - convert dict to JSON string
-            type_map[dict] = lambda x: to_json(x) if x is not None else None
-
-        return type_map
 
     @staticmethod
     def _get_dialect(connection: "AdbcConnection") -> str:
@@ -169,7 +184,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
     # Remove override - default implementation should handle this correctly
 
-    def _try_special_handling(self, cursor: "Cursor", statement: "SQL") -> "Optional[tuple[Any, Optional[int], Any]]":
+    def _try_special_handling(self, cursor: "Cursor", statement: "SQL") -> "Optional[SQLResult]":
         """Hook for ADBC-specific special operations.
 
         ADBC handles scripts by executing multiple statements sequentially.
@@ -178,6 +193,8 @@ class AdbcDriver(SyncDriverAdapterBase):
             try:
                 sql, parameters = statement.compile()
                 statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
+                statement_count = len(statements)
+
                 for stmt in statements:
                     if stmt.strip():
                         prepared_params = self.prepare_driver_parameters(
@@ -185,31 +202,51 @@ class AdbcDriver(SyncDriverAdapterBase):
                         )
                         cursor.execute(stmt, parameters=prepared_params)
 
-                from sqlspec.driver._common import create_execution_result
+                # Get row count if available
+                try:
+                    row_count = self._get_row_count(cursor)
+                except Exception:
+                    row_count = None
 
-                return create_execution_result(cursor)
+                # Create ExecutionResult and build SQLResult directly
+                execution_result = self.create_execution_result(
+                    cursor,
+                    statement_count=statement_count,
+                    successful_statements=statement_count,  # Assume all successful if no exception
+                    rowcount_override=row_count,
+                    is_script_result=True,
+                )
+                return self.build_statement_result(statement, execution_result)
+
             except Exception as e:
                 self._handle_postgres_rollback(cursor)
                 raise e from e
 
         return None
 
-    def _execute_many(self, cursor: "Cursor", sql: str, prepared_params: Any) -> Any:
+    def _execute_many(self, cursor: "Cursor", sql: str, prepared_params: Any) -> "ExecutionResult":
         """ADBC executemany implementation."""
         try:
             # ADBC requires at least one parameter set for executemany with parameterized queries
             # Use AST-based parameter detection instead of naive string searching
             if not prepared_params:
                 cursor._rowcount = 0
+                row_count = 0
             else:
                 cursor.executemany(sql, prepared_params)
+                # Get row count if available
+                try:
+                    row_count = self._get_row_count(cursor)
+                except Exception:
+                    row_count = None
 
         except Exception as e:
             self._handle_postgres_rollback(cursor)
             raise e from e
-        return cursor
 
-    def _execute_statement(self, cursor: "Cursor", sql: str, prepared_params: Any) -> Any:
+        return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
+
+    def _execute_statement(self, cursor: "Cursor", sql: str, prepared_params: Any) -> "ExecutionResult":
         """ADBC single execution."""
         try:
             # Handle PostgreSQL empty params and single param lists
@@ -220,7 +257,14 @@ class AdbcDriver(SyncDriverAdapterBase):
         except Exception as e:
             self._handle_postgres_rollback(cursor)
             raise e from e
-        return cursor
+
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(cursor, rowcount_override=row_count)
 
     def _get_selected_data(self, cursor: "Cursor") -> "tuple[list[dict[str, Any]], list[str], int]":
         """Extract data from cursor after SELECT execution."""
@@ -265,7 +309,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         The base class handles dict->list conversion for positional parameter styles.
         """
         # Use base class for parameter structure conversion
-        base_params = super()._prepare_driver_parameters(parameters)
+        base_params = self.prepare_driver_parameters(parameters, self.statement_config, is_many=False)
 
         if not base_params:
             return []

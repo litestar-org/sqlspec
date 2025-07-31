@@ -1,10 +1,11 @@
 """Common driver attributes and utilities."""
 
-from typing import TYPE_CHECKING, Any, Final, Optional, Union
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Optional, Union, cast
 
 from mypy_extensions import trait
+from sqlglot import exp
 
-from sqlspec.exceptions import NotFoundError
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.parameters import ParameterStyle
 from sqlspec.parameters.types import TypedParameter
 from sqlspec.statement import SQLResult, Statement, StatementFilter
@@ -16,9 +17,7 @@ from sqlspec.statement.sql import SQL, StatementConfig
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from sqlglot import exp
-
-    from sqlspec.typing import StatementParameters, T
+    from sqlspec.typing import StatementParameters
 
 
 __all__ = (
@@ -27,45 +26,73 @@ __all__ = (
     "EXEC_ROWCOUNT_OVERRIDE",
     "EXEC_SPECIAL_DATA",
     "CommonDriverAttributesMixin",
-    "create_execution_result",
+    "ExecutionResult",
+    "ScriptExecutionResult",
 )
 
 
 logger = get_logger("driver")
 
+
+class ScriptExecutionResult(NamedTuple):
+    """Result from script execution with statement count information.
+
+    This named tuple eliminates the need for redundant script splitting
+    by providing statement count information during execution rather than
+    requiring re-parsing after execution.
+
+    Attributes:
+        cursor_result: The result returned by the database cursor/driver
+        rowcount_override: Optional override for the number of affected rows
+        special_data: Any special metadata or additional information
+        statement_count: Total number of statements in the script
+        successful_statements: Number of statements that executed successfully
+    """
+
+    cursor_result: Any
+    rowcount_override: Optional[int]
+    special_data: Any
+    statement_count: int
+    successful_statements: int
+
+
+class ExecutionResult(NamedTuple):
+    """Comprehensive execution result containing all data needed for SQLResult building.
+
+    This named tuple consolidates all execution result data to eliminate the need
+    for additional data extraction calls and script re-parsing in build_statement_result.
+
+    Attributes:
+        cursor_result: The raw result returned by the database cursor/driver
+        rowcount_override: Optional override for the number of affected rows
+        special_data: Any special metadata or additional information from execution
+        selected_data: For SELECT operations, the extracted row data
+        column_names: For SELECT operations, the column names
+        data_row_count: For SELECT operations, the number of rows returned
+        statement_count: For script operations, total number of statements
+        successful_statements: For script operations, number of successful statements
+        is_script_result: Whether this result is from script execution
+        is_select_result: Whether this result is from a SELECT operation
+        is_many_result: Whether this result is from an execute_many operation
+    """
+
+    cursor_result: Any
+    rowcount_override: Optional[int]
+    special_data: Any
+    selected_data: Optional["list[dict[str, Any]]"]
+    column_names: Optional["list[str]"]
+    data_row_count: Optional[int]
+    statement_count: Optional[int]
+    successful_statements: Optional[int]
+    is_script_result: bool
+    is_select_result: bool
+    is_many_result: bool
+
+
 EXEC_CURSOR_RESULT = 0
 EXEC_ROWCOUNT_OVERRIDE = 1
 EXEC_SPECIAL_DATA = 2
 DEFAULT_EXECUTION_RESULT: Final[tuple[Any, Optional[int], Any]] = (None, None, None)
-
-
-def create_execution_result(
-    cursor_result: Any, rowcount_override: "Optional[int]" = None, special_data: Any = None
-) -> "tuple[Any, Optional[int], Any]":
-    """Create execution result tuple with explicit data flow.
-
-    This function creates a standardized execution result tuple that provides
-    explicit data flow for adapter refactoring. The tuple structure eliminates
-    the need for fragile dictionary-based state management and ensures MyPyC
-    compatibility through native tuple usage.
-
-    Args:
-        cursor_result: The primary result from cursor execution (cursor, rows, etc.)
-        rowcount_override: Optional override for row count when driver provides incorrect values
-        special_data: Any additional data specific to the execution context
-
-    Returns:
-        A tuple containing (cursor_result, rowcount_override, special_data)
-
-    Example:
-        >>> result = create_execution_result(
-        ...     cursor, rowcount_override=5
-        ... )
-        >>> cursor_data = result[EXEC_CURSOR_RESULT]
-        >>> override_count = result[EXEC_ROWCOUNT_OVERRIDE]
-        >>> special = result[EXEC_SPECIAL_DATA]
-    """
-    return (cursor_result, rowcount_override, special_data)
 
 
 @trait
@@ -95,15 +122,133 @@ class CommonDriverAttributesMixin:
         self.driver_features = driver_features or {}
 
     # ================================================================================
+    # Execution Result Utilities
+    # ================================================================================
+
+    def create_execution_result(
+        self,
+        cursor_result: Any,
+        *,
+        # For all operations
+        rowcount_override: Optional[int] = None,
+        special_data: Any = None,
+        # For SELECT operations
+        selected_data: Optional["list[dict[str, Any]]"] = None,
+        column_names: Optional["list[str]"] = None,
+        data_row_count: Optional[int] = None,
+        # For script operations
+        statement_count: Optional[int] = None,
+        successful_statements: Optional[int] = None,
+        # Operation type flags
+        is_script_result: bool = False,
+        is_select_result: bool = False,
+        is_many_result: bool = False,
+    ) -> ExecutionResult:
+        """Create ExecutionResult with all necessary data for any operation type.
+
+        This consolidated method replaces multiple specialized creation methods.
+        Pass only the parameters relevant to your operation type.
+
+        Args:
+            cursor_result: The raw result returned by the database cursor/driver
+            rowcount_override: Optional override for the number of affected rows
+            special_data: Any special metadata or additional information
+            selected_data: For SELECT operations, the extracted row data
+            column_names: For SELECT operations, the column names
+            data_row_count: For SELECT operations, the number of rows returned
+            statement_count: For script operations, total number of statements
+            successful_statements: For script operations, number of successful statements
+            is_script_result: Whether this result is from script execution
+            is_select_result: Whether this result is from a SELECT operation
+            is_many_result: Whether this result is from an execute_many operation
+
+        Returns:
+            ExecutionResult configured for the specified operation type
+
+        Examples:
+            # SELECT operation
+            create_execution_result(cursor, selected_data=data, column_names=cols,
+                                  data_row_count=len(data), is_select_result=True)
+
+            # Script operation
+            create_execution_result(cursor, statement_count=5, successful_statements=5,
+                                  is_script_result=True)
+
+            # Regular execute operation
+            create_execution_result(cursor, rowcount_override=1)
+
+            # Execute many operation
+            create_execution_result(cursor, rowcount_override=10, is_many_result=True)
+        """
+        return ExecutionResult(
+            cursor_result=cursor_result,
+            rowcount_override=rowcount_override,
+            special_data=special_data,
+            selected_data=selected_data,
+            column_names=column_names,
+            data_row_count=data_row_count,
+            statement_count=statement_count,
+            successful_statements=successful_statements,
+            is_script_result=is_script_result,
+            is_select_result=is_select_result,
+            is_many_result=is_many_result,
+        )
+
+    def build_statement_result(self, statement: "SQL", execution_result: ExecutionResult) -> "SQLResult":
+        """Build and return the SQLResult from consolidated execution data.
+
+        This method creates SQLResult objects from ExecutionResult data without requiring
+        additional data extraction calls or script re-parsing, significantly improving
+        performance and simplifying the execution flow.
+
+        Args:
+            statement: SQL statement that was executed
+            execution_result: ExecutionResult containing all necessary data
+
+        Returns:
+            SQLResult with complete execution data
+        """
+        if execution_result.is_script_result:
+            # Script execution - use pre-calculated statement counts
+            row_count = (
+                execution_result.rowcount_override
+                if execution_result.rowcount_override is not None
+                else 0  # Default for scripts when no rowcount provided
+            )
+            return SQLResult(
+                statement=statement,
+                data=[],
+                rows_affected=row_count,
+                operation_type="SCRIPT",
+                total_statements=execution_result.statement_count or 0,
+                successful_statements=execution_result.successful_statements or 0,
+                metadata=execution_result.special_data or {"status_message": "OK"},
+            )
+
+        if execution_result.is_select_result:
+            # SELECT operation - use pre-extracted data
+            return SQLResult(
+                statement=statement,
+                data=execution_result.selected_data or [],
+                column_names=execution_result.column_names or [],
+                rows_affected=execution_result.data_row_count or 0,
+                operation_type="SELECT",
+                metadata=execution_result.special_data or {},
+            )
+
+        # Non-SELECT operation (INSERT/UPDATE/DELETE)
+        row_count = execution_result.rowcount_override if execution_result.rowcount_override is not None else 0
+        return SQLResult(
+            statement=statement,
+            data=[],
+            rows_affected=row_count,
+            operation_type=self._determine_operation_type(statement),
+            metadata=execution_result.special_data or {"status_message": "OK"},
+        )
+
+    # ================================================================================
     # SQL Analysis & Detection Methods
     # ================================================================================
-    def _build_select_result_from_data(
-        self, statement: "SQL", data: "list[dict[str, Any]]", column_names: "list[str]", row_count: int
-    ) -> "SQLResult":
-        """Build SQLResult for SELECT operations from extracted data."""
-        return SQLResult(
-            statement=statement, data=data, column_names=column_names, rows_affected=row_count, operation_type="SELECT"
-        )
 
     def _determine_operation_type(self, statement: "Any") -> OperationType:
         """Determine operation type from SQL statement expression.
@@ -117,8 +262,7 @@ class CommonDriverAttributesMixin:
         Returns:
             OperationType literal value
         """
-        # Check if it's a script first
-        if hasattr(statement, "is_script") and statement.is_script:
+        if statement.is_script:
             return "SCRIPT"
 
         try:
@@ -139,18 +283,6 @@ class CommonDriverAttributesMixin:
         if "SELECT" in expr_type:
             return "SELECT"
         return "EXECUTE"
-
-    def _build_execute_result_from_data(
-        self, statement: "SQL", row_count: int, metadata: "Optional[dict[str, Any]]" = None
-    ) -> "SQLResult":
-        """Build SQLResult for non-SELECT operations from extracted data."""
-        return SQLResult(
-            statement=statement,
-            data=[],
-            rows_affected=row_count,
-            operation_type=self._determine_operation_type(statement),
-            metadata=metadata or {"status_message": "OK"},
-        )
 
     def prepare_statement(
         self,
@@ -184,24 +316,6 @@ class CommonDriverAttributesMixin:
                 return statement.copy(statement_config=new_config, dialect=self.statement_config.dialect)
             return statement
         return SQL(statement, *parameters, statement_config=statement_config, **kwargs)
-
-    @staticmethod
-    def check_not_found(item_or_none: "Optional[T]" = None) -> "T":
-        """Raise :exc:`sqlspec.exceptions.NotFoundError` if ``item_or_none`` is ``None``.
-
-        Args:
-            item_or_none: Item to be tested for existence.
-
-        Raises:
-            NotFoundError: If ``item_or_none`` is ``None``
-
-        Returns:
-            The item, if it exists.
-        """
-        if item_or_none is None:
-            msg = "No result found when one was expected"
-            raise NotFoundError(msg)
-        return item_or_none
 
     def split_script_statements(
         self, script: str, statement_config: "StatementConfig", strip_trailing_semicolon: bool = False
@@ -270,11 +384,10 @@ class CommonDriverAttributesMixin:
         if isinstance(parameters, dict):
             if not parameters:
                 return []
-            parameter_config = statement_config.parameter_config
-            if parameter_config.default_parameter_style in {
-                ParameterStyle.NUMERIC,  # PostgreSQL $1, $2
-                ParameterStyle.QMARK,  # SQLite ?, ?
-                ParameterStyle.POSITIONAL_PYFORMAT,  # MySQL %s, %s
+            if statement_config.parameter_config.default_parameter_style in {
+                ParameterStyle.NUMERIC,
+                ParameterStyle.QMARK,
+                ParameterStyle.POSITIONAL_PYFORMAT,
             }:
                 # Convert dict to ordered list based on numeric or param_ keys
                 ordered_params = []
@@ -296,22 +409,6 @@ class CommonDriverAttributesMixin:
             return [p.value if isinstance(p, TypedParameter) else p for p in parameters]
 
         return [parameters.value if isinstance(parameters, TypedParameter) else parameters]
-
-    def _prepare_script_sql(self, statement: "SQL") -> str:
-        """Prepare SQL script for execution by embedding parameters as static values.
-
-        Since most database drivers don't support parameters in executescript
-        methods, this method compiles the SQL with ParameterStyle.STATIC to
-        embed parameter values directly in the SQL string.
-
-        Args:
-            statement: SQL statement marked as a script
-
-        Returns:
-            SQL string with parameters embedded as static values
-        """
-        sql, _ = statement.compile(placeholder_style=ParameterStyle.STATIC)
-        return sql
 
     def _apply_pipeline_transformations(
         self, expression: "exp.Expression", parameters: Any = None, config: "Optional[StatementConfig]" = None
@@ -357,102 +454,56 @@ class CommonDriverAttributesMixin:
         Returns:
             Tuple of (compiled_sql, parameters)
         """
-        parameter_config = statement_config.parameter_config
-        return statement.compile(parameter_config.execution_parameter_style)
+        params = self.prepare_driver_parameters(statement.parameters, statement_config, is_many=statement.is_many)
+        if statement.is_script and not statement_config.parameter_config.needs_static_script_compilation:
+            target_style = ParameterStyle.STATIC
+        elif statement_config.parameter_config.execution_parameter_style is not None:
+            target_style = statement_config.parameter_config.execution_parameter_style
+        else:
+            target_style = None
+        sql, params = statement.compile(placeholder_style=target_style)
+        return sql, self.prepare_driver_parameters(params, statement_config, is_many=statement.is_many)
 
-    # ================================================================================
-    # Unified Execution Methods
-    # ================================================================================
+    def _create_count_query(self, original_sql: "SQL") -> "SQL":
+        """Create a COUNT query from the original SQL statement.
 
-    def _perform_execute(self, cursor: Any, statement: "SQL") -> Any:
-        """Unified execution logic that delegates to driver-specific methods.
+        Transforms the original SELECT statement to count total rows while preserving
+        WHERE, HAVING, and GROUP BY clauses but removing ORDER BY, LIMIT, and OFFSET.
 
-        This method implements the common execution pattern shared by all drivers:
-        1. Compile SQL with driver's parameter style
-        2. Route to appropriate execution method based on statement type
-        3. Let driver implement the specific database execution logic
-
-        Args:
-            cursor: Database cursor/connection object
-            statement: SQL statement to execute
-
-        Returns:
-            Whatever the driver-specific execution method returns
+        For queries with GROUP BY, wraps the query in a subquery to count groups correctly.
         """
-        sql, params = self._get_compiled_sql(statement, self.statement_config)
+        if not original_sql.expression:
+            msg = "Cannot create COUNT query from empty SQL expression"
+            raise ImproperConfigurationError(msg)
+        expr = original_sql.expression.copy()
 
-        if statement.is_script:
-            # Check if driver needs static compilation (e.g., SQLite executescript)
-            if self.statement_config.parameter_config.needs_static_script_compilation:
-                static_sql = self._prepare_script_sql(statement)
-                return self._execute_script(cursor, static_sql, None, self.statement_config)
-            # Prepare parameters for script execution
-            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-            return self._execute_script(cursor, sql, prepared_params, self.statement_config)
-        if statement.is_many:
-            # Prepare parameters for executemany
-            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=True)
-            return self._execute_many(cursor, sql, prepared_params)
-        # Prepare parameters for single execution
-        prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-        return self._execute_statement(cursor, sql, prepared_params)
+        if isinstance(expr, exp.Select):
+            # Check if query has GROUP BY clause
+            if expr.args.get("group"):
+                # For GROUP BY queries, wrap in subquery and count rows
+                # This counts the number of groups, not the total rows
+                subquery = expr.subquery(alias="grouped_data")
+                count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
+            else:
+                # Simple case: replace SELECT list with COUNT(*)
+                count_expr = exp.select(exp.Count(this=exp.Star())).from_(
+                    cast("exp.Expression", expr.args.get("from")), copy=False
+                )
+                if expr.args.get("where"):
+                    count_expr = count_expr.where(cast("exp.Expression", expr.args.get("where")), copy=False)
+                if expr.args.get("having"):
+                    count_expr = count_expr.having(cast("exp.Expression", expr.args.get("having")), copy=False)
 
-    def _execute_script(self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig") -> Any:
-        """Execute a SQL script (multiple statements).
+            # Remove ORDER BY, LIMIT, OFFSET - preserve WHERE, HAVING, GROUP BY
+            count_expr.set("order", None)
+            count_expr.set("limit", None)
+            count_expr.set("offset", None)
 
-        Default implementation splits script and executes statements individually.
-        Drivers can override for database-specific script execution methods.
+            # Create new SQL with same parameters and config as original
+            return SQL(count_expr, *original_sql._positional_params, config=original_sql.statement_config)
 
-        Args:
-            cursor: Database cursor/connection object
-            sql: Compiled SQL script
-            prepared_params: Prepared parameters
-            statement_config: Statement configuration for dialect information
-
-        Returns:
-            Driver-specific result
-        """
-        statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
-        last_result = None
-        for stmt in statements:
-            # split_script_statements already removes empty strings, no need to check again
-            last_result = self._execute_statement(cursor, stmt, prepared_params)
-        return last_result
-
-    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
-        """Execute SQL with multiple parameter sets (executemany).
-
-        Must be implemented by each driver for database-specific executemany logic.
-
-        Args:
-            cursor: Database cursor/connection object
-            sql: Compiled SQL statement
-            prepared_params: List of prepared parameter sets
-
-        Returns:
-            Driver-specific result
-
-        Raises:
-            NotImplementedError: Must be implemented by driver subclasses
-        """
-        msg = f"{type(self).__name__} must implement _execute_many"
-        raise NotImplementedError(msg)
-
-    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
-        """Execute a single SQL statement.
-
-        Must be implemented by each driver for database-specific execution logic.
-
-        Args:
-            cursor: Database cursor/connection object
-            sql: Compiled SQL statement
-            prepared_params: Prepared parameters
-
-        Returns:
-            Driver-specific result
-
-        Raises:
-            NotImplementedError: Must be implemented by driver subclasses
-        """
-        msg = f"{type(self).__name__} must implement _execute_single"
-        raise NotImplementedError(msg)
+        # Handle other query types (UNION, etc.) - wrap in subquery
+        subquery = cast("exp.Select", expr).subquery(alias="total_query")
+        count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
+        # Create new SQL with same parameters and config as original
+        return SQL(count_expr, *original_sql._positional_params, config=original_sql.statement_config)

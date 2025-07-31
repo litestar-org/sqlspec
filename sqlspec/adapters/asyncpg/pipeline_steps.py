@@ -33,7 +33,8 @@ def postgres_copy_pipeline_step(context: SQLTransformContext) -> SQLTransformCon
         copy_sql = copy_sql.replace("COPY INTO", "COPY").replace("copy into", "copy")
 
     # Store consistent metadata for both drivers
-    context.metadata["copy_operation"] = True
+    context.metadata["postgres_copy_operation"] = True
+    context.metadata["copy_operation"] = True  # Keep for backward compatibility
     context.metadata["original_sql"] = copy_sql
 
     # Process parameters in single pass - move all to metadata

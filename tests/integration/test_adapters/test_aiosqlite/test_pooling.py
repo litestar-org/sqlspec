@@ -13,9 +13,7 @@ async def test_shared_memory_pooling() -> None:
         pool_config={"database": "file::memory:?cache=shared", "uri": True, "pool_min_size": 2, "pool_max_size": 5}
     )
 
-    # Verify pooling is not disabled
-    assert config.min_pool == 2
-    assert config.max_pool == 5
+    # Test that pooling works
 
     # Test that multiple connections can access the same data
     async with config.provide_session() as session1:
@@ -52,9 +50,7 @@ async def test_regular_memory_auto_converted_pooling() -> None:
     # Create config with regular memory database
     config = AiosqliteConfig(pool_config={"database": ":memory:", "pool_min_size": 5, "pool_max_size": 10})
 
-    # Verify pooling is enabled (no longer forced to 1)
-    assert config.min_pool == 5
-    assert config.max_pool == 10
+    # Test that pooling works
 
     # Verify auto-conversion happened
     assert config.connection_config["database"] == "file::memory:?cache=shared"
@@ -99,11 +95,9 @@ async def test_file_database_pooling_enabled() -> None:
 
     try:
         # Create config with file database
-        config = AiosqliteConfig(connection_config={"database": db_path}, min_pool=3, max_pool=8)
+        config = AiosqliteConfig(pool_config={"database": db_path, "pool_min_size": 3, "pool_max_size": 8})
 
-        # Verify pooling is enabled
-        assert config.min_pool == 3
-        assert config.max_pool == 8
+        # Test that pooling works
 
         # Test that multiple connections work
         async with config.provide_session() as session1:

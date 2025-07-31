@@ -10,7 +10,7 @@ import aiosqlite
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
-from sqlspec.adapters.aiosqlite.driver import AiosqliteCursor, AiosqliteDriver
+from sqlspec.adapters.aiosqlite.driver import AiosqliteCursor, AiosqliteDriver, aiosqlite_statement_config
 from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.exceptions import ImproperConfigurationError
 
@@ -99,12 +99,6 @@ class AiosqliteConnectionPool:
     async def initialize(self) -> None:
         """Pre-populate the pool with minimum connections."""
         # Skip pre-population for now to avoid initialization hangs
-        # connections_to_create = min(self._min_pool, self._max_pool)
-        # for _ in range(connections_to_create):
-        #     if self._pool.full():
-        #         break
-        #     conn = await self._create_connection()
-        #     await self._pool.put(conn)
 
     def _should_recycle(self, connection: "AiosqliteConnection") -> bool:
         """Check if connection should be recycled based on age."""
@@ -277,8 +271,18 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
 
         super().__init__(pool_instance=pool_instance, migration_config=migration_config)
 
-        # Use provided StatementConfig or None to let driver set its own defaults
-        self.statement_config = statement_config
+        # Handle statement_config - use provided value or create default
+        if statement_config is None:
+            from sqlspec.parameters import ParameterStyle
+            from sqlspec.parameters.config import ParameterStyleConfig
+            from sqlspec.statement.sql import StatementConfig
+
+            default_parameter_config = ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+            )
+            self.statement_config = StatementConfig(parameter_config=default_parameter_config)
+        else:
+            self.statement_config = statement_config
 
     def _get_connection_config_dict(self) -> "dict[str, Any]":
         """Get connection configuration as plain dict for pool creation."""
@@ -391,9 +395,9 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
             An AiosqliteDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as connection:
-            # Use provided statement_config or instance default
-            config = statement_config if statement_config is not None else self.statement_config
-            yield self.driver_type(connection=connection, statement_config=config)
+            # Use shared config or user-provided config or instance default
+            final_statement_config = statement_config or self.statement_config or aiosqlite_statement_config
+            yield self.driver_type(connection=connection, statement_config=final_statement_config)
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":
         """Get the signature namespace for Aiosqlite types.

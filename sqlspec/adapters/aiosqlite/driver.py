@@ -6,17 +6,35 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import aiosqlite
 
-from sqlspec.driver import AsyncDriverAdapterBase
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
-from sqlspec.statement.sql import StatementConfig
+from sqlspec.driver import AsyncDriverAdapterBase, ExecutionResult
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.statement import StatementConfig
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
+    from sqlspec.statement.result import SQLResult
 
+# Shared AIOSQLite statement configuration
+aiosqlite_statement_config = StatementConfig(
+    dialect="sqlite",
+    parameter_config=ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.QMARK,
+        supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
+        type_coercion_map={
+            bool: int,
+            datetime.datetime: lambda v: v.isoformat(),
+            Decimal: str,
+            dict: to_json,
+            list: to_json,
+            tuple: lambda v: to_json(list(v)),
+        },
+        has_native_list_expansion=False,
+        needs_static_script_compilation=False,
+    ),
+)
 
-__all__ = ("AiosqliteCursor", "AiosqliteDriver")
+__all__ = ("AiosqliteCursor", "AiosqliteDriver", "aiosqlite_statement_config")
 
 
 class AiosqliteCursor:
@@ -47,30 +65,14 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     ) -> None:
         # Set default aiosqlite-specific configuration
         if statement_config is None:
-            parameter_config = ParameterStyleConfig(
-                default_parameter_style=ParameterStyle.QMARK,
-                supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
-                type_coercion_map={
-                    bool: int,
-                    datetime.datetime: lambda v: v.isoformat(),
-                    Decimal: str,
-                    dict: to_json,
-                    list: to_json,
-                    tuple: lambda v: to_json(list(v)),
-                },
-                has_native_list_expansion=False,
-                needs_static_script_compilation=False,
-            )
-            statement_config = StatementConfig(dialect="sqlite", parameter_config=parameter_config)
+            statement_config = aiosqlite_statement_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: "AiosqliteConnection") -> "AiosqliteCursor":
         return AiosqliteCursor(connection)
 
-    async def _try_special_handling(
-        self, cursor: "aiosqlite.Cursor", statement: "Any"
-    ) -> "Optional[tuple[Any, Optional[int], Any]]":
+    async def _try_special_handling(self, cursor: "aiosqlite.Cursor", statement: "Any") -> "Optional[SQLResult]":
         """Hook for AioSQLite-specific special operations.
 
         AioSQLite doesn't have special operations like PostgreSQL COPY,
@@ -88,7 +90,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     async def begin(self) -> None:
         """Begin a database transaction."""
         with contextlib.suppress(Exception):
-            # aiosqlite might already be in a transaction or handle transactions differently
             await self.connection.execute("BEGIN")
 
     async def rollback(self) -> None:
@@ -101,31 +102,59 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
     async def _execute_script(
         self, cursor: "aiosqlite.Cursor", sql: str, prepared_params: Any, statement_config: "StatementConfig"
-    ) -> Any:
+    ) -> "ExecutionResult":
         """Execute SQL script by splitting and executing statements individually.
 
         AioSQLite doesn't have executescript but supports parameters in execute() calls.
         """
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
+
         last_result = None
         for stmt in statements:
-            if stmt.strip():  # Skip empty statements
-                last_result = await cursor.execute(stmt, prepared_params or ())
-        return last_result
+            last_result = await cursor.execute(stmt, prepared_params or ())
 
-    async def _execute_many(self, cursor: "aiosqlite.Cursor", sql: str, prepared_params: Any) -> Any:
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(
+            last_result,
+            statement_count=len(statements),
+            successful_statements=len(statements),
+            rowcount_override=row_count,
+            is_script_result=True,
+        )
+
+    async def _execute_many(self, cursor: "aiosqlite.Cursor", sql: str, prepared_params: Any) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using aiosqlite executemany."""
-        return await cursor.executemany(sql, prepared_params)
+        result = await cursor.executemany(sql, prepared_params)
 
-    async def _execute_statement(self, cursor: "aiosqlite.Cursor", sql: str, prepared_params: Any) -> Any:
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(result, rowcount_override=row_count, is_many_result=True)
+
+    async def _execute_statement(self, cursor: "aiosqlite.Cursor", sql: str, prepared_params: Any) -> "ExecutionResult":
         """Execute single SQL statement using aiosqlite execute."""
-        return await cursor.execute(sql, prepared_params or ())
+        result = await cursor.execute(sql, prepared_params or ())
+
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(result, rowcount_override=row_count)
 
     async def _get_selected_data(self, cursor: "aiosqlite.Cursor") -> "tuple[list[dict[str, Any]], list[str], int]":
         """Extract data from cursor after SELECT execution."""
         fetched_data = await cursor.fetchall()
         column_names = [col[0] for col in cursor.description or []]
-        # Convert Row objects to dicts
         data = [dict(row) for row in fetched_data]
         return data, column_names, len(data)
 

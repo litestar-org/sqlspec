@@ -111,7 +111,7 @@ class _AiosqlAdapterBase:
     def _create_sql_object(self, sql: str, parameters: "Any" = None) -> SQL:
         """Create SQL object with proper configuration."""
         config = StatementConfig(enable_validation=False)
-        converted_dialect = _normalize_dialect(self.driver.dialect)
+        converted_dialect = _normalize_dialect(getattr(self.driver, "dialect", "sqlite"))
         return SQL(sql, parameters, config=config, dialect=converted_dialect)
 
 

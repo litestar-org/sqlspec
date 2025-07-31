@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict, 
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.adbc._types import AdbcConnection
-from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver
+from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, create_adbc_statement_config
 from sqlspec.config import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.statement.sql import StatementConfig
@@ -100,14 +100,16 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         self.connection_config: dict[str, Any] = dict(connection_config)
         self.connection_config.update(extras)
 
-        # Override parent's empty StatementConfig with ADBC-specific dynamic configuration
+        # Handle statement_config - use provided value or create default
         if statement_config is None:
-            supported_styles, default_style = self._get_parameter_styles()
-            self.statement_config = StatementConfig(
-                dialect=self._get_dialect(),
-                supported_parameter_styles=supported_styles,
-                default_parameter_style=default_style,
+            from sqlspec.parameters import ParameterStyle
+            from sqlspec.parameters.config import ParameterStyleConfig
+            from sqlspec.statement.sql import StatementConfig
+
+            default_parameter_config = ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
             )
+            self.statement_config = StatementConfig(parameter_config=default_parameter_config)
         else:
             self.statement_config = statement_config
         super().__init__(
@@ -252,7 +254,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                 return (("qmark", "numeric"), "qmark")
 
         except Exception:
-            pass
+            logger.debug("Error resolving parameter styles for ADBC driver, using defaults")
         return (("qmark",), "qmark")
 
     def create_connection(self) -> AdbcConnection:
@@ -309,7 +311,13 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         @contextmanager
         def session_manager() -> "Generator[AdbcDriver, None, None]":
             with self.provide_connection(*args, **kwargs) as connection:
-                yield self.driver_type(connection=connection, statement_config=statement_config)
+                # Use shared config or user-provided config or instance default
+                final_statement_config = (
+                    statement_config
+                    or self.statement_config
+                    or create_adbc_statement_config(str(self._get_dialect() or "sqlite"))
+                )
+                yield self.driver_type(connection=connection, statement_config=final_statement_config)
 
         return session_manager()
 

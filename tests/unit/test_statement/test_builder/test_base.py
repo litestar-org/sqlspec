@@ -19,6 +19,8 @@ from sqlglot import exp
 from sqlglot.dialects.dialect import Dialect
 
 from sqlspec.exceptions import SQLBuilderError
+from sqlspec.parameters import ParameterStyle
+from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.builder._base import QueryBuilder, SafeQuery
 from sqlspec.statement.builder._ddl import (
     AlterTable,
@@ -399,7 +401,10 @@ def test_query_builder_to_statement_basic(test_builder: MockQueryBuilder) -> Non
 
 def test_query_builder_to_statement_with_config(test_builder: MockQueryBuilder) -> None:
     """Test to_statement method with custom config."""
-    config = StatementConfig()
+    parameter_config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+    )
+    config = StatementConfig(parameter_config=parameter_config)
     statement = test_builder.to_statement(config)
 
     assert isinstance(statement, SQL)

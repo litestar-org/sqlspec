@@ -9,10 +9,17 @@ from sqlglot import exp
 
 from sqlspec.config import NoPoolSyncConfig
 from sqlspec.driver import SyncDriverAdapterBase
+from sqlspec.driver._common import ExecutionResult
 from sqlspec.driver.mixins._sql_translator import SQLTranslatorMixin
 from sqlspec.exceptions import SQLConversionError
 from sqlspec.parameters import ParameterStyle
+from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
+
+# Create a default parameter config for tests
+DEFAULT_PARAMETER_CONFIG = ParameterStyleConfig(
+    default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+)
 
 
 class MockConnection:
@@ -74,6 +81,32 @@ class MockDriver(SyncDriverAdapterBase, SQLTranslatorMixin):
         """Mock extract execute rowcount."""
         return 0
 
+    def _execute_many(self, cursor: "Any", sql: str, prepared_params: "Any") -> "ExecutionResult":
+        """Mock execute many."""
+        return self.create_execution_result(cursor, is_many_result=True)
+
+    def _execute_statement(self, cursor: "Any", sql: str, prepared_params: "Any") -> "ExecutionResult":
+        """Mock execute statement."""
+        return self.create_execution_result(cursor)
+
+    def _execute_script(
+        self, cursor: "Any", sql: str, prepared_params: "Any", statement_config: "StatementConfig"
+    ) -> "ExecutionResult":
+        """Mock execute script."""
+        return self.create_execution_result(cursor, is_script_result=True)
+
+    def _try_special_handling(self, cursor: "Any", statement: "SQL") -> "Any":
+        """Mock special handling."""
+        return None
+
+    def _get_selected_data(self, cursor: "Any") -> "tuple[list[dict[str, Any]], list[str], int]":
+        """Mock get selected data."""
+        return [], [], 0
+
+    def _get_row_count(self, cursor: "Any") -> int:
+        """Mock get row count."""
+        return 0
+
 
 class MockConfig(NoPoolSyncConfig[MockConnection, MockDriver]):
     """Mock config for testing dialect property."""
@@ -82,7 +115,7 @@ class MockConfig(NoPoolSyncConfig[MockConnection, MockDriver]):
 
     def __init__(self) -> None:
         self.instrumentation = Mock()
-        self.statement_config = StatementConfig()
+        self.statement_config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
         self.connection_config = {"host": "localhost"}
         super().__init__()
 
@@ -102,7 +135,9 @@ class TestSQLTranslatorMixinWithDialect:
 
     def test_translator_mixin_uses_driver_dialect(self) -> None:
         """Test that SQLTranslatorMixin uses the driver's dialect attribute."""
-        driver = MockDriver(connection=MockConnection(), statement_config=StatementConfig())
+        driver = MockDriver(
+            connection=MockConnection(), statement_config=StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
+        )
 
         assert driver.dialect == "sqlite"
 
@@ -121,7 +156,9 @@ class TestSQLTranslatorMixinWithDialect:
 
     def test_translator_mixin_with_sql_object(self) -> None:
         """Test convert_to_dialect with SQL object input."""
-        driver = MockDriver(connection=MockConnection(), statement_config=StatementConfig())
+        driver = MockDriver(
+            connection=MockConnection(), statement_config=StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
+        )
 
         # Create SQL object with expression
         sql = SQL("SELECT * FROM users WHERE id = ?", parameters=[1])
@@ -140,7 +177,9 @@ class TestSQLTranslatorMixinWithDialect:
 
     def test_translator_mixin_with_target_dialect(self) -> None:
         """Test convert_to_dialect with explicit target dialect."""
-        driver = MockDriver(connection=MockConnection(), statement_config=StatementConfig())
+        driver = MockDriver(
+            connection=MockConnection(), statement_config=StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
+        )
 
         # Test conversion to different dialect
         with patch("sqlspec.driver.mixins._sql_translator.parse_one") as mock_parse:
@@ -157,7 +196,9 @@ class TestSQLTranslatorMixinWithDialect:
 
     def test_translator_mixin_with_expression_input(self) -> None:
         """Test convert_to_dialect with sqlglot Expression input."""
-        driver = MockDriver(connection=MockConnection(), statement_config=StatementConfig())
+        driver = MockDriver(
+            connection=MockConnection(), statement_config=StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
+        )
 
         # Create a sqlglot expression
         expr = exp.Select().select("*").from_("users")
@@ -172,7 +213,9 @@ class TestSQLTranslatorMixinWithDialect:
 
     def test_translator_mixin_error_handling(self) -> None:
         """Test error handling in convert_to_dialect."""
-        driver = MockDriver(connection=MockConnection(), statement_config=StatementConfig())
+        driver = MockDriver(
+            connection=MockConnection(), statement_config=StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
+        )
 
         # Test with SQL object without expression
         sql = Mock(spec=SQL)
@@ -208,7 +251,9 @@ class TestSQLTranslatorMixinWithDialect:
 
             TestDriver.dialect = dialect
 
-            driver = TestDriver(connection=MockConnection(), statement_config=StatementConfig())
+            driver = TestDriver(
+                connection=MockConnection(), statement_config=StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
+            )
 
             assert driver.dialect == dialect
 
@@ -228,7 +273,9 @@ class TestSQLTranslatorMixinWithDialect:
     def test_translator_mixin_with_config_dialect(self) -> None:
         """Test that driver gets dialect properly."""
         # Create driver instance
-        driver = MockDriver(connection=MockConnection(), statement_config=StatementConfig())
+        driver = MockDriver(
+            connection=MockConnection(), statement_config=StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
+        )
 
         # Driver should have its own dialect
         assert driver.dialect == "sqlite"
@@ -246,7 +293,9 @@ class TestSQLTranslatorMixinWithDialect:
 
     def test_translator_mixin_pretty_formatting(self) -> None:
         """Test pretty formatting option in convert_to_dialect."""
-        driver = MockDriver(connection=MockConnection(), statement_config=StatementConfig())
+        driver = MockDriver(
+            connection=MockConnection(), statement_config=StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
+        )
 
         with patch("sqlspec.driver.mixins._sql_translator.parse_one") as mock_parse:
             mock_expr = Mock()
@@ -270,7 +319,9 @@ class TestRealAdapterTranslatorMixin:
         from sqlspec.adapters.sqlite import SqliteDriver
 
         mock_connection = Mock()
-        driver = SqliteDriver(connection=mock_connection, statement_config=StatementConfig())
+        driver = SqliteDriver(
+            connection=mock_connection, statement_config=StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
+        )
 
         assert driver.dialect == "sqlite"
 
@@ -292,12 +343,16 @@ class TestRealAdapterTranslatorMixin:
 
         # Test AsyncPG
         mock_connection = Mock()
-        asyncpg_driver = AsyncpgDriver(connection=mock_connection, statement_config=StatementConfig())
+        asyncpg_driver = AsyncpgDriver(
+            connection=mock_connection, statement_config=StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
+        )
 
         assert asyncpg_driver.dialect == "postgres"
 
         # Test Psycopg
-        psycopg_driver = PsycopgSyncDriver(connection=mock_connection, statement_config=StatementConfig())
+        psycopg_driver = PsycopgSyncDriver(
+            connection=mock_connection, statement_config=StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
+        )
 
         assert psycopg_driver.dialect == "postgres"
 
@@ -306,7 +361,9 @@ class TestRealAdapterTranslatorMixin:
         from sqlspec.adapters.asyncmy import AsyncmyDriver
 
         mock_connection = Mock()
-        driver = AsyncmyDriver(connection=mock_connection, statement_config=StatementConfig())
+        driver = AsyncmyDriver(
+            connection=mock_connection, statement_config=StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
+        )
 
         assert driver.dialect == "mysql"
 
@@ -315,6 +372,8 @@ class TestRealAdapterTranslatorMixin:
         from sqlspec.adapters.duckdb import DuckDBDriver
 
         mock_connection = Mock()
-        driver = DuckDBDriver(connection=mock_connection, statement_config=StatementConfig())
+        driver = DuckDBDriver(
+            connection=mock_connection, statement_config=StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
+        )
 
         assert driver.dialect == "duckdb"

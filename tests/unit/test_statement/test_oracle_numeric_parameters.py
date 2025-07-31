@@ -10,6 +10,7 @@ import pytest
 
 from sqlspec.exceptions import MissingParameterError, ParameterError, SQLValidationError
 from sqlspec.parameters import ParameterStyle, ParameterValidator
+from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
 
 if TYPE_CHECKING:
@@ -89,10 +90,12 @@ def test_mixed_parameter_styles(
     """Test handling of mixed parameter styles."""
     # Enable parameter validation by setting supported_parameter_styles
     # sqlglot can't parse these mixed styles but SQL class handles this gracefully
-    config = StatementConfig(
-        supported_parameter_styles=("positional_colon", "qmark", "named_colon"),
+    parameter_config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.POSITIONAL_COLON,
+        supported_parameter_styles={ParameterStyle.POSITIONAL_COLON, ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
         allow_mixed_parameter_styles=True,  # Allow mixed styles for these tests
     )
+    config = StatementConfig(parameter_config=parameter_config)
     if error_type:
         stmt = SQL(sql, parameters=parameters, statement_config=config)
         with pytest.raises((error_type, SQLValidationError)):
@@ -266,7 +269,11 @@ def test_positional_colon_parameter_validation(
 ) -> None:
     """Test parameter validation for Oracle numeric style."""
     # Enable parameter validation by setting supported_parameter_styles
-    statement_config = StatementConfig(supported_parameter_styles=("positional_colon", "positional_colon"))
+    parameter_config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.POSITIONAL_COLON,
+        supported_parameter_styles={ParameterStyle.POSITIONAL_COLON},
+    )
+    statement_config = StatementConfig(parameter_config=parameter_config)
     stmt = SQL(sql, parameters=parameters, statement_config=statement_config)
 
     if should_fail:
@@ -291,7 +298,11 @@ def test_positional_colon_in_strings_and_comments() -> None:
         :5 as real_param
     FROM dual
     """
-    statement_config = StatementConfig()
+    parameter_config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.POSITIONAL_COLON,
+        supported_parameter_styles={ParameterStyle.POSITIONAL_COLON},
+    )
+    statement_config = StatementConfig(parameter_config=parameter_config)
     stmt = SQL(sql, parameters=[42], statement_config=statement_config)
 
     # Should only find :5 as a real parameter

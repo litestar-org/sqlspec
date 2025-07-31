@@ -5,11 +5,16 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from sqlglot import exp
 
+from sqlspec.parameters import ParameterStyle
+from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.filters import LimitOffsetFilter, SearchFilter
 from sqlspec.statement.sql import SQL, StatementConfig
 
 # Create a default test config
-TEST_CONFIG = StatementConfig()
+DEFAULT_PARAMETER_CONFIG = ParameterStyleConfig(
+    default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+)
+TEST_CONFIG = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
 
 if TYPE_CHECKING:
     from sqlspec.typing import StatementParameters
@@ -20,10 +25,13 @@ if TYPE_CHECKING:
     "config_kwargs,expected_values",
     [
         (
-            {},  # Default values
+            {"parameter_config": DEFAULT_PARAMETER_CONFIG},  # Default values
             {"dialect": None, "enable_caching": True},
         ),
-        ({"dialect": "duckdb", "enable_caching": False}, {"dialect": "duckdb", "enable_caching": False}),
+        (
+            {"parameter_config": DEFAULT_PARAMETER_CONFIG, "dialect": "duckdb", "enable_caching": False},
+            {"dialect": "duckdb", "enable_caching": False},
+        ),
     ],
     ids=["defaults", "custom"],
 )
@@ -92,7 +100,7 @@ def test_sql_initialization_with_expression() -> None:
 
 def test_sql_initialization_with_custom_config() -> None:
     """Test SQL initialization with custom config."""
-    config = StatementConfig(dialect="sqlite")
+    config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, dialect="sqlite")
     stmt = SQL("SELECT * FROM users", statement_config=config)
 
     assert stmt.statement_config == config
@@ -320,7 +328,7 @@ def test_sql_comment_removal() -> None:
 )
 def test_sql_with_dialect(dialect: str, expected_sql: str) -> None:
     """Test SQL respects dialect setting."""
-    config = StatementConfig(dialect=dialect)
+    config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, dialect=dialect)
     stmt = SQL("SELECT * FROM users", statement_config=config)
     assert stmt.sql == expected_sql
 
@@ -363,7 +371,7 @@ def test_sql_whitespace_only() -> None:
 # Test SQL caching behavior
 def test_sql_expression_caching() -> None:
     """Test SQL expression caching when enabled."""
-    config = StatementConfig(enable_caching=True)
+    config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, enable_caching=True)
     stmt = SQL("SELECT * FROM users", statement_config=config)
 
     # First access
@@ -376,7 +384,7 @@ def test_sql_expression_caching() -> None:
 
 def test_sql_no_expression_caching() -> None:
     """Test SQL expression not cached when disabled."""
-    config = StatementConfig(enable_caching=False)
+    config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, enable_caching=False)
     stmt = SQL("SELECT * FROM users", statement_config=config)
 
     # Access expression multiple times
@@ -414,7 +422,7 @@ def test_sql_copy() -> None:
     stmt1 = SQL("SELECT * FROM users", id=1)
 
     # Create new instance with different config
-    new_config = StatementConfig(dialect="sqlite")
+    new_config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, dialect="sqlite")
     stmt2 = SQL(stmt1, statement_config=new_config)
 
     assert stmt2._raw_sql == stmt1._raw_sql

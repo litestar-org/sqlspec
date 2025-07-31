@@ -11,7 +11,7 @@ from asyncmy.pool import Pool as AsyncmyPool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncmy._types import AsyncmyConnection
-from sqlspec.adapters.asyncmy.driver import AsyncmyCursor, AsyncmyDriver
+from sqlspec.adapters.asyncmy.driver import AsyncmyCursor, AsyncmyDriver, asyncmy_statement_config
 from sqlspec.config import AsyncDatabaseConfig
 
 if TYPE_CHECKING:
@@ -148,7 +148,9 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             An AsyncmyDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as connection:
-            yield self.driver_type(connection=connection, statement_config=statement_config)
+            # Use shared config or user-provided config
+            final_statement_config = statement_config or asyncmy_statement_config
+            yield self.driver_type(connection=connection, statement_config=final_statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool":  # pyright: ignore
         """Provide async pool instance.

@@ -14,8 +14,30 @@ if TYPE_CHECKING:
     import sqlite3
 
     from sqlspec.adapters.sqlite._types import SqliteConnection
+    from sqlspec.driver import ExecutionResult
+    from sqlspec.statement.result import SQLResult
+    from sqlspec.statement.sql import SQL
 
-__all__ = ("SqliteCursor", "SqliteDriver")
+__all__ = ("SqliteCursor", "SqliteDriver", "sqlite_statement_config")
+
+# Shared SQLite statement configuration
+sqlite_statement_config = StatementConfig(
+    dialect="sqlite",
+    parameter_config=ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.QMARK,
+        supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
+        type_coercion_map={
+            bool: int,
+            datetime.datetime: lambda v: v.isoformat(),
+            Decimal: str,
+            dict: to_json,
+            list: to_json,
+            tuple: lambda v: to_json(list(v)),
+        },
+        has_native_list_expansion=False,
+        needs_static_script_compilation=True,
+    ),
+)
 
 
 class SqliteCursor:
@@ -46,34 +68,15 @@ class SqliteDriver(SyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Set default sqlite-specific configuration
         if statement_config is None:
-            # Create parameter configuration for SQLite
-            parameter_config = ParameterStyleConfig(
-                default_parameter_style=ParameterStyle.QMARK,
-                supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
-                type_coercion_map={
-                    bool: int,
-                    datetime.datetime: lambda v: v.isoformat(),
-                    Decimal: str,
-                    dict: to_json,
-                    list: to_json,
-                    tuple: lambda v: to_json(list(v)),
-                },
-                has_native_list_expansion=False,
-                needs_static_script_compilation=True,
-            )
-
-            statement_config = StatementConfig(dialect="sqlite", parameter_config=parameter_config)
+            statement_config = sqlite_statement_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
         return SqliteCursor(connection)
 
-    def _try_special_handling(
-        self, cursor: "sqlite3.Cursor", statement: "Any"
-    ) -> "Optional[tuple[Any, Optional[int], Any]]":
+    def _try_special_handling(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "Optional[SQLResult]":
         """Hook for SQLite-specific special operations.
 
         SQLite doesn't have special operations like PostgreSQL COPY,
@@ -90,17 +93,51 @@ class SqliteDriver(SyncDriverAdapterBase):
 
     def _execute_script(
         self, cursor: "sqlite3.Cursor", sql: str, prepared_params: Optional[Any], statement_config: "StatementConfig"
-    ) -> None:
+    ) -> "ExecutionResult":
         """Execute SQL script using SQLite's native executescript (parameters embedded as static values)."""
         cursor.executescript(sql)
 
-    def _execute_many(self, cursor: "sqlite3.Cursor", sql: str, prepared_params: Any) -> None:
+        # Count statements for the result
+        statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
+        statement_count = len(statements)
+
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(
+            cursor,
+            statement_count=statement_count,
+            successful_statements=statement_count,  # Assume all successful if no exception
+            rowcount_override=row_count,
+            is_script_result=True,
+        )
+
+    def _execute_many(self, cursor: "sqlite3.Cursor", sql: str, prepared_params: Any) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using SQLite executemany."""
         cursor.executemany(sql, prepared_params)
 
-    def _execute_statement(self, cursor: "sqlite3.Cursor", sql: str, prepared_params: Any) -> None:
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
+
+    def _execute_statement(self, cursor: "sqlite3.Cursor", sql: str, prepared_params: Any) -> "ExecutionResult":
         """Execute single SQL statement using SQLite execute."""
         cursor.execute(sql, prepared_params or ())
+
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(cursor, rowcount_override=row_count)
 
     def begin(self) -> None:
         """Begin a database transaction."""

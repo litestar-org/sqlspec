@@ -9,9 +9,22 @@ from sqlspec.statement.sql import StatementConfig
 
 if TYPE_CHECKING:
     from sqlspec.adapters.duckdb._types import DuckDBConnection
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.statement.result import SQLResult
 
+# Shared DuckDB statement configuration
+duckdb_statement_config = StatementConfig(
+    dialect="duckdb",
+    parameter_config=ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.QMARK,
+        supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
+        type_coercion_map={},
+        has_native_list_expansion=True,
+        needs_static_script_compilation=True,  # DuckDB requires static compilation for scripts
+    ),
+)
 
-__all__ = ("DuckDBCursor", "DuckDBDriver")
+__all__ = ("DuckDBCursor", "DuckDBDriver", "duckdb_statement_config")
 
 
 class DuckDBCursor:
@@ -41,24 +54,14 @@ class DuckDBDriver(SyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Create DuckDB-specific parameter configuration
-        # DuckDB supports: ? (qmark), $1,$2 (numeric), $name (named_dollar)
-        duckdb_parameter_config = ParameterStyleConfig(
-            default_parameter_style=ParameterStyle.QMARK,
-            supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
-            type_coercion_map={},
-            has_native_list_expansion=True,
-            needs_static_script_compilation=True,  # DuckDB requires static compilation for scripts
-        )
-
         if statement_config is None:
             # Use DuckDB defaults
-            statement_config = StatementConfig(dialect="duckdb", parameter_config=duckdb_parameter_config)
+            statement_config = duckdb_statement_config
         else:
             # Ensure provided config uses DuckDB-compatible parameter configuration
             # Preserve other settings but replace parameter_config with DuckDB requirements
             statement_config = statement_config.replace(
-                dialect=statement_config.dialect or "duckdb", parameter_config=duckdb_parameter_config
+                dialect=statement_config.dialect or "duckdb", parameter_config=duckdb_statement_config.parameter_config
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
@@ -66,7 +69,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
     def with_cursor(self, connection: "DuckDBConnection") -> "DuckDBCursor":
         return DuckDBCursor(connection)
 
-    def _try_special_handling(self, cursor: Any, statement: "Any") -> "Optional[tuple[Any, Optional[int], Any]]":
+    def _try_special_handling(self, cursor: Any, statement: "Any") -> "Optional[SQLResult]":
         """Hook for DuckDB-specific special operations.
 
         DuckDB doesn't have special operations like PostgreSQL COPY,
@@ -74,7 +77,9 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """
         return None
 
-    def _execute_script(self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig") -> Any:
+    def _execute_script(
+        self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig"
+    ) -> "ExecutionResult":
         """Execute a SQL script (multiple statements).
 
         DuckDB can handle multiple statements in a single execute call.
@@ -86,29 +91,57 @@ class DuckDBDriver(SyncDriverAdapterBase):
                 cursor.execute(sql)
         except Exception as e:
             raise e from e
-        else:
-            return cursor
 
-    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+        # Count statements for the result
+        statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
+        statement_count = len(statements)
+
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(
+            cursor,
+            statement_count=statement_count,
+            successful_statements=statement_count,  # Assume all successful if no exception
+            rowcount_override=row_count,
+            is_script_result=True,
+        )
+
+    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
         """DuckDB executemany with accurate row counting."""
         if prepared_params:
             cursor.executemany(sql, prepared_params)
             # DuckDB's cursor.rowcount is unreliable for executemany
-            # Return explicit count for INSERT/UPDATE/DELETE operations
+            # Use explicit count for INSERT/UPDATE/DELETE operations
             sql_upper = sql.strip().upper()
             if sql_upper.startswith(("INSERT", "UPDATE", "DELETE")):
-                return len(prepared_params)  # Explicit accurate count
+                row_count = len(prepared_params)  # Explicit accurate count
+            else:
+                # For non-modifying operations, try to get row count from cursor
+                try:
+                    row_count = self._get_row_count(cursor)
+                except Exception:
+                    row_count = None
         else:
             # Empty parameter set - no operation performed
-            return 0
+            row_count = 0
 
-        # For non-modifying operations, return cursor
-        return cursor
+        return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
-    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
         """DuckDB single execution."""
         cursor.execute(sql, prepared_params or ())
-        return cursor
+
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(cursor, rowcount_override=row_count)
 
     def _get_selected_data(self, cursor: Any) -> "tuple[list[dict[str, Any]], list[str], int]":
         """Extract data from cursor after SELECT execution."""
@@ -129,17 +162,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
             return int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0
         except Exception:
             return max(cursor.rowcount, 0) or 0
-
-    def _build_result(self, cursor: Any, statement: "Any", execution_result: "tuple[Any, Optional[int], Any]") -> "Any":
-        """Build result with DuckDB-specific handling for executemany row counting."""
-        cursor_result, _, _ = execution_result
-
-        # For executemany operations, use explicit row count from _execute_many
-        if statement.is_many and isinstance(cursor_result, int):
-            return self._build_execute_result_from_data(statement=statement, row_count=cursor_result)
-
-        # Use base class implementation for all other cases
-        return super()._build_result(cursor, statement, execution_result)
 
     def begin(self) -> None:
         """Begin a database transaction."""

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, TypedDict, Uni
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.sqlite._types import SqliteConnection
-from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver
+from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver, sqlite_statement_config
 from sqlspec.config import SyncDatabaseConfig
 
 if TYPE_CHECKING:
@@ -299,10 +299,12 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             # Ensure uri=True is set for all file::memory: databases
             self.connection_config["uri"] = True
 
-        super().__init__(pool_instance=pool_instance, migration_config=migration_config)
-
-        # Use provided StatementConfig or None to let driver set its own defaults
-        self.statement_config = statement_config
+        super().__init__(
+            pool_instance=pool_instance,
+            pool_config=self.pool_config,
+            migration_config=migration_config,
+            statement_config=statement_config or sqlite_statement_config,
+        )
 
     def _optimize_memory_database(self) -> None:
         """Optimize in-memory databases for concurrent access."""
@@ -400,8 +402,8 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
     def provide_session(self, *args: "Any", **kwargs: "Any") -> "Generator[SqliteDriver, None, None]":
         """Provide a SQLite driver session using pooled connections."""
         with self.provide_connection(*args, **kwargs) as connection:
-            statement_config = self.statement_config
-            # No need to replace since we now create complete StatementConfig in __init__
+            # Use shared config or user-provided config
+            statement_config = self.statement_config or sqlite_statement_config
             yield self.driver_type(connection=connection, statement_config=statement_config)
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":

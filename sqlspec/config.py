@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, Optional, Ty
 
 from typing_extensions import NotRequired, TypedDict
 
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.statement import StatementConfig
 from sqlspec.utils.logging import get_logger
 
@@ -76,14 +77,16 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     supports_native_parquet_import: "ClassVar[bool]" = False
     supports_native_parquet_export: "ClassVar[bool]" = False
     statement_config: "StatementConfig"
+    pool_instance: "Optional[PoolT]"
+    migration_config: "dict[str, Any]"
 
     def __hash__(self) -> int:
         return id(self)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, type(self)):
-            return NotImplemented
-        return self.pool_instance == other.pool_instance and self.migration_config == other.migration_config
+            return False
+        return bool(self.pool_instance == other.pool_instance and self.migration_config == other.migration_config)
 
     def __repr__(self) -> str:
         parts = ", ".join([f"pool_instance={self.pool_instance!r}", f"migration_config={self.migration_config!r}"])
@@ -153,12 +156,21 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
+        from sqlspec.parameters import ParameterStyle
+        from sqlspec.parameters.config import ParameterStyleConfig
         from sqlspec.statement.sql import StatementConfig
 
         self.pool_instance = None
         self.connection_config = connection_config or {}
         self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
-        self.statement_config = statement_config or StatementConfig()
+
+        if statement_config is None:
+            default_parameter_config = ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+            )
+            self.statement_config = StatementConfig(parameter_config=default_parameter_config)
+        else:
+            self.statement_config = statement_config
         self.driver_features = driver_features or {}
 
     def create_connection(self) -> ConnectionT:
@@ -204,7 +216,14 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self.pool_instance = None
         self.connection_config = connection_config or {}
         self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
-        self.statement_config = statement_config or StatementConfig()
+
+        if statement_config is None:
+            default_parameter_config = ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+            )
+            self.statement_config = StatementConfig(parameter_config=default_parameter_config)
+        else:
+            self.statement_config = statement_config
         self.driver_features = driver_features or {}
 
     async def create_connection(self) -> ConnectionT:
@@ -248,12 +267,18 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        from sqlspec.statement.sql import StatementConfig
-
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
         self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
-        self.statement_config = statement_config or StatementConfig()
+
+        if statement_config is None:
+            # Create a basic default parameter config
+            default_parameter_config = ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+            )
+            self.statement_config = StatementConfig(parameter_config=default_parameter_config)
+        else:
+            self.statement_config = statement_config
         self.driver_features = driver_features or {}
 
     def create_pool(self) -> PoolT:
@@ -322,7 +347,15 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
         self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
-        self.statement_config = statement_config or StatementConfig()
+
+        if statement_config is None:
+            self.statement_config = StatementConfig(
+                parameter_config=ParameterStyleConfig(
+                    default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+                )
+            )
+        else:
+            self.statement_config = statement_config
         self.driver_features = driver_features or {}
 
     async def create_pool(self) -> PoolT:

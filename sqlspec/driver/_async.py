@@ -3,19 +3,19 @@
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
-from sqlglot import exp
-
-from sqlspec.driver._common import CommonDriverAttributesMixin, create_execution_result
+from sqlspec.driver._common import CommonDriverAttributesMixin, ExecutionResult
 from sqlspec.driver.mixins import SQLTranslatorMixin, ToSchemaMixin
-from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
-from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL, Statement, StatementConfig
+from sqlspec.exceptions import NotFoundError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_dict_row, is_indexable_row
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.statement.builder import QueryBuilder
     from sqlspec.statement.filters import StatementFilter
+    from sqlspec.statement.result import SQLResult
+    from sqlspec.statement.sql import SQL, Statement, StatementConfig
     from sqlspec.typing import ModelDTOT, ModelT, RowT, StatementParameters
 
 logger = get_logger("sqlspec")
@@ -28,6 +28,38 @@ EMPTY_FILTERS: "list[StatementFilter]" = []
 
 class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToSchemaMixin):
     __slots__ = ()
+
+    async def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
+        """Central execution dispatcher using the Template Method Pattern.
+
+        This method orchestrates the common execution flow, delegating
+        database-specific steps to abstract methods that concrete adapters
+        must implement.
+
+        Args:
+            statement: The SQL statement to execute.
+            connection: The database connection to use.
+
+        Returns:
+            The result of the SQL execution.
+        """
+
+        async with self.with_cursor(connection) as cursor:
+            special_result = await self._try_special_handling(cursor, statement)
+            if special_result is not None:
+                return special_result
+
+            sql, params = self._get_compiled_sql(statement, self.statement_config)
+
+            # Create appropriate ExecutionResult based on statement type
+            if statement.is_script:
+                execution_result = await self._perform_script_execution(cursor, sql, params, self.statement_config)
+            elif statement.returns_rows():
+                execution_result = await self._perform_select_execution(cursor, sql, params)
+            else:
+                execution_result = await self._perform_execute_execution(cursor, sql, params, statement.is_many)
+
+            return self.build_statement_result(statement, execution_result)
 
     @abstractmethod
     def with_cursor(self, connection: Any) -> Any:
@@ -50,90 +82,25 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
     async def commit(self) -> None:
         """Commit the current transaction on the current connection."""
 
-    def _get_compiled_sql_and_params(self, statement: "SQL") -> tuple[str, Any]:
-        """Get compiled SQL and driver-ready parameters in one call.
+    @abstractmethod
+    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
+        """Hook for database-specific special operations (e.g., PostgreSQL COPY, bulk operations).
 
-        This method handles all SQL compilation and parameter preparation:
-        1. Compiles SQL with optimal parameter style (only converts when needed)
-        2. Handles script compilation for databases that need static SQL
-        3. Prepares parameters for driver-specific execution (single/many/script)
-
-        Args:
-            statement: SQL statement to compile
-
-        Returns:
-            Tuple of (driver_ready_sql, driver_ready_parameters)
-        """
-        # Handle script compilation first
-        if statement.is_script:
-            if self.statement_config.parameter_config.needs_static_script_compilation:
-                # Use static compilation for databases that don't support parameters in scripts
-                static_sql = self._prepare_script_sql(statement)
-                return static_sql, None
-            # Regular script compilation
-            sql, params = self._get_compiled_sql(statement, self.statement_config)
-            return sql, self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-
-        # Regular statement compilation
-        sql, params = self._get_compiled_sql(statement, self.statement_config)
-
-        # Prepare parameters based on execution type
-        if statement.is_many:
-            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=True)
-        else:
-            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-
-        return sql, prepared_params
-
-    async def _perform_execute(self, cursor: Any, statement: "SQL") -> "tuple[Any, Optional[int], Any]":
-        """Enhanced async execution logic with parameter integration and hook support.
-
-        This method implements the enhanced execution pattern that:
-        1. Calls _try_special_handling() hook first for database-specific operations
-        2. Uses ParameterProcessor for centralized SQL compilation
-        3. Routes to appropriate hook method based on statement type
-        4. Returns execution results as standardized tuple
+        This method is called first in dispatch_statement_execution() to allow drivers to handle
+        special operations that don't follow the standard SQL execution pattern.
 
         Args:
             cursor: Database cursor/connection object
-            statement: SQL statement to execute
+            statement: SQL statement to analyze
 
         Returns:
-            Tuple of (cursor_result, rowcount_override, special_data)
+            SQLResult if the special operation was handled and completed,
+            None if standard execution should proceed
         """
-        # Step 1: Try special handling first (e.g., PostgreSQL COPY, bulk operations)
-        special_result = await self._try_special_handling(cursor, statement)
-        if special_result is not None:
-            return special_result
-
-        # Step 2: Compile with driver's parameter style (same as sync driver)
-        sql, params = self._get_compiled_sql(statement, self.statement_config)
-
-        # Step 3: Route to appropriate hook method
-        if statement.is_script:
-            # Handle script execution
-            if self.statement_config.parameter_config.needs_static_script_compilation:
-                # Use static compilation for databases that don't support parameters in scripts
-                static_sql = self._prepare_script_sql(statement)
-                result = await self._execute_script(cursor, static_sql, None, self.statement_config)
-            else:
-                # Prepare parameters for script execution
-                prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-                result = await self._execute_script(cursor, sql, prepared_params, self.statement_config)
-            return create_execution_result(result)
-        if statement.is_many:
-            # Prepare parameters for executemany
-            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=True)
-            result = await self._execute_many(cursor, sql, prepared_params)
-            return create_execution_result(result)
-        # Prepare parameters for single execution
-        prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-        result = await self._execute_statement(cursor, sql, prepared_params)
-        return create_execution_result(result)
 
     async def _execute_script(
         self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig"
-    ) -> Any:
+    ) -> ExecutionResult:
         """Execute a SQL script (multiple statements).
 
         Default implementation splits script and executes statements individually.
@@ -146,33 +113,31 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
             statement_config: Statement configuration for dialect information
 
         Returns:
-            Driver-specific result
+            ExecutionResult with script execution data including statement counts
         """
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
+        statement_count = len(statements)  # Script splitter already filters empty statements
+
         last_result = None
         for stmt in statements:
-            # split_script_statements already removes empty strings, no need to check again
             last_result = await self._execute_statement(cursor, stmt, prepared_params)
-        return last_result
+
+        # Extract row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(
+            last_result,
+            statement_count=statement_count,
+            successful_statements=statement_count,  # Assume all successful if no exception
+            rowcount_override=row_count,
+            is_script_result=True,
+        )
 
     @abstractmethod
-    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[tuple[Any, Optional[int], Any]]":
-        """Hook for database-specific special operations (e.g., PostgreSQL COPY, bulk operations).
-
-        This method is called first in _perform_execute() to allow drivers to handle
-        special operations that don't follow the standard SQL execution pattern.
-
-        Args:
-            cursor: Database cursor/connection object
-            statement: SQL statement to analyze
-
-        Returns:
-            Tuple of (cursor_result, rowcount_override, special_data) if handled,
-            None if standard execution should proceed
-        """
-
-    @abstractmethod
-    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> ExecutionResult:
         """Execute SQL with multiple parameter sets (executemany).
 
         Must be implemented by each driver for database-specific executemany logic.
@@ -183,14 +148,14 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
             prepared_params: List of prepared parameter sets
 
         Returns:
-            Driver-specific result
+            ExecutionResult with execution data for the many operation
 
         Raises:
             NotImplementedError: Must be implemented by driver subclasses
         """
 
     @abstractmethod
-    async def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+    async def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> ExecutionResult:
         """Execute a single SQL statement.
 
         Must be implemented by each driver for database-specific execution logic.
@@ -201,7 +166,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
             prepared_params: Prepared parameters
 
         Returns:
-            Driver-specific result
+            ExecutionResult with execution data
 
         Raises:
             NotImplementedError: Must be implemented by driver subclasses
@@ -224,52 +189,41 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
             Number of affected rows
         """
 
-    async def _build_result(
-        self, cursor: Any, statement: "SQL", execution_result: "tuple[Any, Optional[int], Any]"
-    ) -> "SQLResult":
-        """Build and return the result of the SQL execution.
+    async def _perform_script_execution(
+        self, cursor: Any, sql: str, params: Any, statement_config: "StatementConfig"
+    ) -> ExecutionResult:
+        """Execute script and return ExecutionResult with statement counts."""
+        # _execute_script now returns ExecutionResult directly
+        return await self._execute_script(cursor, sql, params, statement_config)
 
-        This method now receives execution result data directly from _perform_execute
-        to enable clean data flow without getattr patterns.
+    async def _perform_select_execution(self, cursor: Any, sql: str, params: Any) -> ExecutionResult:
+        """Execute SELECT and return ExecutionResult with extracted data."""
+        # Execute the statement - _execute_statement now returns ExecutionResult directly
+        execution_result = await self._execute_statement(cursor, sql, params)
 
-        Args:
-            cursor: Database cursor/connection object
-            statement: SQL statement that was executed
-            execution_result: Tuple of (cursor_result, rowcount_override, special_data)
+        # Extract data using existing method
+        data, column_names, row_count = await self._get_selected_data(cursor)
 
-        Returns:
-            SQLResult with execution data
-        """
-        _, rowcount_override, special_data = execution_result
-        if statement.is_script:
-            # Use rowcount override if provided, otherwise extract from cursor
-            row_count = rowcount_override if rowcount_override is not None else self._get_row_count(cursor)
+        # Create new ExecutionResult with SELECT data added
+        return self.create_execution_result(
+            execution_result.cursor_result,
+            selected_data=data,
+            column_names=column_names,
+            data_row_count=row_count,
+            is_select_result=True,
+            # Preserve any other data from the original result
+            rowcount_override=execution_result.rowcount_override,
+            special_data=execution_result.special_data,
+        )
 
-            # Count statements in the script using existing method
-            sql, _ = statement.compile()
-            statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-            statement_count = len([stmt for stmt in statements if stmt.strip()])
-
-            return SQLResult(
-                statement=statement,
-                data=[],
-                rows_affected=row_count,
-                operation_type="SCRIPT",
-                total_statements=statement_count,
-                successful_statements=statement_count,  # Assume all successful if no exception
-                metadata=special_data or {"status_message": "OK"},
-            )
-
-        # Handle regular operations using execution result data
-        if statement.returns_rows():
-            data, column_names, row_count = await self._get_selected_data(cursor)
-            return self._build_select_result_from_data(
-                statement=statement, data=data, column_names=column_names, row_count=row_count
-            )
-
-        # Use rowcount override if provided, otherwise extract from cursor
-        row_count = rowcount_override if rowcount_override is not None else self._get_row_count(cursor)
-        return self._build_execute_result_from_data(statement=statement, row_count=row_count, metadata=special_data)
+    async def _perform_execute_execution(
+        self, cursor: Any, sql: str, params: Any, is_many: bool = False
+    ) -> ExecutionResult:
+        """Execute non-SELECT statement and return ExecutionResult."""
+        # Execute the statement - methods now return ExecutionResult directly
+        if is_many:
+            return await self._execute_many(cursor, sql, params)
+        return await self._execute_statement(cursor, sql, params)
 
     async def execute(
         self,
@@ -282,35 +236,14 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         sql_statement = self.prepare_statement(
             statement, *parameters, statement_config=statement_config or self.statement_config, **kwargs
         )
-        return await self._dispatch_execution(statement=sql_statement, connection=self.connection)
-
-    async def _dispatch_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
-        """Central execution dispatcher using the Template Method Pattern.
-
-        This method orchestrates the common execution flow, delegating
-        database-specific steps to abstract methods that concrete adapters
-        must implement.
-
-        The enhanced pattern captures the execution result tuple from _perform_execute
-        and passes it directly to _build_result for clean data flow.
-
-        Args:
-            statement: The SQL statement to execute.
-            connection: The database connection to use.
-
-        Returns:
-            The result of the SQL execution.
-        """
-
-        async with self.with_cursor(connection) as cursor:
-            execution_result = await self._perform_execute(cursor, statement)
-            return await self._build_result(cursor, statement, execution_result)
+        return await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
 
     async def execute_many(
         self,
         statement: "Union[SQL, Statement, QueryBuilder]",
         /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
+        parameters: "Sequence[StatementParameters]",
+        *filters: "Union[StatementParameters, StatementFilter]",
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "SQLResult":
@@ -318,22 +251,15 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
 
         Parameters passed will be used as the batch execution sequence.
         """
-        # For execute_many, we need to handle parameters specially to preserve structure
-        if parameters and len(parameters) == 1 and isinstance(parameters[0], list):
-            # Direct list of parameter sets - pass to as_many
-            sql_statement = self.prepare_statement(
-                statement, statement_config=statement_config or self.statement_config, **kwargs
-            )
-            return await self._dispatch_execution(
-                statement=sql_statement.as_many(parameters[0]), connection=self.connection
-            )
-
+        # Prepare the base statement without parameters
         sql_statement = self.prepare_statement(
-            statement, *parameters, statement_config=statement_config or self.statement_config, **kwargs
+            statement, *filters, statement_config=statement_config or self.statement_config, **kwargs
         )
 
-        # Mark for batch execution - as_many() will use the existing positional params
-        return await self._dispatch_execution(statement=sql_statement.as_many(), connection=self.connection)
+        # Execute with the parameter sequence using as_many()
+        return await self.dispatch_statement_execution(
+            statement=sql_statement.as_many(parameters), connection=self.connection
+        )
 
     async def execute_script(
         self,
@@ -351,7 +277,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         script_config = statement_config or self.statement_config
         sql_statement = self.prepare_statement(statement, *parameters, statement_config=script_config, **kwargs)
 
-        return await self._dispatch_execution(statement=sql_statement.as_script(), connection=self.connection)
+        return await self.dispatch_statement_execution(statement=sql_statement.as_script(), connection=self.connection)
 
     # Syntax Sugar Methods for Selecting Data Below:
     @overload
@@ -549,50 +475,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
             msg = f"Cannot extract value from row type {type(row).__name__}: {e}"
             raise TypeError(msg) from e
 
-    def _create_count_query(self, original_sql: "SQL") -> "SQL":
-        """Create a COUNT query from the original SQL statement.
-
-        Transforms the original SELECT statement to count total rows while preserving
-        WHERE, HAVING, and GROUP BY clauses but removing ORDER BY, LIMIT, and OFFSET.
-
-        For queries with GROUP BY, wraps the query in a subquery to count groups correctly.
-        """
-        if not original_sql.expression:
-            msg = "Cannot create COUNT query from empty SQL expression"
-            raise ImproperConfigurationError(msg)
-        expr = original_sql.expression.copy()
-
-        if isinstance(expr, exp.Select):
-            # Check if query has GROUP BY clause
-            if expr.args.get("group"):
-                # For GROUP BY queries, wrap in subquery and count rows
-                # This counts the number of groups, not the total rows
-                subquery = expr.subquery(alias="grouped_data")
-                count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
-            else:
-                # Simple case: replace SELECT list with COUNT(*)
-                count_expr = exp.select(exp.Count(this=exp.Star())).from_(
-                    cast("exp.Expression", expr.args.get("from")), copy=False
-                )
-                if expr.args.get("where"):
-                    count_expr = count_expr.where(cast("exp.Expression", expr.args.get("where")), copy=False)
-                if expr.args.get("having"):
-                    count_expr = count_expr.having(cast("exp.Expression", expr.args.get("having")), copy=False)
-
-            # Remove ORDER BY, LIMIT, OFFSET - preserve WHERE, HAVING, GROUP BY
-            count_expr.set("order", None)
-            count_expr.set("limit", None)
-            count_expr.set("offset", None)
-
-            # Create new SQL with same parameters and config as original
-            return SQL(count_expr, *original_sql._positional_params, config=original_sql.statement_config)
-
-        # Handle other query types (UNION, etc.) - wrap in subquery
-        subquery = cast("exp.Select", expr).subquery(alias="total_query")
-        count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
-        # Create new SQL with same parameters and config as original
-        return SQL(count_expr, *original_sql._positional_params, config=original_sql.statement_config)
-
     @overload
     async def select_with_total(
         self,
@@ -652,7 +534,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         sql_statement = self.prepare_statement(
             statement, *parameters, statement_config=statement_config or self.statement_config, **kwargs
         )
-        count_result = await self._dispatch_execution(self._create_count_query(sql_statement), self.connection)
+        count_result = await self.dispatch_statement_execution(self._create_count_query(sql_statement), self.connection)
         select_result = await self.execute(sql_statement)
         data = self.to_schema(select_result.get_data(), schema_type=schema_type)
 

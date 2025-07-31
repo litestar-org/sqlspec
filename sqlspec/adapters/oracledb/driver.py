@@ -6,15 +6,41 @@ from oracledb import AsyncCursor, Cursor
 from sqlspec.adapters.oracledb._types import OracleAsyncConnection, OracleSyncConnection
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.parameters import ParameterStyle
+from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.sql import StatementConfig
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.statement.result import SQLResult
     from sqlspec.statement.sql import SQL
 
-__all__ = ("OracleAsyncDriver", "OracleSyncDriver")
+# Shared Oracle statement configurations
+oracledb_sync_statement_config = StatementConfig(
+    dialect="oracle",
+    parameter_config=ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON},
+        type_coercion_map={},
+        has_native_list_expansion=False,
+        needs_static_script_compilation=True,
+    ),
+)
+
+oracledb_async_statement_config = StatementConfig(
+    dialect="oracle",
+    parameter_config=ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON},
+        type_coercion_map={},  # Oracle specific type mappings
+        has_native_list_expansion=False,
+        needs_static_script_compilation=True,  # Oracle requires static compilation for scripts
+    ),
+)
+
+__all__ = ("OracleAsyncDriver", "OracleSyncDriver", "oracledb_async_statement_config", "oracledb_sync_statement_config")
 
 logger = get_logger("adapters.oracledb")
 
@@ -46,27 +72,16 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        from sqlspec.statement.sql import StatementConfig
-
         # Set default Oracle-specific configuration
         if statement_config is None:
-            from sqlspec.parameters.config import ParameterStyleConfig
-
-            parameter_config = ParameterStyleConfig(
-                default_parameter_style=ParameterStyle.NAMED_COLON,
-                supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON},
-                type_coercion_map={},
-                has_native_list_expansion=False,
-                needs_static_script_compilation=True,
-            )
-            statement_config = StatementConfig(dialect="oracle", parameter_config=parameter_config)
+            statement_config = oracledb_sync_statement_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: OracleSyncConnection) -> OracleSyncCursor:
         return OracleSyncCursor(connection)
 
-    def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[tuple[Any, Optional[int], Any]]":
+    def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
         """Hook for Oracle-specific special operations.
 
         Oracle doesn't have special operations like PostgreSQL COPY,
@@ -74,15 +89,29 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         """
         return None
 
-    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
         """Oracle executemany implementation."""
         cursor.executemany(sql, prepared_params)
-        return cursor
 
-    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
+
+    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
         """Oracle single execution."""
         cursor.execute(sql, prepared_params or {})
-        return cursor
+
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(cursor, rowcount_override=row_count)
 
     def _get_selected_data(self, cursor: Cursor) -> "tuple[list[dict[str, Any]], list[str], int]":
         """Extract data from cursor after SELECT execution."""
@@ -136,23 +165,14 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
         if statement_config is None:
-            from sqlspec.parameters.config import ParameterStyleConfig
-
-            parameter_config = ParameterStyleConfig(
-                default_parameter_style=ParameterStyle.NAMED_COLON,
-                supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON},
-                type_coercion_map={},  # Oracle specific type mappings
-                has_native_list_expansion=False,
-                needs_static_script_compilation=True,  # Oracle requires static compilation for scripts
-            )
-            statement_config = StatementConfig(dialect="oracle", parameter_config=parameter_config)
+            statement_config = oracledb_async_statement_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: "OracleAsyncConnection") -> "OracleAsyncCursor":
         return OracleAsyncCursor(connection)
 
-    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[tuple[Any, Optional[int], Any]]":
+    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
         """Hook for Oracle-specific special operations.
 
         Oracle doesn't have special operations like PostgreSQL COPY,
@@ -160,15 +180,29 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         """
         return None
 
-    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
         """Oracle async executemany implementation."""
         await cursor.executemany(sql, prepared_params)
-        return cursor
 
-    async def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
+
+    async def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
         """Oracle async single execution."""
         await cursor.execute(sql, prepared_params or {})
-        return cursor
+
+        # Get row count if available
+        try:
+            row_count = self._get_row_count(cursor)
+        except Exception:
+            row_count = None
+
+        return self.create_execution_result(cursor, rowcount_override=row_count)
 
     async def _get_selected_data(self, cursor: AsyncCursor) -> "tuple[list[dict[str, Any]], list[str], int]":
         """Extract data from cursor after SELECT execution."""

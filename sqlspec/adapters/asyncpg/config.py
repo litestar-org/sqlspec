@@ -1,6 +1,7 @@
 """AsyncPG database configuration with direct field-based configuration."""
 
 import logging
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union
 
@@ -11,18 +12,18 @@ from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncpg._types import AsyncpgConnection
-from sqlspec.adapters.asyncpg.driver import AsyncpgCursor, AsyncpgDriver
+from sqlspec.adapters.asyncpg.driver import AsyncpgCursor, AsyncpgDriver, asyncpg_statement_config
 from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from asyncio.events import AbstractEventLoop
-    from collections.abc import AsyncGenerator, Awaitable, Callable
+    from collections.abc import AsyncGenerator, Awaitable
 
     from sqlspec.statement.sql import StatementConfig
 
 
-__all__ = ("AsyncpgConfig", "AsyncpgConnectionConfig", "AsyncpgPoolConfig")
+__all__ = ("AsyncpgConfig", "AsyncpgConnectionConfig", "AsyncpgDriverFeatures", "AsyncpgPoolConfig")
 
 logger = logging.getLogger("sqlspec")
 
@@ -62,6 +63,13 @@ class AsyncpgPoolConfig(AsyncpgConnectionConfig, total=False):
     extra: NotRequired[dict[str, Any]]
 
 
+class AsyncpgDriverFeatures(TypedDict, total=False):
+    """TypedDict for AsyncPG driver features configuration."""
+
+    json_serializer: NotRequired[Callable[[Any], str]]
+    json_deserializer: NotRequired[Callable[[str], Any]]
+
+
 class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", AsyncpgDriver]):
     """Configuration for AsyncPG database connections using TypedDict."""
 
@@ -74,24 +82,34 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         pool_config: "Optional[Union[AsyncpgPoolConfig, dict[str, Any]]]" = None,
         pool_instance: "Optional[Pool[Record]]" = None,
         migration_config: "Optional[dict[str, Any]]" = None,
-        json_serializer: "Optional[Callable[[Any], str]]" = None,
-        json_deserializer: "Optional[Callable[[str], Any]]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        driver_features: "Optional[Union[AsyncpgDriverFeatures, dict[str, Any]]]" = None,
     ) -> None:
         """Initialize AsyncPG configuration.
 
         Args:
             pool_config: Pool configuration parameters (TypedDict or dict)
             pool_instance: Existing pool instance to use
-            json_serializer: JSON serialization function
-            json_deserializer: JSON deserialization function
             migration_config: Migration configuration
+            statement_config: Statement configuration override
+            driver_features: Driver features configuration (TypedDict or dict)
         """
-        # Store the pool config as a dict
-        self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
+        # Build driver features dict
+        features_dict: dict[str, Any] = dict(driver_features) if driver_features else {}
 
-        self.json_serializer = json_serializer or to_json
-        self.json_deserializer = json_deserializer or from_json
-        super().__init__(pool_instance=pool_instance, migration_config=migration_config)
+        # Set defaults if not provided
+        if "json_serializer" not in features_dict:
+            features_dict["json_serializer"] = to_json
+        if "json_deserializer" not in features_dict:
+            features_dict["json_deserializer"] = from_json
+        statement_config = statement_config or asyncpg_statement_config
+        super().__init__(
+            pool_config=dict(pool_config) if pool_config else {},
+            pool_instance=pool_instance,
+            migration_config=migration_config,
+            statement_config=statement_config,
+            driver_features=features_dict,
+        )
 
     def _get_pool_config_dict(self) -> "dict[str, Any]":
         """Get pool configuration as plain dict for external library.
@@ -162,7 +180,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             An AsyncpgDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as connection:
-            yield self.driver_type(connection=connection, statement_config=statement_config)
+            # Use shared config or user-provided config or instance default
+            final_statement_config = statement_config or self.statement_config or asyncpg_statement_config
+            yield self.driver_type(connection=connection, statement_config=final_statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool[Record]":
         """Provide async pool instance.
@@ -185,16 +205,14 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update(
-            {
-                "Connection": Connection,
-                "Pool": Pool,
-                "PoolConnectionProxy": PoolConnectionProxy,
-                "PoolConnectionProxyMeta": PoolConnectionProxyMeta,
-                "ConnectionMeta": ConnectionMeta,
-                "Record": Record,
-                "AsyncpgConnection": AsyncpgConnection,
-                "AsyncpgCursor": AsyncpgCursor,
-            }
-        )
+        namespace.update({
+            "Connection": Connection,
+            "Pool": Pool,
+            "PoolConnectionProxy": PoolConnectionProxy,
+            "PoolConnectionProxyMeta": PoolConnectionProxyMeta,
+            "ConnectionMeta": ConnectionMeta,
+            "Record": Record,
+            "AsyncpgConnection": AsyncpgConnection,  # type: ignore[dict-item]
+            "AsyncpgCursor": AsyncpgCursor,
+        })
         return namespace

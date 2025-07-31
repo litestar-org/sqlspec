@@ -45,7 +45,11 @@ from sqlspec.utils.type_guards import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlglot.dialects.dialect import DialectType
+
+    from sqlspec.typing import StatementParameters
 
 __all__ = ("SQL", "Statement", "StatementConfig")
 
@@ -200,9 +204,7 @@ class StatementConfig:
         dialect: SQL dialect to use for parsing and generation
 
     Parameter Style Configuration:
-        supported_parameter_styles: Supported parameter styles (e.g., [ParameterStyle.QMARK, ParameterStyle.NAMED_COLON])
-        default_parameter_style: Target parameter style for SQL generation
-        allow_mixed_parameter_styles: Whether to allow mixing parameter styles in same query
+        parameter_config: Required ParameterStyleConfig instance containing all parameter style settings
     """
 
     __slots__ = SQL_CONFIG_SLOTS
@@ -224,6 +226,7 @@ class StatementConfig:
 
     def __init__(
         self,
+        parameter_config: "Optional[ParameterStyleConfig]" = None,
         enable_parsing: bool = True,
         enable_validation: bool = True,
         enable_transformations: bool = True,
@@ -233,16 +236,8 @@ class StatementConfig:
         enable_caching: bool = True,
         parameter_converter: "Optional[ParameterConverter]" = None,
         parameter_validator: "Optional[ParameterValidator]" = None,
-        parameter_config: "Optional[ParameterStyleConfig]" = None,
         dialect: "Optional[DialectType]" = None,
         custom_pipeline_steps: "Optional[list[Any]]" = None,
-        allow_mixed_parameter_styles: bool = False,
-        default_parameter_style: "Optional[ParameterStyle]" = None,
-        supported_parameter_styles: "Optional[set[ParameterStyle]]" = None,
-        type_coercion_map: "Optional[dict[type, Callable[[Any], Any]]]" = None,
-        has_native_list_expansion: bool = False,
-        needs_static_script_compilation: bool = False,
-        execution_parameter_style: "Optional[ParameterStyle]" = None,
         output_transformer: "Optional[Callable[[str, Any], tuple[str, Any]]]" = None,
     ) -> None:
         self.enable_parsing = enable_parsing
@@ -255,21 +250,15 @@ class StatementConfig:
         self.parameter_converter = parameter_converter or ParameterConverter()
         self.parameter_validator = parameter_validator or ParameterValidator()
 
-        # Use parameter_config if provided, otherwise create from individual parameters
-        if parameter_config is not None:
-            self.parameter_config = parameter_config
-        else:
-            default_parameter_style = default_parameter_style or ParameterStyle.POSITIONAL_COLON
-            self.parameter_config = ParameterStyleConfig(
-                default_parameter_style=default_parameter_style,
-                supported_parameter_styles=supported_parameter_styles or {default_parameter_style},
-                execution_parameter_style=execution_parameter_style,
-                type_coercion_map=type_coercion_map or {},
-                has_native_list_expansion=has_native_list_expansion,
-                output_transformer=output_transformer,
-                needs_static_script_compilation=needs_static_script_compilation,
-                allow_mixed_parameter_styles=allow_mixed_parameter_styles,
+        # Create default parameter config if none provided
+        if parameter_config is None:
+            from sqlspec.parameters import ParameterStyle
+            from sqlspec.parameters.config import ParameterStyleConfig
+
+            parameter_config = ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
             )
+        self.parameter_config = parameter_config
 
         self.dialect = dialect
         self.custom_pipeline_steps = custom_pipeline_steps
@@ -374,7 +363,16 @@ class SQL:
         **kwargs: Any,
     ) -> None:
         """Initialize SQL with centralized parameter management."""
-        self.statement_config = statement_config or StatementConfig()
+        if statement_config is None:
+            from sqlspec.parameters import ParameterStyle
+            from sqlspec.parameters.config import ParameterStyleConfig
+
+            default_parameter_config = ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+            )
+            self.statement_config = StatementConfig(parameter_config=default_parameter_config)
+        else:
+            self.statement_config = statement_config
         self._dialect = self._normalize_dialect(_dialect or self.statement_config.dialect)
         self._builder_result_type = _builder_result_type
         self._processed_state: Any = Empty  # Use Any to avoid mypyc Optional issues
@@ -936,7 +934,7 @@ class SQL:
         # This provides graceful handling while maintaining visibility of issues
         if self._processed_state.validation_errors:
             for error in self._processed_state.validation_errors:
-                logger.warning(f"SQL validation issue: {error.message}")
+                logger.warning("SQL validation issue: %s", error.message)
 
     def _to_expression(self, statement: "Union[str, exp.Expression]") -> exp.Expression:
         """Convert string to sqlglot expression."""
@@ -1200,7 +1198,7 @@ class SQL:
 
         return self._copy_with(_filters=new_filters, _positional_params=new_positional, _named_params=new_named)
 
-    def as_many(self, parameters: "Optional[list[Any]]" = None) -> "SQL":
+    def as_many(self, parameters: "Optional[Union[list[Any], Sequence[StatementParameters]]]" = None) -> "SQL":
         """Mark for executemany with optional parameters.
 
         If no parameters are provided, uses the existing positional parameters

@@ -351,9 +351,15 @@ class QueryBuilder(ABC):
             )
 
         if config is None:
+            from sqlspec.parameters import ParameterStyle
+            from sqlspec.parameters.config import ParameterStyleConfig
             from sqlspec.statement.sql import StatementConfig
 
-            config = StatementConfig(dialect=safe_query.dialect)
+            # Create a basic parameter config for the query builder
+            parameter_config = ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+            )
+            config = StatementConfig(parameter_config=parameter_config, dialect=safe_query.dialect)
 
         # SQL expects parameters as variadic args, not as a keyword
         if kwargs:
