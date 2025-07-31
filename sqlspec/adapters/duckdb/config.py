@@ -435,7 +435,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         pool_config_dict: dict[str, Any] = dict(pool_config) if pool_config else {}
 
         # Set defaults for connection config
-        if not any(key in pool_config_dict for key in ["database"]):
+        if not any(key in pool_config_dict for key in ["database"]) or not pool_config_dict.get("database"):
             pool_config_dict["database"] = ":memory:"
 
         # Extract pool parameters with unified names

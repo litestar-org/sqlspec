@@ -283,6 +283,10 @@ def test_sqlite_transactions(sqlite_session: SqliteDriver) -> None:
 @pytest.mark.xdist_group("sqlite")
 def test_sqlite_complex_queries(sqlite_session: SqliteDriver) -> None:
     """Test complex SQL queries."""
+    # Clear any existing data between test runs
+    sqlite_session.execute("DELETE FROM test_table")
+    sqlite_session.commit()
+
     # Insert test data
     test_data = [("Alice", 25), ("Bob", 30), ("Charlie", 35), ("Diana", 28)]
 

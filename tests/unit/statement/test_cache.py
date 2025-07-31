@@ -232,9 +232,7 @@ class TestSQLCaching:
         assert key1 != key2  # Different parameter styles
 
         # Test with mixed parameters
-        sql3 = SQL(
-            "SELECT * FROM users WHERE id = ? AND name = :name", 1, name="test", statement_config=config
-        )
+        sql3 = SQL("SELECT * FROM users WHERE id = ? AND name = :name", 1, name="test", statement_config=config)
         key3 = sql3._cache_key()
         assert key3 != key1
         assert key3 != key2

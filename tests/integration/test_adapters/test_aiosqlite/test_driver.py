@@ -17,7 +17,7 @@ ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 @pytest.fixture
 async def aiosqlite_session() -> AsyncGenerator[AiosqliteDriver, None]:
     """Create an aiosqlite session with test table."""
-    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    config = AiosqliteConfig(pool_config={"database": ":memory:"})
 
     async with config.provide_session() as session:
         # Create test table

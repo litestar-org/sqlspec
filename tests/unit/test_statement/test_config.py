@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Annotated, Any, Optional
 
 import pytest
-from sqlglot import exp
 
 from sqlspec.base import SQLSpec
 from sqlspec.config import NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
@@ -332,18 +331,18 @@ def test_returns_rows_with_invalid_expression(driver_attributes: CommonDriverAtt
 def test_returns_rows_expression_types(driver_attributes: CommonDriverAttributesMixin) -> None:
     """Test returns_rows with various SQL statement types."""
     test_config = StatementConfig()
-    
+
     # Test statements that should return rows
     select_sql = SQL("SELECT 1", config=test_config)
     assert select_sql.returns_rows() is True, "Select statement should return rows"
-    
+
     show_sql = SQL("SHOW TABLES", config=test_config)
     assert show_sql.returns_rows() is True, "SHOW statement should return rows"
-    
+
     # Test statements that should not return rows
     insert_sql = SQL("INSERT INTO users (name) VALUES ('test')", config=test_config)
     assert insert_sql.returns_rows() is False, "Insert without RETURNING should not return rows"
-    
+
     # Test INSERT with RETURNING
     insert_returning_sql = SQL("INSERT INTO users (name) VALUES ('test') RETURNING id", config=test_config)
     assert insert_returning_sql.returns_rows() is True, "Insert with RETURNING should return rows"

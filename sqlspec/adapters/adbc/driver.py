@@ -51,9 +51,9 @@ DIALECT_PARAMETER_STYLES = {
     "postgres": (ParameterStyle.NUMERIC, [ParameterStyle.NUMERIC]),
     "postgresql": (ParameterStyle.NUMERIC, [ParameterStyle.NUMERIC]),
     "bigquery": (ParameterStyle.NAMED_AT, [ParameterStyle.NAMED_AT]),
-    "sqlite": (ParameterStyle.QMARK, [ParameterStyle.QMARK]),
-    "duckdb": (ParameterStyle.QMARK, [ParameterStyle.QMARK, ParameterStyle.NUMERIC]),
-    "mysql": (ParameterStyle.POSITIONAL_PYFORMAT, [ParameterStyle.POSITIONAL_PYFORMAT]),
+    "sqlite": (ParameterStyle.QMARK, [ParameterStyle.QMARK, ParameterStyle.NAMED_COLON]),
+    "duckdb": (ParameterStyle.QMARK, [ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR]),
+    "mysql": (ParameterStyle.POSITIONAL_PYFORMAT, [ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT]),
     "snowflake": (ParameterStyle.QMARK, [ParameterStyle.QMARK, ParameterStyle.NUMERIC]),
 }
 
@@ -70,7 +70,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         # Detect dialect from connection before using it
         detected_dialect = self._get_dialect(connection)
 
-        # Set default ADBC-specific configuration if none provided
+        # Create default config if none provided
         if statement_config is None:
             from sqlspec.parameters.config import ParameterStyleConfig
 
@@ -84,7 +84,22 @@ class AdbcDriver(SyncDriverAdapterBase):
                 has_native_list_expansion=True,  # ADBC handles lists natively
                 needs_static_script_compilation=True,  # ADBC requires static compilation for scripts
             )
-            statement_config = StatementConfig(dialect=detected_dialect, parameter_config=parameter_config)
+
+            # Add PostgreSQL null transform step if needed
+            custom_pipeline_steps = None
+            if detected_dialect in {"postgres", "postgresql"}:
+                from sqlspec.adapters.adbc.pipeline_steps import adbc_null_transform_step
+
+                custom_pipeline_steps = [adbc_null_transform_step]
+
+            statement_config = StatementConfig(
+                dialect=detected_dialect, parameter_config=parameter_config, custom_pipeline_steps=custom_pipeline_steps
+            )
+        elif detected_dialect in {"postgres", "postgresql"} and not statement_config.custom_pipeline_steps:
+            # If PostgreSQL config provided without null transform, we need to add it
+            from sqlspec.adapters.adbc.pipeline_steps import adbc_null_transform_step
+
+            statement_config = statement_config.replace(custom_pipeline_steps=[adbc_null_transform_step])
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
@@ -151,6 +166,8 @@ class AdbcDriver(SyncDriverAdapterBase):
 
     def with_cursor(self, connection: "AdbcConnection") -> "AdbcCursor":
         return AdbcCursor(connection)
+
+    # Remove override - default implementation should handle this correctly
 
     def _try_special_handling(self, cursor: "Cursor", statement: "SQL") -> "Optional[tuple[Any, Optional[int], Any]]":
         """Hook for ADBC-specific special operations.

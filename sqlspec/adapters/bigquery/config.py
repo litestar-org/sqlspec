@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
     from sqlspec.statement.sql import StatementConfig
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -91,6 +92,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         on_job_start: Optional[Callable[[str], None]] = None,
         on_job_complete: Optional[Callable[[str, Any], None]] = None,
         migration_config: Optional[dict[str, Any]] = None,
+        statement_config: "Optional[StatementConfig]" = None,
     ) -> None:
         """Initialize BigQuery configuration with comprehensive feature support.
 
@@ -101,6 +103,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             on_job_start: Callback executed when a BigQuery job starts
             on_job_complete: Callback executed when a BigQuery job completes
             migration_config: Migration configuration
+            statement_config: Statement configuration override
 
         Example:
             >>> # Basic BigQuery connection
@@ -152,7 +155,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         if self.connection_config.get("default_query_job_config") is None:
             self._setup_default_job_config()
 
-        super().__init__(migration_config=migration_config)
+        super().__init__(migration_config=migration_config, statement_config=statement_config)
 
     def _setup_default_job_config(self) -> None:
         """Set up default job configuration based on connection settings."""

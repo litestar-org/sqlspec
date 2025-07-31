@@ -41,16 +41,25 @@ class DuckDBDriver(SyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Set default DuckDB-specific configuration
+        # Create DuckDB-specific parameter configuration
+        # DuckDB supports: ? (qmark), $1,$2 (numeric), $name (named_dollar)
+        duckdb_parameter_config = ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK,
+            supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
+            type_coercion_map={},
+            has_native_list_expansion=True,
+            needs_static_script_compilation=True,  # DuckDB requires static compilation for scripts
+        )
+
         if statement_config is None:
-            parameter_config = ParameterStyleConfig(
-                default_parameter_style=ParameterStyle.QMARK,
-                supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC},
-                type_coercion_map={},
-                has_native_list_expansion=True,
-                needs_static_script_compilation=True,  # DuckDB requires static compilation for scripts
+            # Use DuckDB defaults
+            statement_config = StatementConfig(dialect="duckdb", parameter_config=duckdb_parameter_config)
+        else:
+            # Ensure provided config uses DuckDB-compatible parameter configuration
+            # Preserve other settings but replace parameter_config with DuckDB requirements
+            statement_config = statement_config.replace(
+                dialect=statement_config.dialect or "duckdb", parameter_config=duckdb_parameter_config
             )
-            statement_config = StatementConfig(dialect="duckdb", parameter_config=parameter_config)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
@@ -65,19 +74,35 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """
         return None
 
+    def _execute_script(self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig") -> Any:
+        """Execute a SQL script (multiple statements).
+
+        DuckDB can handle multiple statements in a single execute call.
+        """
+        try:
+            if prepared_params:
+                cursor.execute(sql, prepared_params)
+            else:
+                cursor.execute(sql)
+        except Exception as e:
+            raise e from e
+        else:
+            return cursor
+
     def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
         """DuckDB executemany with accurate row counting."""
         if prepared_params:
             cursor.executemany(sql, prepared_params)
             # DuckDB's cursor.rowcount is unreliable for executemany
-            # Return explicit count for INSERT operations
-            if sql.strip().upper().startswith("INSERT"):
+            # Return explicit count for INSERT/UPDATE/DELETE operations
+            sql_upper = sql.strip().upper()
+            if sql_upper.startswith(("INSERT", "UPDATE", "DELETE")):
                 return len(prepared_params)  # Explicit accurate count
         else:
             # Empty parameter set - no operation performed
             return 0
 
-        # For non-INSERT operations, return cursor
+        # For non-modifying operations, return cursor
         return cursor
 
     def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
@@ -103,7 +128,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             result = cursor.fetchone()
             return int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0
         except Exception:
-            return max(cursor.rowcount, 0) if hasattr(cursor, "rowcount") else 0
+            return max(cursor.rowcount, 0) or 0
 
     def _build_result(self, cursor: Any, statement: "Any", execution_result: "tuple[Any, Optional[int], Any]") -> "Any":
         """Build result with DuckDB-specific handling for executemany row counting."""

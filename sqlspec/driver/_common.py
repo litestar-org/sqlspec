@@ -174,15 +174,16 @@ class CommonDriverAttributesMixin:
                     statement_config=statement_config,
                     **kwargs,
                 )
-            if self.dialect and (
-                not statement.statement_config.dialect or statement.statement_config.dialect != self.dialect
+            if self.statement_config.dialect and (
+                not statement.statement_config.dialect
+                or statement.statement_config.dialect != self.statement_config.dialect
             ):
-                new_config = statement.statement_config.replace(dialect=self.dialect)
+                new_config = statement.statement_config.replace(dialect=self.statement_config.dialect)
                 if statement.parameters:
-                    return statement.copy(statement_config=new_config, dialect=self.dialect)
-                return statement.copy(statement_config=new_config, dialect=self.dialect)
+                    return statement.copy(statement_config=new_config, dialect=self.statement_config.dialect)
+                return statement.copy(statement_config=new_config, dialect=self.statement_config.dialect)
             return statement
-        return SQL(statement, *parameters, config=statement_config, **kwargs)
+        return SQL(statement, *parameters, statement_config=statement_config, **kwargs)
 
     @staticmethod
     def check_not_found(item_or_none: "Optional[T]" = None) -> "T":
@@ -335,7 +336,7 @@ class CommonDriverAttributesMixin:
             current_expression=expression,
             original_expression=expression,
             parameters=parameters,
-            dialect=str(self.dialect),
+            dialect=str(self.statement_config.dialect or ""),
             metadata={},
             driver_adapter=self,
         )
@@ -357,10 +358,7 @@ class CommonDriverAttributesMixin:
             Tuple of (compiled_sql, parameters)
         """
         parameter_config = statement_config.parameter_config
-        target_style = parameter_config.execution_parameter_style
-        if target_style and target_style != parameter_config.default_parameter_style:
-            return statement.compile(placeholder_style=target_style)
-        return statement.compile()
+        return statement.compile(parameter_config.execution_parameter_style)
 
     # ================================================================================
     # Unified Execution Methods
@@ -381,7 +379,6 @@ class CommonDriverAttributesMixin:
         Returns:
             Whatever the driver-specific execution method returns
         """
-        # Compile with driver's parameter style
         sql, params = self._get_compiled_sql(statement, self.statement_config)
 
         if statement.is_script:

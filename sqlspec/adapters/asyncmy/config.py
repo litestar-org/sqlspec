@@ -69,6 +69,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         pool_config: "Optional[Union[AsyncmyPoolParams, dict[str, Any]]]" = None,
         pool_instance: "Optional[Pool]" = None,
         migration_config: Optional[dict[str, Any]] = None,
+        statement_config: "Optional[StatementConfig]" = None,
     ) -> None:
         """Initialize Asyncmy configuration.
 
@@ -76,14 +77,26 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             pool_config: Pool configuration parameters
             pool_instance: Existing pool instance to use
             migration_config: Migration configuration
+            statement_config: Statement configuration override
         """
         # Store the pool config as a dict and extract/merge extras
-        self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
-        if "extra" in self.pool_config:
-            extras = self.pool_config.pop("extra")
-            self.pool_config.update(extras)
+        processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
+        if "extra" in processed_pool_config:
+            extras = processed_pool_config.pop("extra")
+            processed_pool_config.update(extras)
 
-        super().__init__(pool_instance=pool_instance, migration_config=migration_config)
+        # Set defaults for MySQL connection
+        if "host" not in processed_pool_config:
+            processed_pool_config["host"] = "localhost"
+        if "port" not in processed_pool_config:
+            processed_pool_config["port"] = 3306
+
+        super().__init__(
+            pool_config=processed_pool_config,
+            pool_instance=pool_instance,
+            migration_config=migration_config,
+            statement_config=statement_config,
+        )
 
     async def _create_pool(self) -> "Pool":  # pyright: ignore
         """Create the actual async connection pool."""

@@ -12,6 +12,7 @@ from sqlspec.adapters.oracledb._types import OracleAsyncConnection, OracleSyncCo
 from sqlspec.adapters.oracledb.driver import OracleAsyncCursor, OracleAsyncDriver, OracleSyncCursor, OracleSyncDriver
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 from sqlspec.parameters import ParameterStyle
+from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.sql import StatementConfig
 
 if TYPE_CHECKING:
@@ -108,19 +109,20 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
 
         # Override parent's empty StatementConfig with Oracle-specific configuration
         if statement_config is None:
-            self.statement_config = StatementConfig(
-                supported_parameter_styles=(
-                    ParameterStyle.POSITIONAL_COLON.value,  # :1, :2
-                    ParameterStyle.NAMED_COLON.value,  # :name
-                ),
-                default_parameter_style=ParameterStyle.NAMED_COLON.value,
+            parameter_config = ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NAMED_COLON,
+                supported_parameter_styles={
+                    ParameterStyle.POSITIONAL_COLON,  # :1, :2
+                    ParameterStyle.NAMED_COLON,  # :name
+                },
                 type_coercion_map={
                     # Oracle has good native type support
                     # Add any specific type mappings as needed
                 },
                 has_native_list_expansion=False,  # Oracle doesn't handle lists natively
-                force_style_conversion=True,  # Force conversion to avoid denormalization bugs
+                needs_static_script_compilation=False,
             )
+            self.statement_config = StatementConfig(dialect="oracle", parameter_config=parameter_config)
         else:
             self.statement_config = statement_config
 
@@ -253,19 +255,20 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
 
         # Override parent's empty StatementConfig with Oracle-specific configuration
         if statement_config is None:
-            self.statement_config = StatementConfig(
-                supported_parameter_styles=(
-                    ParameterStyle.POSITIONAL_COLON.value,  # :1, :2
-                    ParameterStyle.NAMED_COLON.value,  # :name
-                ),
-                default_parameter_style=ParameterStyle.NAMED_COLON.value,
+            parameter_config = ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NAMED_COLON,
+                supported_parameter_styles={
+                    ParameterStyle.POSITIONAL_COLON,  # :1, :2
+                    ParameterStyle.NAMED_COLON,  # :name
+                },
                 type_coercion_map={
                     # Oracle has good native type support
                     # Add any specific type mappings as needed
                 },
                 has_native_list_expansion=False,  # Oracle doesn't handle lists natively
-                force_style_conversion=True,  # Force conversion to avoid denormalization bugs
+                needs_static_script_compilation=False,
             )
+            self.statement_config = StatementConfig(dialect="oracle", parameter_config=parameter_config)
         else:
             self.statement_config = statement_config
 

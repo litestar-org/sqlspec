@@ -8,9 +8,6 @@ from sqlglot import exp
 from sqlspec.driver._common import CommonDriverAttributesMixin, create_execution_result
 from sqlspec.driver.mixins import SQLTranslatorMixin, ToSchemaMixin
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
-from sqlspec.parameters.converter import ParameterConverter
-from sqlspec.parameters.core import ParameterProcessor
-from sqlspec.parameters.validator import ParameterValidator
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, Statement, StatementConfig
 from sqlspec.utils.logging import get_logger
@@ -109,23 +106,8 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         if special_result is not None:
             return special_result
 
-        # Step 2: Use ParameterProcessor for centralized compilation
-        processor = ParameterProcessor()
-        validator = ParameterValidator()
-        converter = ParameterConverter()
-
-        # Get raw SQL and parameters
-        sql, params = statement.compile()
-
-        # Process through centralized parameter pipeline
-        processed_sql, processed_params = processor.process(
-            sql=sql,
-            params=params,
-            config=self.statement_config.parameter_config,
-            validator=validator,
-            converter=converter,
-            is_parsed=statement.expression is not None,
-        )
+        # Step 2: Compile with driver's parameter style (same as sync driver)
+        sql, params = self._get_compiled_sql(statement, self.statement_config)
 
         # Step 3: Route to appropriate hook method
         if statement.is_script:
@@ -136,17 +118,17 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
                 result = await self._execute_script(cursor, static_sql, None, self.statement_config)
             else:
                 # Prepare parameters for script execution
-                prepared_params = self.prepare_driver_parameters(processed_params, self.statement_config, is_many=False)
-                result = await self._execute_script(cursor, processed_sql, prepared_params, self.statement_config)
+                prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
+                result = await self._execute_script(cursor, sql, prepared_params, self.statement_config)
             return create_execution_result(result)
         if statement.is_many:
             # Prepare parameters for executemany
-            prepared_params = self.prepare_driver_parameters(processed_params, self.statement_config, is_many=True)
-            result = await self._execute_many(cursor, processed_sql, prepared_params)
+            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=True)
+            result = await self._execute_many(cursor, sql, prepared_params)
             return create_execution_result(result)
         # Prepare parameters for single execution
-        prepared_params = self.prepare_driver_parameters(processed_params, self.statement_config, is_many=False)
-        result = await self._execute_statement(cursor, processed_sql, prepared_params)
+        prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
+        result = await self._execute_statement(cursor, sql, prepared_params)
         return create_execution_result(result)
 
     async def _execute_script(

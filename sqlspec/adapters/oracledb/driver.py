@@ -51,13 +51,13 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         # Set default Oracle-specific configuration
         if statement_config is None:
             from sqlspec.parameters.config import ParameterStyleConfig
-            
+
             parameter_config = ParameterStyleConfig(
                 default_parameter_style=ParameterStyle.NAMED_COLON,
-                supported_parameter_styles={ParameterStyle.NAMED_COLON},
-                type_coercion_map={},  # Oracle specific type mappings
+                supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON},
+                type_coercion_map={},
                 has_native_list_expansion=False,
-                needs_static_script_compilation=True,  # Oracle requires static compilation for scripts
+                needs_static_script_compilation=True,
             )
             statement_config = StatementConfig(dialect="oracle", parameter_config=parameter_config)
 
@@ -68,7 +68,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
 
     def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[tuple[Any, Optional[int], Any]]":
         """Hook for Oracle-specific special operations.
-        
+
         Oracle doesn't have special operations like PostgreSQL COPY,
         so this always returns None to proceed with standard execution.
         """
@@ -137,10 +137,10 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
     ) -> None:
         if statement_config is None:
             from sqlspec.parameters.config import ParameterStyleConfig
-            
+
             parameter_config = ParameterStyleConfig(
                 default_parameter_style=ParameterStyle.NAMED_COLON,
-                supported_parameter_styles={ParameterStyle.NAMED_COLON},
+                supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON},
                 type_coercion_map={},  # Oracle specific type mappings
                 has_native_list_expansion=False,
                 needs_static_script_compilation=True,  # Oracle requires static compilation for scripts
@@ -154,7 +154,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
 
     async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[tuple[Any, Optional[int], Any]]":
         """Hook for Oracle-specific special operations.
-        
+
         Oracle doesn't have special operations like PostgreSQL COPY,
         so this always returns None to proceed with standard execution.
         """

@@ -98,12 +98,13 @@ class AiosqliteConnectionPool:
 
     async def initialize(self) -> None:
         """Pre-populate the pool with minimum connections."""
-        connections_to_create = min(self._min_pool, self._max_pool)
-        for _ in range(connections_to_create):
-            if self._pool.full():
-                break
-            conn = await self._create_connection()
-            await self._pool.put(conn)
+        # Skip pre-population for now to avoid initialization hangs
+        # connections_to_create = min(self._min_pool, self._max_pool)
+        # for _ in range(connections_to_create):
+        #     if self._pool.full():
+        #         break
+        #     conn = await self._create_connection()
+        #     await self._pool.put(conn)
 
     def _should_recycle(self, connection: "AiosqliteConnection") -> bool:
         """Check if connection should be recycled based on age."""
@@ -247,6 +248,7 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
         pool_config: "Optional[Union[AiosqlitePoolParams, dict[str, Any]]]" = None,
         pool_instance: "Optional[AiosqliteConnectionPool]" = None,
         migration_config: "Optional[dict[str, Any]]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
     ) -> None:
         """Initialize Aiosqlite configuration.
 
@@ -270,12 +272,13 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
             extras = self.connection_config.pop("extra")
             self.connection_config.update(extras)
 
-        # Check if this is an in-memory database and auto-convert to shared memory
-        database = self.connection_config.get("database", ":memory:")
-        if self._is_memory_database(database):
-            self._convert_to_shared_memory()
+        # Note: aiosqlite doesn't properly support shared memory databases with cache=shared
+        # so we leave memory databases as :memory: for compatibility
 
         super().__init__(pool_instance=pool_instance, migration_config=migration_config)
+
+        # Use provided StatementConfig or None to let driver set its own defaults
+        self.statement_config = statement_config
 
     def _get_connection_config_dict(self) -> "dict[str, Any]":
         """Get connection configuration as plain dict for pool creation."""
@@ -285,13 +288,21 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
 
     async def _create_pool(self) -> "AiosqliteConnectionPool":
         """Create the Aiosqlite connection pool."""
-        connection_params = self._get_connection_config_dict()
+        # Get connection parameters and extract pool configuration
+        config_dict = dict(self.connection_config)
+
+        # Extract pool parameters with unified names
+        min_pool = config_dict.pop("pool_min_size", DEFAULT_MIN_POOL)
+        max_pool = config_dict.pop("pool_max_size", DEFAULT_MAX_POOL)
+        timeout = config_dict.pop("pool_timeout", POOL_TIMEOUT)
+        recycle = config_dict.pop("pool_recycle_seconds", POOL_RECYCLE)
+
+        # Remaining is connection configuration
+        connection_params = {k: v for k, v in config_dict.items() if v is not None}
+        connection_params.pop("extra", None)
+
         pool = AiosqliteConnectionPool(
-            connection_params=connection_params,
-            min_pool=self.min_pool,
-            max_pool=self.max_pool,
-            timeout=self.pool_timeout,
-            recycle=self.pool_recycle,
+            connection_params=connection_params, min_pool=min_pool, max_pool=max_pool, timeout=timeout, recycle=recycle
         )
         await pool.initialize()
         return pool
@@ -380,7 +391,9 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
             An AiosqliteDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as connection:
-            yield self.driver_type(connection=connection, statement_config=statement_config)
+            # Use provided statement_config or instance default
+            config = statement_config if statement_config is not None else self.statement_config
+            yield self.driver_type(connection=connection, statement_config=config)
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":
         """Get the signature namespace for Aiosqlite types.

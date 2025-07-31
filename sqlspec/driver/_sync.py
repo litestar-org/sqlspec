@@ -247,7 +247,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         self,
         statement: "Union[Statement, QueryBuilder]",
         *parameters: "Union[StatementParameters, StatementFilter]",
-        config: "StatementConfig",
+        statement_config: "StatementConfig",
         **kwargs: Any,
     ) -> "SQL":
         """Build SQL statement from various input types.
@@ -255,12 +255,12 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         Ensures dialect is set and preserves existing state when rebuilding SQL objects.
         """
         if isinstance(statement, QueryBuilder):
-            return statement.to_statement(config=config)
+            return statement.to_statement(config=statement_config)
         if isinstance(statement, SQL):
             if parameters or kwargs:
-                new_config = config
-                if self.dialect and new_config and not new_config.dialect:
-                    new_config = new_config.replace(dialect=self.dialect)
+                new_config = statement_config
+                if self.statement_config.dialect and new_config and not new_config.dialect:
+                    new_config = new_config.replace(dialect=self.statement_config.dialect)
                 return statement.copy(
                     parameters=(*statement._positional_params, *parameters)
                     if parameters
@@ -268,17 +268,18 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
                     statement_config=new_config,
                     **kwargs,
                 )
-            if self.dialect and (
-                not statement.statement_config.dialect or statement.statement_config.dialect != self.dialect
+            if self.statement_config.dialect and (
+                not statement.statement_config.dialect
+                or statement.statement_config.dialect != self.statement_config.dialect
             ):
-                new_config = statement.statement_config.replace(dialect=self.dialect)
+                new_config = statement.statement_config.replace(dialect=self.statement_config.dialect)
                 if statement.parameters:
-                    return statement.copy(statement_config=new_config, dialect=self.dialect)
-                return statement.copy(statement_config=new_config, dialect=self.dialect)
+                    return statement.copy(statement_config=new_config, dialect=self.statement_config.dialect)
+                return statement.copy(statement_config=new_config, dialect=self.statement_config.dialect)
             return statement
-        if self.dialect and config and not config.dialect:
-            config = config.replace(dialect=self.dialect)
-        return SQL(statement, *parameters, config=config, **kwargs)
+        if self.statement_config.dialect and statement_config and not statement_config.dialect:
+            statement_config = statement_config.replace(dialect=self.statement_config.dialect)
+        return SQL(statement, *parameters, statement_config=statement_config, **kwargs)
 
     def execute(
         self,
@@ -289,7 +290,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         **kwargs: Any,
     ) -> "SQLResult":
         sql_statement = self._prepare_sql(
-            statement, *parameters, config=statement_config or self.statement_config, **kwargs
+            statement, *parameters, statement_config=statement_config or self.statement_config, **kwargs
         )
         return self._dispatch_execution(statement=sql_statement, connection=self.connection)
 
@@ -308,12 +309,14 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         # For execute_many, we need to handle parameters specially to preserve structure
         if parameters and len(parameters) == 1 and isinstance(parameters[0], list):
             # Direct list of parameter sets - pass the full list to as_many
-            sql_statement = self._prepare_sql(statement, config=statement_config or self.statement_config, **kwargs)
+            sql_statement = self._prepare_sql(
+                statement, statement_config=statement_config or self.statement_config, **kwargs
+            )
             return self._dispatch_execution(statement=sql_statement.as_many(parameters[0]), connection=self.connection)
 
         # Default behavior for other cases
         sql_statement = self._prepare_sql(
-            statement, *parameters, config=statement_config or self.statement_config, **kwargs
+            statement, *parameters, statement_config=statement_config or self.statement_config, **kwargs
         )
         return self._dispatch_execution(statement=sql_statement.as_many(), connection=self.connection)
 
@@ -332,7 +335,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         """
         return self._dispatch_execution(
             statement=self._prepare_sql(
-                statement, *parameters, config=statement_config or self.statement_config, **kwargs
+                statement, *parameters, statement_config=statement_config or self.statement_config, **kwargs
             ).as_script(),
             connection=self.connection,
         )
@@ -634,7 +637,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
             >>> print(f"Page data: {len(data)} rows, Total: {total} rows")
         """
         sql_statement = self._prepare_sql(
-            statement, *parameters, config=statement_config or self.statement_config, **kwargs
+            statement, *parameters, statement_config=statement_config or self.statement_config, **kwargs
         )
         count_result = self._dispatch_execution(self._create_count_query(sql_statement), self.connection)
         select_result = self.execute(sql_statement)

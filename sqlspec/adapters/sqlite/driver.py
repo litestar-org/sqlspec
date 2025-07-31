@@ -51,7 +51,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             # Create parameter configuration for SQLite
             parameter_config = ParameterStyleConfig(
                 default_parameter_style=ParameterStyle.QMARK,
-                supported_parameter_styles={ParameterStyle.QMARK},
+                supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
                 type_coercion_map={
                     bool: int,
                     datetime.datetime: lambda v: v.isoformat(),
@@ -114,13 +114,13 @@ class SqliteDriver(SyncDriverAdapterBase):
         """Commit the current transaction."""
         self.connection.commit()
 
-    def _extract_select_data(self, cursor: "sqlite3.Cursor") -> "tuple[list[dict[str, Any]], list[str], int]":
+    def _get_selected_data(self, cursor: "sqlite3.Cursor") -> "tuple[list[dict[str, Any]], list[str], int]":
         """Extract data from cursor after SELECT execution."""
         fetched_data = cursor.fetchall()
         column_names = [col[0] for col in cursor.description or []]
         data = [dict(zip(column_names, row)) for row in fetched_data]
         return data, column_names, len(data)
 
-    def _extract_execute_rowcount(self, cursor: "sqlite3.Cursor") -> int:
+    def _get_row_count(self, cursor: "sqlite3.Cursor") -> int:
         """Extract row count from cursor after INSERT/UPDATE/DELETE."""
         return cursor.rowcount or 0

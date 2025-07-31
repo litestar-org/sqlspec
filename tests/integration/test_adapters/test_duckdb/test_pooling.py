@@ -48,9 +48,10 @@ def test_regular_memory_auto_conversion() -> None:
     # Verify pooling is not disabled (no more pool size overrides)
     assert config.min_pool == 5
     assert config.max_pool == 10
-    # TODO: re-add this feature
-    # Verify database was auto-converted to shared memory
-    assert config.connection_config["database"] == ":memory:shared_db"
+    # Verify database was auto-converted to unique named memory database for pooling
+    database = config.connection_config["database"]
+    assert database.startswith(":memory:pool_")
+    assert len(database) == len(":memory:pool_") + 8  # 8-character unique ID
 
     # Test that multiple connections can access the same data (like shared memory test)
     with config.provide_session() as session1:
@@ -73,11 +74,13 @@ def test_regular_memory_auto_conversion() -> None:
 @pytest.mark.xdist_group("duckdb")
 def test_file_database_pooling() -> None:
     """Test that file databases work with pooling (no changes needed)."""
+    import os
     import tempfile
 
-    # TODO: Use a temporary directory instead.  This method doesn't tend to work otherwise.
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp_file:
+    # Create a unique temporary file path (but don't create the file - let DuckDB create it)
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp_file:
         db_path = tmp_file.name
+    # File should be deleted at this point, so DuckDB can create a new one
 
     config = DuckDBConfig(pool_config={"database": db_path, "pool_min_size": 2, "pool_max_size": 4})
 
@@ -98,8 +101,11 @@ def test_file_database_pooling() -> None:
         # Clean up
         session2.execute("DROP TABLE file_test")
 
-    # Note: In a real scenario, you'd want to clean up the temp file
-    # but for testing purposes, the OS will handle it
+    # Clean up the temporary database file
+    try:
+        os.unlink(db_path)
+    except FileNotFoundError:
+        pass  # File may not exist if test failed early
 
 
 @pytest.mark.xdist_group("duckdb")
@@ -122,10 +128,12 @@ def test_connection_pool_health_checks() -> None:
 @pytest.mark.xdist_group("duckdb")
 def test_empty_database_conversion() -> None:
     """Test that empty database string gets converted properly."""
-    config = DuckDBConfig(connection_config={"database": ""})
+    config = DuckDBConfig(pool_config={"database": ""})
 
-    # Empty string should default to :memory: and then be converted
-    assert config.connection_config["database"] == ":memory:shared_db"
+    # Empty string should default to :memory: and then be converted to unique pool name
+    database = config.connection_config["database"]
+    assert database.startswith(":memory:pool_")
+    assert len(database) == len(":memory:pool_") + 8  # 8-character unique ID
 
     # Should work with pooling
     with config.provide_session() as session:
@@ -138,8 +146,10 @@ def test_default_config_conversion() -> None:
     """Test that default config (no connection_config) works with shared memory."""
     config = DuckDBConfig()
 
-    # Default should be converted to shared memory
-    assert config.connection_config["database"] == ":memory:shared_db"
+    # Default should be converted to unique pool memory database
+    database = config.connection_config["database"]
+    assert database.startswith(":memory:pool_")
+    assert len(database) == len(":memory:pool_") + 8  # 8-character unique ID
 
     # Should work with pooling
     with config.provide_session() as session:

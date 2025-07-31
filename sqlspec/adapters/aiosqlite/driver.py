@@ -49,7 +49,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         if statement_config is None:
             parameter_config = ParameterStyleConfig(
                 default_parameter_style=ParameterStyle.QMARK,
-                supported_parameter_styles={ParameterStyle.QMARK},
+                supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
                 type_coercion_map={
                     bool: int,
                     datetime.datetime: lambda v: v.isoformat(),

@@ -305,7 +305,6 @@ def test_returns_rows(
         # Create a permissive configuration for testing that allows DDL, risky DML, and UNION operations
         test_config = StatementConfig()
         statement = SQL(sql, statement_config=test_config)
-        expression = statement.expression
         actual_returns_rows = statement.returns_rows()
 
         assert actual_returns_rows == expected_returns_rows, (

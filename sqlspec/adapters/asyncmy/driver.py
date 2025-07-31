@@ -82,7 +82,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
     async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[tuple[Any, Optional[int], Any]]":
         """Hook for AsyncMy-specific special operations.
-        
+
         AsyncMy doesn't have special operations like PostgreSQL COPY,
         so this always returns None to proceed with standard execution.
         """

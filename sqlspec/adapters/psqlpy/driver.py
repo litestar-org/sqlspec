@@ -10,7 +10,6 @@ from sqlspec.parameters import ParameterStyle
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.statement.result import SQLResult
     from sqlspec.statement.sql import SQL, StatementConfig
 
 
@@ -60,9 +59,11 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     def with_cursor(self, connection: PsqlpyConnection) -> "PsqlpyCursor":
         return PsqlpyCursor(connection)
 
-    async def _try_special_handling(self, cursor: PsqlpyConnection, statement: "SQL") -> "Optional[tuple[Any, Optional[int], Any]]":
+    async def _try_special_handling(
+        self, cursor: PsqlpyConnection, statement: "SQL"
+    ) -> "Optional[tuple[Any, Optional[int], Any]]":
         """Hook for PsqlPy-specific special operations.
-        
+
         PsqlPy requires special handling for SELECT queries that need separate fetch() call.
         Also handles scripts by executing multiple statements sequentially.
         """
@@ -74,15 +75,16 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             for stmt in statements:
                 if stmt.strip():  # Skip empty statements
                     await cursor.execute(stmt, prepared_params)
-            
+
             from sqlspec.driver._common import create_execution_result
+
             return create_execution_result(cursor)
-        
+
         # Handle SELECT queries that need separate fetch() call
         if statement.returns_rows() and not statement.is_script and not statement.is_many:
             sql, params = statement.compile()
             prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-            
+
             # For PsqlPy, we need to use fetch() instead of execute() for SELECT queries
             query_result = await cursor.fetch(sql, prepared_params)
             dict_rows: list[dict[str, Any]] = []
@@ -90,12 +92,13 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                 dict_rows = query_result.result()
 
             column_names = list(dict_rows[0].keys()) if dict_rows else []
-            
+
             # Package the pre-fetched data as special_data
             special_data = (dict_rows, column_names, len(dict_rows))
             from sqlspec.driver._common import create_execution_result
+
             return create_execution_result(cursor, None, special_data)
-        
+
         return None
 
     async def _execute_many(self, cursor: PsqlpyConnection, sql: str, prepared_params: Any) -> Any:
@@ -121,7 +124,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         """Extract row count from cursor after INSERT/UPDATE/DELETE."""
         # psqlpy doesn't easily expose rowcount, so we return -1
         return -1
-
 
     async def begin(self) -> None:
         """Begin transaction using psqlpy-specific method."""

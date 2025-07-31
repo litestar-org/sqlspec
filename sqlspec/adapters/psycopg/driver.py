@@ -54,7 +54,7 @@ class PsycopgSyncDriver(PsycopgCopyMixin, SyncDriverAdapterBase):
         # Set default Psycopg-specific configuration
         if statement_config is None:
             from sqlspec.parameters.config import ParameterStyleConfig
-            
+
             parameter_config = ParameterStyleConfig(
                 default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
                 supported_parameter_styles={
@@ -165,7 +165,7 @@ class PsycopgAsyncDriver(PsycopgCopyMixin, AsyncDriverAdapterBase):
         # Set default Psycopg-specific configuration
         if statement_config is None:
             from sqlspec.parameters.config import ParameterStyleConfig
-            
+
             parameter_config = ParameterStyleConfig(
                 default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
                 supported_parameter_styles={

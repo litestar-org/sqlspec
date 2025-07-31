@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -71,7 +71,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
             statement_config = StatementConfig()
         super().__init__(connection, statement_config)
 
-    def _try_special_handling(self, cursor: Any, statement: SQL) -> "Optional[tuple[Any, Optional[int], Any]]":
+    def _try_special_handling(self, cursor: Any, statement: SQL) -> Optional[tuple[Any, Optional[int], Any]]:
         """Hook for mock-specific special operations - none needed."""
         return None
 
@@ -131,23 +131,23 @@ class MockSyncDriver(SyncDriverAdapterBase):
     def returns_rows(self, expression: Any) -> bool:
         """Mock implementation of returns_rows from CommonDriverAttributesMixin."""
         from sqlglot import expressions as exp
-        
+
         if expression is None:
             return False
-        
+
         # Row-returning expressions
         if isinstance(expression, (exp.Select, exp.Values, exp.Table, exp.Show, exp.Describe, exp.Pragma)):
             return True
-        
+
         # Handle WITH clauses
         if isinstance(expression, exp.With):
             if expression.expressions:
                 return self.returns_rows(expression.expressions[0])
-        
+
         # Handle RETURNING clause
-        if hasattr(expression, 'find') and expression.find(exp.Returning):
+        if hasattr(expression, "find") and expression.find(exp.Returning):
             return True
-        
+
         return False
 
     def _execute_sql(self, statement: SQL, connection: Any | None = None, **kwargs: Any) -> SQLResult:
@@ -199,7 +199,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
 class MockAsyncDriver(AsyncDriverAdapterBase):
     """Test async driver implementation."""
 
-    dialect = "postgres"  # Use valid SQLGlot dialect
+    dialect = "postgres"
     parameter_style = ParameterStyle.NAMED_COLON
 
     def __init__(self, connection: MockAsyncConnection, statement_config: StatementConfig | None = None) -> None:
@@ -207,7 +207,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
             statement_config = StatementConfig()
         super().__init__(connection, statement_config)
 
-    async def _try_special_handling(self, cursor: Any, statement: SQL) -> "Optional[tuple[Any, Optional[int], Any]]":
+    async def _try_special_handling(self, cursor: Any, statement: SQL) -> tuple[Any, int | None, Any] | None:
         """Hook for mock-specific special operations - none needed."""
         return None
 
@@ -267,23 +267,23 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
     def returns_rows(self, expression: Any) -> bool:
         """Mock implementation of returns_rows from CommonDriverAttributesMixin."""
         from sqlglot import expressions as exp
-        
+
         if expression is None:
             return False
-        
+
         # Row-returning expressions
         if isinstance(expression, (exp.Select, exp.Values, exp.Table, exp.Show, exp.Describe, exp.Pragma)):
             return True
-        
+
         # Handle WITH clauses
         if isinstance(expression, exp.With):
             if expression.expressions:
                 return self.returns_rows(expression.expressions[0])
-        
+
         # Handle RETURNING clause
-        if hasattr(expression, 'find') and expression.find(exp.Returning):
+        if hasattr(expression, "find") and expression.find(exp.Returning):
             return True
-        
+
         return False
 
     async def _execute_sql(self, statement: SQL, connection: Any | None = None, **kwargs: Any) -> SQLResult:

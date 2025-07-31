@@ -109,11 +109,13 @@ class _ProcessedState:
 
     def __hash__(self) -> int:
         """Hash based on processed SQL and expression."""
-        return hash((
-            self.processed_sql,
-            str(self.processed_expression),
-            len(self.validation_errors) if self.validation_errors else 0,
-        ))
+        return hash(
+            (
+                self.processed_sql,
+                str(self.processed_expression),
+                len(self.validation_errors) if self.validation_errors else 0,
+            )
+        )
 
     def __init__(
         self,
@@ -207,16 +209,18 @@ class StatementConfig:
 
     def __hash__(self) -> int:
         """Hash based on key configuration settings."""
-        return hash((
-            self.enable_parsing,
-            self.enable_validation,
-            self.enable_transformations,
-            self.enable_analysis,
-            self.enable_expression_simplification,
-            self.enable_parameter_type_wrapping,
-            self.enable_caching,
-            self.dialect,
-        ))
+        return hash(
+            (
+                self.enable_parsing,
+                self.enable_validation,
+                self.enable_transformations,
+                self.enable_analysis,
+                self.enable_expression_simplification,
+                self.enable_parameter_type_wrapping,
+                self.enable_caching,
+                self.dialect,
+            )
+        )
 
     def __init__(
         self,
@@ -250,7 +254,7 @@ class StatementConfig:
         self.enable_caching = enable_caching
         self.parameter_converter = parameter_converter or ParameterConverter()
         self.parameter_validator = parameter_validator or ParameterValidator()
-        
+
         # Use parameter_config if provided, otherwise create from individual parameters
         if parameter_config is not None:
             self.parameter_config = parameter_config
@@ -266,7 +270,7 @@ class StatementConfig:
                 needs_static_script_compilation=needs_static_script_compilation,
                 allow_mixed_parameter_styles=allow_mixed_parameter_styles,
             )
-        
+
         self.dialect = dialect
         self.custom_pipeline_steps = custom_pipeline_steps
         self.output_transformer = output_transformer

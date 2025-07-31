@@ -12,10 +12,11 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.sqlite._types import SqliteConnection
 from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver
 from sqlspec.config import SyncDatabaseConfig
-from sqlspec.statement.sql import StatementConfig
 
 if TYPE_CHECKING:
     from collections.abc import Generator
+
+    from sqlspec.statement.sql import StatementConfig
 
 
 DEFAULT_MIN_POOL: Final[int] = 5
@@ -300,8 +301,8 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
 
         super().__init__(pool_instance=pool_instance, migration_config=migration_config)
 
-        # Use provided StatementConfig or create a minimal one (driver will override with its own defaults)
-        self.statement_config = statement_config or StatementConfig()
+        # Use provided StatementConfig or None to let driver set its own defaults
+        self.statement_config = statement_config
 
     def _optimize_memory_database(self) -> None:
         """Optimize in-memory databases for concurrent access."""

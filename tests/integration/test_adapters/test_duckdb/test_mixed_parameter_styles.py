@@ -11,7 +11,7 @@ from sqlspec.statement.sql import SQL, StatementConfig
 @pytest.fixture
 def duckdb_session() -> Generator[DuckDBDriver, None, None]:
     """Create a DuckDB session for testing."""
-    config = DuckDBConfig(connection_config={"database": ":memory:"}, statement_config=StatementConfig())
+    config = DuckDBConfig(pool_config={"database": ":memory:"}, statement_config=StatementConfig())
 
     with config.provide_session() as session:
         # Create test table
