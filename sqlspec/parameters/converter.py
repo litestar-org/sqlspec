@@ -357,6 +357,50 @@ class ParameterConverter:
         # Nothing provided
         return None
 
+    def convert_mixed_parameters_to_dict(self, params: Any, param_info: list[ParameterInfo]) -> dict[str, Any]:
+        """Convert mixed parameter styles to a consistent dict format.
+
+        This method handles the case where SQL has mixed parameter styles
+        (e.g., ? and $1) and ensures each parameter gets a unique key.
+
+        Args:
+            params: Parameters in list, tuple, or dict format
+            param_info: Parameter information extracted from SQL
+
+        Returns:
+            Dictionary with unique keys for each parameter
+        """
+        if not param_info:
+            return {}
+
+        if isinstance(params, dict):
+            return params
+
+        if not isinstance(params, (list, tuple)):
+            return {"param_0": params} if params is not None else {}
+
+        # Handle list/tuple parameters with mixed styles
+        param_dict: dict[str, Any] = {}
+
+        # Sort parameters by their position in the SQL to maintain order
+        sorted_params = sorted(param_info, key=lambda p: p.position)
+
+        for i, p_info in enumerate(sorted_params):
+            if i < len(params):
+                # Generate unique key for each parameter
+                # Generate unique key - use the named parameter's name (e.g., "1" for $1)
+                # or param_N format for unnamed parameters (e.g., ? placeholders)
+                key = p_info.name if p_info.name is not None else f"param_{i}"
+
+                # Check for key conflicts and resolve them
+                if key in param_dict:
+                    # If there's a conflict, use param_N format to ensure uniqueness
+                    key = f"param_{i}"
+
+                param_dict[key] = params[i]
+
+        return param_dict
+
     def convert_parameters(
         self,
         sql: str,

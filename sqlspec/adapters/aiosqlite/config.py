@@ -200,6 +200,96 @@ class AiosqliteConnectionPool:
         """Get number of checked out connections."""
         return self._checked_out
 
+    async def acquire(self) -> "AiosqliteConnection":
+        """Acquire a connection from the pool without a context manager.
+
+        This method gets a connection from the pool that must be manually
+        returned using the release() method.
+
+        Returns:
+            AiosqliteConnection: A connection from the pool
+
+        Raises:
+            RuntimeError: If pool limit is reached and timeout expires
+        """
+        connection = None
+        acquired = False
+
+        try:
+            # Acquire semaphore with timeout
+            acquired = await asyncio.wait_for(self._semaphore.acquire(), timeout=self._timeout)
+
+            # Try to get existing connection from pool
+            try:
+                connection = self._pool.get_nowait()
+
+                # Check if connection should be recycled based on age
+                if self._should_recycle(connection) or not await self._is_connection_alive(connection):
+                    conn_id = id(connection)
+                    with suppress(Exception):
+                        await connection.close()
+                    async with self._lock:
+                        self._connection_times.pop(conn_id, None)
+                    connection = None
+
+            except asyncio.QueueEmpty:
+                connection = None
+
+            # Create new connection if needed
+            if connection is None:
+                connection = await self._create_connection()
+
+            async with self._lock:
+                self._checked_out += 1
+
+        except asyncio.TimeoutError:
+            msg = f"Connection pool timeout after {self._timeout} seconds"
+            raise RuntimeError(msg) from None
+        except Exception:
+            # If we got a connection but failed somewhere, return it to pool
+            if connection is not None:
+                with suppress(asyncio.QueueFull):
+                    self._pool.put_nowait(connection)
+            if acquired:
+                self._semaphore.release()
+            raise
+        return connection
+
+    async def release(self, connection: "AiosqliteConnection") -> None:
+        """Return a connection to the pool.
+
+        Args:
+            connection: The connection to return to the pool
+        """
+        if connection is None:
+            return
+
+        try:
+            async with self._lock:
+                self._checked_out = max(0, self._checked_out - 1)
+
+            # Validate connection before returning to pool
+            if await self._is_connection_alive(connection):
+                try:
+                    self._pool.put_nowait(connection)
+                except asyncio.QueueFull:
+                    # Pool is full, close the connection
+                    with suppress(Exception):
+                        await connection.close()
+                    conn_id = id(connection)
+                    async with self._lock:
+                        self._connection_times.pop(conn_id, None)
+            else:
+                # Connection is dead, close it
+                with suppress(Exception):
+                    await connection.close()
+                conn_id = id(connection)
+                async with self._lock:
+                    self._connection_times.pop(conn_id, None)
+        finally:
+            # Always release the semaphore
+            self._semaphore.release()
+
 
 class AiosqliteConnectionParams(TypedDict, total=False):
     """aiosqlite connection parameters."""
@@ -297,16 +387,30 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
             await self.pool_instance.close()
 
     async def create_connection(self) -> "AiosqliteConnection":
-        """Create a single async connection (bypasses pool).
+        """Get an Aiosqlite connection from the pool.
+
+        This method ensures the pool is created and returns a connection
+        from the pool. The connection is checked out from the pool and must
+        be properly managed by the caller.
 
         Returns:
-            An Aiosqlite connection instance.
+            AiosqliteConnection: A connection from the pool
+
+        Note:
+            For automatic connection management, prefer using provide_connection()
+            or provide_session() which handle returning connections to the pool.
+            The caller is responsible for returning the connection to the pool
+            using pool.release(connection) when done.
         """
         try:
-            config = self._get_connection_config_dict()
-            return await aiosqlite.connect(**config)
+            # Ensure pool exists
+            pool = await self.provide_pool()
+
+            # Use the pool's acquire method
+            return await pool.acquire()
+
         except Exception as e:
-            msg = f"Could not configure the Aiosqlite connection. Error: {e!s}"
+            msg = f"Could not acquire Aiosqlite connection from pool. Error: {e!s}"
             raise ImproperConfigurationError(msg) from e
 
     @asynccontextmanager

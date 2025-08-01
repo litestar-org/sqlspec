@@ -603,24 +603,12 @@ class SQL:
                     any(p.style == ParameterStyle.NUMERIC for p in param_info) if param_info else False
                 )
 
-                if has_numeric_placeholders:
-                    # Handle Oracle-style numeric parameters
-                    if len(final_params) == 1 and isinstance(final_params[0], tuple):
-                        tuple_param = final_params[0]
-                        if len(param_info) == 1 and len(tuple_param) == 1:
-                            param_dict["1"] = tuple_param[0]
-                        elif len(param_info) > 1 and len(tuple_param) == len(param_info):
-                            for i, param in enumerate(tuple_param):
-                                param_dict[str(i + 1)] = param
-                        else:
-                            param_dict["1"] = tuple_param
-                    else:
-                        # Map parameters based on their position in SQL
-                        sorted_params = sorted(param_info, key=lambda p: p.position)
-                        for i, p_info in enumerate(sorted_params):
-                            if i < len(final_params):
-                                key = p_info.name if p_info.name is not None else str(i + 1)
-                                param_dict[key] = final_params[i]
+                # Check for mixed parameter styles
+                has_mixed_styles = len({p.style for p in param_info}) > 1
+
+                if has_mixed_styles or has_numeric_placeholders:
+                    # Use ParameterConverter for mixed parameter style handling
+                    param_dict = converter.convert_mixed_parameters_to_dict(final_params, param_info)
                 else:
                     # Regular parameter mapping
                     for i, param in enumerate(final_params):

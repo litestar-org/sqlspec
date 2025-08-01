@@ -243,6 +243,94 @@ class SqliteConnectionPool:
         """Get number of checked out connections."""
         return self._checked_out
 
+    def acquire(self) -> SqliteConnection:
+        """Acquire a connection from the pool without a context manager.
+
+        This method gets a connection from the pool that must be manually
+        returned using the release() method.
+
+        Returns:
+            SqliteConnection: A connection from the pool
+
+        Raises:
+            RuntimeError: If pool limit is reached and timeout expires
+        """
+        connection = None
+        try:
+            # Try to get existing connection from pool
+            try:
+                connection = self._pool.get(timeout=self._timeout)
+
+                # Check if connection should be recycled based on age
+                if self._should_recycle(connection) or not self._is_connection_alive(connection):
+                    conn_id = id(connection)
+                    with suppress(Exception):
+                        connection.close()
+                    with self._lock:
+                        self._connection_times.pop(conn_id, None)
+                    connection = None
+
+            except Empty:
+                # Pool is empty, check if we can create new connection
+                with self._lock:
+                    total_connections = self._checked_out + self._pool.qsize()
+                    if total_connections < self._max_pool_size:
+                        connection = None  # Will create new one below
+                    else:
+                        # Wait for a connection to become available
+                        try:
+                            connection = self._pool.get(timeout=self._timeout)
+                        except Empty:
+                            msg = f"Pool limit of {self._max_pool_size} connections reached"
+                            raise RuntimeError(msg) from None
+
+            # Create new connection if needed
+            if connection is None:
+                connection = self._create_connection()
+
+            with self._lock:
+                self._checked_out += 1
+
+            return connection
+
+        except Exception:
+            # If we got a connection but failed somewhere, return it to pool
+            if connection is not None:
+                with suppress(Full):
+                    self._pool.put_nowait(connection)
+            raise
+
+    def release(self, connection: SqliteConnection) -> None:
+        """Return a connection to the pool.
+
+        Args:
+            connection: The connection to return to the pool
+        """
+        if connection is None:
+            return
+
+        with self._lock:
+            self._checked_out = max(0, self._checked_out - 1)
+
+        # Validate connection before returning to pool
+        if self._is_connection_alive(connection):
+            try:
+                self._pool.put_nowait(connection)
+            except Full:
+                # Pool is full, close the connection
+                with suppress(Exception):
+                    connection.close()
+                conn_id = id(connection)
+                with self._lock:
+                    self._connection_times.pop(conn_id, None)
+        else:
+            # Connection is dead, close it
+            with suppress(Exception):
+                connection.close()
+            conn_id = id(connection)
+            with self._lock:
+                self._connection_times.pop(conn_id, None)
+
 
 class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, SqliteDriver]):
     """SQLite configuration with connection pooling for high performance.
@@ -308,36 +396,32 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         pool_config = self._get_pool_config_dict()
         return SqliteConnectionPool(connection_params=config_dict, **pool_config)
 
-    def _is_memory_database(self, database: "Optional[str]") -> bool:
-        """Check if the database is an in-memory database.
-
-        Args:
-            database: Database path or connection string
-
-        Returns:
-            True if this is an in-memory database
-        """
-        if not database:
-            return True
-
-        # Standard :memory: database
-        if database == ":memory:":
-            return True
-
-        # Check for URI-style memory database but NOT shared cache
-        return "file::memory:" in database and "cache=shared" not in database
-
     def _close_pool(self) -> None:
         """Close the connection pool."""
         if self.pool_instance:
             self.pool_instance.close()
 
     def create_connection(self) -> SqliteConnection:
-        """Create a single connection (bypasses pool)."""
-        config = self._get_connection_config_dict()
-        connection = sqlite3.connect(**config)
-        connection.row_factory = sqlite3.Row
-        return connection  # type: ignore[no-any-return]
+        """Get a SQLite connection from the pool.
+
+        This method ensures the pool is created and returns a connection
+        from the pool. The connection is checked out from the pool and must
+        be properly managed by the caller.
+
+        Returns:
+            SqliteConnection: A connection from the pool
+
+        Note:
+            For automatic connection management, prefer using provide_connection()
+            or provide_session() which handle returning connections to the pool.
+            The caller is responsible for returning the connection to the pool
+            using pool.release(connection) when done.
+        """
+        # Ensure pool exists
+        pool = self.provide_pool()
+
+        # Use the pool's acquire method
+        return pool.acquire()
 
     @contextmanager
     def provide_connection(self, *args: "Any", **kwargs: "Any") -> "Generator[SqliteConnection, None, None]":
