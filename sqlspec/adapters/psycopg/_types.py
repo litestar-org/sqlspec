@@ -1,8 +1,9 @@
 from typing import TYPE_CHECKING
 
+from psycopg.rows import DictRow as PsycopgDictRow
+
 if TYPE_CHECKING:
     from psycopg import AsyncConnection, Connection
-    from psycopg.rows import DictRow as PsycopgDictRow
     from typing_extensions import TypeAlias
 
     PsycopgSyncConnection: TypeAlias = Connection[PsycopgDictRow]
@@ -13,4 +14,4 @@ else:
     PsycopgSyncConnection = Connection
     PsycopgAsyncConnection = AsyncConnection
 
-__all__ = ("PsycopgAsyncConnection", "PsycopgSyncConnection")
+__all__ = ("PsycopgAsyncConnection", "PsycopgDictRow", "PsycopgSyncConnection")

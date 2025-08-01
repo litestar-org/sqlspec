@@ -5,7 +5,7 @@ import threading
 import time
 from contextlib import contextmanager, suppress
 from queue import Empty, Full, Queue
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, TypedDict, Union, cast
 
 from typing_extensions import NotRequired
 
@@ -87,18 +87,18 @@ class SqliteConnectionPool:
     def __init__(
         self,
         connection_params: "dict[str, Any]",
-        min_pool_size: int = DEFAULT_MIN_POOL,
-        max_pool_size: int = DEFAULT_MAX_POOL,
-        timeout: float = POOL_TIMEOUT,
-        recycle: int = POOL_RECYCLE,
+        pool_min_size: int = DEFAULT_MIN_POOL,
+        pool_max_size: int = DEFAULT_MAX_POOL,
+        pool_timeout: float = POOL_TIMEOUT,
+        pool_recycle_seconds: int = POOL_RECYCLE,
     ) -> None:
         """Initialize the connection pool."""
-        self._pool: "Queue[SqliteConnection]" = Queue(maxsize=max_pool_size)  # noqa: UP037
+        self._pool: "Queue[SqliteConnection]" = Queue(maxsize=pool_max_size)  # noqa: UP037
         self._lock = threading.RLock()
-        self._min_pool_size = min_pool_size
-        self._max_pool_size = max_pool_size
-        self._timeout = timeout
-        self._recycle = recycle
+        self._min_pool_size = pool_min_size
+        self._max_pool_size = pool_max_size
+        self._timeout = pool_timeout
+        self._recycle = pool_recycle_seconds
         self._connection_params = connection_params
         self._created_connections = 0
         self._checked_out = 0
@@ -106,7 +106,7 @@ class SqliteConnectionPool:
 
         # Pre-populate core pool
         try:
-            for _ in range(min_pool_size):
+            for _ in range(pool_min_size):
                 conn = self._create_connection()
                 self._pool.put_nowait(conn)
         except Full:
@@ -271,94 +271,42 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             migration_config: Migration configuration
         """
         # Store and parse the unified pool configuration
-        self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
-        if "extra" in self.pool_config:
-            extras = self.pool_config.pop("extra")
-            self.pool_config.update(extras)
-
-        # Extract connection parameters from pool_config
-        connection_params = {
-            key: value
-            for key, value in self.pool_config.items()
-            if key
-            not in {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds", "pool_max_overflow"}
-        }
-
-        # Set default database if not provided
-        if "database" not in connection_params or not connection_params["database"]:
-            connection_params["database"] = ":memory:"
-
-        self.connection_config: dict[str, Any] = connection_params
-        database = self.connection_config["database"]
-
-        # Check if this is an in-memory database and auto-convert to shared memory
-        if self._is_memory_database(database):
-            self._convert_to_shared_memory()
-        # Also handle cases where database is already a shared memory URI
-        elif "file::memory:" in database:
-            # Ensure uri=True is set for all file::memory: databases
-            self.connection_config["uri"] = True
+        if pool_config is None:
+            pool_config = {}
+        if "database" not in pool_config or pool_config["database"] == ":memory:":
+            pool_config["database"] = "file::memory:?cache=shared"
+            pool_config["uri"] = True
 
         super().__init__(
             pool_instance=pool_instance,
-            pool_config=self.pool_config,
+            pool_config=cast("dict[str, Any]", pool_config),
             migration_config=migration_config,
             statement_config=statement_config or sqlite_statement_config,
+            driver_features={},
         )
-
-    def _optimize_memory_database(self) -> None:
-        """Optimize in-memory databases for concurrent access."""
-        database = self.pool_config.get("database", ":memory:")
-
-        if self._is_memory_database(database):
-            # Convert to shared cache for concurrency
-            shared_name = f"shared_cache_{id(self)}"
-            self.pool_config["database"] = f"file:{shared_name}?mode=memory&cache=shared"
-            self.pool_config["uri"] = True
-        elif "file::memory:" in database:
-            # Ensure URI mode is enabled for file-based memory databases
-            self.pool_config["uri"] = True
-
-    def _convert_to_shared_memory(self) -> None:
-        """Convert in-memory database to shared memory for connection pooling.
-
-        Automatically converts :memory: and file::memory: databases to
-        file::memory:?cache=shared format to enable safe connection pooling.
-        """
-        database = self.connection_config.get("database", ":memory:")
-
-        if database == ":memory:":
-            # Convert :memory: to shared memory
-            self.connection_config["database"] = "file::memory:?cache=shared"
-            self.connection_config["uri"] = True
-        elif "file::memory:" in database:
-            # For file::memory: URIs, ensure they have cache=shared and uri=True
-            if "cache=shared" not in database:
-                # Add cache=shared to existing file::memory: URI
-                separator = "&" if "?" in database else "?"
-                self.connection_config["database"] = f"{database}{separator}cache=shared"
-            # Always ensure uri=True for file::memory: databases
-            self.connection_config["uri"] = True
 
     def _get_connection_config_dict(self) -> "dict[str, Any]":
         """Get connection configuration as plain dict for pool creation."""
-        config: "dict[str, Any]" = dict(self.connection_config)  # noqa: UP037
-        config.pop("extra", None)
-        return {k: v for k, v in config.items() if v is not None}
+        return {
+            k: v
+            for k, v in self.pool_config.items()
+            if v is not None
+            and k not in {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds", "extra"}
+        }
+
+    def _get_pool_config_dict(self) -> "dict[str, Any]":
+        """Get pool configuration as plain dict for pool creation."""
+        return {
+            k: v
+            for k, v in self.pool_config.items()
+            if v is not None and k in {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds"}
+        }
 
     def _create_pool(self) -> SqliteConnectionPool:
         """Create optimized connection pool from unified configuration."""
-        min_pool_size = self.pool_config.pop("pool_min_size", DEFAULT_MIN_POOL)
-        max_pool_size = self.pool_config.pop("pool_max_size", DEFAULT_MAX_POOL)
-        timeout = self.pool_config.pop("pool_timeout", POOL_TIMEOUT)
-        recycle = self.pool_config.pop("pool_recycle_seconds", POOL_RECYCLE)
-        return SqliteConnectionPool(
-            connection_params=self.connection_config,
-            min_pool_size=min_pool_size,
-            max_pool_size=max_pool_size,
-            timeout=timeout,
-            recycle=recycle,
-        )
+        config_dict = self._get_connection_config_dict()
+        pool_config = self._get_pool_config_dict()
+        return SqliteConnectionPool(connection_params=config_dict, **pool_config)
 
     def _is_memory_database(self, database: "Optional[str]") -> bool:
         """Check if the database is an in-memory database.
@@ -399,12 +347,13 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             yield connection
 
     @contextmanager
-    def provide_session(self, *args: "Any", **kwargs: "Any") -> "Generator[SqliteDriver, None, None]":
+    def provide_session(
+        self, *args: "Any", statement_config: "Optional[StatementConfig]" = None, **kwargs: "Any"
+    ) -> "Generator[SqliteDriver, None, None]":
         """Provide a SQLite driver session using pooled connections."""
         with self.provide_connection(*args, **kwargs) as connection:
             # Use shared config or user-provided config
-            statement_config = self.statement_config or sqlite_statement_config
-            yield self.driver_type(connection=connection, statement_config=statement_config)
+            yield self.driver_type(connection=connection, statement_config=statement_config or self.statement_config)
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":
         """Get the signature namespace for SQLite types.

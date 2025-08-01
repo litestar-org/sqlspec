@@ -23,9 +23,9 @@ asyncpg_statement_config = StatementConfig(
     parameter_config=ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NUMERIC,
         supported_parameter_styles={ParameterStyle.NUMERIC},
-        type_coercion_map={},  # AsyncPG handles most types natively
+        type_coercion_map={},
         has_native_list_expansion=True,
-        needs_static_script_compilation=False,  # AsyncPG supports parameters in scripts
+        needs_static_script_compilation=False,
     ),
     custom_pipeline_steps=[postgres_copy_pipeline_step],
 )

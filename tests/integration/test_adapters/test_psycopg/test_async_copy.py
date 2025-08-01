@@ -16,11 +16,7 @@ async def psycopg_async_session(postgres_service: PostgresService) -> AsyncGener
     """Create a psycopg async session with test table."""
     config = PsycopgAsyncConfig(
         pool_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "dbname": postgres_service.database,
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
             "autocommit": True,  # Enable autocommit for tests
         }
     )

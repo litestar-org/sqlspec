@@ -2,6 +2,8 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 from typing import TYPE_CHECKING, Any, Optional
 
+from sqlglot import exp
+
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.parameters import ParameterStyle
 from sqlspec.parameters.config import ParameterStyleConfig
@@ -21,7 +23,7 @@ duckdb_statement_config = StatementConfig(
         supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
         type_coercion_map={},
         has_native_list_expansion=True,
-        needs_static_script_compilation=True,  # DuckDB requires static compilation for scripts
+        needs_static_script_compilation=True,
     ),
 )
 
@@ -95,13 +97,25 @@ class DuckDBDriver(SyncDriverAdapterBase):
             last_result, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
         )
 
+    def _is_modifying_operation(self, statement: "SQL") -> bool:
+        """Check if the SQL statement is a modifying operation (INSERT/UPDATE/DELETE)."""
+
+        # Try to get the expression from the statement
+        expression = statement.expression
+        if expression and isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):
+            return True
+
+        # Fallback: check the raw SQL text for INSERT/UPDATE/DELETE keywords
+        sql_upper = statement._raw_sql.strip().upper()
+        return sql_upper.startswith(("INSERT", "UPDATE", "DELETE"))
+
     def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
         """DuckDB executemany with accurate row counting."""
         if prepared_params:
             cursor.executemany(sql, prepared_params)
             # DuckDB's cursor.rowcount is unreliable for executemany
             # Use explicit count for INSERT/UPDATE/DELETE operations
-            if statement.operation_type in ("INSERT", "UPDATE", "DELETE"):
+            if self._is_modifying_operation(statement):
                 row_count = len(prepared_params)  # Explicit accurate count
             else:
                 # For non-modifying operations, try to get row count from cursor

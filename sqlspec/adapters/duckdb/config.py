@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from contextlib import contextmanager, suppress
 from queue import Empty as QueueEmpty
 from queue import Full, Queue
-from typing import TYPE_CHECKING, Any, Final, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, Final, Optional, TypedDict, cast
 
 import duckdb
 from typing_extensions import NotRequired
@@ -16,7 +16,6 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.duckdb._types import DuckDBConnection
 from sqlspec.adapters.duckdb.driver import DuckDBCursor, DuckDBDriver, duckdb_statement_config
 from sqlspec.config import SyncDatabaseConfig
-from sqlspec.typing import Empty
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -69,20 +68,20 @@ class DuckDBConnectionPool:
     def __init__(  # noqa: PLR0913
         self,
         connection_config: "dict[str, Any]",  # noqa: UP037
-        min_pool: int = DEFAULT_MIN_POOL,
-        max_pool: int = DEFAULT_MAX_POOL,
-        timeout: float = POOL_TIMEOUT,
-        recycle: int = POOL_RECYCLE,
+        pool_min_size: int = DEFAULT_MIN_POOL,
+        pool_max_size: int = DEFAULT_MAX_POOL,
+        pool_timeout: float = POOL_TIMEOUT,
+        pool_recycle_seconds: int = POOL_RECYCLE,
         extensions: "Optional[list[dict[str, Any]]]" = None,  # noqa: FA100, UP037
         secrets: "Optional[list[dict[str, Any]]]" = None,  # noqa: FA100, UP037
         on_connection_create: "Optional[Callable[[DuckDBConnection], None]]" = None,  # noqa: FA100
     ) -> None:
-        self._pool: "Queue[DuckDBConnection]" = Queue(maxsize=max_pool)  # noqa: UP037
+        self._pool: "Queue[DuckDBConnection]" = Queue(maxsize=pool_max_size)  # noqa: UP037
         self._lock = threading.RLock()
-        self._min_pool = min_pool
-        self._max_pool = max_pool
-        self._timeout = timeout
-        self._recycle = recycle
+        self._min_pool = pool_min_size
+        self._max_pool = pool_max_size
+        self._timeout = pool_timeout
+        self._recycle = pool_recycle_seconds
         self._connection_config = connection_config
         self._extensions = extensions or []
         self._secrets = secrets or []
@@ -92,7 +91,7 @@ class DuckDBConnectionPool:
         self._connection_times: "dict[int, float]" = {}  # noqa: UP037
 
         # Pre-populate pool
-        for _ in range(min_pool):
+        for _ in range(pool_min_size):
             if self._pool.full():
                 break
             conn = self._create_connection()
@@ -397,125 +396,46 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[Union[DuckDBDriverFeatures, dict[str, Any]]]" = None,
     ) -> None:
-        """Initialize DuckDB configuration with intelligent features.
+        """Initialize DuckDB configuration with intelligent features."""
+        if pool_config is None:
+            pool_config = {}
+        if "database" not in pool_config:
+            pool_config["database"] = ":memory:shared_db"
 
-        Args:
-            pool_config: Pool configuration parameters (TypedDict or dict) including connection params
-            migration_config: Migration configuration
-            pool_instance: Pre-created pool instance
-            statement_config: Default SQL statement configuration
-            driver_features: Driver features configuration (TypedDict or dict) with extensions, secrets, callbacks
+        if pool_config.get("database") in {":memory:", ""}:
+            pool_config["database"] = ":memory:shared_db"
 
-        Example:
-            >>> config = DuckDBConfig(
-            ...     pool_config={
-            ...         "database": ":memory:",
-            ...         "memory_limit": "1GB",
-            ...         "threads": 4,
-            ...         "autoload_known_extensions": True,
-            ...         "pool_min_size": 2,
-            ...         "pool_max_size": 10,
-            ...         "pool_timeout": 30.0,
-            ...         "pool_recycle_seconds": 3600,
-            ...     },
-            ...     driver_features={
-            ...         "extensions": [
-            ...             {"name": "spatial", "repository": "core"},
-            ...             {"name": "aws", "repository": "core"},
-            ...         ],
-            ...         "secrets": [
-            ...             {
-            ...                 "secret_type": "openai",
-            ...                 "name": "my_openai_secret",
-            ...                 "value": {"api_key": "sk-..."},
-            ...             }
-            ...         ],
-            ...         "on_connection_create": my_callback_function,
-            ...     },
-            ... )
-        """
-        # Convert to dict and extract configuration
-        pool_config_dict: dict[str, Any] = dict(pool_config) if pool_config else {}
-
-        # Set defaults for connection config
-        if not any(key in pool_config_dict for key in ["database"]) or not pool_config_dict.get("database"):
-            pool_config_dict["database"] = ":memory:"
-
-        # Extract pool parameters with unified names
-        self.min_pool = pool_config_dict.pop("pool_min_size", DEFAULT_MIN_POOL)
-        self.max_pool = pool_config_dict.pop("pool_max_size", DEFAULT_MAX_POOL)
-        self.pool_timeout = pool_config_dict.pop("pool_timeout", POOL_TIMEOUT)
-        self.pool_recycle = pool_config_dict.pop("pool_recycle_seconds", POOL_RECYCLE)
-
-        # Remaining config is connection configuration
-        self.connection_config = pool_config_dict
-        if "extra" in self.connection_config:
-            extras = self.connection_config.pop("extra")
-            self.connection_config.update(extras)
-
-        # Convert basic :memory: to unique named memory database for pooling
-        # Named memory databases already work with sharing
-        database = self.connection_config.get("database", ":memory:")
-        if database == ":memory:":
-            # Basic :memory: doesn't share between connections, convert to unique named
-            import uuid
-
-            unique_id = str(uuid.uuid4())[:8]  # Short unique identifier
-            self.connection_config["database"] = f":memory:pool_{unique_id}"
-
-        statement_config = statement_config or duckdb_statement_config
         super().__init__(
+            pool_config=dict(pool_config),
             pool_instance=pool_instance,
             migration_config=migration_config,
-            statement_config=statement_config,
-            driver_features=driver_features,
+            statement_config=statement_config or duckdb_statement_config,
+            driver_features=cast("dict[str, Any]", driver_features),
         )
 
-    def _get_connection_config_dict(self) -> dict[str, Any]:
-        """Get connection configuration as plain dict for external library.
-
-        Returns:
-            Dictionary with connection parameters properly separated for DuckDB.
-        """
-        connect_params: dict[str, Any] = {}
-
-        # Handle database parameter
-        database = self.connection_config.get("database", ":memory:")
-        connect_params["database"] = database
-
-        # Handle read_only parameter
-        read_only = self.connection_config.get("read_only")
-        if read_only is not None:
-            connect_params["read_only"] = read_only
-
-        # All other parameters go into the config dict
-        config_dict: dict[str, Any] = {
-            field: value
-            for field, value in self.connection_config.items()
-            if field not in {"database", "read_only", "config"} and value is not None and value is not Empty
+    def _get_connection_config_dict(self) -> "dict[str, Any]":
+        """Get connection configuration as plain dict for pool creation."""
+        return {
+            k: v
+            for k, v in self.pool_config.items()
+            if v is not None
+            and k not in {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds", "extra"}
         }
 
-        # Add user-provided config dict
-        if "config" in self.connection_config:
-            config_dict.update(self.connection_config["config"])
-
-        config_dict.update(config_dict.pop("extra", {}))
-
-        # If we have config parameters, add them
-        if config_dict:
-            connect_params["config"] = config_dict
-
-        return connect_params
+    def _get_pool_config_dict(self) -> "dict[str, Any]":
+        """Get pool configuration as plain dict for pool creation."""
+        return {
+            k: v
+            for k, v in self.pool_config.items()
+            if v is not None and k in {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds"}
+        }
 
     def _create_pool(self) -> DuckDBConnectionPool:
         """Create the DuckDB connection pool."""
-        connection_config = self._get_connection_config_dict()
 
-        # Get extensions and secrets from driver_features
-        features_dict = dict(self.driver_features) if self.driver_features else {}
-        extensions = features_dict.get("extensions", [])
-        secrets = features_dict.get("secrets", [])
-        on_connection_create = features_dict.get("on_connection_create")
+        extensions = self.driver_features.get("extensions", None)
+        secrets = self.driver_features.get("secrets", None)
+        on_connection_create = self.driver_features.get("on_connection_create", None)
 
         # Convert extension and secret configs to plain dicts for pool compatibility
         extensions_dicts = [dict(ext) for ext in extensions] if extensions else None
@@ -529,16 +449,12 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
                 on_connection_create(conn)
 
             pool_callback = wrapped_callback
+        conf = {"extensions": extensions_dicts, "secrets": secrets_dicts, "on_connection_create": pool_callback}
 
         return DuckDBConnectionPool(
-            connection_config=connection_config,
-            min_pool=self.min_pool,
-            max_pool=self.max_pool,
-            timeout=self.pool_timeout,
-            recycle=self.pool_recycle,
-            extensions=extensions_dicts,
-            secrets=secrets_dicts,
-            on_connection_create=pool_callback,
+            connection_config=self._get_connection_config_dict(),
+            **conf,  # type: ignore[arg-type]
+            **self._get_pool_config_dict(),
         )
 
     def _close_pool(self) -> None:
@@ -575,7 +491,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
                     install_kwargs["force_install"] = True
 
                 try:
-                    if install_kwargs or self.connection_config.get("autoinstall_known_extensions"):
+                    if install_kwargs or self.pool_config.get("autoinstall_known_extensions"):
                         connection.install_extension(ext_name, **install_kwargs)
                     connection.load_extension(ext_name)
                     logger.debug("Loaded DuckDB extension: %s", ext_name, extra={"adapter": "duckdb"})
@@ -666,46 +582,6 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             final_statement_config = statement_config or self.statement_config
             driver = self.driver_type(connection=connection, statement_config=final_statement_config)
             yield driver
-
-    def _is_memory_database(self, database: str) -> bool:
-        """Check if the database is an in-memory database.
-
-        Args:
-            database: Database path or connection string
-
-        Returns:
-            True if this is an in-memory database
-        """
-        if not database:
-            return True
-
-        # Standard :memory: database
-        if database == ":memory:":
-            return True
-
-        # Check for :memory: with custom name but NOT shared
-        return ":memory:" in database and "shared" not in database
-
-    def _convert_to_shared_memory(self) -> None:
-        """Convert in-memory database to shared memory for connection pooling.
-
-        Uses DuckDB's 'md:' prefix for named in-memory databases to maintain
-        uniqueness while enabling safe connection pooling.
-        """
-        database = self.connection_config.get("database", ":memory:")
-
-        if database in {":memory:", ""}:
-            # Convert default memory database to a default named instance
-            self.connection_config["database"] = "md:_default_shared"
-        elif database.startswith(":memory:"):
-            # Extract custom name and preserve it with md: prefix
-            # Format: ":memory:custom_name" -> "md:custom_name"
-            db_name = database.split(":", 2)[-1]  # Get part after second colon
-            if db_name:
-                self.connection_config["database"] = f"md:{db_name}"
-            else:
-                # Fallback for malformed ":memory:" variants
-                self.connection_config["database"] = "md:_default_shared"
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":
         """Get the signature namespace for DuckDB types.

@@ -15,8 +15,8 @@ def test_shared_memory_pooling() -> None:
     config = DuckDBConfig(pool_config={"database": ":memory:shared_test", "pool_min_size": 2, "pool_max_size": 5})
 
     # Verify pooling is not disabled
-    assert config.min_pool == 2
-    assert config.max_pool == 5
+    assert config.pool_config["pool_min_size"] == 2
+    assert config.pool_config["pool_max_size"] == 5
 
     # Test that multiple connections can access the same data
     with config.provide_session() as session1:
@@ -46,12 +46,11 @@ def test_regular_memory_auto_conversion() -> None:
     config = DuckDBConfig(pool_config={"database": ":memory:", "pool_min_size": 5, "pool_max_size": 10})
 
     # Verify pooling is not disabled (no more pool size overrides)
-    assert config.min_pool == 5
-    assert config.max_pool == 10
+    assert config.pool_config["pool_min_size"] == 5
+    assert config.pool_config["pool_max_size"] == 10
     # Verify database was auto-converted to unique named memory database for pooling
-    database = config.connection_config["database"]
-    assert database.startswith(":memory:pool_")
-    assert len(database) == len(":memory:pool_") + 8  # 8-character unique ID
+    database = config.pool_config["database"]
+    assert database == ":memory:shared_db"
 
     # Test that multiple connections can access the same data (like shared memory test)
     with config.provide_session() as session1:
@@ -85,8 +84,8 @@ def test_file_database_pooling() -> None:
     config = DuckDBConfig(pool_config={"database": db_path, "pool_min_size": 2, "pool_max_size": 4})
 
     # Verify pooling works normally
-    assert config.min_pool == 2
-    assert config.max_pool == 4
+    assert config.pool_config["pool_min_size"] == 2
+    assert config.pool_config["pool_max_size"] == 4
 
     # Test that multiple connections work with file database
     with config.provide_session() as session1:
@@ -131,9 +130,9 @@ def test_empty_database_conversion() -> None:
     config = DuckDBConfig(pool_config={"database": ""})
 
     # Empty string should default to :memory: and then be converted to unique pool name
-    database = config.connection_config["database"]
-    assert database.startswith(":memory:pool_")
-    assert len(database) == len(":memory:pool_") + 8  # 8-character unique ID
+    database = config.pool_config["database"]
+    assert database.startswith(":memory:")
+    assert len(database) == len(":memory:shared_db")
 
     # Should work with pooling
     with config.provide_session() as session:
@@ -147,9 +146,9 @@ def test_default_config_conversion() -> None:
     config = DuckDBConfig()
 
     # Default should be converted to unique pool memory database
-    database = config.connection_config["database"]
-    assert database.startswith(":memory:pool_")
-    assert len(database) == len(":memory:pool_") + 8  # 8-character unique ID
+    database = config.pool_config["database"]
+    assert database.startswith(":memory:shared_db")
+    assert len(database) == len(":memory:shared_db")
 
     # Should work with pooling
     with config.provide_session() as session:

@@ -8,32 +8,13 @@ if TYPE_CHECKING:
 
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.adapters.psycopg.mixins import PsycopgCopyMixin
+from sqlspec.adapters.psycopg.pipeline_steps import postgres_copy_pipeline_step
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.parameters import ParameterStyle
 from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
 
-# Shared Psycopg statement configurations
-psycopg_sync_statement_config = StatementConfig(
-    dialect="postgres",
-    parameter_config=ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_parameter_styles={
-            ParameterStyle.POSITIONAL_PYFORMAT,  # %s
-            ParameterStyle.NAMED_PYFORMAT,  # %(name)s
-            ParameterStyle.NUMERIC,  # $1 (also supported!)
-        },
-        type_coercion_map={
-            # Psycopg handles most types natively
-            # Add any specific type mappings as needed
-        },
-        has_native_list_expansion=True,  # Psycopg handles lists/tuples natively
-        needs_static_script_compilation=False,  # Psycopg supports parameters in scripts
-    ),
-    custom_pipeline_steps=None,  # Will be set after import
-)
-
-psycopg_async_statement_config = StatementConfig(
+psycopg_statement_config = StatementConfig(
     dialect="postgres",
     parameter_config=ParameterStyleConfig(
         default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
@@ -42,33 +23,21 @@ psycopg_async_statement_config = StatementConfig(
             ParameterStyle.NAMED_PYFORMAT,
             ParameterStyle.NUMERIC,
         },
+        execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,  # Convert all to positional for reliability
         type_coercion_map={},
         has_native_list_expansion=True,
-        needs_static_script_compilation=False,  # Psycopg supports parameters in scripts
+        needs_static_script_compilation=False,
     ),
+    custom_pipeline_steps=[postgres_copy_pipeline_step],
 )
 
-# Initialize pipeline steps after imports
-try:
-    from sqlspec.adapters.psycopg.pipeline_steps import postgres_copy_pipeline_step
-
-    # Update the sync config with pipeline steps
-    psycopg_sync_statement_config = StatementConfig(
-        dialect="postgres",
-        parameter_config=psycopg_sync_statement_config.parameter_config,
-        custom_pipeline_steps=[postgres_copy_pipeline_step],
-    )
-except ImportError:
-    # Fallback if pipeline steps are not available
-    pass
 
 __all__ = (
     "PsycopgAsyncCursor",
     "PsycopgAsyncDriver",
     "PsycopgSyncCursor",
     "PsycopgSyncDriver",
-    "psycopg_async_statement_config",
-    "psycopg_sync_statement_config",
+    "psycopg_statement_config",
 )
 
 
@@ -113,9 +82,8 @@ class PsycopgSyncDriver(PsycopgCopyMixin, SyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Set default Psycopg-specific configuration
         if statement_config is None:
-            statement_config = psycopg_sync_statement_config
+            statement_config = psycopg_statement_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
@@ -227,9 +195,8 @@ class PsycopgAsyncDriver(PsycopgCopyMixin, AsyncDriverAdapterBase):
         statement_config: Optional[StatementConfig] = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Set default Psycopg-specific configuration
         if statement_config is None:
-            statement_config = psycopg_async_statement_config
+            statement_config = psycopg_statement_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 

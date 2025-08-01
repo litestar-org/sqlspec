@@ -4,6 +4,8 @@ Tests validate that each adapter correctly supports its declared parameter style
 and that parameter conversion only occurs when necessary.
 """
 
+import math
+
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig
@@ -84,7 +86,7 @@ def test_parameter_conversion_principles() -> None:
         session.commit()
 
         # Test 1: Parameters should be passed through unchanged when no conversion needed
-        original_params = [1, "test_name", 3.14]
+        original_params = [1, "test_name", math.pi]
         result = session.execute("INSERT INTO test VALUES (?, ?, ?)", original_params)
         assert isinstance(result, SQLResult)
         assert result.rows_affected == 1
@@ -96,7 +98,7 @@ def test_parameter_conversion_principles() -> None:
         assert result.rows_affected == 1
 
         # Test 3: Named parameters should work correctly
-        named_params = {"id": 3, "name": "named_test", "value": 2.71}
+        named_params = {"id": 3, "name": "named_test", "value": math.e}
         result = session.execute("INSERT INTO test VALUES (:id, :name, :value)", named_params)
         assert isinstance(result, SQLResult)
         assert result.rows_affected == 1
@@ -183,49 +185,56 @@ def test_parameter_compilation_consistency() -> None:
 )
 def test_sqlite_parameter_style_combinations(use_qmark: bool, use_named: bool) -> None:
     """Test SQLite with different parameter style combinations."""
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    # Use unique shared in-memory databases to avoid connection conflicts in parameterized tests
+    db_name = f"file:combo_test_{int(use_qmark)}_{int(use_named)}?mode=memory&cache=shared"
+    config = SqliteConfig(pool_config={"database": db_name})
 
     with config.provide_session() as session:
-        session.execute("CREATE TABLE combo_test (id INTEGER, value TEXT)")
+        table_name = "test_sqlite_parameter_style_combinations"
+        session.execute(f"CREATE TABLE {table_name} (id INTEGER, value TEXT)")
 
         if use_qmark:
-            result = session.execute("INSERT INTO combo_test VALUES (?, ?)", [1, "qmark"])
+            result = session.execute(f"INSERT INTO {table_name} VALUES (?, ?)", [1, "qmark"])
             assert isinstance(result, SQLResult)
             assert result.rows_affected == 1
 
         if use_named:
-            result = session.execute("INSERT INTO combo_test VALUES (:id, :value)", {"id": 2, "value": "named"})
+            result = session.execute(f"INSERT INTO {table_name} VALUES (:id, :value)", {"id": 2, "value": "named"})
             assert isinstance(result, SQLResult)
             assert result.rows_affected == 1
 
         # Verify results
-        result = session.execute("SELECT COUNT(*) as count FROM combo_test")
+        result = session.execute(f"SELECT COUNT(*) as count FROM {table_name}")
         expected_count = (1 if use_qmark else 0) + (1 if use_named else 0)
         assert result.data[0]["count"] == expected_count
 
 
 def test_parameter_edge_cases() -> None:
     """Test parameter handling edge cases."""
-    config = SqliteConfig(pool_config={"database": ":memory:"})
+    # Use unique shared in-memory database to avoid connection conflicts
+    import time
+
+    db_name = f"file:edge_test_{int(time.time() * 1000000)}?mode=memory&cache=shared"
+    config = SqliteConfig(pool_config={"database": db_name})
 
     with config.provide_session() as session:
-        session.execute("CREATE TABLE edge_test (id INTEGER, data TEXT, flag BOOLEAN, amount REAL)")
+        session.execute("CREATE TABLE test_parameter_edge_cases (id INTEGER, data TEXT, flag BOOLEAN, amount REAL)")
 
         # Test None/NULL values
-        result = session.execute("INSERT INTO edge_test VALUES (?, ?, ?, ?)", [1, None, True, 3.14])
+        result = session.execute("INSERT INTO test_parameter_edge_cases VALUES (?, ?, ?, ?)", [1, None, True, math.pi])
         assert isinstance(result, SQLResult)
         assert result.rows_affected == 1
 
         # Test empty parameters
-        result = session.execute("INSERT INTO edge_test (id) VALUES (2)", [])
+        result = session.execute("INSERT INTO test_parameter_edge_cases (id) VALUES (2)", [])
         assert isinstance(result, SQLResult)
         assert result.rows_affected == 1
 
         # Test single parameter
-        result = session.execute("SELECT * FROM edge_test WHERE id = ?", [1])
+        result = session.execute("SELECT * FROM test_parameter_edge_cases WHERE id = ?", [1])
         assert isinstance(result, SQLResult)
         assert len(result.data) == 1
         assert result.data[0]["id"] == 1
         assert result.data[0]["data"] is None
         assert result.data[0]["flag"] == 1  # SQLite converts bool to int
-        assert result.data[0]["amount"] == 3.14
+        assert result.data[0]["amount"] == math.pi

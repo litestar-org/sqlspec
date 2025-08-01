@@ -8,7 +8,6 @@ from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.parameters import ParameterStyle
 from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.sql import StatementConfig
-from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -29,7 +28,7 @@ oracledb_sync_statement_config = StatementConfig(
     ),
 )
 
-oracledb_async_statement_config = StatementConfig(
+oracledb_statement_config = StatementConfig(
     dialect="oracle",
     parameter_config=ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NAMED_COLON,
@@ -40,9 +39,7 @@ oracledb_async_statement_config = StatementConfig(
     ),
 )
 
-__all__ = ("OracleAsyncDriver", "OracleSyncDriver", "oracledb_async_statement_config", "oracledb_sync_statement_config")
-
-logger = get_logger("adapters.oracledb")
+__all__ = ("OracleAsyncDriver", "OracleSyncDriver", "oracledb_statement_config", "oracledb_sync_statement_config")
 
 
 class OracleSyncCursor:
@@ -156,7 +153,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
         if statement_config is None:
-            statement_config = oracledb_async_statement_config
+            statement_config = oracledb_statement_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 

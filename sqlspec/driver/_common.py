@@ -296,7 +296,7 @@ class CommonDriverAttributesMixin:
         Ensures dialect is set and preserves existing state when rebuilding SQL objects.
         """
         if isinstance(statement, QueryBuilder):
-            return statement.to_statement(config=statement_config)
+            return statement.to_statement(statement_config)
         if isinstance(statement, SQL):
             if parameters or kwargs:
                 return statement.copy(
@@ -500,10 +500,10 @@ class CommonDriverAttributesMixin:
             count_expr.set("offset", None)
 
             # Create new SQL with same parameters and config as original
-            return SQL(count_expr, *original_sql._positional_params, config=original_sql.statement_config)
+            return SQL(count_expr, *original_sql._positional_params, statement_config=original_sql.statement_config)
 
         # Handle other query types (UNION, etc.) - wrap in subquery
         subquery = cast("exp.Select", expr).subquery(alias="total_query")
         count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
         # Create new SQL with same parameters and config as original
-        return SQL(count_expr, *original_sql._positional_params, config=original_sql.statement_config)
+        return SQL(count_expr, *original_sql._positional_params, statement_config=original_sql.statement_config)

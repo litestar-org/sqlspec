@@ -108,13 +108,16 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             migration_config: Migration configuration
         """
         # Store pool config as dict and extract/merge extras
-        self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
-        if "extra" in self.pool_config:
-            extras = self.pool_config.pop("extra")
-            self.pool_config.update(extras)
+        processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
+        if "extra" in processed_pool_config:
+            extras = processed_pool_config.pop("extra")
+            processed_pool_config.update(extras)
         statement_config = statement_config or psqlpy_statement_config
         super().__init__(
-            pool_instance=pool_instance, migration_config=migration_config, statement_config=statement_config
+            pool_config=processed_pool_config,
+            pool_instance=pool_instance,
+            migration_config=migration_config,
+            statement_config=statement_config,
         )
 
     def _get_pool_config_dict(self) -> dict[str, Any]:

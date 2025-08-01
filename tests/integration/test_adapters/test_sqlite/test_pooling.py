@@ -48,8 +48,8 @@ def test_regular_memory_auto_conversion() -> None:
     assert config.pool_config["pool_max_size"] == 10
 
     # Verify database was auto-converted to shared memory
-    assert config.connection_config["database"] == "file::memory:?cache=shared"
-    assert config.connection_config["uri"] is True
+    assert config._get_connection_config_dict()["database"] == "file::memory:?cache=shared"  # pyright: ignore[reportAttributeAccessIssue]
+    assert config._get_connection_config_dict()["uri"] is True  # pyright: ignore[reportAttributeAccessIssue]
 
     # Test that multiple connections can access the same data (like shared memory test)
     with config.provide_session() as session1:

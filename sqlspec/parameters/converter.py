@@ -618,13 +618,26 @@ class ParameterConverter:
         if isinstance(params, dict):
             # Convert dict to list based on parameter order
             param_list = []
-            for p in param_info:
+
+            # First, try to match by position using parameter values in order
+            # This handles the case where SQL has been transformed to use param_0, param_1
+            # but original parameter dictionary still has the original keys
+            param_values = list(params.values())
+
+            for i, p in enumerate(param_info):
                 if p.name and p.name in params:
+                    # Direct name match - use this value
                     param_list.append(params[p.name])
                 elif f"param_{p.ordinal}" in params:
+                    # Generated name match (param_0, param_1, etc.)
                     param_list.append(params[f"param_{p.ordinal}"])
                 elif str(p.ordinal + 1) in params:  # 1-based indexing
+                    # Numeric key match (1, 2, etc.)
                     param_list.append(params[str(p.ordinal + 1)])
+                elif i < len(param_values):
+                    # Fallback: use parameter by position in original dictionary order
+                    # This handles cases where SQL placeholders were renamed during processing
+                    param_list.append(param_values[i])
                 else:
                     param_list.append(None)
             return param_list

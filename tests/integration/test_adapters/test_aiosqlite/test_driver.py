@@ -288,6 +288,10 @@ async def test_aiosqlite_transactions(aiosqlite_session: AiosqliteDriver) -> Non
 @pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_complex_queries(aiosqlite_session: AiosqliteDriver) -> None:
     """Test complex SQL queries."""
+    # Clear any existing data to ensure consistent test results
+    await aiosqlite_session.execute("DELETE FROM test_table")
+    await aiosqlite_session.commit()
+
     # Insert test data
     test_data = [("Alice", 25), ("Bob", 30), ("Charlie", 35), ("Diana", 28)]
 

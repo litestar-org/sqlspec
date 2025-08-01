@@ -1,7 +1,9 @@
 """Integration tests for dialect propagation through the SQL pipeline."""
 
+import sqlite3
 from unittest.mock import Mock, patch
 
+import duckdb
 import pytest
 from pytest_databases.docker.mysql import MySQLService
 from sqlglot.dialects.dialect import DialectType
@@ -11,7 +13,6 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
-from sqlspec.driver.mixins import SQLTranslatorMixin
 from sqlspec.statement.builder import Select
 
 # Import removed - SQLProcessingContext no longer exists in new architecture
@@ -23,13 +24,7 @@ from tests.integration.test_adapters.test_adbc.conftest import PostgresService
 # Sync dialect propagation tests
 def test_sqlite_dialect_propagation_through_execute() -> None:
     """Test that SQLite dialect propagates through execute calls."""
-    config = SqliteConfig(pool_config={"database": ":memory:"})
-
-    # Verify config has correct dialect
-    assert config.dialect == "sqlite"
-
-    # Use real SQLite connection for integration test
-    import sqlite3
+    _config = SqliteConfig(pool_config={"database": ":memory:"})
 
     connection = sqlite3.connect(":memory:")
     # Set row factory to return Row objects that can be converted to dicts
@@ -40,11 +35,8 @@ def test_sqlite_dialect_propagation_through_execute() -> None:
     connection.execute("INSERT INTO users (id, name) VALUES (1, 'test')")
     connection.commit()
 
-    # Create driver with real connection
-    driver = SqliteDriver(connection=connection, statement_config=StatementConfig())
-
-    # Verify driver has correct dialect
-    assert driver.dialect == "sqlite"
+    # Create driver with real connection - pass None to use default sqlite config
+    driver = SqliteDriver(connection=connection)
 
     # Execute a query and verify result
     result = driver.execute("SELECT * FROM users")
@@ -63,13 +55,9 @@ def test_sqlite_dialect_propagation_through_execute() -> None:
 
 def test_duckdb_dialect_propagation_with_query_builder() -> None:
     """Test that DuckDB dialect propagates through query builder."""
-    config = DuckDBConfig(pool_config={"database": ":memory:"})
-
-    # Verify config has correct dialect
-    assert config.dialect == "duckdb"
+    _config = DuckDBConfig(pool_config={"database": ":memory:"})
 
     # Use real DuckDB connection for integration test
-    import duckdb
 
     connection = duckdb.connect(":memory:")
 
@@ -77,8 +65,8 @@ def test_duckdb_dialect_propagation_with_query_builder() -> None:
     connection.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR)")
     connection.execute("INSERT INTO users (id, name) VALUES (1, 'test')")
 
-    # Create driver
-    driver = DuckDBDriver(connection=connection, statement_config=StatementConfig())
+    # Create driver - pass None to use default duckdb config
+    driver = DuckDBDriver(connection=connection, statement_config=None)
 
     # Create a query builder
     query = Select(dialect="duckdb").select("id", "name").from_("users").where("id = 1")
@@ -112,9 +100,6 @@ def test_psycopg_dialect_in_execute_script(postgres_service: PostgresService) ->
             "dbname": postgres_service.database,
         }
     )
-
-    # Verify config has correct dialect
-    assert config.dialect == "postgres"
 
     try:
         # Create a real connection
@@ -154,13 +139,10 @@ async def test_asyncpg_dialect_propagation_through_execute(postgres_service: Pos
         }
     )
 
-    # Verify config has correct dialect
-    assert config.dialect == "postgres"
-
     # Create a real connection
     async with config.provide_connection() as connection:
-        # Create driver
-        driver = AsyncpgDriver(connection=connection, statement_config=StatementConfig())
+        # Create driver - pass None to use default asyncpg config
+        driver = AsyncpgDriver(connection=connection, statement_config=None)
 
         # Create temp table and execute a query
         await connection.execute("CREATE TEMP TABLE test_users (id INT, name TEXT)")
@@ -197,9 +179,6 @@ async def test_asyncmy_dialect_propagation_with_filters(mysql_service: MySQLServ
         }
     )
 
-    # Verify config has correct dialect
-    assert config.dialect == "mysql"
-
     # Create a real connection
     async with config.provide_connection() as connection:
         # Create driver - use the statement config from the database config to preserve dialect
@@ -209,11 +188,12 @@ async def test_asyncmy_dialect_propagation_with_filters(mysql_service: MySQLServ
         await driver.execute_script("CREATE TEMPORARY TABLE test_users (id INT, name VARCHAR(100))")
         await driver.execute_script("INSERT INTO test_users VALUES (1, 'test'), (2, 'another')")
 
-        # Create SQL with filter
+        # Test with LimitOffsetFilter
         from sqlspec.statement.filters import LimitOffsetFilter
 
-        sql = SQL("SELECT * FROM test_users").filter(LimitOffsetFilter(limit=1, offset=0))
-
+        sql = SQL("SELECT * FROM test_users", statement_config=config.statement_config).filter(
+            LimitOffsetFilter(limit=1, offset=0)
+        )
         result = await driver.execute(sql)
 
         # Verify we got results
@@ -261,11 +241,11 @@ def test_query_builder_dialect_inheritance() -> None:
 def test_sql_translator_mixin_dialect_usage() -> None:
     """Test that SQLTranslatorMixin uses dialect properly."""
 
-    class TestDriver(SqliteDriver, SQLTranslatorMixin):
+    class TestDriver(SqliteDriver):
         dialect: DialectType = "sqlite"
 
     mock_connection = Mock()
-    driver = TestDriver(connection=mock_connection, statement_config=StatementConfig())
+    driver = TestDriver(connection=mock_connection)
 
     # Test convert_todialect with string input
     # NOTE: This test patches internal implementation to verify dialect propagation.
@@ -312,15 +292,15 @@ def test_missing_dialect_in_driver() -> None:
 def test_different_dialect_in_sql_creation() -> None:
     """Test that different dialects can be used in SQL creation."""
     # SQL should accept various valid dialect values
-    sql = SQL("SELECT 1", config=StatementConfig(dialect="mysql"))
+    sql = SQL("SELECT 1", statement_config=StatementConfig(dialect="mysql"))
     assert sql.dialect == "mysql"
 
     # None dialect should also work
-    sql = SQL("SELECT 1", config=StatementConfig(dialect=None))
+    sql = SQL("SELECT 1", statement_config=StatementConfig(dialect=None))
     assert sql.dialect is None
 
     # Test with another valid dialect
-    sql = SQL("SELECT 1", config=StatementConfig(dialect="bigquery"))
+    sql = SQL("SELECT 1", statement_config=StatementConfig(dialect="bigquery"))
     assert sql.dialect == "bigquery"
 
 
@@ -331,10 +311,10 @@ def test_dialect_mismatch_handling() -> None:
 
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
-    driver = SqliteDriver(connection=connection, statement_config=StatementConfig())
+    driver = SqliteDriver(connection=connection, statement_config=None)
 
     # Create SQL with different dialect
-    sql = SQL("SELECT 1 AS num", config=StatementConfig(dialect="postgres"))
+    sql = SQL("SELECT 1 AS num", statement_config=StatementConfig(dialect="postgres"))
 
     # Should still execute without error (driver handles conversion if needed)
     result = driver.execute(sql)

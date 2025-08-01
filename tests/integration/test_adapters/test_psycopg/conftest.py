@@ -16,11 +16,7 @@ def psycopg_sync_config(postgres_service: PostgresService) -> "Generator[Psycopg
     """Create a psycopg sync configuration."""
     config = PsycopgSyncConfig(
         pool_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "dbname": postgres_service.database,
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         }
     )
     yield config
@@ -34,11 +30,7 @@ def psycopg_async_config(postgres_service: PostgresService) -> "Generator[Psycop
     """Create a psycopg async configuration."""
     config = PsycopgAsyncConfig(
         pool_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "dbname": postgres_service.database,
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         }
     )
     yield config

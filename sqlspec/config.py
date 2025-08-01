@@ -156,10 +156,6 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        from sqlspec.parameters import ParameterStyle
-        from sqlspec.parameters.config import ParameterStyleConfig
-        from sqlspec.statement.sql import StatementConfig
-
         self.pool_instance = None
         self.connection_config = connection_config or {}
         self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
@@ -168,7 +164,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
             default_parameter_config = ParameterStyleConfig(
                 default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
             )
-            self.statement_config = StatementConfig(parameter_config=default_parameter_config)
+            self.statement_config = StatementConfig(dialect="sqlite", parameter_config=default_parameter_config)
         else:
             self.statement_config = statement_config
         self.driver_features = driver_features or {}
@@ -221,7 +217,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
             default_parameter_config = ParameterStyleConfig(
                 default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
             )
-            self.statement_config = StatementConfig(parameter_config=default_parameter_config)
+            self.statement_config = StatementConfig(dialect="sqlite", parameter_config=default_parameter_config)
         else:
             self.statement_config = statement_config
         self.driver_features = driver_features or {}
@@ -272,11 +268,10 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
 
         if statement_config is None:
-            # Create a basic default parameter config
             default_parameter_config = ParameterStyleConfig(
                 default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
             )
-            self.statement_config = StatementConfig(parameter_config=default_parameter_config)
+            self.statement_config = StatementConfig(dialect="postgres", parameter_config=default_parameter_config)
         else:
             self.statement_config = statement_config
         self.driver_features = driver_features or {}
@@ -352,7 +347,8 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
             self.statement_config = StatementConfig(
                 parameter_config=ParameterStyleConfig(
                     default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
-                )
+                ),
+                dialect="postgres",
             )
         else:
             self.statement_config = statement_config

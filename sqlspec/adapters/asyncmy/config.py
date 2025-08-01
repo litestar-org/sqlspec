@@ -91,11 +91,16 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         if "port" not in processed_pool_config:
             processed_pool_config["port"] = 3306
 
+        # Use asyncmy default statement config if none provided
+        if statement_config is None:
+            statement_config = asyncmy_statement_config
+
         super().__init__(
             pool_config=processed_pool_config,
             pool_instance=pool_instance,
             migration_config=migration_config,
             statement_config=statement_config,
+            driver_features={},
         )
 
     async def _create_pool(self) -> "Pool":  # pyright: ignore

@@ -157,7 +157,9 @@ def test_connection_with_hook() -> None:
 
     statement_config = StatementConfig(enable_validation=False)
     config = DuckDBConfig(
-        pool_config={"database": ":memory:"}, statement_config=statement_config, on_connection_create=connection_hook
+        pool_config={"database": ":memory:"},
+        statement_config=statement_config,
+        driver_features={"on_connection_create": connection_hook},
     )
 
     with config.provide_session() as session:

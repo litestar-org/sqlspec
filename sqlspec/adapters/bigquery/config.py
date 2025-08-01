@@ -155,7 +155,12 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         if self.connection_config.get("default_query_job_config") is None:
             self._setup_default_job_config()
 
-        super().__init__(migration_config=migration_config, statement_config=statement_config)
+        super().__init__(
+            connection_config=self.connection_config,
+            migration_config=migration_config,
+            statement_config=statement_config,
+            driver_features={},
+        )
 
     def _setup_default_job_config(self) -> None:
         """Set up default job configuration based on connection settings."""

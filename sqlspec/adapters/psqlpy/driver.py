@@ -21,13 +21,10 @@ psqlpy_statement_config = StatementConfig(
     dialect="postgres",
     parameter_config=ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NUMERIC,
-        supported_parameter_styles={ParameterStyle.NUMERIC},  # $1, $2
-        type_coercion_map={
-            # Psqlpy handles most types natively
-            # Add any specific type mappings as needed
-        },
-        has_native_list_expansion=True,  # Psqlpy handles lists natively
-        needs_static_script_compilation=False,  # Psqlpy supports parameters in scripts
+        supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
+        type_coercion_map={},
+        has_native_list_expansion=True,
+        needs_static_script_compilation=False,
     ),
 )
 
@@ -49,6 +46,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     """Psqlpy Driver Adapter."""
 
     dialect: "DialectType" = "postgres"
+    connection: "PsqlpyConnection"
 
     def __init__(
         self,
@@ -68,52 +66,9 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     async def _try_special_handling(self, cursor: PsqlpyConnection, statement: "SQL") -> "Optional[SQLResult]":
         """Hook for PsqlPy-specific special operations.
 
-        PsqlPy requires special handling for SELECT queries that need separate fetch() call.
-        Also handles scripts by executing multiple statements sequentially.
+        PsqlPy doesn't have special operations like PostgreSQL COPY,
+        so this always returns None to proceed with standard execution.
         """
-        if statement.is_script:
-            sql, params = statement.compile()
-            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-            # Use the proper script splitter to handle complex cases
-            statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
-            statement_count = len(statements)
-
-            for stmt in statements:
-                if stmt.strip():  # Skip empty statements
-                    await cursor.execute(stmt, prepared_params)
-
-            # Create ExecutionResult and build SQLResult directly
-            execution_result = self.create_execution_result(
-                cursor,
-                statement_count=statement_count,
-                successful_statements=statement_count,  # Assume all successful if no exception
-                is_script_result=True,
-            )
-            return self.build_statement_result(statement, execution_result)
-
-        # Handle SELECT queries that need separate fetch() call
-        if statement.returns_rows() and not statement.is_script and not statement.is_many:
-            sql, params = statement.compile()
-            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-
-            # For PsqlPy, we need to use fetch() instead of execute() for SELECT queries
-            query_result = await cursor.fetch(sql, prepared_params)
-            dict_rows: list[dict[str, Any]] = []
-            if query_result:
-                dict_rows = query_result.result()
-
-            column_names = list(dict_rows[0].keys()) if dict_rows else []
-
-            # Create ExecutionResult with pre-fetched data and build SQLResult directly
-            execution_result = self.create_execution_result(
-                cursor,
-                selected_data=dict_rows,
-                column_names=column_names,
-                data_row_count=len(dict_rows),
-                is_select_result=True,
-            )
-            return self.build_statement_result(statement, execution_result)
-
         return None
 
     async def _execute_many(
@@ -122,19 +77,60 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         """PsqlPy executemany implementation."""
         await cursor.execute_many(sql, prepared_params)
 
-        # PsqlPy doesn't easily expose rowcount, so we approximate using parameter count
-        row_count = len(prepared_params) if prepared_params else 0
+        # PsqlPy doesn't easily expose rowcount, so we use -1 to indicate unavailable row count
+        return self.create_execution_result(cursor, rowcount_override=-1, is_many_result=True)
 
-        return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
+    async def _execute_script(
+        self,
+        cursor: PsqlpyConnection,
+        sql: str,
+        prepared_params: Any,
+        statement_config: "StatementConfig",
+        statement: "SQL",
+    ) -> "ExecutionResult":
+        """Execute SQL script by splitting and executing statements sequentially.
+
+        PsqlPy doesn't have executescript but supports parameters in all statements.
+        """
+        statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
+        statement_count = len(statements)  # Script splitter already filters empty statements
+
+        last_result = None
+        for stmt in statements:
+            last_result = await cursor.execute(stmt, prepared_params or ())
+
+        return self.create_execution_result(
+            last_result,
+            statement_count=statement_count,
+            successful_statements=statement_count,  # Assume all successful if no exception
+            is_script_result=True,
+        )
 
     async def _execute_statement(
         self, cursor: PsqlpyConnection, sql: str, prepared_params: Any, statement: "SQL"
     ) -> "ExecutionResult":
-        """PsqlPy single execution for non-row-returning queries."""
+        """Execute single SQL statement using PsqlPy-optimized approach."""
+        if statement.returns_rows():
+            # For PsqlPy, we need to use fetch() instead of execute() for SELECT queries
+            query_result = await cursor.fetch(sql, prepared_params)
+            dict_rows: list[dict[str, Any]] = []
+            if query_result:
+                dict_rows = query_result.result()
+
+            column_names = list(dict_rows[0].keys()) if dict_rows else []
+            return self.create_execution_result(
+                cursor,
+                selected_data=dict_rows,
+                column_names=column_names,
+                data_row_count=len(dict_rows),
+                is_select_result=True,
+            )
+
+        # Use execute() for non-row-returning queries
         await cursor.execute(sql, prepared_params)
 
-        # PsqlPy doesn't easily expose rowcount, so we can't get accurate row count
-        return self.create_execution_result(cursor, rowcount_override=None)
+        # PsqlPy doesn't easily expose rowcount, so we use -1 to indicate unavailable row count
+        return self.create_execution_result(cursor, rowcount_override=-1)
 
     async def begin(self) -> None:
         """Begin transaction using psqlpy-specific method."""

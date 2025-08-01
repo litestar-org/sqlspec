@@ -29,7 +29,7 @@ async def test_shared_memory_pooling() -> None:
             );
             INSERT INTO shared_test (value) VALUES ('shared_data');
         """)
-        await session1.commit()  # Commit to release locks
+        await session1.commit()
 
     # Get data from another session in the pool
     async with config.provide_session() as session2:
@@ -52,8 +52,8 @@ async def test_regular_memory_auto_converted_pooling() -> None:
 
     # Test that pooling works
 
-    # Verify database remains as :memory: (aiosqlite doesn't support shared cache)
-    assert config.connection_config["database"] == ":memory:"
+    # Verify database was auto-converted to shared cache format for pooling
+    assert config._get_connection_config_dict()["database"] == "file::memory:?cache=shared"  # pyright: ignore[reportAttributeAccessIssue]
 
     # Test that multiple connections can access the same data (like shared memory test)
     async with config.provide_session() as session1:

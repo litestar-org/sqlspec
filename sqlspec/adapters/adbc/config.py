@@ -116,6 +116,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             connection_config=self.connection_config,
             migration_config=migration_config,
             statement_config=self.statement_config,
+            driver_features={},
         )
 
     def _resolve_driver_name(self) -> str:

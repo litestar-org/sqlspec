@@ -104,11 +104,13 @@ class _ProcessedState:
 
     def __hash__(self) -> int:
         """Hash based on processed SQL and expression."""
-        return hash((
-            self.processed_sql,
-            str(self.processed_expression),
-            len(self.validation_errors) if self.validation_errors else 0,
-        ))
+        return hash(
+            (
+                self.processed_sql,
+                str(self.processed_expression),
+                len(self.validation_errors) if self.validation_errors else 0,
+            )
+        )
 
     def __init__(
         self,
@@ -200,16 +202,18 @@ class StatementConfig:
 
     def __hash__(self) -> int:
         """Hash based on key configuration settings."""
-        return hash((
-            self.enable_parsing,
-            self.enable_validation,
-            self.enable_transformations,
-            self.enable_analysis,
-            self.enable_expression_simplification,
-            self.enable_parameter_type_wrapping,
-            self.enable_caching,
-            self.dialect,
-        ))
+        return hash(
+            (
+                self.enable_parsing,
+                self.enable_validation,
+                self.enable_transformations,
+                self.enable_analysis,
+                self.enable_expression_simplification,
+                self.enable_parameter_type_wrapping,
+                self.enable_caching,
+                self.dialect,
+            )
+        )
 
     def __init__(
         self,
@@ -237,11 +241,7 @@ class StatementConfig:
         self.parameter_converter = parameter_converter or ParameterConverter()
         self.parameter_validator = parameter_validator or ParameterValidator()
 
-        # Create default parameter config if none provided
         if parameter_config is None:
-            from sqlspec.parameters import ParameterStyle
-            from sqlspec.parameters.config import ParameterStyleConfig
-
             parameter_config = ParameterStyleConfig(
                 default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
             )
@@ -638,18 +638,6 @@ class SQL:
         self._populate_context_metadata(context, initial_sql_for_context, has_placeholders, param_info, final_params)
         return context
 
-    # _convert_params_to_dict removed - functionality moved to ParameterConverter
-
-    # _handle_dict_params removed - functionality moved to ParameterConverter
-
-    # _handle_list_params removed - functionality moved to ParameterConverter
-
-    # _expand_tuple_param removed - functionality moved to ParameterConverter
-
-    # _handle_numeric_placeholders removed - functionality moved to ParameterConverter
-
-    # _handle_tuple_in_list removed - functionality moved to ParameterConverter
-
     def _populate_context_metadata(
         self,
         context: SQLTransformContext,
@@ -838,7 +826,7 @@ class SQL:
         # This provides graceful handling while maintaining visibility of issues
         if self._processed_state.validation_errors:
             for error in self._processed_state.validation_errors:
-                logger.warning("SQL validation issue: %s", error.message)
+                logger.warning("SQL validation issue: %s", str(error))
 
     def _to_expression(self, statement: "Union[str, exp.Expression]") -> exp.Expression:
         """Convert string to sqlglot expression."""

@@ -98,18 +98,20 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """AsyncMy executemany implementation."""
         await cursor.executemany(sql, prepared_params)
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
-
-        return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
+        return self.create_execution_result(
+            cursor, rowcount_override=len(prepared_params) if prepared_params else 0, is_many_result=True
+        )
 
     async def _execute_statement(
         self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL"
     ) -> "ExecutionResult":
         """AsyncMy single execution."""
+        # AsyncMy expects tuples for positional parameters, not lists
+        if isinstance(prepared_params, list):
+            # Filter out any non-scalar values that might have been incorrectly included
+            clean_params = [p for p in prepared_params if not isinstance(p, (list, dict))]
+            prepared_params = tuple(clean_params)
+
         await cursor.execute(sql, prepared_params or None)
 
         if statement.returns_rows():

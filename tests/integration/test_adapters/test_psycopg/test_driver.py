@@ -21,11 +21,7 @@ def psycopg_session(postgres_service: PostgresService) -> Generator[PsycopgSyncD
 
     config = PsycopgSyncConfig(
         pool_config={
-            "host": postgres_service.host,
-            "port": postgres_service.port,
-            "user": postgres_service.user,
-            "password": postgres_service.password,
-            "dbname": postgres_service.database,
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
         },
         statement_config=StatementConfig(enable_transformations=True, enable_validation=False, enable_parsing=True),
     )

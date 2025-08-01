@@ -58,18 +58,18 @@ class AiosqliteConnectionPool:
     def __init__(
         self,
         connection_params: "dict[str, Any]",
-        min_pool: int = DEFAULT_MIN_POOL,
-        max_pool: int = DEFAULT_MAX_POOL,
-        timeout: float = POOL_TIMEOUT,
-        recycle: int = POOL_RECYCLE,
+        pool_min_size: int = DEFAULT_MIN_POOL,
+        pool_max_size: int = DEFAULT_MAX_POOL,
+        pool_timeout: float = POOL_TIMEOUT,
+        pool_recycle_seconds: int = POOL_RECYCLE,
     ) -> None:
-        self._pool: "asyncio.Queue[AiosqliteConnection]" = asyncio.Queue(maxsize=max_pool)  # noqa: UP037
+        self._pool: "asyncio.Queue[AiosqliteConnection]" = asyncio.Queue(maxsize=pool_max_size)  # noqa: UP037
         self._lock = asyncio.Lock()
-        self._semaphore = asyncio.Semaphore(max_pool)
-        self._min_pool = min_pool
-        self._max_pool = max_pool
-        self._timeout = timeout
-        self._recycle = recycle
+        self._semaphore = asyncio.Semaphore(pool_max_size)
+        self._min_pool = pool_min_size
+        self._max_pool = pool_max_size
+        self._timeout = pool_timeout
+        self._recycle = pool_recycle_seconds
         self._connection_params = connection_params
         self._created_connections = 0
         self._checked_out = 0
@@ -253,99 +253,43 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
             pool_instance: Pre-created pool instance
 
         """
-        # Convert to dict and extract configuration
-        pool_config_dict: dict[str, Any] = dict(pool_config) if pool_config else {}
+        if pool_config is None:
+            pool_config = {}
+        if "database" not in pool_config or pool_config["database"] == ":memory:":
+            pool_config["database"] = "file::memory:?cache=shared"
 
-        # Set defaults for connection config
-        if not any(key in pool_config_dict for key in ["database"]):
-            pool_config_dict["database"] = ":memory:"
-
-        # Remaining config is connection configuration
-        self.connection_config = pool_config_dict
-        if "extra" in self.connection_config:
-            extras = self.connection_config.pop("extra")
-            self.connection_config.update(extras)
-
-        # Note: aiosqlite doesn't properly support shared memory databases with cache=shared
-        # so we leave memory databases as :memory: for compatibility
-
-        super().__init__(pool_instance=pool_instance, migration_config=migration_config)
-
-        # Handle statement_config - use provided value or create default
-        if statement_config is None:
-            from sqlspec.parameters import ParameterStyle
-            from sqlspec.parameters.config import ParameterStyleConfig
-            from sqlspec.statement.sql import StatementConfig
-
-            default_parameter_config = ParameterStyleConfig(
-                default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
-            )
-            self.statement_config = StatementConfig(parameter_config=default_parameter_config)
-        else:
-            self.statement_config = statement_config
+        super().__init__(
+            pool_config=dict(pool_config),
+            pool_instance=pool_instance,
+            migration_config=migration_config,
+            statement_config=statement_config or aiosqlite_statement_config,
+            driver_features={},
+        )
 
     def _get_connection_config_dict(self) -> "dict[str, Any]":
         """Get connection configuration as plain dict for pool creation."""
-        config: "dict[str, Any]" = dict(self.connection_config)  # noqa: UP037
-        config.pop("extra", None)
-        return {k: v for k, v in config.items() if v is not None}
+        return {
+            k: v
+            for k, v in self.pool_config.items()
+            if v is not None
+            and k not in {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds", "extra"}
+        }
+
+    def _get_pool_config_dict(self) -> "dict[str, Any]":
+        """Get pool configuration as plain dict for pool creation."""
+        return {
+            k: v
+            for k, v in self.pool_config.items()
+            if v is not None and k in {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds"}
+        }
 
     async def _create_pool(self) -> "AiosqliteConnectionPool":
         """Create the Aiosqlite connection pool."""
-        # Get connection parameters and extract pool configuration
-        config_dict = dict(self.connection_config)
-
-        # Extract pool parameters with unified names
-        min_pool = config_dict.pop("pool_min_size", DEFAULT_MIN_POOL)
-        max_pool = config_dict.pop("pool_max_size", DEFAULT_MAX_POOL)
-        timeout = config_dict.pop("pool_timeout", POOL_TIMEOUT)
-        recycle = config_dict.pop("pool_recycle_seconds", POOL_RECYCLE)
-
-        # Remaining is connection configuration
-        connection_params = {k: v for k, v in config_dict.items() if v is not None}
-        connection_params.pop("extra", None)
-
-        pool = AiosqliteConnectionPool(
-            connection_params=connection_params, min_pool=min_pool, max_pool=max_pool, timeout=timeout, recycle=recycle
-        )
+        config_dict = self._get_connection_config_dict()
+        pool_config = self._get_pool_config_dict()
+        pool = AiosqliteConnectionPool(connection_params=config_dict, **pool_config)
         await pool.initialize()
         return pool
-
-    def _is_memory_database(self, database: str) -> bool:
-        """Check if the database is an in-memory database.
-
-        Args:
-            database: Database path or connection string
-
-        Returns:
-            True if this is an in-memory database
-        """
-        if not database:
-            return True
-
-        # Standard :memory: database
-        if database == ":memory:":
-            return True
-
-        # Check for URI-style memory database but NOT shared cache
-        return "file::memory:" in database and "cache=shared" not in database
-
-    def _convert_to_shared_memory(self) -> None:
-        """Convert in-memory database to shared memory for connection pooling.
-
-        Automatically converts :memory: and file::memory: databases to
-        file::memory:?cache=shared format to enable safe connection pooling.
-        """
-        database = self.connection_config.get("database", ":memory:")
-
-        if database in {":memory:", ""}:
-            self.connection_config["database"] = "file::memory:?cache=shared"
-            self.connection_config["uri"] = True
-        elif "file::memory:" in database and "cache=shared" not in database:
-            # Add cache=shared to existing file::memory: URI
-            separator = "&" if "?" in database else "?"
-            self.connection_config["database"] = f"{database}{separator}cache=shared"
-            self.connection_config["uri"] = True
 
     async def _close_pool(self) -> None:
         """Close the connection pool."""
@@ -396,7 +340,7 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
         """
         async with self.provide_connection(*args, **kwargs) as connection:
             # Use shared config or user-provided config or instance default
-            final_statement_config = statement_config or self.statement_config or aiosqlite_statement_config
+            final_statement_config = statement_config or self.statement_config
             yield self.driver_type(connection=connection, statement_config=final_statement_config)
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":

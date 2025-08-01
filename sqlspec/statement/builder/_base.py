@@ -363,10 +363,10 @@ class QueryBuilder(ABC):
 
         # SQL expects parameters as variadic args, not as a keyword
         if kwargs:
-            return SQL(safe_query.sql, config=config, **kwargs)
+            return SQL(safe_query.sql, statement_config=config, **kwargs)
         if parameters:
-            return SQL(safe_query.sql, *parameters, config=config)
-        return SQL(safe_query.sql, config=config)
+            return SQL(safe_query.sql, *parameters, statement_config=config)
+        return SQL(safe_query.sql, statement_config=config)
 
     def __str__(self) -> str:
         """Return the SQL string representation of the query.

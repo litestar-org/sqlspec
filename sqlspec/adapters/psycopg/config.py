@@ -9,41 +9,20 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
+from sqlspec.adapters.psycopg.driver import (
+    PsycopgAsyncCursor,
+    PsycopgAsyncDriver,
+    PsycopgSyncCursor,
+    PsycopgSyncDriver,
+    psycopg_statement_config,
+)
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
 
-    from psycopg import AsyncConnection, Connection
-    from psycopg.rows import DictRow as PsycopgDictRow
-    from typing_extensions import TypeAlias
-
-    from sqlspec.adapters.psycopg.driver import (
-        PsycopgAsyncCursor,
-        PsycopgAsyncDriver,
-        PsycopgSyncCursor,
-        PsycopgSyncDriver,
-        psycopg_async_statement_config,
-        psycopg_sync_statement_config,
-    )
     from sqlspec.statement.sql import StatementConfig
-
-    PsycopgSyncConnection: TypeAlias = Connection[PsycopgDictRow]
-    PsycopgAsyncConnection: TypeAlias = AsyncConnection[PsycopgDictRow]
-else:
-    from psycopg import AsyncConnection, Connection
-
-    from sqlspec.adapters.psycopg.driver import (
-        PsycopgAsyncCursor,
-        PsycopgAsyncDriver,
-        PsycopgSyncCursor,
-        PsycopgSyncDriver,
-        psycopg_async_statement_config,
-        psycopg_sync_statement_config,
-    )
-
-    PsycopgSyncConnection = Connection
-    PsycopgAsyncConnection = AsyncConnection
 
 
 logger = logging.getLogger("sqlspec.adapters.psycopg")
@@ -119,12 +98,17 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
         """
         # Store the pool config as a dict and extract/merge extras
-        self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
-        if "extra" in self.pool_config:
-            extras = self.pool_config.pop("extra")
-            self.pool_config.update(extras)
+        processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
+        if "extra" in processed_pool_config:
+            extras = processed_pool_config.pop("extra")
+            processed_pool_config.update(extras)
 
-        super().__init__(pool_instance=pool_instance, migration_config=migration_config)
+        super().__init__(
+            pool_config=processed_pool_config,
+            pool_instance=pool_instance,
+            migration_config=migration_config,
+            statement_config=statement_config or psycopg_statement_config,
+        )
 
     def _create_pool(self) -> "ConnectionPool":
         """Create the actual connection pool."""
@@ -243,7 +227,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         """
         with self.provide_connection(*args, **kwargs) as conn:
             # Use shared config or user-provided config
-            final_statement_config = statement_config or psycopg_sync_statement_config
+            final_statement_config = statement_config or self.statement_config
             yield self.driver_type(connection=conn, statement_config=final_statement_config)
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
@@ -282,6 +266,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         pool_config: "Optional[Union[PsycopgPoolParams, dict[str, Any]]]" = None,
         pool_instance: "Optional[AsyncConnectionPool]" = None,
         migration_config: "Optional[dict[str, Any]]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
     ) -> None:
         """Initialize Psycopg asynchronous configuration.
 
@@ -292,12 +277,17 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             migration_config: Migration configuration
         """
         # Store the pool config as a dict and extract/merge extras
-        self.pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
-        if "extra" in self.pool_config:
-            extras = self.pool_config.pop("extra")
-            self.pool_config.update(extras)
+        processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
+        if "extra" in processed_pool_config:
+            extras = processed_pool_config.pop("extra")
+            processed_pool_config.update(extras)
 
-        super().__init__(pool_instance=pool_instance, migration_config=migration_config)
+        super().__init__(
+            pool_config=processed_pool_config,
+            pool_instance=pool_instance,
+            migration_config=migration_config,
+            statement_config=statement_config or psycopg_statement_config,
+        )
 
     async def _create_pool(self) -> "AsyncConnectionPool":
         """Create the actual async connection pool."""
@@ -406,7 +396,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """
         async with self.provide_connection(*args, **kwargs) as conn:
             # Use shared config or user-provided config
-            final_statement_config = statement_config or psycopg_async_statement_config
+            final_statement_config = statement_config or psycopg_statement_config
             yield self.driver_type(connection=conn, statement_config=final_statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":
