@@ -94,7 +94,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """
         return None
 
-    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
+    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
         """AsyncMy executemany implementation."""
         await cursor.executemany(sql, prepared_params)
 
@@ -106,28 +106,25 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
-    async def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
+    async def _execute_statement(
+        self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL"
+    ) -> "ExecutionResult":
         """AsyncMy single execution."""
         await cursor.execute(sql, prepared_params or None)
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
+        if statement.returns_rows():
+            # Extract data immediately for SELECT operations
+            data = await cursor.fetchall()
+            column_names = [desc[0] for desc in cursor.description or []]
+            # Ensure data is list of dicts
+            if data and not isinstance(data[0], dict):
+                # Convert tuples to dicts
+                data = [dict(zip(column_names, row)) for row in data]
 
+            return self.create_execution_result(
+                cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
+            )
+
+        # For non-SELECT operations, get row count
+        row_count = cursor.rowcount if cursor.rowcount is not None else -1
         return self.create_execution_result(cursor, rowcount_override=row_count)
-
-    async def _get_selected_data(self, cursor: Any) -> "tuple[list[dict[str, Any]], list[str], int]":
-        """Extract data from cursor after SELECT execution."""
-        data = await cursor.fetchall()
-        column_names = [desc[0] for desc in cursor.description or []]
-        # Ensure data is list of dicts
-        if data and not isinstance(data[0], dict):
-            # Convert tuples to dicts
-            data = [dict(zip(column_names, row)) for row in data]
-        return data, column_names, len(data)
-
-    def _get_row_count(self, cursor: Any) -> int:
-        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
-        return cursor.rowcount if cursor.rowcount is not None else -1

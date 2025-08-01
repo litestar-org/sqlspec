@@ -116,7 +116,9 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         return None
 
-    async def _execute_many(self, cursor: PsqlpyConnection, sql: str, prepared_params: Any) -> "ExecutionResult":
+    async def _execute_many(
+        self, cursor: PsqlpyConnection, sql: str, prepared_params: Any, statement: "SQL"
+    ) -> "ExecutionResult":
         """PsqlPy executemany implementation."""
         await cursor.execute_many(sql, prepared_params)
 
@@ -125,31 +127,14 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
-    async def _execute_statement(self, cursor: PsqlpyConnection, sql: str, prepared_params: Any) -> "ExecutionResult":
+    async def _execute_statement(
+        self, cursor: PsqlpyConnection, sql: str, prepared_params: Any, statement: "SQL"
+    ) -> "ExecutionResult":
         """PsqlPy single execution for non-row-returning queries."""
         await cursor.execute(sql, prepared_params)
 
-        # Get row count if available (PsqlPy doesn't easily expose rowcount)
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
-
-        return self.create_execution_result(cursor, rowcount_override=row_count)
-
-    async def _get_selected_data(self, cursor: PsqlpyConnection) -> "tuple[list[dict[str, Any]], list[str], int]":
-        """Extract data from cursor after SELECT execution.
-
-        Note: For PsqlPy, data is pre-fetched in _try_special_handling,
-        so this method should not be called.
-        """
-        # This should not be called for PsqlPy since we pre-fetch in _try_special_handling
-        return [], [], 0
-
-    def _get_row_count(self, cursor: PsqlpyConnection) -> int:
-        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
-        # psqlpy doesn't easily expose rowcount, so we return -1
-        return -1
+        # PsqlPy doesn't easily expose rowcount, so we can't get accurate row count
+        return self.create_execution_result(cursor, rowcount_override=None)
 
     async def begin(self) -> None:
         """Begin transaction using psqlpy-specific method."""

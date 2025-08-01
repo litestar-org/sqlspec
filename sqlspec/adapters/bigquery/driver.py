@@ -293,7 +293,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         return None
 
-    def _execute_many(self, cursor: "Any", sql: str, prepared_params: Any) -> "ExecutionResult":
+    def _execute_many(self, cursor: "Any", sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
         """BigQuery doesn't support executemany directly, create script instead."""
         # BigQuery doesn't support executemany directly, create script
         script_parts = []
@@ -331,46 +331,31 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=total_rowcount, is_many_result=True)
 
-    def _execute_statement(self, cursor: "Any", sql: str, prepared_params: Any) -> "ExecutionResult":
+    def _execute_statement(self, cursor: "Any", sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
         """BigQuery single execution."""
         bq_params = self._prepare_bq_query_parameters(self._convert_params_to_dict(prepared_params))
         cursor.job = self._run_query_job(sql, bq_params, connection=cursor.connection)
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
+        if statement.returns_rows():
+            # Extract data immediately for SELECT operations
+            query_job = cursor.job
+            job_result = query_job.result()
+            rows_list = self._rows_to_results(iter(job_result))
+            column_names = [field.name for field in query_job.schema] if query_job.schema else []
 
-        return self.create_execution_result(cursor, rowcount_override=row_count)
+            return self.create_execution_result(
+                cursor,
+                selected_data=rows_list,
+                column_names=column_names,
+                data_row_count=len(rows_list),
+                is_select_result=True,
+            )
 
-    def _get_selected_data(self, cursor: "Any") -> "tuple[list[dict[str, Any]], list[str], int]":
-        """Extract data from cursor after SELECT execution."""
-        query_job = cursor.job
-        job_result = query_job.result()
-        rows_list = self._rows_to_results(iter(job_result))
-        column_names = [field.name for field in query_job.schema] if query_job.schema else []
-        return rows_list, column_names, len(rows_list)
-
-    def _get_row_count(self, cursor: "Any") -> int:
-        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
+        # For non-SELECT operations, get row count
         query_job = cursor.job
         query_job.result()
-        num_affected = query_job.num_dml_affected_rows
-
-        if (
-            (num_affected is None or num_affected == 0)
-            and query_job.statement_type in {"INSERT", "UPDATE", "DELETE", "MERGE"}
-            and query_job.state == "DONE"
-            and not query_job.errors
-        ):
-            logger.warning(
-                "BigQuery emulator workaround: DML operation reported 0 rows but completed successfully. "
-                "Assuming 1 row affected. Consider using state-based verification in tests."
-            )
-            num_affected = 1
-
-        return num_affected or 0
+        row_count = query_job.num_dml_affected_rows or 0
+        return self.create_execution_result(cursor, rowcount_override=row_count)
 
     def _convert_params_to_dict(self, prepared_params: "Any") -> dict[str, Any]:
         """Convert prepared parameters to a dictionary format for BigQuery."""

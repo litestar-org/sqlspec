@@ -81,16 +81,18 @@ class MockDriver(SyncDriverAdapterBase, SQLTranslatorMixin):
         """Mock extract execute rowcount."""
         return 0
 
-    def _execute_many(self, cursor: "Any", sql: str, prepared_params: "Any") -> "ExecutionResult":
+    def _execute_many(self, cursor: "Any", sql: str, prepared_params: "Any", statement: "SQL") -> "ExecutionResult":
         """Mock execute many."""
         return self.create_execution_result(cursor, is_many_result=True)
 
-    def _execute_statement(self, cursor: "Any", sql: str, prepared_params: "Any") -> "ExecutionResult":
+    def _execute_statement(
+        self, cursor: "Any", sql: str, prepared_params: "Any", statement: "SQL"
+    ) -> "ExecutionResult":
         """Mock execute statement."""
         return self.create_execution_result(cursor)
 
     def _execute_script(
-        self, cursor: "Any", sql: str, prepared_params: "Any", statement_config: "StatementConfig"
+        self, cursor: "Any", sql: str, prepared_params: "Any", statement_config: "StatementConfig", statement: "SQL"
     ) -> "ExecutionResult":
         """Mock execute script."""
         return self.create_execution_result(cursor, is_script_result=True)

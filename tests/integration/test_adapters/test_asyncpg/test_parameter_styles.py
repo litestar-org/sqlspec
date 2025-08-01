@@ -9,7 +9,6 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import StatementConfig
 
 
 @pytest.fixture(scope="function")
@@ -27,8 +26,7 @@ async def asyncpg_params_session(postgres_service: PostgresService) -> "AsyncGen
             "database": postgres_service.database,
             "min_size": 1,  # Minimal pool size
             "max_size": 3,  # Very small pool to conserve connections
-        },
-        statement_config=StatementConfig(enable_transformations=False),
+        }
     )
 
     async with config.provide_session() as session:

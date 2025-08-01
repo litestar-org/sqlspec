@@ -76,7 +76,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Set default AsyncPG-specific configuration
         if statement_config is None:
             statement_config = asyncpg_statement_config
 
@@ -86,7 +85,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         return AsyncpgCursor(connection)
 
     async def _try_special_handling(self, cursor: "AsyncpgConnection", statement: "SQL") -> "Optional[SQLResult]":
-        """Hook for PostgreSQL COPY operations and row-returning queries with pre-fetching."""
+        """Hook for PostgreSQL COPY operations only."""
         # Handle COPY operations
         if statement._processing_context and statement._processing_context.metadata.get("postgres_copy_operation"):
             await self._handle_copy_operation_from_pipeline(cursor, statement)
@@ -95,29 +94,12 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             execution_result = self.create_execution_result(cursor)
             return self.build_statement_result(statement, execution_result)
 
-        # Handle row-returning queries with pre-fetching for AsyncPG
-        if statement.returns_rows() and not statement.is_script and not statement.is_many:
-            # For AsyncPG, fetch data immediately since we need separate fetch() call
-            sql, params = statement.compile()
-            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-
-            records = await cursor.fetch(sql, *prepared_params)
-            data = [dict(record) for record in records]
-            column_names = list(records[0].keys()) if records else []
-
-            # Create ExecutionResult with pre-fetched data and build SQLResult directly
-            execution_result = self.create_execution_result(
-                cursor,
-                selected_data=data,
-                column_names=column_names,
-                data_row_count=len(records),
-                is_select_result=True,
-            )
-            return self.build_statement_result(statement, execution_result)
-
+        # Return None to let standard execution flow handle all other queries
         return None
 
-    async def _execute_many(self, cursor: "AsyncpgConnection", sql: str, prepared_params: Any) -> "ExecutionResult":
+    async def _execute_many(
+        self, cursor: "AsyncpgConnection", sql: str, prepared_params: Any, statement: "SQL"
+    ) -> "ExecutionResult":
         """AsyncPG executemany with row count approximation."""
         await cursor.executemany(sql, prepared_params)
 
@@ -127,40 +109,26 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
     async def _execute_statement(
-        self, cursor: "AsyncpgConnection", sql: str, prepared_params: Any
+        self, cursor: "AsyncpgConnection", sql: str, prepared_params: Any, statement: "SQL"
     ) -> "ExecutionResult":
-        """AsyncPG single execution for non-row-returning queries."""
-        # This hook only handles non-row-returning queries since row-returning
-        # queries are handled by _try_special_handling
+        """AsyncPG single execution using AsyncPG-optimized approach."""
+        if statement.returns_rows():
+            # Use fetch() for row-returning queries
+            records = await cursor.fetch(sql, *prepared_params)
+            data = [dict(record) for record in records]
+            column_names = list(records[0].keys()) if records else []
+            return self.create_execution_result(
+                cursor,
+                selected_data=data,
+                column_names=column_names,
+                data_row_count=len(records),
+                is_select_result=True,
+            )
+
+        # Use execute() for non-row-returning queries
         result = await cursor.execute(sql, *prepared_params)
-
-        # Parse AsyncPG status string to get row count
-        if isinstance(result, str):
-            row_count = self._parse_asyncpg_status(result)
-        elif isinstance(result, int):
-            row_count = result
-        else:
-            row_count = 0
-
+        row_count = self._parse_asyncpg_status(result) if isinstance(result, str) else 0
         return self.create_execution_result(result, rowcount_override=row_count)
-
-    async def _get_selected_data(self, cursor: "AsyncpgConnection") -> "tuple[list[dict[str, Any]], list[str], int]":
-        """Extract data from cursor after SELECT execution.
-
-        Note: For AsyncPG, data is pre-fetched in _try_special_handling,
-        so this method should not be called.
-        """
-        # This should not be called for AsyncPG since we pre-fetch in _try_special_handling
-        return [], [], 0
-
-    def _get_row_count(self, cursor: "AsyncpgConnection") -> int:
-        """Extract row count from cursor after INSERT/UPDATE/DELETE.
-
-        For AsyncPG, the row count is parsed from the execution status.
-        """
-        # This method is called by the base class after _execute_statement
-        # The actual status is handled in the execution result
-        return 0
 
     async def _handle_copy_operation_from_pipeline(self, cursor: "AsyncpgConnection", statement: "SQL") -> None:
         """Handle PostgreSQL COPY operations using pipeline metadata.

@@ -14,6 +14,7 @@ from sqlspec.utils.serializers import to_json
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
     from sqlspec.statement.result import SQLResult
+    from sqlspec.statement.sql import SQL
 
 # Shared AIOSQLite statement configuration
 aiosqlite_statement_config = StatementConfig(
@@ -101,7 +102,12 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         await self.connection.commit()
 
     async def _execute_script(
-        self, cursor: "aiosqlite.Cursor", sql: str, prepared_params: Any, statement_config: "StatementConfig"
+        self,
+        cursor: "aiosqlite.Cursor",
+        sql: str,
+        prepared_params: Any,
+        statement_config: "StatementConfig",
+        statement: "SQL",
     ) -> "ExecutionResult":
         """Execute SQL script by splitting and executing statements individually.
 
@@ -113,51 +119,34 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         for stmt in statements:
             last_result = await cursor.execute(stmt, prepared_params or ())
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
-
         return self.create_execution_result(
-            last_result,
-            statement_count=len(statements),
-            successful_statements=len(statements),
-            rowcount_override=row_count,
-            is_script_result=True,
+            last_result, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
         )
 
-    async def _execute_many(self, cursor: "aiosqlite.Cursor", sql: str, prepared_params: Any) -> "ExecutionResult":
+    async def _execute_many(
+        self, cursor: "aiosqlite.Cursor", sql: str, prepared_params: Any, statement: "SQL"
+    ) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using aiosqlite executemany."""
         result = await cursor.executemany(sql, prepared_params)
-
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
-
+        row_count = cursor.rowcount or 0
         return self.create_execution_result(result, rowcount_override=row_count, is_many_result=True)
 
-    async def _execute_statement(self, cursor: "aiosqlite.Cursor", sql: str, prepared_params: Any) -> "ExecutionResult":
+    async def _execute_statement(
+        self, cursor: "aiosqlite.Cursor", sql: str, prepared_params: Any, statement: "SQL"
+    ) -> "ExecutionResult":
         """Execute single SQL statement using aiosqlite execute."""
         result = await cursor.execute(sql, prepared_params or ())
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
+        if statement.returns_rows():
+            # Extract data immediately for SELECT operations
+            fetched_data = await cursor.fetchall()
+            column_names = [col[0] for col in cursor.description or []]
+            data = [dict(row) for row in fetched_data]
 
+            return self.create_execution_result(
+                result, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
+            )
+
+        # For non-SELECT operations, get row count
+        row_count = cursor.rowcount or 0
         return self.create_execution_result(result, rowcount_override=row_count)
-
-    async def _get_selected_data(self, cursor: "aiosqlite.Cursor") -> "tuple[list[dict[str, Any]], list[str], int]":
-        """Extract data from cursor after SELECT execution."""
-        fetched_data = await cursor.fetchall()
-        column_names = [col[0] for col in cursor.description or []]
-        data = [dict(row) for row in fetched_data]
-        return data, column_names, len(data)
-
-    def _get_row_count(self, cursor: "aiosqlite.Cursor") -> int:
-        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
-        return cursor.rowcount or 0

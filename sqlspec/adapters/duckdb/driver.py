@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.duckdb._types import DuckDBConnection
     from sqlspec.driver._common import ExecutionResult
     from sqlspec.statement.result import SQLResult
+    from sqlspec.statement.sql import SQL
 
 # Shared DuckDB statement configuration
 duckdb_statement_config = StatementConfig(
@@ -78,90 +79,72 @@ class DuckDBDriver(SyncDriverAdapterBase):
         return None
 
     def _execute_script(
-        self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig"
+        self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig", statement: "SQL"
     ) -> "ExecutionResult":
-        """Execute a SQL script (multiple statements).
+        """Execute SQL script by splitting and executing statements individually.
 
-        DuckDB can handle multiple statements in a single execute call.
+        DuckDB supports parameters in individual statements.
         """
-        try:
-            if prepared_params:
-                cursor.execute(sql, prepared_params)
-            else:
-                cursor.execute(sql)
-        except Exception as e:
-            raise e from e
-
-        # Count statements for the result
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
-        statement_count = len(statements)
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
+        last_result = None
+        for stmt in statements:
+            last_result = cursor.execute(stmt, prepared_params or ())
 
         return self.create_execution_result(
-            cursor,
-            statement_count=statement_count,
-            successful_statements=statement_count,  # Assume all successful if no exception
-            rowcount_override=row_count,
-            is_script_result=True,
+            last_result, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
         )
 
-    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
+    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
         """DuckDB executemany with accurate row counting."""
         if prepared_params:
             cursor.executemany(sql, prepared_params)
             # DuckDB's cursor.rowcount is unreliable for executemany
             # Use explicit count for INSERT/UPDATE/DELETE operations
-            sql_upper = sql.strip().upper()
-            if sql_upper.startswith(("INSERT", "UPDATE", "DELETE")):
+            if statement.operation_type in ("INSERT", "UPDATE", "DELETE"):
                 row_count = len(prepared_params)  # Explicit accurate count
             else:
                 # For non-modifying operations, try to get row count from cursor
                 try:
-                    row_count = self._get_row_count(cursor)
+                    result = cursor.fetchone()
+                    row_count = int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0
                 except Exception:
-                    row_count = None
+                    row_count = max(cursor.rowcount, 0) or 0
         else:
             # Empty parameter set - no operation performed
             row_count = 0
 
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
-    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
+    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
         """DuckDB single execution."""
         cursor.execute(sql, prepared_params or ())
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
+        if statement.returns_rows():
+            # Extract data immediately for SELECT operations
+            fetched_data = cursor.fetchall()
+            column_names = [col[0] for col in cursor.description or []]
+            if fetched_data and isinstance(fetched_data[0], tuple):
+                dict_data = [dict(zip(column_names, row)) for row in fetched_data]
+            else:
+                dict_data = fetched_data
 
-        return self.create_execution_result(cursor, rowcount_override=row_count)
+            return self.create_execution_result(
+                cursor,
+                selected_data=dict_data,
+                column_names=column_names,
+                data_row_count=len(dict_data),
+                is_select_result=True,
+            )
 
-    def _get_selected_data(self, cursor: Any) -> "tuple[list[dict[str, Any]], list[str], int]":
-        """Extract data from cursor after SELECT execution."""
-        fetched_data = cursor.fetchall()
-        column_names = [col[0] for col in cursor.description or []]
-
-        if fetched_data and isinstance(fetched_data[0], tuple):
-            dict_data = [dict(zip(column_names, row)) for row in fetched_data]
-        else:
-            dict_data = fetched_data
-
-        return dict_data, column_names, len(dict_data)
-
-    def _get_row_count(self, cursor: Any) -> int:
-        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
+        # For non-SELECT operations, get row count
         try:
             result = cursor.fetchone()
-            return int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0
+            row_count = int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0
         except Exception:
-            return max(cursor.rowcount, 0) or 0
+            row_count = max(cursor.rowcount, 0) or 0
+
+        return self.create_execution_result(cursor, rowcount_override=row_count)
 
     def begin(self) -> None:
         """Begin a database transaction."""

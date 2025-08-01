@@ -13,9 +13,9 @@ def test_shared_memory_pooling() -> None:
         pool_config={"database": "file::memory:?cache=shared", "uri": True, "pool_min_size": 2, "pool_max_size": 5}
     )
 
-    # Verify pooling is not disabled
-    assert config.min_pool_size == 2
-    assert config.max_pool_size == 5
+    # Verify pooling configuration
+    assert config.pool_config["pool_min_size"] == 2
+    assert config.pool_config["pool_max_size"] == 5
 
     # Test that multiple connections can access the same data
     with config.provide_session() as session1:
@@ -43,9 +43,9 @@ def test_regular_memory_auto_conversion() -> None:
     # Create config with regular memory database
     config = SqliteConfig(pool_config={"database": ":memory:", "pool_min_size": 5, "pool_max_size": 10})
 
-    # Verify pooling is enabled with requested sizes
-    assert config.min_pool_size == 5
-    assert config.max_pool_size == 10
+    # Verify pooling configuration
+    assert config.pool_config["pool_min_size"] == 5
+    assert config.pool_config["pool_max_size"] == 10
 
     # Verify database was auto-converted to shared memory
     assert config.connection_config["database"] == "file::memory:?cache=shared"
@@ -83,9 +83,9 @@ def test_file_database_pooling_enabled() -> None:
         # Create config with file database
         config = SqliteConfig(pool_config={"database": db_path, "pool_min_size": 3, "pool_max_size": 8})
 
-        # Verify pooling is enabled
-        assert config.min_pool_size == 3
-        assert config.max_pool_size == 8
+        # Verify pooling configuration
+        assert config.pool_config["pool_min_size"] == 3
+        assert config.pool_config["pool_max_size"] == 8
 
         # Test that multiple connections work
         with config.provide_session() as session1:

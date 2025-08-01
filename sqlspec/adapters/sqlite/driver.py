@@ -92,51 +92,48 @@ class SqliteDriver(SyncDriverAdapterBase):
         return None
 
     def _execute_script(
-        self, cursor: "sqlite3.Cursor", sql: str, prepared_params: Optional[Any], statement_config: "StatementConfig"
+        self,
+        cursor: "sqlite3.Cursor",
+        sql: str,
+        prepared_params: Optional[Any],
+        statement_config: "StatementConfig",
+        statement: "SQL",
     ) -> "ExecutionResult":
         """Execute SQL script using SQLite's native executescript (parameters embedded as static values)."""
-        cursor.executescript(sql)
-
-        # Count statements for the result
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
-        statement_count = len(statements)
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
+        last_result = None
+        for stmt in statements:
+            last_result = cursor.execute(stmt, prepared_params or ())
 
         return self.create_execution_result(
-            cursor,
-            statement_count=statement_count,
-            successful_statements=statement_count,  # Assume all successful if no exception
-            rowcount_override=row_count,
-            is_script_result=True,
+            last_result, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
         )
 
-    def _execute_many(self, cursor: "sqlite3.Cursor", sql: str, prepared_params: Any) -> "ExecutionResult":
+    def _execute_many(
+        self, cursor: "sqlite3.Cursor", sql: str, prepared_params: Any, statement: "SQL"
+    ) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using SQLite executemany."""
         cursor.executemany(sql, prepared_params)
-
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
-
+        row_count = cursor.rowcount or 0
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
-    def _execute_statement(self, cursor: "sqlite3.Cursor", sql: str, prepared_params: Any) -> "ExecutionResult":
+    def _execute_statement(
+        self, cursor: "sqlite3.Cursor", sql: str, prepared_params: Any, statement: "SQL"
+    ) -> "ExecutionResult":
         """Execute single SQL statement using SQLite execute."""
         cursor.execute(sql, prepared_params or ())
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
+        if statement.returns_rows():
+            fetched_data = cursor.fetchall()
+            column_names = [col[0] for col in cursor.description or []]
+            data = [dict(zip(column_names, row)) for row in fetched_data]
 
+            return self.create_execution_result(
+                cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
+            )
+        # For non-SELECT operations, get row count
+        row_count = cursor.rowcount or 0
         return self.create_execution_result(cursor, rowcount_override=row_count)
 
     def begin(self) -> None:
@@ -150,14 +147,3 @@ class SqliteDriver(SyncDriverAdapterBase):
     def commit(self) -> None:
         """Commit the current transaction."""
         self.connection.commit()
-
-    def _get_selected_data(self, cursor: "sqlite3.Cursor") -> "tuple[list[dict[str, Any]], list[str], int]":
-        """Extract data from cursor after SELECT execution."""
-        fetched_data = cursor.fetchall()
-        column_names = [col[0] for col in cursor.description or []]
-        data = [dict(zip(column_names, row)) for row in fetched_data]
-        return data, column_names, len(data)
-
-    def _get_row_count(self, cursor: "sqlite3.Cursor") -> int:
-        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
-        return cursor.rowcount or 0

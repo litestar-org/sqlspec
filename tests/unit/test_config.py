@@ -51,15 +51,17 @@ class MockSyncDriver(SyncDriverAdapterBase):
     def _execute(self, sql: "str", parameters: "Any", connection: "MockConnection", **kwargs: "Any") -> "Any":
         return {"rows": [], "rowcount": 0}
 
-    def _execute_many(self, cursor: "Any", sql: "str", prepared_params: "Any") -> "ExecutionResult":
+    def _execute_many(self, cursor: "Any", sql: "str", prepared_params: "Any", statement: "SQL") -> "ExecutionResult":
         return self.create_execution_result(cursor, is_many_result=True)
 
     def _execute_script(
-        self, cursor: "Any", sql: "str", prepared_params: "Any", statement_config: "StatementConfig"
+        self, cursor: "Any", sql: "str", prepared_params: "Any", statement_config: "StatementConfig", statement: "SQL"
     ) -> "ExecutionResult":
         return self.create_execution_result(cursor, is_script_result=True)
 
-    def _execute_statement(self, cursor: "Any", sql: "str", prepared_params: "Any") -> "ExecutionResult":
+    def _execute_statement(
+        self, cursor: "Any", sql: "str", prepared_params: "Any", statement: "SQL"
+    ) -> "ExecutionResult":
         return self.create_execution_result(cursor)
 
     def _try_special_handling(self, cursor: "Any", statement: "SQL") -> "Optional[Any]":
@@ -129,15 +131,19 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
     async def _execute(self, sql: "str", parameters: "Any", connection: "MockConnection", **kwargs: "Any") -> "Any":
         return {"rows": [], "rowcount": 0}
 
-    async def _execute_many(self, cursor: "Any", sql: "str", prepared_params: "Any") -> "ExecutionResult":
+    async def _execute_many(
+        self, cursor: "Any", sql: "str", prepared_params: "Any", statement: "SQL"
+    ) -> "ExecutionResult":
         return self.create_execution_result(cursor, is_many_result=True)
 
     async def _execute_script(
-        self, cursor: "Any", sql: "str", prepared_params: "Any", statement_config: "StatementConfig"
+        self, cursor: "Any", sql: "str", prepared_params: "Any", statement_config: "StatementConfig", statement: "SQL"
     ) -> "ExecutionResult":
         return self.create_execution_result(cursor, is_script_result=True)
 
-    async def _execute_statement(self, cursor: "Any", sql: "str", prepared_params: "Any") -> "ExecutionResult":
+    async def _execute_statement(
+        self, cursor: "Any", sql: "str", prepared_params: "Any", statement: "SQL"
+    ) -> "ExecutionResult":
         return self.create_execution_result(cursor)
 
     async def _try_special_handling(self, cursor: "Any", statement: "SQL") -> "Optional[Any]":

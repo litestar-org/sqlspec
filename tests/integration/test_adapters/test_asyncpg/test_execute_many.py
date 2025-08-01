@@ -7,7 +7,6 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import StatementConfig
 
 
 @pytest.fixture
@@ -20,8 +19,7 @@ async def asyncpg_batch_session(postgres_service: PostgresService) -> "AsyncGene
             "user": postgres_service.user,
             "password": postgres_service.password,
             "database": postgres_service.database,
-        },
-        statement_config=StatementConfig(enable_validation=False),
+        }
     )
 
     async with config.provide_session() as session:

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Optional
 if TYPE_CHECKING:
     from sqlspec.driver._common import ExecutionResult
     from sqlspec.statement.result import SQLResult
+    from sqlspec.statement.sql import SQL
 
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.adapters.psycopg.mixins import PsycopgCopyMixin
@@ -153,7 +154,7 @@ class PsycopgSyncDriver(PsycopgCopyMixin, SyncDriverAdapterBase):
             pass  # Just execute the COPY command
 
     def _execute_script(
-        self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig"
+        self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig", statement: "SQL"
     ) -> "ExecutionResult":
         """Execute SQL script by splitting and executing statements individually.
 
@@ -166,54 +167,41 @@ class PsycopgSyncDriver(PsycopgCopyMixin, SyncDriverAdapterBase):
         for stmt in statements:
             last_result = cursor.execute(stmt, prepared_params or ())
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
-
         return self.create_execution_result(
             last_result,
             statement_count=statement_count,
             successful_statements=statement_count,  # Assume all successful if no exception
-            rowcount_override=row_count,
             is_script_result=True,
         )
 
-    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
+    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using Psycopg executemany."""
         result = cursor.executemany(sql, prepared_params)
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
-
+        # For executemany, get row count
+        row_count = cursor.rowcount if cursor.rowcount is not None else 0
         return self.create_execution_result(result, rowcount_override=row_count, is_many_result=True)
 
-    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
+    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement using Psycopg execute."""
         result = cursor.execute(sql, prepared_params or ())
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
+        if statement.returns_rows():
+            # Extract data immediately for SELECT operations
+            fetched_data = cursor.fetchall()
+            column_names = [col.name for col in cursor.description or []]
+            # Data is already in dict format from DictRow
+            return self.create_execution_result(
+                result,
+                selected_data=fetched_data,
+                column_names=column_names,
+                data_row_count=len(fetched_data),
+                is_select_result=True,
+            )
 
+        # For non-SELECT operations, get row count
+        row_count = cursor.rowcount if cursor.rowcount is not None else 0
         return self.create_execution_result(result, rowcount_override=row_count)
-
-    def _get_selected_data(self, cursor: Any) -> "tuple[list[dict[str, Any]], list[str], int]":
-        """Extract data from cursor after SELECT execution."""
-        fetched_data = cursor.fetchall()
-        column_names = [col.name for col in cursor.description or []]
-        # Data is already in dict format from DictRow
-        return fetched_data, column_names, len(fetched_data)
-
-    def _get_row_count(self, cursor: Any) -> int:
-        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
-        return cursor.rowcount if cursor.rowcount is not None else 0
 
     def begin(self) -> None:
         """Begin transaction using psycopg-specific method."""
@@ -310,7 +298,7 @@ class PsycopgAsyncDriver(PsycopgCopyMixin, AsyncDriverAdapterBase):
         return await self._execute_copy_without_data(cursor, sql_text)
 
     async def _execute_script(
-        self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig"
+        self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig", statement: "SQL"
     ) -> "ExecutionResult":
         """Execute SQL script by splitting and executing statements individually.
 
@@ -323,54 +311,43 @@ class PsycopgAsyncDriver(PsycopgCopyMixin, AsyncDriverAdapterBase):
         for stmt in statements:
             last_result = await cursor.execute(stmt, prepared_params or ())
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
-
         return self.create_execution_result(
             last_result,
             statement_count=statement_count,
             successful_statements=statement_count,  # Assume all successful if no exception
-            rowcount_override=row_count,
             is_script_result=True,
         )
 
-    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
+    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using Psycopg executemany."""
         result = await cursor.executemany(sql, prepared_params)
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
-
+        # For executemany, get row count
+        row_count = cursor.rowcount if cursor.rowcount is not None else 0
         return self.create_execution_result(result, rowcount_override=row_count, is_many_result=True)
 
-    async def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
+    async def _execute_statement(
+        self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL"
+    ) -> "ExecutionResult":
         """Execute single SQL statement using Psycopg execute."""
         result = await cursor.execute(sql, prepared_params or ())
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
+        if statement.returns_rows():
+            # Extract data immediately for SELECT operations
+            fetched_data = await cursor.fetchall()
+            column_names = [col.name for col in cursor.description or []]
+            # Data is already in dict format from DictRow
+            return self.create_execution_result(
+                result,
+                selected_data=fetched_data,
+                column_names=column_names,
+                data_row_count=len(fetched_data),
+                is_select_result=True,
+            )
 
+        # For non-SELECT operations, get row count
+        row_count = cursor.rowcount if cursor.rowcount is not None else 0
         return self.create_execution_result(result, rowcount_override=row_count)
-
-    async def _get_selected_data(self, cursor: Any) -> "tuple[list[dict[str, Any]], list[str], int]":
-        """Extract data from cursor after SELECT execution."""
-        fetched_data = await cursor.fetchall()
-        column_names = [col.name for col in cursor.description or []]
-        # Data is already in dict format from DictRow
-        return fetched_data, column_names, len(fetched_data)
-
-    def _get_row_count(self, cursor: Any) -> int:
-        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
-        return cursor.rowcount if cursor.rowcount is not None else 0
 
     async def begin(self) -> None:
         """Begin transaction using psycopg-specific method."""

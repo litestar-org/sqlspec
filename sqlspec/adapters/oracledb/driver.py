@@ -89,40 +89,31 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         """
         return None
 
-    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
+    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
         """Oracle executemany implementation."""
         cursor.executemany(sql, prepared_params)
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
-
+        # For executemany, get row count
+        row_count = cursor.rowcount if cursor.rowcount is not None else 0
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
-    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
+    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
         """Oracle single execution."""
         cursor.execute(sql, prepared_params or {})
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
+        if statement.returns_rows():
+            # Extract data immediately for SELECT operations
+            fetched_data = cursor.fetchall()
+            column_names = [col[0] for col in cursor.description or []]
+            data = cast("list[dict[str, Any]]", [dict(zip(column_names, row)) for row in fetched_data])
 
+            return self.create_execution_result(
+                cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
+            )
+
+        # For non-SELECT operations, get row count
+        row_count = cursor.rowcount if cursor.rowcount is not None else 0
         return self.create_execution_result(cursor, rowcount_override=row_count)
-
-    def _get_selected_data(self, cursor: Cursor) -> "tuple[list[dict[str, Any]], list[str], int]":
-        """Extract data from cursor after SELECT execution."""
-        fetched_data = cursor.fetchall()
-        column_names = [col[0] for col in cursor.description or []]
-        data = cast("list[dict[str, Any]]", [dict(zip(column_names, row)) for row in fetched_data])
-        return data, column_names, len(data)
-
-    def _get_row_count(self, cursor: Cursor) -> int:
-        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
-        return cursor.rowcount if cursor.rowcount is not None else 0
 
     def begin(self) -> None:
         """Begin a database transaction."""
@@ -180,40 +171,33 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         """
         return None
 
-    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
+    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
         """Oracle async executemany implementation."""
         await cursor.executemany(sql, prepared_params)
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
-
+        # For executemany, get row count
+        row_count = cursor.rowcount if cursor.rowcount is not None else 0
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
-    async def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> "ExecutionResult":
+    async def _execute_statement(
+        self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL"
+    ) -> "ExecutionResult":
         """Oracle async single execution."""
         await cursor.execute(sql, prepared_params or {})
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
+        if statement.returns_rows():
+            # Extract data immediately for SELECT operations
+            fetched_data = await cursor.fetchall()
+            column_names = [col[0] for col in cursor.description or []]
+            data = cast("list[dict[str, Any]]", [dict(zip(column_names, row)) for row in fetched_data])
 
+            return self.create_execution_result(
+                cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
+            )
+
+        # For non-SELECT operations, get row count
+        row_count = cursor.rowcount if cursor.rowcount is not None else 0
         return self.create_execution_result(cursor, rowcount_override=row_count)
-
-    async def _get_selected_data(self, cursor: AsyncCursor) -> "tuple[list[dict[str, Any]], list[str], int]":
-        """Extract data from cursor after SELECT execution."""
-        fetched_data = await cursor.fetchall()
-        column_names = [col[0] for col in cursor.description or []]
-        data = cast("list[dict[str, Any]]", [dict(zip(column_names, row)) for row in fetched_data])
-        return data, column_names, len(data)
-
-    def _get_row_count(self, cursor: AsyncCursor) -> int:
-        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
-        return cursor.rowcount if cursor.rowcount is not None else 0
 
     async def begin(self) -> None:
         """Begin a database transaction."""

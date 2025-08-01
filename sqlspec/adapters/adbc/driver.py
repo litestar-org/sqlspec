@@ -202,18 +202,11 @@ class AdbcDriver(SyncDriverAdapterBase):
                         )
                         cursor.execute(stmt, parameters=prepared_params)
 
-                # Get row count if available
-                try:
-                    row_count = self._get_row_count(cursor)
-                except Exception:
-                    row_count = None
-
                 # Create ExecutionResult and build SQLResult directly
                 execution_result = self.create_execution_result(
                     cursor,
                     statement_count=statement_count,
                     successful_statements=statement_count,  # Assume all successful if no exception
-                    rowcount_override=row_count,
                     is_script_result=True,
                 )
                 return self.build_statement_result(statement, execution_result)
@@ -224,7 +217,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         return None
 
-    def _execute_many(self, cursor: "Cursor", sql: str, prepared_params: Any) -> "ExecutionResult":
+    def _execute_many(self, cursor: "Cursor", sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
         """ADBC executemany implementation."""
         try:
             # ADBC requires at least one parameter set for executemany with parameterized queries
@@ -234,11 +227,8 @@ class AdbcDriver(SyncDriverAdapterBase):
                 row_count = 0
             else:
                 cursor.executemany(sql, prepared_params)
-                # Get row count if available
-                try:
-                    row_count = self._get_row_count(cursor)
-                except Exception:
-                    row_count = None
+                # For executemany, get row count
+                row_count = cursor.rowcount if cursor.rowcount is not None else -1
 
         except Exception as e:
             self._handle_postgres_rollback(cursor)
@@ -246,7 +236,9 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
-    def _execute_statement(self, cursor: "Cursor", sql: str, prepared_params: Any) -> "ExecutionResult":
+    def _execute_statement(
+        self, cursor: "Cursor", sql: str, prepared_params: Any, statement: "SQL"
+    ) -> "ExecutionResult":
         """ADBC single execution."""
         try:
             # Handle PostgreSQL empty params and single param lists
@@ -258,29 +250,27 @@ class AdbcDriver(SyncDriverAdapterBase):
             self._handle_postgres_rollback(cursor)
             raise e from e
 
-        # Get row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
+        if statement.returns_rows():
+            # Extract data immediately for SELECT operations
+            fetched_data = cursor.fetchall()
+            column_names = [col[0] for col in cursor.description or []]
 
+            if fetched_data and isinstance(fetched_data[0], tuple):
+                dict_data: list[dict[Any, Any]] = [dict(zip(column_names, row)) for row in fetched_data]
+            else:
+                dict_data = fetched_data  # type: ignore[assignment]
+
+            return self.create_execution_result(
+                cursor,
+                selected_data=cast("list[dict[str, Any]]", dict_data),
+                column_names=column_names,
+                data_row_count=len(dict_data),
+                is_select_result=True,
+            )
+
+        # For non-SELECT operations, get row count
+        row_count = cursor.rowcount if cursor.rowcount is not None else -1
         return self.create_execution_result(cursor, rowcount_override=row_count)
-
-    def _get_selected_data(self, cursor: "Cursor") -> "tuple[list[dict[str, Any]], list[str], int]":
-        """Extract data from cursor after SELECT execution."""
-        fetched_data = cursor.fetchall()
-        column_names = [col[0] for col in cursor.description or []]
-
-        if fetched_data and isinstance(fetched_data[0], tuple):
-            dict_data: list[dict[Any, Any]] = [dict(zip(column_names, row)) for row in fetched_data]
-        else:
-            dict_data = fetched_data  # type: ignore[assignment]
-
-        return cast("list[dict[str, Any]]", dict_data), column_names, len(dict_data)
-
-    def _get_row_count(self, cursor: "Cursor") -> int:
-        """Extract row count from cursor after INSERT/UPDATE/DELETE."""
-        return cursor.rowcount if cursor.rowcount is not None else -1
 
     def begin(self) -> None:
         """Begin database transaction."""

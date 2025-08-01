@@ -51,13 +51,13 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
 
             sql, params = self._get_compiled_sql(statement, self.statement_config)
 
-            # Create appropriate ExecutionResult based on statement type
+            # Single execution path - data handled in _execute_statement
             if statement.is_script:
-                execution_result = self._perform_script_execution(cursor, sql, params, self.statement_config)
-            elif statement.returns_rows():
-                execution_result = self._perform_select_execution(cursor, sql, params)
+                execution_result = self._execute_script(cursor, sql, params, self.statement_config, statement)
+            elif statement.is_many:
+                execution_result = self._execute_many(cursor, sql, params, statement)
             else:
-                execution_result = self._perform_execute_execution(cursor, sql, params, statement.is_many)
+                execution_result = self._execute_statement(cursor, sql, params, statement)
 
             return self.build_statement_result(statement, execution_result)
 
@@ -99,7 +99,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         """
 
     def _execute_script(
-        self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig"
+        self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig", statement: "SQL"
     ) -> ExecutionResult:
         """Execute a SQL script (multiple statements).
 
@@ -111,6 +111,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
             sql: Compiled SQL script
             prepared_params: Prepared parameters
             statement_config: Statement configuration for dialect information
+            statement: Original SQL statement object with metadata
 
         Returns:
             ExecutionResult with script execution data including statement counts
@@ -120,24 +121,16 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
 
         last_result = None
         for stmt in statements:
-            last_result = self._execute_statement(cursor, stmt, prepared_params)
+            last_result = self._execute_statement(cursor, stmt, prepared_params, statement)
 
-        # Extract row count if available
-        try:
-            row_count = self._get_row_count(cursor)
-        except Exception:
-            row_count = None
+        # Row count will be provided by individual drivers in ExecutionResult
 
         return self.create_execution_result(
-            last_result,
-            statement_count=statement_count,
-            successful_statements=statement_count,
-            rowcount_override=row_count,
-            is_script_result=True,
+            last_result, statement_count=statement_count, successful_statements=statement_count, is_script_result=True
         )
 
     @abstractmethod
-    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> ExecutionResult:
+    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> ExecutionResult:
         """Execute SQL with multiple parameter sets (executemany).
 
         Must be implemented by each driver for database-specific executemany logic.
@@ -146,13 +139,14 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
             cursor: Database cursor/connection object
             sql: Compiled SQL statement
             prepared_params: List of prepared parameter sets
+            statement: Original SQL statement object with metadata
 
         Returns:
             ExecutionResult with execution data for the many operation
         """
 
     @abstractmethod
-    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> ExecutionResult:
+    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> ExecutionResult:
         """Execute a single SQL statement.
 
         Must be implemented by each driver for database-specific execution logic.
@@ -161,61 +155,11 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
             cursor: Database cursor/connection object
             sql: Compiled SQL statement
             prepared_params: Prepared parameters
+            statement: Original SQL statement object with metadata
 
         Returns:
             ExecutionResult with execution data
         """
-
-    # New abstract methods for data extraction
-    @abstractmethod
-    def _get_selected_data(self, cursor: Any) -> "tuple[list[dict[str, Any]], list[str], int]":
-        """Extract data from cursor after SELECT execution.
-
-        Returns:
-            Tuple of (data_rows, column_names, row_count)
-        """
-
-    @abstractmethod
-    def _get_row_count(self, cursor: Any) -> int:
-        """Extract row count from cursor after INSERT/UPDATE/DELETE.
-
-        Returns:
-            Number of affected rows
-        """
-
-    def _perform_script_execution(
-        self, cursor: Any, sql: str, params: Any, statement_config: "StatementConfig"
-    ) -> ExecutionResult:
-        """Execute script and return ExecutionResult with statement counts."""
-        # _execute_script now returns ExecutionResult directly
-        return self._execute_script(cursor, sql, params, statement_config)
-
-    def _perform_select_execution(self, cursor: Any, sql: str, params: Any) -> ExecutionResult:
-        """Execute SELECT and return ExecutionResult with extracted data."""
-        # Execute the statement - _execute_statement now returns ExecutionResult directly
-        execution_result = self._execute_statement(cursor, sql, params)
-
-        # Extract data using existing method
-        data, column_names, row_count = self._get_selected_data(cursor)
-
-        # Create new ExecutionResult with SELECT data added
-        return self.create_execution_result(
-            execution_result.cursor_result,
-            selected_data=data,
-            column_names=column_names,
-            data_row_count=row_count,
-            is_select_result=True,
-            # Preserve any other data from the original result
-            rowcount_override=execution_result.rowcount_override,
-            special_data=execution_result.special_data,
-        )
-
-    def _perform_execute_execution(self, cursor: Any, sql: str, params: Any, is_many: bool = False) -> ExecutionResult:
-        """Execute non-SELECT statement and return ExecutionResult."""
-        # Execute the statement - methods now return ExecutionResult directly
-        if is_many:
-            return self._execute_many(cursor, sql, params)
-        return self._execute_statement(cursor, sql, params)
 
     def execute(
         self,
@@ -243,12 +187,9 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
 
         Parameters passed will be used as the batch execution sequence.
         """
-        # Prepare the base statement without parameters
         sql_statement = self.prepare_statement(
             statement, *filters, statement_config=statement_config or self.statement_config, **kwargs
         )
-
-        # Execute with the parameter sequence using as_many()
         return self.dispatch_statement_execution(
             statement=sql_statement.as_many(parameters), connection=self.connection
         )
@@ -417,7 +358,11 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         Raises an exception if no rows or more than one row/column is returned.
         """
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
-        row = result.one()
+        try:
+            row = result.one()
+        except ValueError as e:
+            msg = "No rows found"
+            raise NotFoundError(msg) from e
         if not row:
             msg = "No rows found"
             raise NotFoundError(msg)

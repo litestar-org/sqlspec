@@ -95,11 +95,11 @@ class MockSyncDriver(SyncDriverAdapterBase):
         """Hook for mock-specific special operations - none needed."""
         return None
 
-    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any, statement: SQL) -> Any:
         """Execute single SQL statement using mock cursor."""
         return cursor.execute(sql, prepared_params or ())
 
-    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: SQL) -> Any:
         """Execute SQL with multiple parameter sets using mock cursor."""
         return cursor.executemany(sql, prepared_params)
 
@@ -116,7 +116,9 @@ class MockSyncDriver(SyncDriverAdapterBase):
         """Extract row count from cursor after INSERT/UPDATE/DELETE."""
         return 1  # Mock always returns 1 affected row
 
-    def _execute_script(self, cursor: Any, sql: str, prepared_params: Any, statement_config: StatementConfig) -> Any:
+    def _execute_script(
+        self, cursor: Any, sql: str, prepared_params: Any, statement_config: StatementConfig, statement: SQL
+    ) -> Any:
         """Execute a SQL script (multiple statements)."""
         # Mock implementation - just execute as single statement
         return cursor.execute(sql, prepared_params or ())
@@ -233,11 +235,11 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         """Hook for mock-specific special operations - none needed."""
         return None
 
-    async def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+    async def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any, statement: SQL) -> Any:
         """Execute single SQL statement using mock cursor."""
         return await cursor.execute(sql, prepared_params or ())
 
-    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: SQL) -> Any:
         """Execute SQL with multiple parameter sets using mock cursor."""
         return await cursor.executemany(sql, prepared_params)
 

@@ -52,9 +52,8 @@ async def test_regular_memory_auto_converted_pooling() -> None:
 
     # Test that pooling works
 
-    # Verify auto-conversion happened
-    assert config.connection_config["database"] == "file::memory:?cache=shared"
-    assert config.connection_config["uri"] is True
+    # Verify database remains as :memory: (aiosqlite doesn't support shared cache)
+    assert config.connection_config["database"] == ":memory:"
 
     # Test that multiple connections can access the same data (like shared memory test)
     async with config.provide_session() as session1:
