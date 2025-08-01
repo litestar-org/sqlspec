@@ -20,10 +20,8 @@ def adbc_postgresql_session_returning(postgres_service: PostgresService) -> Gene
     """Create an ADBC PostgreSQL session with test table supporting RETURNING."""
     config = AdbcConfig(
         connection_config={
-            "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-            "driver_name": "adbc_driver_postgresql",
-        },
-        statement_config=StatementConfig(),
+            "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        }
     )
 
     with config.provide_session() as session:

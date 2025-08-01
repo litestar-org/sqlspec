@@ -347,14 +347,13 @@ class DuckDBConnectionPool:
             with self._lock:
                 self._checked_out += 1
 
-            return connection
-
         except Exception:
             # If we got a connection but failed somewhere, return it to pool
             if connection is not None:
                 with suppress(Full):
                     self._pool.put_nowait(connection)
             raise
+        return connection
 
     def release(self, connection: DuckDBConnection) -> None:
         """Return a connection to the pool.

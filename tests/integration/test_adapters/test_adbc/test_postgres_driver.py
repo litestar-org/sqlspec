@@ -12,7 +12,7 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL, StatementConfig
+from sqlspec.statement.sql import SQL
 
 # Import the decorator
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
@@ -37,10 +37,8 @@ def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[Adbc
     """Create an ADBC PostgreSQL session with test table."""
     config = AdbcConfig(
         connection_config={
-            "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-            "driver_name": "adbc_driver_postgresql.dbapi.connect",
-        },
-        statement_config=StatementConfig(),  # Allow DDL statements for tests
+            "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        }
     )
 
     with config.provide_session() as session:

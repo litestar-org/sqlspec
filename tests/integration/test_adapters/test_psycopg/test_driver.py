@@ -17,13 +17,10 @@ ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 @pytest.fixture
 def psycopg_session(postgres_service: PostgresService) -> Generator[PsycopgSyncDriver, None, None]:
     """Create a psycopg session with test table."""
-    from sqlspec.statement.sql import StatementConfig
-
     config = PsycopgSyncConfig(
         pool_config={
             "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
-        },
-        statement_config=StatementConfig(enable_transformations=True, enable_validation=False, enable_parsing=True),
+        }
     )
 
     try:

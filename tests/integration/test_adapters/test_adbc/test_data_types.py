@@ -22,10 +22,8 @@ def adbc_postgresql_types_session(postgres_service: PostgresService) -> Generato
     """Create an ADBC PostgreSQL session for data type testing."""
     config = AdbcConfig(
         connection_config={
-            "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
-            "driver_name": "adbc_driver_postgresql",
-        },
-        statement_config=StatementConfig(),
+            "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        }
     )
 
     with config.provide_session() as session:

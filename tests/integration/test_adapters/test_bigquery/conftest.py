@@ -7,7 +7,6 @@ from google.api_core.client_options import ClientOptions
 from google.auth.credentials import AnonymousCredentials
 
 from sqlspec.adapters.bigquery.config import BigQueryConfig
-from sqlspec.statement.sql import StatementConfig
 
 if TYPE_CHECKING:
     from pytest_databases.docker.bigquery import BigQueryService
@@ -28,6 +27,5 @@ def bigquery_session(bigquery_service: BigQueryService, table_schema_prefix: str
             "dataset_id": table_schema_prefix,
             "client_options": ClientOptions(api_endpoint=f"http://{bigquery_service.host}:{bigquery_service.port}"),
             "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
-        },
-        statement_config=StatementConfig(dialect="bigquery"),
+        }
     )

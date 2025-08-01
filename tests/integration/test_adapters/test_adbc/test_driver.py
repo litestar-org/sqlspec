@@ -26,8 +26,7 @@ def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[Adbc
         connection_config={
             "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
             "driver_name": "adbc_driver_postgresql",
-        },
-        statement_config=StatementConfig(),  # Allow DDL statements for tests
+        }
     )
 
     with config.provide_session() as session:

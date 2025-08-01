@@ -22,8 +22,7 @@ def adbc_postgresql_script_session(postgres_service: PostgresService) -> Generat
         connection_config={
             "uri": f"postgres://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
             "driver_name": "adbc_driver_postgresql",
-        },
-        statement_config=StatementConfig(),
+        }
     )
 
     with config.provide_session() as session:

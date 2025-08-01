@@ -1512,8 +1512,10 @@ class SQL:
 
         if should_denormalize and original_style in SQLGLOT_INCOMPATIBLE_STYLES:
             # Denormalize SQL back to original style
+            # Need to extract current parameter info from the processed SQL instead of using original positions
+            current_param_info = self.statement_config.parameter_validator.extract_parameters(sql)
             sql = self.statement_config.parameter_converter._convert_sql_placeholders(
-                sql, original_style, norm_state.original_param_info
+                sql, original_style, current_param_info
             )
 
             # Convert parameters to match original style

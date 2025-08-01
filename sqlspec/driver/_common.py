@@ -454,7 +454,6 @@ class CommonDriverAttributesMixin:
         Returns:
             Tuple of (compiled_sql, parameters)
         """
-        params = self.prepare_driver_parameters(statement.parameters, statement_config, is_many=statement.is_many)
         if statement.is_script and not statement_config.parameter_config.needs_static_script_compilation:
             target_style = ParameterStyle.STATIC
         elif statement_config.parameter_config.execution_parameter_style is not None:
