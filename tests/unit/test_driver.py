@@ -9,6 +9,7 @@ import pytest
 from sqlglot import exp
 
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+from sqlspec.driver._common import ExecutionResult
 from sqlspec.parameters import ParameterStyle
 from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.result import SQLResult
@@ -95,9 +96,23 @@ class MockSyncDriver(SyncDriverAdapterBase):
         """Hook for mock-specific special operations - none needed."""
         return None
 
-    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any, statement: SQL) -> Any:
+    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any, statement: SQL) -> ExecutionResult:
         """Execute single SQL statement using mock cursor."""
-        return cursor.execute(sql, prepared_params or ())
+        cursor.execute(sql, prepared_params or ())
+
+        # Determine if this is a SELECT statement
+        sql_upper = sql.upper().strip()
+        if sql_upper.startswith("SELECT"):
+            # Mock SELECT result - empty as expected by tests
+            mock_data: list[dict[str, Any]] = []
+            return self.create_execution_result(
+                cursor_result=mock_data,
+                selected_data=mock_data,
+                column_names=["id", "name"],
+                data_row_count=len(mock_data),
+                is_select_result=True,
+            )
+        return self.create_execution_result(cursor_result=None, rowcount_override=1, is_select_result=False)
 
     def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: SQL) -> Any:
         """Execute SQL with multiple parameter sets using mock cursor."""
@@ -235,9 +250,24 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         """Hook for mock-specific special operations - none needed."""
         return None
 
-    async def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any, statement: SQL) -> Any:
+    async def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any, statement: SQL) -> ExecutionResult:
         """Execute single SQL statement using mock cursor."""
-        return await cursor.execute(sql, prepared_params or ())
+        await cursor.execute(sql, prepared_params or ())
+
+        # Determine if this is a SELECT statement
+        sql_upper = sql.upper().strip()
+        if sql_upper.startswith("SELECT"):
+            # Mock SELECT result - empty as expected by tests
+            mock_data: list[dict[str, Any]] = []
+            return self.create_execution_result(
+                cursor_result=mock_data,
+                selected_data=mock_data,
+                column_names=["id", "name"],
+                data_row_count=len(mock_data),
+                is_select_result=True,
+            )
+        # Mock non-SELECT result
+        return self.create_execution_result(cursor_result=None, rowcount_override=1, is_select_result=False)
 
     async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: SQL) -> Any:
         """Execute SQL with multiple parameter sets using mock cursor."""

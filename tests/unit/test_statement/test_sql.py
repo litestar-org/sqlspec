@@ -187,32 +187,6 @@ def test_sql_expression_with_parsing_disabled() -> None:
     assert stmt.expression is not None
 
 
-# Test SQL validation
-def test_sql_validate_method() -> None:
-    """Test SQL.validate() returns validation errors."""
-    # Valid SQL
-    stmt1 = SQL("SELECT id, name FROM users")
-    errors1 = stmt1.validate()
-    assert isinstance(errors1, list)
-    assert len(errors1) == 0
-
-    # SQL with validation issues
-    stmt2 = SQL("UPDATE users SET name = 'test'")  # No WHERE clause
-    errors2 = stmt2.validate()
-    assert isinstance(errors2, list)
-    # The actual validation happens in the pipeline
-
-
-def test_sql_validation_disabled() -> None:
-    """Test SQL validation behavior."""
-    # StatementConfig no longer has enable_validation flag
-    # Validation happens in the pipeline
-    stmt = SQL("UPDATE users SET name = 'test'")
-    errors = stmt.validate()
-    assert isinstance(errors, list)
-    # The actual validation happens in the pipeline
-
-
 def test_sql_parse_errors_warn_by_default() -> None:
     """Test SQL warns on parse errors by default (new behavior for compatibility)."""
     # Invalid SQL that can't be parsed - should return Anonymous expression instead of raising
@@ -426,6 +400,6 @@ def test_sql_copy() -> None:
     stmt2 = SQL(stmt1, statement_config=new_config)
 
     assert stmt2._raw_sql == stmt1._raw_sql
-    assert stmt2._raw_parameters == stmt1._raw_parameters
+    assert stmt2._original_parameters == stmt1._original_parameters
     assert stmt2.statement_config == new_config
     assert stmt2.statement_config != stmt1.statement_config

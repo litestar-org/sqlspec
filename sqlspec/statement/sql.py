@@ -1,7 +1,6 @@
 """SQL statement handling with centralized parameter management."""
 
-import operator
-from typing import TYPE_CHECKING, Any, Callable, Final, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
 
 import sqlglot
 import sqlglot.expressions as exp
@@ -35,7 +34,6 @@ from sqlspec.utils.type_guards import (
     can_append_to_statement,
     can_extract_parameters,
     expression_has_limit,
-    get_param_style_and_name,
     get_value_attribute,
     has_parameter_value,
     is_dict,
@@ -57,14 +55,9 @@ logger = get_logger("sqlspec.statement")
 
 Statement: TypeAlias = Union[str, exp.Expression, "SQL"]
 
-# Parameter naming constants
-PARAM_PREFIX: Final[str] = "param_"
-POS_PARAM_PREFIX: Final[str] = "pos_param_"
-KW_POS_PARAM_PREFIX: Final[str] = "kw_pos_param_"
-ARG_PREFIX: Final[str] = "arg_"
+# Parameter naming constants (moved to ParameterConverter)
 
 # Cache and limit constants
-DEFAULT_CACHE_SIZE: Final[int] = 1000
 
 # Row-returning token types for SQL analysis
 ROW_RETURNING_TOKENS = {
@@ -77,9 +70,7 @@ ROW_RETURNING_TOKENS = {
     TokenType.PRAGMA,
 }
 
-# Oracle/Colon style parameter constants
-COLON_PARAM_ONE: Final[str] = "1"
-COLON_PARAM_MIN_INDEX: Final[int] = 1
+# Oracle/Colon style parameter constants (moved to ParameterConverter)
 PROCESSED_STATE_SLOTS = (
     "analysis_results",
     "merged_parameters",
@@ -113,13 +104,11 @@ class _ProcessedState:
 
     def __hash__(self) -> int:
         """Hash based on processed SQL and expression."""
-        return hash(
-            (
-                self.processed_sql,
-                str(self.processed_expression),
-                len(self.validation_errors) if self.validation_errors else 0,
-            )
-        )
+        return hash((
+            self.processed_sql,
+            str(self.processed_expression),
+            len(self.validation_errors) if self.validation_errors else 0,
+        ))
 
     def __init__(
         self,
@@ -211,18 +200,16 @@ class StatementConfig:
 
     def __hash__(self) -> int:
         """Hash based on key configuration settings."""
-        return hash(
-            (
-                self.enable_parsing,
-                self.enable_validation,
-                self.enable_transformations,
-                self.enable_analysis,
-                self.enable_expression_simplification,
-                self.enable_parameter_type_wrapping,
-                self.enable_caching,
-                self.dialect,
-            )
-        )
+        return hash((
+            self.enable_parsing,
+            self.enable_validation,
+            self.enable_transformations,
+            self.enable_analysis,
+            self.enable_expression_simplification,
+            self.enable_parameter_type_wrapping,
+            self.enable_caching,
+            self.dialect,
+        ))
 
     def __init__(
         self,
@@ -495,7 +482,7 @@ class SQL:
         elif is_dict(item):
             self._named_params.update(item)
         elif isinstance(item, tuple):
-            self._positional_params.append(item)
+            self._positional_params.extend(item)
         else:
             self._positional_params.append(item)
 
@@ -581,144 +568,65 @@ class SQL:
         if is_expression(final_expr) and self._placeholder_mapping:
             initial_sql_for_context = final_expr.sql(dialect=self._dialect or self.statement_config.dialect)
             if self._placeholder_mapping:
-                final_params = self._convert_parameters(final_params)
+                # Delegate parameter conversion to ParameterConverter
+                converter = self.statement_config.parameter_converter
+                converted_result = converter.convert_parameters(
+                    initial_sql_for_context, final_params, None, None, validate=False
+                )
+                final_params = converted_result.merged_parameters
 
         return initial_sql_for_context, final_params
 
-    def _convert_parameters(self, final_params: Any) -> Any:
-        """Convert parameters based on placeholder mapping."""
-        # Only convert if we actually have a parameter conversion state indicating transformation
-        if not self._parameter_conversion_state or not self._parameter_conversion_state.was_transformed:
-            return final_params
-        if is_dict(final_params):
-            converted_params = {}
-            for placeholder_key, original_name in self._placeholder_mapping.items():
-                if str(original_name) in final_params:
-                    converted_params[placeholder_key] = final_params[str(original_name)]
-            non_oracle_params = {
-                key: value
-                for key, value in final_params.items()
-                if key not in {str(name) for name in self._placeholder_mapping.values()}
-            }
-            converted_params.update(non_oracle_params)
-            return converted_params
-        if isinstance(final_params, (list, tuple)):
-            validator = self.statement_config.parameter_validator
-            param_info = validator.extract_parameters(self._raw_sql)
+    # _convert_parameters removed - functionality moved to ParameterConverter
 
-            all_numeric = all(p.name and p.name.isdigit() for p in param_info)
+    # _convert_dict_with_mapping removed - functionality moved to ParameterConverter
 
-            if all_numeric:
-                converted_params = {}
-
-                min_param_num = min(int(p.name) for p in param_info if p.name)
-
-                for i, param in enumerate(final_params):
-                    param_num = str(i + min_param_num)
-                    converted_params[param_num] = param
-
-                return converted_params
-            converted_params = {}
-            for i, param in enumerate(final_params):
-                if i < len(param_info):
-                    placeholder_key = f"{PARAM_PREFIX}{param_info[i].ordinal}"
-                    converted_params[placeholder_key] = param
-            return converted_params
-        return final_params
+    # _convert_list_with_info removed - functionality moved to ParameterConverter
 
     def _create_processing_context(
         self, initial_sql_for_context: str, final_expr: exp.Expression, final_params: Any, has_placeholders: bool
     ) -> SQLTransformContext:
         """Create SQL processing context."""
-        # Convert parameters to dict format for the context
+        # Use ParameterConverter for parameter dict conversion
         param_dict: dict[str, Any] = {}
-        param_info = None  # Initialize to avoid unbound variable
+        param_info = None
+
         if final_params:
+            converter = self.statement_config.parameter_converter
+            param_info = converter.validator.extract_parameters(initial_sql_for_context)
+
             if is_dict(final_params):
-                # CRITICAL FIX: Handle tuple parameters that are already in dict format
-                # This happens when parameters are pre-processed by earlier pipeline stages
-                param_dict = {}
-                validator = self.statement_config.parameter_validator
-                param_info = validator.extract_parameters(initial_sql_for_context)
-
-                # Check if we have a single tuple parameter that needs processing
-                if len(final_params) == 1 and next(iter(final_params.keys())).startswith("param_"):
-                    # Get the single parameter value
-                    single_param_value = next(iter(final_params.values()))
-
-                    # Handle tuple parameters correctly
-                    if isinstance(single_param_value, tuple):
-                        if len(param_info) > 1 and len(single_param_value) == len(param_info):
-                            # Multi-element tuple expansion: ('a', 'b', 'c') with 3 placeholders → param_0='a', param_1='b', param_2='c'
-                            for i, param_value in enumerate(single_param_value):
-                                param_dict[f"param_{i}"] = param_value
-                        elif len(param_info) == 1 and len(single_param_value) == 1:
-                            # Single-element tuple unwrapping: (['array'],) with 1 placeholder → param_0=['array']
-                            param_dict["param_0"] = single_param_value[0]
-                        else:
-                            # Keep tuple as-is for other cases
-                            param_dict = final_params
-                    else:
-                        # Non-tuple parameter, keep original dict format
-                        param_dict = final_params
-                else:
-                    # Keep original dict format
-                    param_dict = final_params
+                param_dict = final_params
             elif isinstance(final_params, (list, tuple)):
-                # Extract parameter info to check if we have numeric placeholders
-                validator = self.statement_config.parameter_validator
-                param_info = validator.extract_parameters(initial_sql_for_context)
-
-                # Check if SQL has numeric placeholders ($1, $2, etc.)
-                has_numeric_placeholders = any(p.style == ParameterStyle.NUMERIC for p in param_info)
+                # Check if we have numeric placeholders for Oracle-style conversion
+                has_numeric_placeholders = (
+                    any(p.style == ParameterStyle.NUMERIC for p in param_info) if param_info else False
+                )
 
                 if has_numeric_placeholders:
-                    # For numeric placeholders, map parameters by their numeric value
-                    # $1 -> key "1", $2 -> key "2", etc.
-
-                    # CRITICAL FIX: Handle tuple parameters correctly for numeric placeholders
+                    # Handle Oracle-style numeric parameters
                     if len(final_params) == 1 and isinstance(final_params[0], tuple):
                         tuple_param = final_params[0]
                         if len(param_info) == 1 and len(tuple_param) == 1:
-                            # Single placeholder, single-element tuple -> extract the element
                             param_dict["1"] = tuple_param[0]
                         elif len(param_info) > 1 and len(tuple_param) == len(param_info):
-                            # Multiple placeholders, tuple with matching elements -> expand
                             for i, param in enumerate(tuple_param):
                                 param_dict[str(i + 1)] = param
                         else:
-                            # Keep tuple as-is for other cases
                             param_dict["1"] = tuple_param
                     else:
-                        # CRITICAL FIX: For mixed parameter styles, map parameters based on their position in SQL
-                        # Sort parameters by position to ensure correct order
+                        # Map parameters based on their position in SQL
                         sorted_params = sorted(param_info, key=lambda p: p.position)
                         for i, p_info in enumerate(sorted_params):
                             if i < len(final_params):
-                                # CRITICAL FIX: For mixed styles, use parameter name when available
-                                # Otherwise fall back to positional naming
-                                key = p_info.name if p_info.name is not None else f"param_{i}"
+                                key = p_info.name if p_info.name is not None else str(i + 1)
                                 param_dict[key] = final_params[i]
-                # For other styles, use param_0, param_1, etc.
-                # CRITICAL FIX: Handle tuple parameters correctly
-                elif len(final_params) == 1 and isinstance(final_params[0], tuple):
-                    tuple_param = final_params[0]
-                    if len(param_info) == 1 and len(tuple_param) == 1:
-                        # Single placeholder, single-element tuple -> extract the element
-                        param_dict["param_0"] = tuple_param[0]
-                    elif len(param_info) > 1 and len(tuple_param) == len(param_info):
-                        # Multiple placeholders, tuple with matching elements -> expand
-                        for i, param in enumerate(tuple_param):
-                            param_dict[f"param_{i}"] = param
-                    else:
-                        # Keep tuple as-is for other cases
-                        param_dict["param_0"] = tuple_param
                 else:
-                    # Normal case: map each parameter to its position
+                    # Regular parameter mapping
                     for i, param in enumerate(final_params):
                         param_dict[f"param_{i}"] = param
             else:
-                param_dict["param_0"] = final_params
+                param_dict = {"param_0": final_params}
 
         context = SQLTransformContext(
             current_expression=final_expr,
@@ -727,26 +635,45 @@ class SQL:
             dialect=str(self._dialect or self.statement_config.dialect or ""),
         )
 
-        # Store additional metadata
+        self._populate_context_metadata(context, initial_sql_for_context, has_placeholders, param_info, final_params)
+        return context
+
+    # _convert_params_to_dict removed - functionality moved to ParameterConverter
+
+    # _handle_dict_params removed - functionality moved to ParameterConverter
+
+    # _handle_list_params removed - functionality moved to ParameterConverter
+
+    # _expand_tuple_param removed - functionality moved to ParameterConverter
+
+    # _handle_numeric_placeholders removed - functionality moved to ParameterConverter
+
+    # _handle_tuple_in_list removed - functionality moved to ParameterConverter
+
+    def _populate_context_metadata(
+        self,
+        context: SQLTransformContext,
+        initial_sql_for_context: str,
+        has_placeholders: bool,
+        param_info: Optional[list[Any]],
+        final_params: Any,
+    ) -> None:
+        """Populate context metadata."""
         context.metadata["initial_sql"] = initial_sql_for_context
         context.metadata["has_placeholders"] = has_placeholders
 
         if self._placeholder_mapping:
             context.metadata["placeholder_map"] = self._placeholder_mapping
 
-        # Store parameter conversion state
         if self._parameter_conversion_state:
             context.metadata["parameter_conversion"] = self._parameter_conversion_state
 
-        # Extract and store parameter info (reuse if already extracted above)
+        # Store parameter info
         if final_params and isinstance(final_params, (list, tuple)) and param_info is not None:
-            # We already extracted it above
             context.metadata["parameter_info"] = param_info
         else:
             validator = self.statement_config.parameter_validator
             context.metadata["parameter_info"] = validator.extract_parameters(initial_sql_for_context)
-
-        return context
 
     def _run_pipeline(self, context: SQLTransformContext) -> SQLTransformContext:
         """Run the SQL processing pipeline."""
@@ -787,74 +714,51 @@ class SQL:
                 else ""
             )
             if self._placeholder_mapping and self._original_sql:
-                processed_sql, context = self._denormalize_sql(processed_sql, context)
+                processed_sql, context = self._transform_parameter_style(processed_sql, context)
 
         merged_params = self._merge_pipeline_parameters(context, final_params)
 
         return processed_sql, merged_params
 
-    def _denormalize_sql(self, processed_sql: str, context: SQLTransformContext) -> tuple[str, SQLTransformContext]:
-        """Denormalize SQL back to original parameter style."""
+    def _transform_parameter_style(
+        self, processed_sql: str, context: SQLTransformContext
+    ) -> tuple[str, SQLTransformContext]:
+        """Denormalize SQL back to original parameter style using ParameterConverter."""
+        if not self._original_sql:
+            return processed_sql, context
 
-        original_sql = self._original_sql
         # Extract param info from the ORIGINAL SQL to get the target styles
-        original_param_info = self.statement_config.parameter_validator.extract_parameters(original_sql)
+        original_param_info = self.statement_config.parameter_validator.extract_parameters(self._original_sql)
         target_styles = {p.style for p in original_param_info}
 
-        # Extract param info from the PROCESSED SQL for correct positions
-        processed_param_info = self.statement_config.parameter_validator.extract_parameters(processed_sql)
-
         if ParameterStyle.POSITIONAL_PYFORMAT in target_styles:
-            processed_sql = self.statement_config.parameter_converter._convert_sql_placeholders(
-                processed_sql, ParameterStyle.POSITIONAL_PYFORMAT, processed_param_info
+            processed_sql = self.statement_config.parameter_converter.convert_placeholders(
+                processed_sql, ParameterStyle.POSITIONAL_PYFORMAT
             )
         elif ParameterStyle.NAMED_PYFORMAT in target_styles:
-            processed_sql = self.statement_config.parameter_converter._convert_sql_placeholders(
-                processed_sql, ParameterStyle.NAMED_PYFORMAT, processed_param_info
+            processed_sql = self.statement_config.parameter_converter.convert_placeholders(
+                processed_sql, ParameterStyle.NAMED_PYFORMAT
             )
             if self._placeholder_mapping and context.parameters and is_dict(context.parameters):
-                # For mypyc: create new variable after type narrowing
-                dict_params = context.parameters  # Type narrowed to dict[str, Any]
-                context.parameters = self._denormalize_pyformat_params(dict_params)
-        elif ParameterStyle.POSITIONAL_COLON in target_styles:
-            # Already extracted processed_param_info above
-            has_param_placeholders = any(p.name and p.name.startswith(PARAM_PREFIX) for p in processed_param_info)
-
-            if not has_param_placeholders:
-                processed_sql = self.statement_config.parameter_converter._convert_sql_placeholders(
-                    processed_sql, ParameterStyle.POSITIONAL_COLON, processed_param_info
+                # Convert parameters using ParameterConverter
+                context.parameters = self.statement_config.parameter_converter._convert_to_named_pyformat_format(
+                    context.parameters, original_param_info
                 )
+        elif ParameterStyle.POSITIONAL_COLON in target_styles:
+            processed_sql = self.statement_config.parameter_converter.convert_placeholders(
+                processed_sql, ParameterStyle.POSITIONAL_COLON
+            )
             if self._placeholder_mapping and context.parameters and is_dict(context.parameters):
-                # For mypyc: create new variable after type narrowing
-                dict_params = context.parameters  # Type narrowed to dict[str, Any]
-                context.parameters = self._denormalize_colon_params(dict_params)
+                # Convert parameters using ParameterConverter
+                context.parameters = self.statement_config.parameter_converter._convert_to_positional_colon_format(
+                    context.parameters, original_param_info
+                )
 
         return processed_sql, context
 
-    def _denormalize_colon_params(self, params: "dict[str, Any]") -> "dict[str, Any]":
-        """Denormalize colon-style parameters back to numeric format."""
-        # For positional colon style, all params should have numeric keys
-        # Just return the params as-is if they already have the right format
-        if all(key.isdigit() for key in params):
-            return params
+    # _handle_colon_params removed - functionality moved to ParameterConverter
 
-        # For positional colon, we need ALL parameters in the final result
-        # This includes both user parameters and extracted literals
-        # We should NOT filter out extracted parameters (param_0, param_1, etc)
-        # because they need to be included in the final parameter conversion
-        return params
-
-    def _denormalize_pyformat_params(self, params: "dict[str, Any]") -> "dict[str, Any]":
-        """Denormalize pyformat parameters back to their original names."""
-        deconverted_params = {}
-        for placeholder_key, original_name in self._placeholder_mapping.items():
-            if placeholder_key in params:
-                # For pyformat, the original_name is the actual parameter name (e.g., 'max_value')
-                deconverted_params[str(original_name)] = params[placeholder_key]
-        # Include any parameters that weren't converted
-        non_converted_params = {key: value for key, value in params.items() if not key.startswith(PARAM_PREFIX)}
-        deconverted_params.update(non_converted_params)
-        return deconverted_params
+    # _handle_pyformat_params removed - functionality moved to ParameterConverter
 
     def _merge_pipeline_parameters(self, context: SQLTransformContext, final_params: Any) -> Any:
         """Merge parameters from the pipeline processing."""
@@ -1561,6 +1465,7 @@ class SQL:
 
     def compile(self, placeholder_style: "Optional[str]" = None) -> "tuple[str, Any]":
         """Compile to SQL and parameters with driver awareness."""
+        # Handle special cases first
         if self._is_script:
             return self.sql, None
 
@@ -1568,57 +1473,116 @@ class SQL:
             return self._compile_execute_many(placeholder_style)
 
         if not self.statement_config.enable_parsing and self._raw_sql:
-            return self._raw_sql, self._raw_parameters
+            return self._raw_sql, self._original_parameters
 
-        self._ensure_processed()
+        # Get processed state
+        sql, params = self._get_processed_sql_and_params()
 
-        if self._processed_state is Empty:
-            msg = "Failed to process SQL statement"
-            raise RuntimeError(msg)
-        sql = self._processed_state.processed_sql
-        params = self._processed_state.merged_parameters
-
+        # Apply parameter transformations
         if params is not None and self._processing_context:
-            parameter_mapping = self._processing_context.metadata.get("parameter_position_mapping")
-            if parameter_mapping:
-                params = self._reorder_parameters(params, parameter_mapping)
+            sql, params = self._apply_parameter_transformations(sql, params, placeholder_style)
 
-            # Handle conversion if needed
-            if self._processing_context.metadata.get("parameter_conversion"):
-                norm_state = self._processing_context.metadata["parameter_conversion"]
-
-                # If original SQL had incompatible styles, denormalize back to the original style
-                # when no specific style requested OR when the requested style matches the original
-                if norm_state.was_transformed and norm_state.original_styles:
-                    original_style = norm_state.original_styles[0]
-                    should_denormalize = placeholder_style is None or (
-                        placeholder_style and ParameterStyle(placeholder_style) == original_style
-                    )
-
-                    if should_denormalize and original_style in SQLGLOT_INCOMPATIBLE_STYLES:
-                        # Denormalize SQL back to original style
-                        sql = self.statement_config.parameter_converter._convert_sql_placeholders(
-                            sql, original_style, norm_state.original_param_info
-                        )
-                        # Also deConvert parameters if needed
-                        if original_style == ParameterStyle.POSITIONAL_COLON and is_dict(params):
-                            params = self._denormalize_colon_params(params)
-
+        # Unwrap typed parameters
         params = self._unwrap_typed_parameters(params)
 
-        if placeholder_style is None:
-            return sql, params
-
+        # Apply placeholder style if requested
         if placeholder_style:
             sql, params = self._apply_placeholder_style(sql, params, placeholder_style)
 
         return sql, params
 
-    def _apply_placeholder_style(self, sql: "str", params: Any, placeholder_style: "str") -> "tuple[str, Any]":
-        """Apply placeholder style conversion to SQL and parameters."""
-        # Just use the params passed in - they've already been processed
-        sql, params = self._convert_placeholder_style(sql, params, placeholder_style)
+    def _get_processed_sql_and_params(self) -> "tuple[str, Any]":
+        """Get processed SQL and parameters from the processed state."""
+        self._ensure_processed()
+
+        if self._processed_state is Empty:
+            msg = "Failed to process SQL statement"
+            raise RuntimeError(msg)
+
+        return self._processed_state.processed_sql, self._processed_state.merged_parameters
+
+    def _apply_parameter_transformations(
+        self, sql: str, params: Any, placeholder_style: "Optional[str]"
+    ) -> "tuple[str, Any]":
+        """Apply parameter reordering and conversion transformations."""
+        if self._processing_context is None:
+            return sql, params
+
+        # Apply parameter reordering if needed
+        parameter_mapping = self._processing_context.metadata.get("parameter_position_mapping")
+        if parameter_mapping:
+            params = self._reorder_parameters(params, parameter_mapping)
+
+        # Apply parameter conversion if needed
+        conversion_state = self._processing_context.metadata.get("parameter_conversion")
+        if conversion_state:
+            sql, params = self._apply_parameter_conversion(sql, params, conversion_state, placeholder_style)
+
         return sql, params
+
+    def _apply_parameter_conversion(
+        self, sql: str, params: Any, norm_state: Any, placeholder_style: "Optional[str]"
+    ) -> "tuple[str, Any]":
+        """Apply parameter conversion based on normalization state."""
+        # If original SQL had incompatible styles, denormalize back to the original style
+        # when no specific style requested OR when the requested style matches the original
+        if not (norm_state.was_transformed and norm_state.original_styles):
+            return sql, params
+
+        original_style = norm_state.original_styles[0]
+        should_denormalize = placeholder_style is None or (
+            placeholder_style and ParameterStyle(placeholder_style) == original_style
+        )
+
+        if should_denormalize and original_style in SQLGLOT_INCOMPATIBLE_STYLES:
+            # Denormalize SQL back to original style
+            sql = self.statement_config.parameter_converter._convert_sql_placeholders(
+                sql, original_style, norm_state.original_param_info
+            )
+
+            # Convert parameters to match original style
+            if original_style == ParameterStyle.POSITIONAL_COLON and is_dict(params):
+                params = self._convert_colon_parameters(params, norm_state)
+
+        return sql, params
+
+    def _convert_colon_parameters(self, params: dict[str, Any], norm_state: Any) -> dict[str, Any]:
+        """Convert parameters for Oracle POSITIONAL_COLON style."""
+        # Map the parameter keys back to original parameter names
+        # For Oracle numeric parameters, map by parameter name, not appearance order
+        original_params = {}
+
+        # Check if parameters are already in original format (no normalization happened)
+        already_original = all(p.name in params for p in norm_state.original_param_info if p.name)
+
+        if not already_original:
+            # Check if all parameters have numeric names (Oracle style)
+            all_numeric = all(p.name and p.name.isdigit() for p in norm_state.original_param_info)
+
+            if all_numeric:
+                # Oracle numeric parameters: map by parameter name
+                for original_param in norm_state.original_param_info:
+                    param_num = int(original_param.name)
+                    # Handle zero-based (:0) and one-based (:1) parameters
+                    normalized_key = "param_0" if param_num == 0 else f"param_{param_num - 1}"
+                    if normalized_key in params:
+                        original_params[original_param.name] = params[normalized_key]
+            else:
+                # Regular parameters: map by appearance order
+                for i, original_param in enumerate(norm_state.original_param_info):
+                    normalized_key = f"param_{i}"
+                    if normalized_key in params:
+                        original_params[original_param.name] = params[normalized_key]
+
+            return original_params
+
+        return params
+
+    def _apply_placeholder_style(self, sql: "str", params: Any, placeholder_style: "str") -> "tuple[str, Any]":
+        """Apply placeholder style conversion using ParameterConverter."""
+        target_style = ParameterStyle(placeholder_style) if isinstance(placeholder_style, str) else placeholder_style
+        converter = self.statement_config.parameter_converter
+        return converter.convert_placeholder_style(sql, params, target_style, is_many=self._is_many)
 
     @staticmethod
     def _unwrap_typed_parameters(params: Any) -> Any:
@@ -1680,16 +1644,16 @@ class SQL:
             return tuple(reordered_list) if isinstance(params, tuple) else reordered_list
 
         if is_dict(params):
-            if all(key.startswith(PARAM_PREFIX) and key[len(PARAM_PREFIX) :].isdigit() for key in params):
+            if all(key.startswith("param_") and key[6:].isdigit() for key in params):
                 reordered_dict: dict[str, Any] = {}
                 for new_pos, old_pos in mapping.items():
-                    old_key = f"{PARAM_PREFIX}{old_pos}"
-                    new_key = f"{PARAM_PREFIX}{new_pos}"
+                    old_key = f"param_{old_pos}"
+                    new_key = f"param_{new_pos}"
                     if old_key in params:
                         reordered_dict[new_key] = params[old_key]
 
                 for key, value in params.items():
-                    if key not in reordered_dict and key.startswith(PARAM_PREFIX):
+                    if key not in reordered_dict and key.startswith("param_"):
                         idx = int(key[6:])
                         if idx not in mapping:
                             reordered_dict[key] = value
@@ -1699,606 +1663,10 @@ class SQL:
         return params
 
     def _convert_placeholder_style(self, sql: str, params: Any, placeholder_style: str) -> tuple[str, Any]:
-        """Convert SQL and parameters to the requested placeholder style.
-
-        Args:
-            sql: The SQL string to convert
-            params: The parameters to convert
-            placeholder_style: Target placeholder style
-
-        Returns:
-            Tuple of (converted_sql, converted_params)
-        """
-        if self._is_many and isinstance(params, list) and params and isinstance(params[0], (list, tuple)):
-            converter = self.statement_config.parameter_converter
-            param_info = converter.validator.extract_parameters(sql)
-
-            if param_info:
-                target_style = (
-                    ParameterStyle(placeholder_style) if isinstance(placeholder_style, str) else placeholder_style
-                )
-                sql = self._replace_placeholders_in_sql(sql, param_info, target_style)
-
-            return sql, params
-
-        converter = self.statement_config.parameter_converter
-
-        # For POSITIONAL_COLON style, use original parameter info if available to preserve numeric identifiers
+        """Convert SQL and parameters using ParameterConverter."""
         target_style = ParameterStyle(placeholder_style) if isinstance(placeholder_style, str) else placeholder_style
-        if (
-            target_style == ParameterStyle.POSITIONAL_COLON
-            and self._processing_context
-            and self._processing_context.metadata.get("parameter_conversion")
-            and self._processing_context.metadata["parameter_conversion"].original_param_info
-        ):
-            param_info = self._processing_context.metadata["parameter_conversion"].original_param_info
-        else:
-            param_info = converter.validator.extract_parameters(sql)
-
-        # CRITICAL FIX: For POSITIONAL_COLON, we need to ensure param_info reflects
-        # all placeholders in the current SQL, not just the original ones.
-        # This handles cases where transformers (like ParameterizeLiterals) add new placeholders.
-        if target_style == ParameterStyle.POSITIONAL_COLON and param_info:
-            # Re-extract from current SQL to get all placeholders
-            current_param_info = converter.validator.extract_parameters(sql)
-            if len(current_param_info) > len(param_info):
-                # More placeholders in current SQL means transformers added some
-                # Use the current info to ensure all placeholders get parameters
-                param_info = current_param_info
-
-        if not param_info:
-            return sql, params
-
-        if target_style == ParameterStyle.STATIC:
-            return self._embed_static_parameters(sql, params, param_info)
-
-        if param_info and all(p.style == target_style for p in param_info):
-            converted_params = self._convert_parameters_format(params, param_info, target_style)
-            return sql, converted_params
-
-        sql = self._replace_placeholders_in_sql(sql, param_info, target_style)
-
-        params = self._convert_parameters_format(params, param_info, target_style)
-
-        return sql, params
-
-    def _embed_static_parameters(self, sql: str, params: Any, param_info: list[Any]) -> tuple[str, Any]:
-        """Embed parameter values directly into SQL for STATIC style.
-
-        This is used for scripts and other cases where parameters need to be
-        embedded directly in the SQL string rather than passed separately.
-
-        Args:
-            sql: The SQL string with placeholders
-            params: The parameter values
-            param_info: List of parameter information from extraction
-
-        Returns:
-            Tuple of (sql_with_embedded_values, None)
-        """
-        param_list: list[Any] = []
-        if is_dict(params):
-            for p in param_info:
-                if p.name and p.name in params:
-                    param_list.append(params[p.name])
-                elif f"{PARAM_PREFIX}{p.ordinal}" in params:
-                    param_list.append(params[f"{PARAM_PREFIX}{p.ordinal}"])
-                elif f"arg_{p.ordinal}" in params:
-                    param_list.append(params[f"arg_{p.ordinal}"])
-                else:
-                    param_list.append(params.get(str(p.ordinal), None))
-        elif isinstance(params, (list, tuple)):
-            param_list = list(params)
-        elif params is not None:
-            param_list = [params]
-
-        sorted_params = sorted(param_info, key=lambda p: p.position, reverse=True)
-
-        for p in sorted_params:
-            if p.ordinal < len(param_list):
-                value = param_list[p.ordinal]
-
-                if has_parameter_value(value):
-                    value = value.value
-
-                if value is None:
-                    literal_str = "NULL"
-                elif isinstance(value, bool):
-                    literal_str = "TRUE" if value else "FALSE"
-                elif isinstance(value, str):
-                    literal_expr = sqlglot.exp.Literal.string(value)
-                    literal_str = literal_expr.sql(dialect=self._dialect)
-                elif isinstance(value, (int, float)):
-                    literal_expr = sqlglot.exp.Literal.number(value)
-                    literal_str = literal_expr.sql(dialect=self._dialect)
-                else:
-                    literal_expr = sqlglot.exp.Literal.string(str(value))
-                    literal_str = literal_expr.sql(dialect=self._dialect)
-
-                start = p.position
-                end = start + len(p.placeholder_text)
-                sql = sql[:start] + literal_str + sql[end:]
-
-        return sql, None
-
-    def _replace_placeholders_in_sql(self, sql: str, param_info: list[Any], target_style: ParameterStyle) -> str:
-        """Replace placeholders in SQL string with target style placeholders."""
-
-        """Replace placeholders in SQL string with target style placeholders.
-
-        Args:
-            sql: The SQL string
-            param_info: List of parameter information
-            target_style: Target parameter style
-
-        Returns:
-            SQL string with replaced placeholders
-        """
-        sorted_params = sorted(param_info, key=lambda p: p.position, reverse=True)
-
-        for p in sorted_params:
-            new_placeholder = self._generate_placeholder(p, target_style)
-            start = p.position
-            end = start + len(p.placeholder_text)
-            sql = sql[:start] + new_placeholder + sql[end:]
-
-        # For pyformat styles, escape literal % characters after placeholder replacement
-        # Skip escaping entirely if this is execute_many compilation or denormalization
-        skip_escaping = (
-            # Check if we're in execute_many context
-            (hasattr(self, "_is_many") and self._is_many)
-            or
-            # Check if we're converting from named colon (denormalization)
-            (
-                param_info
-                and len(param_info) > 0
-                and param_info[0].style == ParameterStyle.NAMED_COLON
-                and target_style == ParameterStyle.POSITIONAL_PYFORMAT
-            )
-        )
-
-        # DEBUG: Print escaping decision
-        if param_info:
-            pass
-
-        if target_style in {ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT} and not skip_escaping:
-            # We need to escape % that are not part of our placeholders
-            # Since we just replaced placeholders, we know %s and %(name)s are our placeholders
-            # So we escape any % that is not followed by 's' or '('
-            result = []
-            i = 0
-            while i < len(sql):
-                if sql[i] == "%":
-                    # Check if this is a placeholder we just added
-                    if i + 1 < len(sql) and (sql[i + 1] == "s" or sql[i + 1] == "("):
-                        # This is a placeholder, don't escape
-                        result.append(sql[i])
-                    else:
-                        # This is a literal %, escape it
-                        result.append("%%")
-                else:
-                    result.append(sql[i])
-                i += 1
-            sql = "".join(result)
-
-        return sql
-
-    @staticmethod
-    def _generate_placeholder(param: Any, target_style: ParameterStyle) -> str:
-        """Generate a placeholder string for the given parameter style.
-
-        Args:
-            param: Parameter information object
-            target_style: Target parameter style
-
-        Returns:
-            Placeholder string
-        """
-        if target_style in {ParameterStyle.STATIC, ParameterStyle.QMARK}:
-            return "?"
-        if target_style == ParameterStyle.NUMERIC:
-            return f"${param.ordinal + 1}"
-        if target_style == ParameterStyle.NAMED_COLON:
-            if param.name and not param.name.isdigit():
-                return f":{param.name}"
-            return f":param_{param.ordinal}"
-        if target_style == ParameterStyle.NAMED_AT:
-            return f"@{param.name or f'param_{param.ordinal}'}"
-        if target_style == ParameterStyle.POSITIONAL_COLON:
-            # For Oracle positional colon, preserve the original numeric identifier if it was already :N style
-            style, name = get_param_style_and_name(param)
-            if style == ParameterStyle.POSITIONAL_COLON and name and name.isdigit():
-                return f":{name}"
-            return f":{param.ordinal + 1}"
-        if target_style == ParameterStyle.POSITIONAL_PYFORMAT:
-            return "%s"
-        if target_style == ParameterStyle.NAMED_PYFORMAT:
-            return f"%({param.name or f'param_{param.ordinal}'})s"
-        return str(param.placeholder_text)
-
-    def _convert_parameters_format(self, params: Any, param_info: list[Any], target_style: ParameterStyle) -> Any:
-        """Convert parameters to the appropriate format for the target style.
-
-        Args:
-            params: Original parameters
-            param_info: List of parameter information
-            target_style: Target parameter style
-
-        Returns:
-            Converted parameters
-        """
-        if target_style == ParameterStyle.POSITIONAL_COLON:
-            return self._convert_to_positional_colon_format(params, param_info)
-        if target_style in {ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_PYFORMAT}:
-            return self._convert_to_positional_format(params, param_info)
-        if target_style == ParameterStyle.NAMED_COLON:
-            return self._convert_to_named_colon_format(params, param_info)
-        if target_style == ParameterStyle.NAMED_PYFORMAT:
-            return self._convert_to_named_pyformat_format(params, param_info)
-        return params
-
-    def _convert_list_to_colon_dict(
-        self, params: "Union[list[Any], tuple[Any, ...]]", param_info: "list[Any]"
-    ) -> "dict[str, Any]":
-        """Convert list/tuple parameters to colon-style dict format."""
-        result_dict: dict[str, Any] = {}
-
-        if param_info:
-            # Check if we have mixed parameter styles
-            has_numeric = any(p.style == ParameterStyle.NUMERIC for p in param_info)
-            has_other_styles = any(p.style != ParameterStyle.NUMERIC for p in param_info)
-
-            if has_numeric and has_other_styles:
-                # Mixed parameter styles: assign parameters in order of appearance in SQL
-                sorted_params = sorted(param_info, key=lambda p: p.position)
-                for i, _ in enumerate(sorted_params):
-                    if i < len(params):
-                        # Use sequential numbering for all parameters in mixed mode
-                        # This ensures first appearance gets "1", second gets "2", etc.
-                        result_dict[str(i + 1)] = params[i]
-                return result_dict
-
-            all_numeric = all(p.name and p.name.isdigit() for p in param_info)
-            if all_numeric:
-                for i, value in enumerate(params):
-                    result_dict[str(i + 1)] = value
-            else:
-                for i, value in enumerate(params):
-                    if i < len(param_info):
-                        param_name = param_info[i].name or str(i + 1)
-                        result_dict[param_name] = value
-                    else:
-                        result_dict[str(i + 1)] = value
-        else:
-            for i, value in enumerate(params):
-                result_dict[str(i + 1)] = value
-
-        return result_dict
-
-    def _convert_single_value_to_colon_dict(self, params: Any, param_info: "list[Any]") -> "dict[str, Any]":
-        """Convert single value parameter to colon-style dict format."""
-        result_dict: dict[str, Any] = {}
-        if param_info and param_info[0].name and param_info[0].name.isdigit():
-            result_dict[param_info[0].name] = params
-        else:
-            result_dict["1"] = params
-        return result_dict
-
-    def _process_mixed_colon_params(self, params: "dict[str, Any]", param_info: "list[Any]") -> "dict[str, Any]":
-        """Process mixed colon-style numeric and converted parameters."""
-        result_dict: dict[str, Any] = {}
-
-        # When we have mixed parameters (extracted literals + user oracle params),
-        # we need to be careful about the ordering. The extracted literals should
-        # fill positions based on where they appear in the SQL, not based on
-        # matching parameter names.
-
-        # Separate extracted parameters and user oracle parameters
-        extracted_params = []
-        user_oracle_params = {}
-        extracted_keys_sorted = []
-
-        for key, value in params.items():
-            if has_parameter_value(value):
-                extracted_params.append((key, value))
-            elif key.isdigit():
-                user_oracle_params[key] = value
-            elif key.startswith("param_") and key[6:].isdigit():
-                param_idx = int(key[6:])
-                oracle_key = str(param_idx + 1)
-                if oracle_key not in user_oracle_params:
-                    extracted_keys_sorted.append((param_idx, key, value))
-            else:
-                extracted_params.append((key, value))
-
-        extracted_keys_sorted.sort(key=operator.itemgetter(0))
-        for _, key, value in extracted_keys_sorted:
-            extracted_params.append((key, value))
-
-        # Build lists of parameter values in order
-        extracted_values = []
-        for _, value in extracted_params:
-            if has_parameter_value(value):
-                extracted_values.append(value.value)
-            else:
-                extracted_values.append(value)
-
-        user_values = [user_oracle_params[key] for key in sorted(user_oracle_params.keys(), key=int)]
-
-        # Now assign parameters based on position
-        # Extracted parameters go first (they were literals in original positions)
-        # User parameters follow
-        all_values = extracted_values + user_values
-
-        for i, p in enumerate(sorted(param_info, key=lambda x: x.ordinal)):
-            oracle_key = str(p.ordinal + 1)
-            if i < len(all_values):
-                result_dict[oracle_key] = all_values[i]
-
-        return result_dict
-
-    def _convert_to_positional_colon_format(self, params: Any, param_info: list[Any]) -> Any:
-        """Convert to dict format for positional colon style.
-
-        Positional colon style uses :1, :2, etc. placeholders and expects
-        parameters as a dict with string keys "1", "2", etc.
-
-        For execute_many operations, returns a list of parameter sets.
-
-        Args:
-            params: Original parameters
-            param_info: List of parameter information
-
-        Returns:
-            Dict of parameters with string keys "1", "2", etc., or list for execute_many
-        """
-        if self._is_many and isinstance(params, list) and params and isinstance(params[0], (list, tuple)):
-            return params
-
-        if isinstance(params, (list, tuple)):
-            return self._convert_list_to_colon_dict(params, param_info)
-
-        if not is_dict(params) and param_info:
-            return self._convert_single_value_to_colon_dict(params, param_info)
-
-        if is_dict(params):
-            if all(key.isdigit() for key in params):
-                return params
-
-            if all(key.startswith("param_") for key in params):
-                param_result_dict: dict[str, Any] = {}
-                for p in sorted(param_info, key=lambda x: x.ordinal):
-                    # Use the parameter's ordinal to find the converted key
-                    converted_key = f"param_{p.ordinal}"
-                    if converted_key in params:
-                        if p.name and p.name.isdigit():
-                            # For Oracle numeric parameters, preserve the original number
-                            param_result_dict[p.name] = params[converted_key]
-                        else:
-                            # For other cases, use sequential numbering
-                            param_result_dict[str(p.ordinal + 1)] = params[converted_key]
-                return param_result_dict
-
-            has_oracle_numeric = any(key.isdigit() for key in params)
-            has_param_converted = any(key.startswith("param_") for key in params)
-            has_typed_params = any(has_parameter_value(v) for v in params.values())
-
-            if (has_oracle_numeric and has_param_converted) or has_typed_params:
-                return self._process_mixed_colon_params(params, param_info)
-
-            result_dict: dict[str, Any] = {}
-
-            if param_info:
-                # Process all parameters in order of their ordinals
-                for p in sorted(param_info, key=lambda x: x.ordinal):
-                    oracle_key = str(p.ordinal + 1)
-                    value = None
-
-                    # Try different ways to find the parameter value
-                    if p.name and (
-                        p.name in params
-                        or (p.name.isdigit() and p.name in params)
-                        or (p.name.startswith("param_") and p.name in params)
-                    ):
-                        value = params[p.name]
-
-                    # If not found by name, try by ordinal-based keys
-                    if value is None:
-                        # Try param_N format (common for pipeline parameters)
-                        param_key = f"param_{p.ordinal}"
-                        if param_key in params:
-                            value = params[param_key]
-                        # Try arg_N format
-                        elif f"arg_{p.ordinal}" in params:
-                            value = params[f"arg_{p.ordinal}"]
-                        # For positional colon, also check if there's a numeric key
-                        # that matches the ordinal position
-                        elif str(p.ordinal + 1) in params:
-                            value = params[str(p.ordinal + 1)]
-
-                    # Unwrap TypedParameter if needed
-                    if value is not None:
-                        if has_parameter_value(value):
-                            value = value.value
-                        result_dict[oracle_key] = value
-
-            return result_dict
-
-        return params
-
-    @staticmethod
-    def _convert_to_positional_format(params: Any, param_info: list[Any]) -> Any:
-        """Convert to list format for positional parameter styles.
-
-        Args:
-            params: Original parameters
-            param_info: List of parameter information
-
-        Returns:
-            List of parameters
-        """
-        if is_dict(params):
-            return SQL._convert_dict_to_positional(params, param_info)
-        if isinstance(params, (list, tuple)):
-            return SQL._convert_sequence_to_positional(params, param_info)
-        return params
-
-    @staticmethod
-    def _convert_dict_to_positional(params: dict[str, Any], param_info: list[Any]) -> list[Any]:
-        """Convert dictionary parameters to positional format."""
-        if all(k.isdigit() for k in params):
-            return SQL._convert_numeric_dict_to_positional(params, param_info)
-
-        return SQL._convert_named_dict_to_positional(params, param_info)
-
-    @staticmethod
-    def _convert_numeric_dict_to_positional(params: dict[str, Any], param_info: list[Any]) -> list[Any]:
-        """Convert numeric dictionary keys to positional format."""
-        result_list: list[Any] = []
-        sorted_params = sorted(param_info, key=lambda p: p.position)
-
-        for i, _ in enumerate(sorted_params):
-            key = str(i + 1)
-            if key in params:
-                val = params[key]
-                result_list.append(val.value if has_parameter_value(val) else val)
-            else:
-                result_list.append(None)
-        return result_list
-
-    @staticmethod
-    def _convert_named_dict_to_positional(params: dict[str, Any], param_info: list[Any]) -> list[Any]:
-        """Convert named dictionary parameters to positional format."""
-        result_list: list[Any] = []
-        param_values_by_ordinal: dict[int, Any] = {}
-
-        # Map named parameters
-        for p in param_info:
-            if p.name and p.name in params:
-                param_values_by_ordinal[p.ordinal] = params[p.name]
-
-        # Map unnamed parameters with arg_/param_ prefixes
-        for p in param_info:
-            if p.name is None and p.ordinal not in param_values_by_ordinal:
-                arg_key = f"arg_{p.ordinal}"
-                param_key = f"param_{p.ordinal}"
-                if arg_key in params:
-                    param_values_by_ordinal[p.ordinal] = params[arg_key]
-                elif param_key in params:
-                    param_values_by_ordinal[p.ordinal] = params[param_key]
-
-        # Handle remaining parameters
-        remaining_params = {
-            k: v
-            for k, v in params.items()
-            if k not in {p.name for p in param_info if p.name} and not k.startswith(("arg_", "param_"))
-        }
-
-        unmatched_ordinals = [p.ordinal for p in param_info if p.ordinal not in param_values_by_ordinal]
-        for ordinal, (_, value) in zip(unmatched_ordinals, remaining_params.items()):
-            param_values_by_ordinal[ordinal] = value
-
-        # Build result list
-        for p in param_info:
-            val = param_values_by_ordinal.get(p.ordinal)
-            if val is not None:
-                result_list.append(val.value if has_parameter_value(val) else val)
-            else:
-                result_list.append(None)
-
-        return result_list
-
-    @staticmethod
-    def _convert_sequence_to_positional(params: "list[Any] | tuple[Any, ...]", param_info: list[Any]) -> Any:
-        """Convert sequence parameters to positional format."""
-        # Special case: if params is empty, preserve it (don't create None values)
-        if not params:
-            return params
-
-        # Handle mixed parameter styles correctly
-        if param_info and any(p.style == ParameterStyle.NUMERIC for p in param_info):
-            return SQL._handle_mixed_style_conversion(params, param_info)
-
-        # Standard conversion for non-mixed styles
-        result_list: list[Any] = [param.value if has_parameter_value(param) else param for param in params]
-        return result_list
-
-    @staticmethod
-    def _handle_mixed_style_conversion(params: "list[Any] | tuple[Any, ...]", param_info: list[Any]) -> list[Any]:
-        """Handle mixed parameter style conversion."""
-        sorted_params = sorted(param_info, key=lambda p: p.position)
-        param_values_by_final_position = {}
-
-        # Assign parameters in order of appearance in SQL to sequential final positions
-        for final_pos, _ in enumerate(sorted_params):
-            if final_pos < len(params):
-                val = params[final_pos]
-                param_values_by_final_position[final_pos] = val.value if has_parameter_value(val) else val
-
-        # Build result list in final positional order
-        result_list: list[Any] = [param_values_by_final_position.get(i) for i in range(len(sorted_params))]
-
-        return result_list
-
-    @staticmethod
-    def _convert_to_named_colon_format(params: Any, param_info: list[Any]) -> Any:
-        """Convert to dict format for named colon style.
-
-        Args:
-            params: Original parameters
-            param_info: List of parameter information
-
-        Returns:
-            Dict of parameters with generated names
-        """
-        result_dict: dict[str, Any] = {}
-        if is_dict(params):
-            if all(p.name in params for p in param_info if p.name):
-                return params
-            for p in param_info:
-                if p.name and p.name in params:
-                    result_dict[p.name] = params[p.name]
-                elif f"param_{p.ordinal}" in params:
-                    result_dict[p.name or f"param_{p.ordinal}"] = params[f"param_{p.ordinal}"]
-            return result_dict
-        if isinstance(params, (list, tuple)):
-            # Sort param_info by position (order in SQL) to ensure correct parameter mapping
-            # This is critical: params list should be ordered by SQL appearance
-            sorted_param_info = sorted(param_info, key=lambda p: getattr(p, "position", getattr(p, "ordinal", 0)))
-
-            for i, value in enumerate(params):
-                if has_parameter_value(value):
-                    value = value.value
-
-                if i < len(sorted_param_info):
-                    p = sorted_param_info[i]
-                    param_name = p.name or f"param_{getattr(p, 'ordinal', i)}"
-                    result_dict[param_name] = value
-                else:
-                    param_name = f"param_{i}"
-                    result_dict[param_name] = value
-            return result_dict
-        return params
-
-    @staticmethod
-    def _convert_to_named_pyformat_format(params: Any, param_info: list[Any]) -> Any:
-        """Convert to dict format for named pyformat style.
-
-        Args:
-            params: Original parameters
-            param_info: List of parameter information
-
-        Returns:
-            Dict of parameters with names
-        """
-        if isinstance(params, (list, tuple)):
-            result_dict: dict[str, Any] = {}
-            for i, p in enumerate(param_info):
-                if i < len(params):
-                    param_name = p.name or f"param_{i}"
-                    result_dict[param_name] = params[i]
-            return result_dict
-        return params
+        converter = self.statement_config.parameter_converter
+        return converter.convert_placeholder_style(sql, params, target_style, is_many=self._is_many)
 
     @property
     def validation_errors(self) -> list[Any]:
@@ -2321,10 +1689,6 @@ class SQL:
         """Check if statement is safe."""
         return not self.has_errors
 
-    def validate(self) -> list[Any]:
-        """Validate the SQL statement and return validation errors."""
-        return self.validation_errors
-
     @property
     def parameter_info(self) -> list[Any]:
         """Get parameter information from the SQL statement.
@@ -2343,26 +1707,11 @@ class SQL:
         return []
 
     @property
-    def _raw_parameters(self) -> Any:
-        """Get raw parameters for compatibility."""
-        return self._original_parameters
-
-    @property
     def param_list(self) -> "Optional[list[Any]]":
         """Get parameter list for execute_many operations."""
         if self._is_many and self._original_parameters is not None:
             return self._original_parameters  # type: ignore[no-any-return]
         return None
-
-    @property
-    def _sql(self) -> str:
-        """Get SQL string for compatibility."""
-        return self.sql
-
-    @property
-    def _expression(self) -> "Optional[exp.Expression]":
-        """Get expression for compatibility."""
-        return self.expression
 
     @property
     def statement(self) -> exp.Expression:

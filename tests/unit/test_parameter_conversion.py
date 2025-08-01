@@ -72,9 +72,11 @@ def test_parameter_conversion_only_when_necessary() -> None:
     statement_config = StatementConfig(dialect="sqlite", parameter_config=parameter_config)
     adapter = MockAdapter(statement_config)
 
-    # Mock SQL statement
+    # Mock SQL statement with proper attributes
     mock_statement = Mock(spec=SQL)
     mock_statement.compile.return_value = ("SELECT * FROM test WHERE id = ?", [1])
+    mock_statement.parameters = [1]  # Mock parameters attribute
+    mock_statement.is_many = False  # Mock is_many attribute
 
     # Test that _get_compiled_sql uses explicit placeholder_style
     sql, params = adapter._get_compiled_sql(mock_statement, statement_config)
@@ -96,9 +98,11 @@ def test_parameter_style_conversion_when_different() -> None:
     statement_config = StatementConfig(dialect="postgres", parameter_config=parameter_config)
     adapter = MockAdapter(statement_config)
 
-    # Mock SQL statement
+    # Mock SQL statement with proper attributes
     mock_statement = Mock(spec=SQL)
     mock_statement.compile.return_value = ("SELECT * FROM test WHERE id = $1", [1])
+    mock_statement.parameters = [1]  # Mock parameters attribute
+    mock_statement.is_many = False  # Mock is_many attribute
 
     # Test compilation with different execution style
     sql, params = adapter._get_compiled_sql(mock_statement, statement_config)
@@ -124,9 +128,11 @@ def test_no_parameter_conversion_without_target_style() -> None:
     statement_config = StatementConfig(dialect="sqlite", parameter_config=parameter_config)
     adapter = MockAdapter(statement_config)
 
-    # Mock SQL statement
+    # Mock SQL statement with proper attributes
     mock_statement = Mock(spec=SQL)
     mock_statement.compile.return_value = ("SELECT * FROM test WHERE id = ?", [1])
+    mock_statement.parameters = [1]  # Mock parameters attribute
+    mock_statement.is_many = False  # Mock is_many attribute
 
     # Test compilation - should use explicit style since execution_parameter_style is set
     sql, params = adapter._get_compiled_sql(mock_statement, statement_config)
@@ -204,12 +210,14 @@ def test_base_get_compiled_sql_always_explicit() -> None:
     statement_config = StatementConfig(dialect="sqlite", parameter_config=parameter_config)
     adapter = MockAdapter(statement_config)
 
-    # Mock SQL statement
+    # Mock SQL statement with proper attributes
     mock_statement = Mock(spec=SQL)
     mock_statement.compile.return_value = ("SELECT * FROM test WHERE id = ?", [1])
+    mock_statement.parameters = [1]  # Mock parameters attribute
+    mock_statement.is_many = False  # Mock is_many attribute
 
     # Call base implementation
-    sql, params = adapter._get_compiled_sql(mock_statement, statement_config)
+    _ = adapter._get_compiled_sql(mock_statement, statement_config)
 
     # Should ALWAYS call with explicit placeholder_style when target_style is set
     # This prevents SQLGlot from using its internal default which may differ
@@ -239,9 +247,11 @@ def test_parameter_style_compilation(adapter_style: ParameterStyle, expected_sty
     statement_config = StatementConfig(dialect="test", parameter_config=parameter_config)
     adapter = MockAdapter(statement_config)
 
-    # Mock SQL statement
+    # Mock SQL statement with proper attributes
     mock_statement = Mock(spec=SQL)
     mock_statement.compile.return_value = ("SELECT * FROM test", [])
+    mock_statement.parameters = []  # Mock parameters attribute (empty for this test)
+    mock_statement.is_many = False  # Mock is_many attribute
 
     # Test compilation
     adapter._get_compiled_sql(mock_statement, statement_config)

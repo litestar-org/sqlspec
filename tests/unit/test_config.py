@@ -155,14 +155,6 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
     def _get_row_count(self, cursor: "Any") -> int:
         return 0
 
-    async def _wrap_select_result(
-        self, statement: "Any", result: "Any", schema_type: "Optional[type[Any]]" = None, **kwargs: "Any"
-    ) -> "Any":
-        return Mock(rows=result.get("rows", []), row_count=result.get("rowcount", 0))
-
-    async def _wrap_execute_result(self, statement: "Any", result: "Any", **kwargs: "Any") -> "Any":
-        return Mock(affected_count=result.get("rowcount", 0), last_insert_id=None)
-
     def with_cursor(self, connection: "Any") -> "AbstractAsyncContextManager[Any]":
         """Mock async cursor context manager."""
         from collections.abc import AsyncIterator
@@ -579,14 +571,3 @@ def test_config_class_variables(config_class: "type", expected_async: bool, expe
     config = config_class()
     assert config.is_async == expected_async
     assert config.supports_connection_pooling == expected_pooling
-
-
-# Test native support flags (all default to False)
-def test_native_support_flags() -> None:
-    """Test native support flags default to False."""
-    config = MockSyncTestConfig()
-
-    assert config.supports_native_arrow_import is False
-    assert config.supports_native_arrow_export is False
-    assert config.supports_native_parquet_import is False
-    assert config.supports_native_parquet_export is False

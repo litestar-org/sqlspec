@@ -445,7 +445,7 @@ class ParameterConverter:
             new_placeholder = f":param_{i}"
             original_placeholder = param.placeholder_text
 
-            # Store mapping for deconversion
+            # Store mapping for reconversion
             placeholder_map[original_placeholder] = new_placeholder
             reverse_map[new_placeholder] = original_placeholder
 
@@ -467,3 +467,237 @@ class ParameterConverter:
         )
 
         return transformed_sql, conversion_state
+
+    def convert_placeholder_style(
+        self, sql: str, params: Any, target_style: ParameterStyle, is_many: bool = False
+    ) -> tuple[str, Any]:
+        """Convert SQL and parameters to the requested placeholder style.
+
+        This is a comprehensive parameter style conversion that handles both SQL
+        placeholder conversion and parameter data structure conversion.
+
+        Args:
+            sql: The SQL string to convert
+            params: The parameters to convert
+            target_style: Target placeholder style
+            is_many: Whether this is for execute_many operation
+
+        Returns:
+            Tuple of (converted_sql, converted_params)
+        """
+        # Handle execute_many case
+        if is_many and isinstance(params, list) and params and isinstance(params[0], (list, tuple)):
+            param_info = self.validator.extract_parameters(sql)
+            if param_info:
+                converted_sql = self.convert_placeholders(sql, target_style, param_info)
+                return converted_sql, params
+            return sql, params
+
+        # Extract parameter info for conversion
+        param_info = self.validator.extract_parameters(sql)
+        if not param_info:
+            return sql, params
+
+        # Handle static style (embed parameters directly in SQL)
+        if target_style == ParameterStyle.STATIC:
+            return self._embed_static_parameters(sql, params, param_info)
+
+        # Check if conversion is needed
+        if all(p.style == target_style for p in param_info):
+            converted_params = self._convert_parameters_format(params, param_info, target_style)
+            return sql, converted_params
+
+        # Convert SQL placeholders
+        converted_sql = self.convert_placeholders(sql, target_style, param_info)
+
+        # Convert parameter format
+        converted_params = self._convert_parameters_format(params, param_info, target_style)
+
+        return converted_sql, converted_params
+
+    def _embed_static_parameters(self, sql: str, params: Any, param_info: list[ParameterInfo]) -> tuple[str, None]:
+        """Embed parameter values directly into SQL for STATIC style.
+
+        Args:
+            sql: The SQL string with placeholders
+            params: The parameter values
+            param_info: List of parameter information from extraction
+
+        Returns:
+            Tuple of (sql_with_embedded_values, None)
+        """
+        import sqlglot
+
+        # Build parameter list from params and param_info
+        param_list: list[Any] = []
+        if isinstance(params, dict):
+            for p in param_info:
+                if p.name and p.name in params:
+                    param_list.append(params[p.name])
+                elif f"param_{p.ordinal}" in params:
+                    param_list.append(params[f"param_{p.ordinal}"])
+                elif f"arg_{p.ordinal}" in params:
+                    param_list.append(params[f"arg_{p.ordinal}"])
+                else:
+                    param_list.append(params.get(str(p.ordinal), None))
+        elif isinstance(params, (list, tuple)):
+            param_list = list(params)
+        elif params is not None:
+            param_list = [params]
+
+        # Sort parameters by position (reverse order for safe replacement)
+        sorted_params = sorted(param_info, key=lambda p: p.position, reverse=True)
+
+        for p in sorted_params:
+            if p.ordinal < len(param_list):
+                value = param_list[p.ordinal]
+
+                # Unwrap TypedParameter if needed
+                if hasattr(value, "value"):
+                    value = value.value
+
+                # Convert value to SQL literal
+                if value is None:
+                    literal_str = "NULL"
+                elif isinstance(value, bool):
+                    literal_str = "TRUE" if value else "FALSE"
+                elif isinstance(value, str):
+                    literal_expr = sqlglot.exp.Literal.string(value)
+                    literal_str = literal_expr.sql()
+                elif isinstance(value, (int, float)):
+                    literal_expr = sqlglot.exp.Literal.number(value)
+                    literal_str = literal_expr.sql()
+                else:
+                    literal_expr = sqlglot.exp.Literal.string(str(value))
+                    literal_str = literal_expr.sql()
+
+                # Replace placeholder in SQL
+                start = p.position
+                end = start + len(p.placeholder_text)
+                sql = sql[:start] + literal_str + sql[end:]
+
+        return sql, None
+
+    def _convert_parameters_format(
+        self, params: Any, param_info: list[ParameterInfo], target_style: ParameterStyle
+    ) -> Any:
+        """Convert parameters to the appropriate format for the target style.
+
+        Args:
+            params: Original parameters
+            param_info: List of parameter information
+            target_style: Target parameter style
+
+        Returns:
+            Converted parameters
+        """
+        if target_style == ParameterStyle.POSITIONAL_COLON:
+            return self._convert_to_positional_colon_format(params, param_info)
+        if target_style in {ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_PYFORMAT}:
+            return self._convert_to_positional_format(params, param_info)
+        if target_style == ParameterStyle.NAMED_COLON:
+            return self._convert_to_named_colon_format(params, param_info)
+        if target_style == ParameterStyle.NAMED_PYFORMAT:
+            return self._convert_to_named_pyformat_format(params, param_info)
+        return params
+
+    def _convert_to_positional_colon_format(self, params: Any, param_info: list[ParameterInfo]) -> dict[str, Any]:
+        """Convert parameters to positional colon format (Oracle :1, :2, :3)."""
+        if isinstance(params, dict):
+            return params  # Already in dict format
+        if isinstance(params, (list, tuple)):
+            return self._convert_list_to_colon_dict(params, param_info)
+        if params is not None:
+            return self._convert_single_value_to_colon_dict(params, param_info)
+        return {}
+
+    def _convert_to_positional_format(self, params: Any, param_info: list[ParameterInfo]) -> list[Any]:
+        """Convert parameters to positional format (?, $1, %s)."""
+        if isinstance(params, (list, tuple)):
+            return list(params)
+        if isinstance(params, dict):
+            # Convert dict to list based on parameter order
+            param_list = []
+            for p in param_info:
+                if p.name and p.name in params:
+                    param_list.append(params[p.name])
+                elif f"param_{p.ordinal}" in params:
+                    param_list.append(params[f"param_{p.ordinal}"])
+                elif str(p.ordinal + 1) in params:  # 1-based indexing
+                    param_list.append(params[str(p.ordinal + 1)])
+                else:
+                    param_list.append(None)
+            return param_list
+        if params is not None:
+            return [params]
+        return []
+
+    def _convert_to_named_colon_format(self, params: Any, param_info: list[ParameterInfo]) -> dict[str, Any]:
+        """Convert parameters to named colon format (:name, :param_0)."""
+        if isinstance(params, dict):
+            return params  # Already in dict format
+        if isinstance(params, (list, tuple)):
+            result = {}
+            for i, value in enumerate(params):
+                param_name = None
+                if i < len(param_info) and param_info[i].name:
+                    param_name = param_info[i].name
+                if param_name:
+                    result[param_name] = value
+                else:
+                    result[f"param_{i}"] = value
+            return result
+        if params is not None:
+            param_name = param_info[0].name if param_info and param_info[0].name else "param_0"
+            return {param_name: params}
+        return {}
+
+    def _convert_to_named_pyformat_format(self, params: Any, param_info: list[ParameterInfo]) -> dict[str, Any]:
+        """Convert parameters to named pyformat format (%(name)s, %(param_0)s)."""
+        return self._convert_to_named_colon_format(params, param_info)  # Same format
+
+    def _convert_list_to_colon_dict(
+        self, params: "list[Any] | tuple[Any, ...]", param_info: list[ParameterInfo]
+    ) -> dict[str, Any]:
+        """Convert list/tuple parameters to colon-style dict format."""
+        result_dict: dict[str, Any] = {}
+
+        if param_info:
+            # Handle mixed parameter styles
+            has_numeric = any(p.style == ParameterStyle.NUMERIC for p in param_info)
+            has_other_styles = any(p.style != ParameterStyle.NUMERIC for p in param_info)
+
+            if has_numeric and has_other_styles:
+                # Mixed parameter styles: assign parameters in order of appearance
+                sorted_params = sorted(param_info, key=lambda p: p.position)
+                for i, _ in enumerate(sorted_params):
+                    if i < len(params):
+                        result_dict[str(i + 1)] = params[i]
+                return result_dict
+
+            # Check if all parameters are numeric
+            all_numeric = all(p.name and p.name.isdigit() for p in param_info)
+            if all_numeric:
+                for i, value in enumerate(params):
+                    result_dict[str(i + 1)] = value
+            else:
+                for i, value in enumerate(params):
+                    if i < len(param_info):
+                        param_name = param_info[i].name or str(i + 1)
+                        result_dict[param_name] = value
+                    else:
+                        result_dict[str(i + 1)] = value
+        else:
+            for i, value in enumerate(params):
+                result_dict[str(i + 1)] = value
+
+        return result_dict
+
+    def _convert_single_value_to_colon_dict(self, params: Any, param_info: list[ParameterInfo]) -> dict[str, Any]:
+        """Convert single value parameter to colon-style dict format."""
+        result_dict: dict[str, Any] = {}
+        if param_info and param_info[0].name and param_info[0].name.isdigit():
+            result_dict[param_info[0].name] = params
+        else:
+            result_dict["1"] = params
+        return result_dict

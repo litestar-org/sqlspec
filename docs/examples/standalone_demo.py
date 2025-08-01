@@ -408,47 +408,6 @@ def analysis() -> None:
         # Display the SQL
         display_sql_with_syntax(stmt, f"{title} - SQL")
 
-        # Show validation results
-        validation = stmt.validate()
-        if validation:
-            validation_table = Table(title="Validation Results")
-            validation_table.add_column("Aspect", style="cyan")
-            validation_table.add_column("Status", style="green")
-            validation_table.add_column("Details", style="yellow")
-
-            validation_table.add_row(
-                "Safety", "✓ Safe" if validation.is_safe else "⚠ Issues Found", f"Risk Level: {validation.risk_level}"
-            )
-
-            if validation.issues:
-                for issue in validation.issues:
-                    validation_table.add_row("Issue", "⚠ Warning", issue)
-
-            if validation.warnings:
-                for warning in validation.warnings:
-                    validation_table.add_row("Warning", "i Info", warning)
-
-            console.print(validation_table)
-
-        # Show analysis results if available
-        if stmt.analysis_result:
-            analysis = stmt.analysis_result
-
-            analysis_table = Table(title="Analysis Results")
-            analysis_table.add_column("Metric", style="cyan")
-            analysis_table.add_column("Value", style="green")
-
-            analysis_table.add_row("Statement Type", analysis.statement_type)
-            analysis_table.add_row("Tables", ", ".join(analysis.tables))
-            analysis_table.add_row("Join Count", str(analysis.join_count))
-            analysis_table.add_row("Uses Subqueries", str(analysis.uses_subqueries))
-            analysis_table.add_row("Complexity Score", str(analysis.complexity_score))
-
-            if analysis.aggregate_functions:
-                analysis_table.add_row("Aggregate Functions", ", ".join(analysis.aggregate_functions))
-
-            console.print(analysis_table)
-
 
 @cli.command()
 @rclick.option("--count", default=1000, help="Number of queries to generate for performance test")
