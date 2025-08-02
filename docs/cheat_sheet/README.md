@@ -9,7 +9,7 @@ This directory contains comprehensive reference documentation for SQLSpec develo
 A comprehensive 700+ line guide covering:
 
 - Complete architecture overview with single-pass pipeline using SQLTransformContext
-- Enhanced data flow from SQL to execution through multi-tier caching system  
+- Enhanced data flow from SQL to execution through multi-tier caching system
 - Current driver implementation patterns with correct method signatures
 - Pipeline system with compose_pipeline and StatementConfig-aware processing
 - Parameter handling with TypedParameter and enhanced type preservation
@@ -48,7 +48,7 @@ Updated comprehensive guide including:
 Enhanced patterns guide covering:
 
 - Current SQLGlot integration patterns in SQLSpec pipeline
-- AST traversal and manipulation in pipeline steps  
+- AST traversal and manipulation in pipeline steps
 - Expression construction for QueryBuilder implementations
 - Security validation patterns used in validate_step
 - Performance optimization techniques for pipeline processing
@@ -123,7 +123,7 @@ def _get_row_count(
 SQLSpec now implements multi-tier caching:
 
 - **SQL Cache**: Compiled SQL strings with StatementConfig-aware keys
-- **Optimized Cache**: Post-optimization AST expressions 
+- **Optimized Cache**: Post-optimization AST expressions
 - **Builder Cache**: QueryBuilder instances with state serialization
 - **File Cache**: SQLFileLoader with checksum validation
 - **Analysis Cache**: Pipeline analysis results with step-specific caching
@@ -137,7 +137,7 @@ SQLSpec now implements multi-tier caching:
 ### Golden Rules (UPDATED)
 
 1. **Template Method Pattern** - Base class orchestrates, drivers implement specifics
-2. **Parameters flow through enhanced context** - User → SQL → Pipeline → Driver → Database  
+2. **Parameters flow through enhanced context** - User → SQL → Pipeline → Driver → Database
 3. **Immutability** - Always return new instances from QueryBuilder methods
 4. **AST over strings** - Use SQLGlot with pipeline transformations
 5. **Leverage multi-tier caching** - Multiple cache layers provide significant performance gains
@@ -169,7 +169,7 @@ The current pipeline uses:
 This documentation reflects significant recent enhancements:
 
 1. **Comprehensive Caching System**: Multi-tier caching with 12x+ performance improvements
-2. **Enhanced Pipeline Architecture**: SQLTransformContext and compose_pipeline 
+2. **Enhanced Pipeline Architecture**: SQLTransformContext and compose_pipeline
 3. **StatementConfig Integration**: Configuration-aware caching and processing
 4. **Method Signature Updates**: Current _get_selected_data/_get_row_count signatures
 5. **MyPyC Optimization**: CachedSQLFile with __slots__ for compilation compatibility

@@ -54,7 +54,7 @@ When a `SQL` object is initialized, the following enhanced process occurs:
    StatementConfig(
        dialect="postgres",
        enable_parsing=True,
-       enable_validation=True, 
+       enable_validation=True,
        enable_transformations=True,
        enable_caching=True,  # NEW: Multi-tier caching control
        parameter_config=ParameterStyleConfig(...)  # Enhanced parameter handling
@@ -102,7 +102,7 @@ The `SQL.compile()` method triggers the enhanced processing pipeline:
    # Cache types and their benefits:
    sql_cache: Dict[str, str]              # Compiled SQL strings (avoids recompilation)
    optimized_cache: Dict[str, Expression] # Post-optimization AST expressions
-   builder_cache: Dict[str, bytes]        # QueryBuilder state serialization  
+   builder_cache: Dict[str, bytes]        # QueryBuilder state serialization
    file_cache: Dict[str, CachedSQLFile]   # File loading with checksums (12x+ speedup)
    analysis_cache: Dict[str, Any]         # Pipeline step results for reuse
    ```
@@ -117,7 +117,7 @@ The `SQL.compile()` method triggers the enhanced processing pipeline:
        metadata={},
        statement_config=config
    )
-   
+
    # Pipeline steps with caching integration:
    pipeline = compose_pipeline([
        parameterize_literals_step,  # Extract literals → parameters
@@ -142,7 +142,7 @@ The `SQL.compile()` method triggers the enhanced processing pipeline:
        needs_static_script_compilation=True  # NEW: Script handling flag
    )
    ```
-   
+
    **Key enhancements:**
    - **Cache Integration**: Parameter conversion results cached with StatementConfig keys
    - **Type Preservation**: Enhanced `TypedParameter` support through entire pipeline
@@ -169,15 +169,15 @@ The current implementation uses enhanced template method pattern with better sep
 ```python
 def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[int], Any]:
     """Enhanced execution with special handling and routing."""
-    
+
     # Step 1: Try special handling first (COPY, bulk ops, etc.)
     special_result = self._try_special_handling(cursor, statement)
     if special_result is not None:
         return special_result
-    
+
     # Step 2: Get compiled SQL with driver's parameter style
     sql, params = self._get_compiled_sql(statement, self.statement_config)
-    
+
     # Step 3: Route to appropriate execution method
     if statement.is_script:
         if self.statement_config.parameter_config.needs_static_script_compilation:
@@ -192,7 +192,7 @@ def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[i
     else:
         prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
         result = self._execute_statement(cursor, sql, prepared_params)
-    
+
     return create_execution_result(result)
 ```
 
@@ -263,15 +263,15 @@ The enhanced `_perform_execute` method in the base class coordinates execution:
 ```python
 def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[int], Any]:
     """Enhanced execution with special handling and routing."""
-    
+
     # 1. Try special handling first (COPY, bulk ops, etc.)
     special_result = self._try_special_handling(cursor, statement)
     if special_result is not None:
         return special_result
-    
+
     # 2. Get compiled SQL with driver's parameter style
     sql, params = self._get_compiled_sql(statement, self.statement_config)
-    
+
     # 3. Route to appropriate execution method
     if statement.is_script:
         if self.statement_config.parameter_config.needs_static_script_compilation:
@@ -286,14 +286,14 @@ def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[i
     else:
         prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
         result = self._execute_statement(cursor, sql, prepared_params)
-    
+
     return create_execution_result(result)
 ```
 
 ### SQLite (`sqlspec.adapters.sqlite`) - Reference Implementation
 
 - **Parameter Style**: `qmark` (`?`)
-- **Special Features**: 
+- **Special Features**:
   - Native `executescript()` support with `needs_static_script_compilation=True`
   - No special handling required (`_try_special_handling` returns `None`)
   - Simple cursor management with context managers
@@ -337,7 +337,7 @@ All async drivers inherit from `AsyncDriverAdapterBase` and follow the same enha
 
 #### AsyncPG (`sqlspec.adapters.asyncpg`)
 - **Parameter Style**: `numeric` (`$1`, `$2`)
-- **Special Features**: 
+- **Special Features**:
   - Connection pool management
   - Prepared statement caching
   - Enhanced type conversion for PostgreSQL types
@@ -377,7 +377,7 @@ from sqlspec.statement.sql import StatementConfig
 
 class MyDatabaseDriver(SyncDriverAdapterBase):
     dialect = "mydatabase"
-    
+
     def __init__(self, connection, statement_config=None, driver_features=None):
         if statement_config is None:
             parameter_config = ParameterStyleConfig(
@@ -407,7 +407,7 @@ def with_cursor(self, connection):
 
 # Transaction methods
 def begin(self): self.connection.begin()
-def commit(self): self.connection.commit() 
+def commit(self): self.connection.commit()
 def rollback(self): self.connection.rollback()
 
 # Special handling hook
@@ -479,16 +479,16 @@ def test_my_database_driver():
         connection_config={"host": "localhost"},
         statement_config=StatementConfig(enable_caching=True)
     )
-    
+
     with config.provide_session() as session:
         # Test basic execution
         result = session.execute("SELECT ?", ("test",))
         assert result.data[0] == {"column": "test"}
-        
+
         # Test caching performance
         result1 = session.execute("SELECT COUNT(*) FROM table")
         result2 = session.execute("SELECT COUNT(*) FROM table")  # Should hit cache
-        
+
         # Test special features
         script_result = session.execute_script("""
             CREATE TABLE test (id INT, name TEXT);

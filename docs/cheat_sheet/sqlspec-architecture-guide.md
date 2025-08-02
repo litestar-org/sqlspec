@@ -100,7 +100,7 @@ SQLSpec now implements a comprehensive multi-tier caching system:
 # Multi-tier caching configuration
 class CachingConfig:
     sql_cache: bool = True           # Compiled SQL strings
-    optimized_cache: bool = True     # Post-optimization AST expressions  
+    optimized_cache: bool = True     # Post-optimization AST expressions
     builder_cache: bool = True       # QueryBuilder instances
     file_cache: bool = True          # SQLFileLoader with checksums
     analysis_cache: bool = True      # Pipeline analysis results
@@ -115,7 +115,7 @@ StatementConfig(
 
 **Performance Benefits:**
 - **SQL Cache**: Avoids recompilation of identical queries
-- **Optimized Cache**: Reuses AST optimization results  
+- **Optimized Cache**: Reuses AST optimization results
 - **Builder Cache**: Accelerates QueryBuilder state serialization
 - **File Cache**: 12x+ speedup with checksum validation
 - **Analysis Cache**: Caches pipeline step results for reuse
@@ -167,15 +167,15 @@ The `_dispatch_execution` method in the base class handles the overall flow usin
 # Current template method pattern
 def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[int], Any]:
     """Enhanced execution with special handling and routing."""
-    
+
     # 1. Try special handling first
     special_result = self._try_special_handling(cursor, statement)
     if special_result is not None:
         return special_result
-    
+
     # 2. Get compiled SQL with driver's parameter style
     sql, params = self._get_compiled_sql(statement, self.statement_config)
-    
+
     # 3. Route to appropriate execution method
     if statement.is_script:
         if self.statement_config.parameter_config.needs_static_script_compilation:
@@ -190,19 +190,19 @@ def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[i
     else:
         prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
         result = self._execute_statement(cursor, sql, prepared_params)
-    
+
     return create_execution_result(result)
 
 # Drivers implement these specific methods:
 def _try_special_handling(self, cursor: Any, statement: SQL) -> Optional[tuple]:
     """Hook for database-specific operations (COPY, bulk ops, etc.)"""
-    
+
 def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
     """Execute single statement"""
-    
+
 def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
     """Execute with parameter batches"""
-    
+
 def _execute_script(self, cursor: Any, sql: str, prepared_params: Any, statement_config: StatementConfig) -> Any:
     """Execute multi-statement script"""
 ```
@@ -233,9 +233,9 @@ parameter_config = ParameterStyleConfig(
     needs_static_script_compilation=True,  # New flag for script handling
 )
 
-# Integration with StatementConfig  
+# Integration with StatementConfig
 statement_config = StatementConfig(
-    dialect="postgres", 
+    dialect="postgres",
     parameter_config=parameter_config,
     enable_caching=True,  # Cache-aware parameter processing
 )

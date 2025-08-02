@@ -417,18 +417,18 @@ from sqlspec.statement.pipeline import SQLTransformContext
 
 def custom_pipeline_step(context: SQLTransformContext) -> SQLTransformContext:
     """Example pipeline step using current architecture."""
-    
+
     # Access expression and parameters
     expression = context.current_expression
     params = context.parameters
-    
+
     # Apply transformation
     transformed_expr = expression.transform(your_transformer)
-    
+
     # Update context
     context.current_expression = transformed_expr
     context.metadata["step_name"] = "custom_step_completed"
-    
+
     return context
 
 # Use with compose_pipeline
@@ -446,23 +446,23 @@ pipeline = compose_pipeline([
 # Current implementation uses multi-tier caching
 def cached_transformation_step(context: SQLTransformContext) -> SQLTransformContext:
     """Pipeline step with caching integration."""
-    
+
     # Generate cache key from StatementConfig and expression
     cache_key = generate_cache_key(context.current_expression, context.statement_config)
-    
+
     # Check analysis cache first
     if cached_result := context.metadata.get("analysis_cache", {}).get(cache_key):
         context.current_expression = cached_result
         return context
-    
+
     # Apply transformation
     transformed = apply_transformation(context.current_expression)
-    
+
     # Store in cache for reuse
     if "analysis_cache" not in context.metadata:
         context.metadata["analysis_cache"] = {}
     context.metadata["analysis_cache"][cache_key] = transformed
-    
+
     context.current_expression = transformed
     return context
 ```
@@ -513,7 +513,7 @@ def parse_condition_expression(condition_input):
 # Based on current sqlspec pipeline steps
 def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformContext:
     """Extract literals and replace with placeholders using current pipeline."""
-    
+
     def extract_literal(node):
         if isinstance(node, exp.Literal):
             if isinstance(node.this, str):
@@ -531,7 +531,7 @@ def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformCont
     # Transform expression and update context
     context.current_expression = context.current_expression.transform(extract_literal)
     context.metadata["parameterize_literals"] = "completed"
-    
+
     return context
 
 # Integration with SQLSpec pipeline
@@ -583,13 +583,13 @@ def validate_step(context: SQLTransformContext) -> SQLTransformContext:
         "issues": issues,
         "status": "failed" if issues else "passed"
     }
-    
+
     # Raise on critical security issues
     if issues:
         critical_issues = [issue for issue in issues if "injection" in issue.lower()]
         if critical_issues:
             raise SecurityValidationError(f"Critical security issues: {critical_issues}")
-    
+
     return context
 
 # Security validation patterns

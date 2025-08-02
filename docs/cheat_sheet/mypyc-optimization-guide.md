@@ -482,7 +482,7 @@ debug_level = "0"  # No debug info in production
 # ├── __init__.py          # NOT compiled (just imports)
 # ├── statement/
 # │   ├── __init__.py      # NOT compiled
-# │   ├── sql.py           # COMPILED (hot path) 
+# │   ├── sql.py           # COMPILED (hot path)
 # │   └── result.py        # COMPILED (used everywhere)
 # ├── adapters/
 # │   ├── __init__.py      # NOT compiled
@@ -724,7 +724,7 @@ params = {"name": "value"}  # Type information lost
 # ✅ DO: Use regular class with __slots__ for optimal MyPyC performance
 class CachedSQLFile:
     """Cached SQL file with parsed queries for efficient reloading.
-    
+
     CRITICAL: Uses regular class with __slots__ instead of @dataclass
     for MyPyC compilation compatibility and optimal performance.
     This pattern provides 22x speedup after compilation.
