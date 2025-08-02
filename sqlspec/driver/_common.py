@@ -398,7 +398,13 @@ class CommonDriverAttributesMixin:
         if isinstance(parameters, dict):
             if not parameters:
                 return []
-            if statement_config.parameter_config.default_parameter_style in {
+            # Check if we should convert dict to list based on supported execution styles
+            # If the driver supports named parameters natively, keep dicts as dicts
+            if (statement_config.parameter_config.supported_execution_parameter_styles and
+                ParameterStyle.NAMED_PYFORMAT in statement_config.parameter_config.supported_execution_parameter_styles):
+                # Driver supports named parameters, keep as dict
+                return {k: apply_type_coercion(v) for k, v in parameters.items()}
+            elif statement_config.parameter_config.default_parameter_style in {
                 ParameterStyle.NUMERIC,
                 ParameterStyle.QMARK,
                 ParameterStyle.POSITIONAL_PYFORMAT,
@@ -473,10 +479,19 @@ class CommonDriverAttributesMixin:
         """
         if statement.is_script and not statement_config.parameter_config.needs_static_script_compilation:
             target_style = ParameterStyle.STATIC
-        elif statement_config.parameter_config.execution_parameter_style is not None:
-            target_style = statement_config.parameter_config.execution_parameter_style
+        elif statement_config.parameter_config.supported_execution_parameter_styles is not None:
+            # New system: check if current style is supported, otherwise use default
+            current_style = statement.detect_parameter_style()
+            if (current_style and 
+                current_style in statement_config.parameter_config.supported_execution_parameter_styles):
+                # Current style is supported, preserve original (don't convert)
+                target_style = None
+            else:
+                # Current style not supported, convert to default execution style
+                target_style = statement_config.parameter_config.default_execution_parameter_style
         else:
-            target_style = None
+            # No execution style configuration, use default parameter style for explicit compilation
+            target_style = statement_config.parameter_config.default_parameter_style
         sql, params = statement.compile(placeholder_style=target_style, flatten_single_params=flatten_single_params)
         return sql, self.prepare_driver_parameters(params, statement_config, is_many=statement.is_many)
 

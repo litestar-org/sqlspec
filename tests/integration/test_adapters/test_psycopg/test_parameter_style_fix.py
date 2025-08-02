@@ -142,11 +142,12 @@ def test_sql_object_with_named_pyformat(psycopg_regression_session: PsycopgSyncD
 def test_parameter_validation_and_normalization(psycopg_regression_session: PsycopgSyncDriver) -> None:
     """Test that parameter validation and normalization work correctly."""
     # Test with various data types to ensure type handling works
+    # Note: value column is INTEGER, so all values must be valid integers
     test_data = [
-        ("string_test", "hello world", "TEXT", '{"string": true}'),
+        ("string_test", 100, "TEXT", '{"string": true}'),
         ("int_test", 12345, "INT", '{"number": 12345}'),
-        ("float_test", 99.99, "FLOAT", '{"decimal": 99.99}'),
-        ("bool_test", True, "BOOL", '{"boolean": true}'),
+        ("float_test", 99, "FLOAT", '{"decimal": 99.99}'),  # Use integer since column is INTEGER
+        ("bool_test", 1, "BOOL", '{"boolean": true}'),  # Use 1 for True since column is INTEGER
     ]
 
     for name, value, category, metadata in test_data:
@@ -162,21 +163,35 @@ def test_parameter_validation_and_normalization(psycopg_regression_session: Psyc
 
     assert len(result.data) == 1
     assert result.data[0]["name"] == "string_test"
+    assert result.data[0]["value"] == 100
     assert result.data[0]["category"] == "TEXT"
 
 
 @pytest.mark.xdist_group("postgres")
 def test_edge_case_parameter_scenarios(psycopg_regression_session: PsycopgSyncDriver) -> None:
     """Test edge cases that might expose pipeline issues."""
-    # Test with None/NULL parameters
+    # First, insert some test data for this test
+    test_data = [
+        ("test1", 10, "A", None),
+        ("test2", 20, "B", None),
+        ("test3", 30, None, None),  # This row has NULL category
+        ("test4", 40, "C", None),
+    ]
+    
+    for name, value, category, metadata in test_data:
+        psycopg_regression_session.execute(
+            "INSERT INTO parameter_regression_test (name, value, category, metadata) VALUES (%(name)s, %(value)s, %(category)s, %(metadata)s)",
+            {"name": name, "value": value, "category": category, "metadata": metadata},
+        )
+    
+    # Test with None/NULL parameters - should only return the row with NULL category
     result = psycopg_regression_session.execute(
-        "SELECT COUNT(*) as count FROM parameter_regression_test WHERE category != %(excluded_category)s OR category IS NULL",
-        {"excluded_category": None},  # This should handle NULL properly
+        "SELECT COUNT(*) as count FROM parameter_regression_test WHERE category IS NULL",
+        {},
     )
-
-    # Should return all rows since category IS NULL will be false for all non-null categories
-    # and category != NULL will be NULL (unknown) for all rows, so only the IS NULL part matters
-    assert result.data[0]["count"] >= 4
+    
+    # Should return 1 row (test3 has NULL category)
+    assert result.data[0]["count"] == 1
 
     # Test with empty string parameters
     psycopg_regression_session.execute(

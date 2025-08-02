@@ -67,7 +67,8 @@ def test_parameter_conversion_only_when_necessary() -> None:
     parameter_config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.QMARK,
         supported_parameter_styles={ParameterStyle.QMARK},
-        execution_parameter_style=ParameterStyle.QMARK,
+        supported_execution_parameter_styles={ParameterStyle.QMARK},
+        default_execution_parameter_style=ParameterStyle.QMARK,
     )
     statement_config = StatementConfig(dialect="sqlite", parameter_config=parameter_config)
     adapter = MockAdapter(statement_config)
@@ -93,7 +94,8 @@ def test_parameter_style_conversion_when_different() -> None:
     parameter_config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.QMARK,
         supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC},
-        execution_parameter_style=ParameterStyle.NUMERIC,
+        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
     )
     statement_config = StatementConfig(dialect="postgres", parameter_config=parameter_config)
     adapter = MockAdapter(statement_config)
@@ -116,16 +118,17 @@ def test_parameter_style_conversion_when_different() -> None:
 
 
 def test_no_parameter_conversion_without_target_style() -> None:
-    """Test that execution_parameter_style defaults to default_parameter_style when None."""
+    """Test that new dual parameter system works without explicit execution configuration."""
     # Create adapter without explicit execution style
     parameter_config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.QMARK,
         supported_parameter_styles={ParameterStyle.QMARK},
-        # Don't set execution_parameter_style - should default to default_parameter_style
+        # Don't set execution parameter styles - should use default behavior
     )
 
-    # Check that execution_parameter_style defaults to default_parameter_style
-    assert parameter_config.execution_parameter_style == ParameterStyle.QMARK
+    # Check that execution style configuration is None (uses default behavior)
+    assert parameter_config.supported_execution_parameter_styles is None
+    assert parameter_config.default_execution_parameter_style is None
 
     statement_config = StatementConfig(dialect="sqlite", parameter_config=parameter_config)
     adapter = MockAdapter(statement_config)
@@ -136,7 +139,7 @@ def test_no_parameter_conversion_without_target_style() -> None:
     mock_statement.parameters = [1]  # Mock parameters attribute
     mock_statement.is_many = False  # Mock is_many attribute
 
-    # Test compilation - should use explicit style since execution_parameter_style is set
+    # Test compilation - should use explicit style from default parameter style
     sql, params = adapter._get_compiled_sql(mock_statement, statement_config)
 
     # Should call compile with explicit style (which equals default in this case)
@@ -150,7 +153,8 @@ def test_parameter_preparation_preserves_values() -> None:
     parameter_config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.QMARK,
         supported_parameter_styles={ParameterStyle.QMARK},
-        execution_parameter_style=ParameterStyle.QMARK,
+        supported_execution_parameter_styles={ParameterStyle.QMARK},
+        default_execution_parameter_style=ParameterStyle.QMARK,
     )
     statement_config = StatementConfig(dialect="sqlite", parameter_config=parameter_config)
     adapter = MockAdapter(statement_config)
@@ -189,13 +193,15 @@ def test_parameter_style_configurations() -> None:
         parameter_config = ParameterStyleConfig(
             default_parameter_style=default_style,
             supported_parameter_styles=supported_styles,
-            execution_parameter_style=default_style,
+            supported_execution_parameter_styles={default_style},
+            default_execution_parameter_style=default_style,
         )
 
         # Verify configuration is valid
         assert parameter_config.default_parameter_style == default_style
         assert parameter_config.supported_parameter_styles == supported_styles
-        assert parameter_config.execution_parameter_style == default_style
+        assert parameter_config.supported_execution_parameter_styles == {default_style}
+        assert parameter_config.default_execution_parameter_style == default_style
 
         # Verify default style is in supported styles
         assert default_style in supported_styles
@@ -207,7 +213,8 @@ def test_base_get_compiled_sql_always_explicit() -> None:
     parameter_config = ParameterStyleConfig(
         default_parameter_style=ParameterStyle.QMARK,
         supported_parameter_styles={ParameterStyle.QMARK},
-        execution_parameter_style=ParameterStyle.QMARK,
+        supported_execution_parameter_styles={ParameterStyle.QMARK},
+        default_execution_parameter_style=ParameterStyle.QMARK,
     )
     statement_config = StatementConfig(dialect="sqlite", parameter_config=parameter_config)
     adapter = MockAdapter(statement_config)
@@ -244,7 +251,8 @@ def test_parameter_style_compilation(adapter_style: ParameterStyle, expected_sty
     parameter_config = ParameterStyleConfig(
         default_parameter_style=adapter_style,
         supported_parameter_styles={adapter_style},
-        execution_parameter_style=adapter_style,
+        supported_execution_parameter_styles={adapter_style},
+        default_execution_parameter_style=adapter_style,
     )
     statement_config = StatementConfig(dialect="test", parameter_config=parameter_config)
     adapter = MockAdapter(statement_config)

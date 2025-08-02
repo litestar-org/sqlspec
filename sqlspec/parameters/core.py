@@ -139,8 +139,20 @@ class ParameterProcessor:
         Returns:
             Tuple of (execution_sql, execution_params) ready for database execution
         """
-        # Use the execution parameter style for final conversion
-        execution_style = config.execution_parameter_style
+        # Use the new execution parameter style configuration
+        if config.supported_execution_parameter_styles is not None:
+            # New system: check if current style is supported, otherwise use default
+            detected_styles = {p.style for p in param_info}
+            if detected_styles and detected_styles.intersection(config.supported_execution_parameter_styles):
+                # Current style is supported, don't convert
+                return sql, params
+            else:
+                # Current style not supported, convert to default execution style
+                execution_style = config.default_execution_parameter_style
+        else:
+            # No execution style configuration, use default parameter style
+            execution_style = config.default_parameter_style
+        
         converted_sql = converter.convert_placeholders(sql, execution_style, param_info)
 
         # Adjust parameters to match the execution style

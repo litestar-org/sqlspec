@@ -1481,9 +1481,19 @@ class SQL:
         # Get processed state
         sql, params = self._get_processed_sql_and_params()
 
-        # Apply parameter transformations
+        # Apply parameter transformations first to handle denormalization
         if params is not None and self._processing_context:
             sql, params = self._apply_parameter_transformations(sql, params, placeholder_style)
+
+        # When no placeholder style is specified and no transformations applied, preserve original parameter format
+        if (placeholder_style is None and self._original_parameters is not None and 
+            not (self._processing_context and self._processing_context.metadata.get("parameter_conversion"))):
+            if isinstance(self._original_parameters, tuple) and not self._named_params:
+                # Preserve tuple parameters for positional styles
+                params = self._original_parameters
+            elif isinstance(self._original_parameters, (tuple, list)) and len(self._original_parameters) == 1 and isinstance(self._original_parameters[0], dict):
+                # Preserve dict parameters for named styles  
+                params = self._original_parameters[0]
 
         # Unwrap typed parameters
         params = self._unwrap_typed_parameters(params)
@@ -1584,6 +1594,10 @@ class SQL:
             # Convert parameters to match original style
             if original_style == ParameterStyle.POSITIONAL_COLON and is_dict(params):
                 params = self._convert_colon_parameters(params, norm_state)
+            elif original_style == ParameterStyle.POSITIONAL_PYFORMAT and is_dict(params):
+                params = self._convert_positional_pyformat_parameters(params, norm_state)
+            elif original_style == ParameterStyle.NAMED_PYFORMAT and is_dict(params):
+                params = self._convert_named_pyformat_parameters(params, norm_state)
 
         return sql, params
 
@@ -1616,6 +1630,54 @@ class SQL:
                         original_params[original_param.name] = params[normalized_key]
 
             return original_params
+
+        return params
+
+    def _convert_positional_pyformat_parameters(self, params: dict[str, Any], norm_state: Any) -> "tuple[Any, ...]":
+        """Convert parameters for POSITIONAL_PYFORMAT style (%s placeholders).
+
+        For positional pyformat, we need to convert from dict back to tuple
+        in the correct order based on parameter appearance.
+        """
+        if not isinstance(params, dict):
+            return params
+
+        # Map parameters back to tuple in order of appearance
+        ordered_params = []
+        for i, _ in enumerate(norm_state.original_param_info):
+            normalized_key = f"param_{i}"
+            if normalized_key in params:
+                ordered_params.append(params[normalized_key])
+
+        return tuple(ordered_params)
+
+    def _convert_named_pyformat_parameters(self, params: dict[str, Any], norm_state: Any) -> dict[str, Any]:
+        """Convert parameters for NAMED_PYFORMAT style (%(name)s placeholders).
+
+        Since SQL placeholder conversion from param_0 back to original names isn't working properly,
+        we need to convert the parameter dictionary to use param_0, param_1, etc. keys to match
+        the SQL placeholders that are currently in the SQL.
+        """
+        if not isinstance(params, dict):
+            return params
+
+        # Check if parameters already use param_0, param_1 format (no conversion needed)
+        param_keys = {f"param_{i}" for i in range(len(norm_state.original_param_info))}
+        current_keys = set(params.keys())
+
+        # If we already have param_0, param_1 keys, no conversion needed
+        if param_keys.issubset(current_keys):
+            return params
+
+        # Check if we have original parameter names - convert them to param_0, param_1 format
+        original_names = {p.name for p in norm_state.original_param_info if p.name}
+        if original_names.issubset(current_keys):
+            # Convert from original names to param_0, param_1 format to match SQL placeholders
+            converted_params = {}
+            for i, original_param in enumerate(norm_state.original_param_info):
+                if original_param.name and original_param.name in params:
+                    converted_params[f"param_{i}"] = params[original_param.name]
+            return converted_params
 
         return params
 
@@ -1753,6 +1815,23 @@ class SQL:
         if self._is_many and self._original_parameters is not None:
             return self._original_parameters  # type: ignore[no-any-return]
         return None
+
+    def detect_parameter_style(self) -> "Optional[ParameterStyle]":
+        """Detect the parameter style of the SQL statement.
+
+        Returns:
+            The dominant parameter style found in the SQL, or None if no parameters
+        """
+        if not self._raw_sql:
+            return None
+
+        validator = self.statement_config.parameter_validator
+        param_info = validator.extract_parameters(self._raw_sql)
+
+        if not param_info:
+            return None
+
+        return validator.get_parameter_style(param_info)
 
     @property
     def statement(self) -> exp.Expression:

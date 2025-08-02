@@ -184,6 +184,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "SQLResult":
+        # Parameter handling is delegated to SQL class constructor
+        # which properly handles tuple expansion and parameter processing
+
         sql_statement = self.prepare_statement(
             statement, *parameters, statement_config=statement_config or self.statement_config, **kwargs
         )

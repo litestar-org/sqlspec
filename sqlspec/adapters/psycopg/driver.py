@@ -9,6 +9,7 @@ from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.parameters import ParameterStyle
 from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from sqlspec.driver._common import ExecutionResult
@@ -16,6 +17,32 @@ if TYPE_CHECKING:
     from sqlspec.statement.sql import SQL
 
 logger = logging.getLogger(__name__)
+
+
+def _convert_list_to_postgres_array(value: Any) -> str:
+    """Convert Python list to PostgreSQL array literal format.
+
+    Args:
+        value: Python list to convert
+
+    Returns:
+        PostgreSQL array literal string (e.g., '{1,2,3}' or '{"a","b","c"}')
+    """
+    if not isinstance(value, (list, tuple)) or not value:
+        return "{}"
+
+    elements = []
+    for item in value:
+        if item is None:
+            elements.append("NULL")
+        elif isinstance(item, str):
+            # Escape quotes and wrap in quotes for strings
+            escaped = item.replace('"', '\\"')
+            elements.append(f'"{escaped}"')
+        else:
+            elements.append(str(item))
+
+    return "{" + ",".join(elements) + "}"
 
 
 psycopg_statement_config = StatementConfig(
@@ -37,8 +64,19 @@ psycopg_statement_config = StatementConfig(
             ParameterStyle.NUMERIC,
             ParameterStyle.QMARK,  # Add support for ? placeholders
         },
-        execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,  # Convert all to positional for reliability
-        type_coercion_map={},
+        # Psycopg supports both named and positional pyformat natively
+        supported_execution_parameter_styles={
+            ParameterStyle.POSITIONAL_PYFORMAT,
+            ParameterStyle.NAMED_PYFORMAT,
+        },
+        # Fallback to positional when the original style is not supported
+        default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
+        type_coercion_map={
+            str: lambda x: int(x) if x.isdigit() else x,  # Convert numeric strings to integers for integer columns
+            dict: to_json,  # Convert dict to JSON string for JSONB columns
+            list: _convert_list_to_postgres_array,  # Convert Python lists to PostgreSQL array format
+            bool: lambda x: x,  # Keep booleans as-is for PostgreSQL
+        },
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
     ),

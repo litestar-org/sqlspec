@@ -30,7 +30,9 @@ bigquery_statement_config = StatementConfig(
     parameter_config=ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NAMED_AT,
         supported_parameter_styles={ParameterStyle.NAMED_AT, ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT},
-        execution_parameter_style=ParameterStyle.NAMED_AT,
+        # BigQuery only supports named @ parameters natively
+        supported_execution_parameter_styles={ParameterStyle.NAMED_AT},
+        default_execution_parameter_style=ParameterStyle.NAMED_AT,
         type_coercion_map={},
         has_native_list_expansion=True,
         needs_static_script_compilation=True,

@@ -173,10 +173,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "SQLResult":
-        # Handle single tuple parameter case: execute(sql, (param1, param2))
-        # If exactly one parameter is passed and it's a tuple/list, expand it
-        if len(parameters) == 1 and isinstance(parameters[0], (tuple, list)):
-            parameters = parameters[0]
+        # Parameter handling is delegated to SQL class constructor
+        # which properly handles tuple expansion and parameter processing
 
         sql_statement = self.prepare_statement(
             statement, *parameters, statement_config=statement_config or self.statement_config, **kwargs
