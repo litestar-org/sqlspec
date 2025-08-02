@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, TypedDict, 
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.adbc._types import AdbcConnection
-from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, create_adbc_statement_config
+from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, get_adbc_statement_config
 from sqlspec.config import NoPoolSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.statement.sql import StatementConfig
@@ -104,7 +104,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         if statement_config is None:
             # Detect dialect and create appropriate config
             detected_dialect = str(self._get_dialect() or "sqlite")
-            statement_config = create_adbc_statement_config(detected_dialect)
+            statement_config = get_adbc_statement_config(detected_dialect)
 
         super().__init__(
             connection_config=self.connection_config,
@@ -310,7 +310,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                 final_statement_config = (
                     statement_config
                     or self.statement_config
-                    or create_adbc_statement_config(str(self._get_dialect() or "sqlite"))
+                    or get_adbc_statement_config(str(self._get_dialect() or "sqlite"))
                 )
                 yield self.driver_type(connection=connection, statement_config=final_statement_config)
 

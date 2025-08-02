@@ -79,7 +79,7 @@ def adbc_sqlite_params_session() -> Generator[AdbcDriver, None, None]:
 @pytest.mark.parametrize(
     "params,expected_count",
     [
-        (("test1"), 1),  # Tuple parameter
+        (("test1",), 1),  # Tuple parameter
         (["test1"], 1),  # List parameter
         ({"name": "test1"}, 1),  # Dict parameter (if supported)
     ],
@@ -94,8 +94,7 @@ def test_postgresql_parameter_types(
         # For dict params with PostgreSQL, we need to convert to positional
         # since ADBC PostgreSQL doesn't support named parameters
         result = adbc_postgresql_params_session.execute(
-            SQL("SELECT * FROM test_params WHERE name = $1"),
-            (params["name"]),  # Convert dict to positional tuple
+            SQL("SELECT * FROM test_params WHERE name = $1"), params["name"]
         )
     else:
         result = adbc_postgresql_params_session.execute(SQL("SELECT * FROM test_params WHERE name = $1"), params)
@@ -110,8 +109,8 @@ def test_postgresql_parameter_types(
 @pytest.mark.parametrize(
     "params,style,query",
     [
-        (("test1"), "qmark", "SELECT * FROM test_params WHERE name = ?"),
-        ((":test1"), "named", "SELECT * FROM test_params WHERE name = :name"),
+        (("test1",), "qmark", "SELECT * FROM test_params WHERE name = ?"),
+        ((":test1",), "named", "SELECT * FROM test_params WHERE name = :name"),
         ({"name": "test1"}, "named_dict", "SELECT * FROM test_params WHERE name = :name"),
     ],
 )

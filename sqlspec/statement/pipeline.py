@@ -119,10 +119,10 @@ def compose_pipeline(steps: list[PipelineStep]) -> PipelineStep:
 
 
 def create_pipeline_from_config(config: "StatementConfig", driver_adapter: "Any" = None) -> PipelineStep:
-    """Create a pipeline based on SQL configuration.
+    """Create a pipeline based on SQL configuration with enhanced architecture.
 
     This function creates a pipeline that respects the configuration
-    settings and can leverage driver-specific optimizations.
+    settings and uses the enhanced pre/post processing pipeline steps.
 
     Args:
         config: SQL configuration object
@@ -131,15 +131,9 @@ def create_pipeline_from_config(config: "StatementConfig", driver_adapter: "Any"
     Returns:
         Composed pipeline function
     """
-    steps: list[PipelineStep] = []
-    if config.enable_transformations:
-        steps.append(parameterize_literals_step)
-        if config.enable_expression_simplification:
-            steps.append(optimize_step)
-    if config.enable_validation:
-        steps.extend((validate_step, validate_dml_safety_step))
-    if config.custom_pipeline_steps:
-        steps.extend(config.custom_pipeline_steps)
+    # Use the StatementConfig's get_pipeline_steps method which handles
+    # the enhanced pipeline architecture with pre/post processing steps
+    steps = config.get_pipeline_steps()
     return compose_pipeline(steps)
 
 

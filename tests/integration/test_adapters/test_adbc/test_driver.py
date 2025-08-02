@@ -78,10 +78,7 @@ def adbc_sqlite_session() -> Generator[AdbcDriver, None, None]:
 @pytest.fixture
 def adbc_duckdb_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC DuckDB session with test table."""
-    config = AdbcConfig(
-        connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"},
-        statement_config=StatementConfig(),  # Allow DDL statements for tests
-    )
+    config = AdbcConfig(connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"})
 
     with config.provide_session() as session:
         # Create test table

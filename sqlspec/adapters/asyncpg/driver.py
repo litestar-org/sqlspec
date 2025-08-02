@@ -20,6 +20,15 @@ from sqlspec.statement.sql import StatementConfig
 # Shared AsyncPG statement configuration
 asyncpg_statement_config = StatementConfig(
     dialect="postgres",
+    # Enhanced pipeline steps with precise execution control
+    pre_process_steps=[postgres_copy_pipeline_step],  # COPY detection before parameterization
+    post_process_steps=None,  # No post-processing needed for asyncpg
+    # Core pipeline configuration
+    enable_parsing=True,
+    enable_transformations=True,
+    enable_validation=True,
+    enable_caching=True,
+    # Parameter processing configuration
     parameter_config=ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NUMERIC,
         supported_parameter_styles={ParameterStyle.NUMERIC},
@@ -27,7 +36,6 @@ asyncpg_statement_config = StatementConfig(
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
     ),
-    custom_pipeline_steps=[postgres_copy_pipeline_step],
 )
 
 __all__ = ("AsyncpgCursor", "AsyncpgDriver", "asyncpg_statement_config")

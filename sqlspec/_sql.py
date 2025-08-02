@@ -625,7 +625,7 @@ class SQLFactory:
             ```
         """
         if isinstance(values, list):
-            literals = [exp.Literal.string(str(v)) if isinstance(v, str) else exp.Literal.number(v) for v in values]
+            literals = [SQLFactory._to_literal(v) for v in values]
             return exp.Any(this=exp.Array(expressions=literals))
         if isinstance(values, str):
             # Parse as SQL
@@ -739,6 +739,28 @@ class SQLFactory:
     # ===================
 
     @staticmethod
+    def _to_literal(value: Any) -> exp.Expression:
+        """Convert a Python value to a SQLGlot literal expression.
+
+        Uses SQLGlot's built-in exp.convert() function for optimal dialect-agnostic
+        literal creation. Handles all Python primitive types correctly:
+        - None -> exp.Null (renders as NULL)
+        - bool -> exp.Boolean (renders as TRUE/FALSE or 1/0 based on dialect)
+        - int/float -> exp.Literal with is_number=True
+        - str -> exp.Literal with is_string=True
+        - exp.Expression -> returned as-is (passthrough)
+
+        Args:
+            value: Python value or SQLGlot expression to convert.
+
+        Returns:
+            SQLGlot expression representing the literal value.
+        """
+        if isinstance(value, exp.Expression):
+            return value
+        return exp.convert(value)
+
+    @staticmethod
     def decode(column: Union[str, exp.Expression], *args: Union[str, exp.Expression, Any]) -> exp.Expression:
         """Create a DECODE expression (Oracle-style conditional logic).
 
@@ -776,29 +798,14 @@ class SQLFactory:
         for i in range(0, len(args) - 1, 2):
             if i + 1 >= len(args):
                 # Odd number of args means last one is default
-                default = exp.Literal.string(str(args[i])) if not isinstance(args[i], exp.Expression) else args[i]
+                default = SQLFactory._to_literal(args[i])
                 break
 
             search_val = args[i]
             result_val = args[i + 1]
 
-            if isinstance(search_val, str):
-                search_expr = exp.Literal.string(search_val)
-            elif isinstance(search_val, (int, float)):
-                search_expr = exp.Literal.number(search_val)
-            elif isinstance(search_val, exp.Expression):
-                search_expr = search_val  # type: ignore[assignment]
-            else:
-                search_expr = exp.Literal.string(str(search_val))
-
-            if isinstance(result_val, str):
-                result_expr = exp.Literal.string(result_val)
-            elif isinstance(result_val, (int, float)):
-                result_expr = exp.Literal.number(result_val)
-            elif isinstance(result_val, exp.Expression):
-                result_expr = result_val  # type: ignore[assignment]
-            else:
-                result_expr = exp.Literal.string(str(result_val))
+            search_expr = SQLFactory._to_literal(search_val)
+            result_expr = SQLFactory._to_literal(result_val)
 
             condition = exp.EQ(this=col_expr, expression=search_expr)
             conditions.append(exp.When(this=condition, then=result_expr))
@@ -844,17 +851,44 @@ class SQLFactory:
             COALESCE expression equivalent to NVL.
         """
         col_expr = exp.column(column) if isinstance(column, str) else column
-
-        if isinstance(substitute_value, str):
-            sub_expr = exp.Literal.string(substitute_value)
-        elif isinstance(substitute_value, (int, float)):
-            sub_expr = exp.Literal.number(substitute_value)
-        elif isinstance(substitute_value, exp.Expression):
-            sub_expr = substitute_value  # type: ignore[assignment]
-        else:
-            sub_expr = exp.Literal.string(str(substitute_value))
-
+        sub_expr = SQLFactory._to_literal(substitute_value)
         return exp.Coalesce(expressions=[col_expr, sub_expr])
+
+    @staticmethod
+    def nvl2(
+        column: Union[str, exp.Expression],
+        value_if_not_null: Union[str, exp.Expression, Any],
+        value_if_null: Union[str, exp.Expression, Any],
+    ) -> exp.Expression:
+        """Create an NVL2 (Oracle-style) expression using CASE.
+
+        NVL2 returns value_if_not_null if column is not NULL,
+        otherwise returns value_if_null.
+
+        Args:
+            column: Column to check for NULL.
+            value_if_not_null: Value to use if column is NOT NULL.
+            value_if_null: Value to use if column is NULL.
+
+        Returns:
+            CASE expression equivalent to NVL2.
+
+        Example:
+            ```python
+            # NVL2(salary, 'Has Salary', 'No Salary')
+            sql.nvl2("salary", "Has Salary", "No Salary")
+            ```
+        """
+        col_expr = exp.column(column) if isinstance(column, str) else column
+        not_null_expr = SQLFactory._to_literal(value_if_not_null)
+        null_expr = SQLFactory._to_literal(value_if_null)
+
+        # Create CASE WHEN column IS NOT NULL THEN value_if_not_null ELSE value_if_null END
+        is_null = exp.Is(this=col_expr, expression=exp.Null())
+        condition = exp.Not(this=is_null)
+        when_clause = exp.If(this=condition, true=not_null_expr)
+
+        return exp.Case(ifs=[when_clause], default=null_expr)
 
     # ===================
     # Bulk Operations
@@ -1057,7 +1091,7 @@ class Case:
 
     def __init__(self) -> None:
         """Initialize the CASE expression builder."""
-        self._conditions: list[exp.When] = []
+        self._conditions: list[exp.If] = []
         self._default: Optional[exp.Expression] = None
 
     def when(self, condition: Union[str, exp.Expression], value: Union[str, exp.Expression, Any]) -> "Case":
@@ -1071,17 +1105,10 @@ class Case:
             Self for method chaining.
         """
         cond_expr = exp.maybe_parse(condition) or exp.column(condition) if isinstance(condition, str) else condition
+        val_expr = SQLFactory._to_literal(value)
 
-        if isinstance(value, str):
-            val_expr = exp.Literal.string(value)
-        elif isinstance(value, (int, float)):
-            val_expr = exp.Literal.number(value)
-        elif isinstance(value, exp.Expression):
-            val_expr = value  # type: ignore[assignment]
-        else:
-            val_expr = exp.Literal.string(str(value))
-
-        when_clause = exp.When(this=cond_expr, then=val_expr)
+        # SQLGlot uses exp.If for CASE WHEN clauses, not exp.When
+        when_clause = exp.If(this=cond_expr, true=val_expr)
         self._conditions.append(when_clause)
         return self
 
@@ -1094,14 +1121,7 @@ class Case:
         Returns:
             Self for method chaining.
         """
-        if isinstance(value, str):
-            self._default = exp.Literal.string(value)
-        elif isinstance(value, (int, float)):
-            self._default = exp.Literal.number(value)
-        elif isinstance(value, exp.Expression):
-            self._default = value
-        else:
-            self._default = exp.Literal.string(str(value))
+        self._default = SQLFactory._to_literal(value)
         return self
 
     def end(self) -> exp.Expression:

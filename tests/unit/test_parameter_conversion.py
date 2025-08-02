@@ -82,7 +82,7 @@ def test_parameter_conversion_only_when_necessary() -> None:
     sql, params = adapter._get_compiled_sql(mock_statement, statement_config)
 
     # Should call compile with explicit style even when it matches default
-    mock_statement.compile.assert_called_once_with(placeholder_style=ParameterStyle.QMARK)
+    mock_statement.compile.assert_called_once_with(placeholder_style=ParameterStyle.QMARK, flatten_single_params=False)
     assert sql == "SELECT * FROM test WHERE id = ?"
     assert params == [1]
 
@@ -108,7 +108,9 @@ def test_parameter_style_conversion_when_different() -> None:
     sql, params = adapter._get_compiled_sql(mock_statement, statement_config)
 
     # Should call compile with explicit execution style
-    mock_statement.compile.assert_called_once_with(placeholder_style=ParameterStyle.NUMERIC)
+    mock_statement.compile.assert_called_once_with(
+        placeholder_style=ParameterStyle.NUMERIC, flatten_single_params=False
+    )
     assert sql == "SELECT * FROM test WHERE id = $1"
     assert params == [1]
 
@@ -138,7 +140,7 @@ def test_no_parameter_conversion_without_target_style() -> None:
     sql, params = adapter._get_compiled_sql(mock_statement, statement_config)
 
     # Should call compile with explicit style (which equals default in this case)
-    mock_statement.compile.assert_called_once_with(placeholder_style=ParameterStyle.QMARK)
+    mock_statement.compile.assert_called_once_with(placeholder_style=ParameterStyle.QMARK, flatten_single_params=False)
     assert sql == "SELECT * FROM test WHERE id = ?"
     assert params == [1]
 
@@ -221,7 +223,7 @@ def test_base_get_compiled_sql_always_explicit() -> None:
 
     # Should ALWAYS call with explicit placeholder_style when target_style is set
     # This prevents SQLGlot from using its internal default which may differ
-    mock_statement.compile.assert_called_once_with(placeholder_style=ParameterStyle.QMARK)
+    mock_statement.compile.assert_called_once_with(placeholder_style=ParameterStyle.QMARK, flatten_single_params=False)
 
 
 @pytest.mark.parametrize(
@@ -257,4 +259,4 @@ def test_parameter_style_compilation(adapter_style: ParameterStyle, expected_sty
     adapter._get_compiled_sql(mock_statement, statement_config)
 
     # Should use the correct parameter style
-    mock_statement.compile.assert_called_once_with(placeholder_style=expected_style)
+    mock_statement.compile.assert_called_once_with(placeholder_style=expected_style, flatten_single_params=False)

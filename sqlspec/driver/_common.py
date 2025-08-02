@@ -376,10 +376,24 @@ class CommonDriverAttributesMixin:
             statement_config: Statement configuration for parameter style detection
 
         Returns:
-            Processed parameter set with TypedParameter objects unwrapped
+            Processed parameter set with TypedParameter objects unwrapped and type coercion applied
         """
         if not parameters:
             return []
+
+        # Apply type coercion map if available
+        def apply_type_coercion(value: Any) -> Any:
+            """Apply type coercion to a single value."""
+            # Unwrap TypedParameter first
+            unwrapped_value = value.value if isinstance(value, TypedParameter) else value
+
+            # Apply type coercion map if available
+            if statement_config.parameter_config.type_coercion_map:
+                for type_check, converter in statement_config.parameter_config.type_coercion_map.items():
+                    if isinstance(unwrapped_value, type_check):
+                        return converter(unwrapped_value)
+
+            return unwrapped_value
 
         if isinstance(parameters, dict):
             if not parameters:
@@ -399,16 +413,16 @@ class CommonDriverAttributesMixin:
                     else (int(item[0][6:]) if item[0].startswith("param_") and item[0][6:].isdigit() else float("inf")),
                 )
                 for _, value in sorted_items:
-                    ordered_params.append(value.value if isinstance(value, TypedParameter) else value)
+                    ordered_params.append(apply_type_coercion(value))
                 return ordered_params
 
             # For named parameter styles, keep as dict
-            return {k: (v.value if isinstance(v, TypedParameter) else v) for k, v in parameters.items()}
+            return {k: apply_type_coercion(v) for k, v in parameters.items()}
 
         if isinstance(parameters, (list, tuple)):
-            return [p.value if isinstance(p, TypedParameter) else p for p in parameters]
+            return [apply_type_coercion(p) for p in parameters]
 
-        return [parameters.value if isinstance(parameters, TypedParameter) else parameters]
+        return [apply_type_coercion(parameters)]
 
     def _apply_pipeline_transformations(
         self, expression: "exp.Expression", parameters: Any = None, config: "Optional[StatementConfig]" = None
@@ -444,12 +458,15 @@ class CommonDriverAttributesMixin:
     # SQL Compilation Methods
     # ================================================================================
 
-    def _get_compiled_sql(self, statement: "SQL", statement_config: "StatementConfig") -> tuple[str, Any]:
+    def _get_compiled_sql(
+        self, statement: "SQL", statement_config: "StatementConfig", flatten_single_params: bool = False
+    ) -> tuple[str, Any]:
         """Get compiled SQL with optimal parameter style (only converts when needed).
 
         Args:
             statement: SQL statement to compile
             statement_config: Complete statement configuration including parameter config, dialect, etc.
+            flatten_single_params: If True, flatten single-element lists for scalar parameters
 
         Returns:
             Tuple of (compiled_sql, parameters)
@@ -460,7 +477,7 @@ class CommonDriverAttributesMixin:
             target_style = statement_config.parameter_config.execution_parameter_style
         else:
             target_style = None
-        sql, params = statement.compile(placeholder_style=target_style)
+        sql, params = statement.compile(placeholder_style=target_style, flatten_single_params=flatten_single_params)
         return sql, self.prepare_driver_parameters(params, statement_config, is_many=statement.is_many)
 
     def _create_count_query(self, original_sql: "SQL") -> "SQL":

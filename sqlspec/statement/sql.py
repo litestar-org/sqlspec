@@ -81,7 +81,8 @@ PROCESSED_STATE_SLOTS = (
 )
 # StatementConfig slots definition for mypyc compatibility
 SQL_CONFIG_SLOTS = (
-    "custom_pipeline_steps",
+    "pre_process_steps",
+    "post_process_steps",
     "dialect",
     "enable_analysis",
     "enable_caching",
@@ -228,7 +229,8 @@ class StatementConfig:
         parameter_converter: "Optional[ParameterConverter]" = None,
         parameter_validator: "Optional[ParameterValidator]" = None,
         dialect: "Optional[DialectType]" = None,
-        custom_pipeline_steps: "Optional[list[Any]]" = None,
+        pre_process_steps: "Optional[list[Any]]" = None,
+        post_process_steps: "Optional[list[Any]]" = None,
         output_transformer: "Optional[Callable[[str, Any], tuple[str, Any]]]" = None,
     ) -> None:
         self.enable_parsing = enable_parsing
@@ -248,7 +250,8 @@ class StatementConfig:
         self.parameter_config = parameter_config
 
         self.dialect = dialect
-        self.custom_pipeline_steps = custom_pipeline_steps
+        self.pre_process_steps = pre_process_steps
+        self.post_process_steps = post_process_steps
         self.output_transformer = output_transformer
 
     def replace(self, **changes: Any) -> "StatementConfig":
@@ -280,22 +283,36 @@ class StatementConfig:
         return all(getattr(self, slot) == getattr(other, slot) for slot in SQL_CONFIG_SLOTS)
 
     def get_pipeline_steps(self) -> list:
-        """Get the configured pipeline steps.
+        """Get the configured pipeline steps with enhanced execution control.
+
+        Pipeline Execution Order:
+        1. pre_process_steps    - Before literal parameterization (e.g., COPY detection)
+        2. parameterize_literals_step - Convert literals to parameters (NULL -> None)
+        3. post_process_steps   - After parameterization (e.g., ADBC NULL handling)
+        4. Parameter processing with output_transformer - Final formatting
 
         Returns:
-            List of pipeline steps to execute
+            List of pipeline steps in precise execution order
         """
         steps = []
 
-        # Add custom pipeline steps first (e.g., ADBC transformer)
-        if self.custom_pipeline_steps:
-            steps.extend(self.custom_pipeline_steps)
+        # Phase 1: Pre-processing (before parameterization)
+        # Use case: psycopg COPY detection, BigQuery preprocessing
+        if self.pre_process_steps:
+            steps.extend(self.pre_process_steps)
 
+        # Phase 2: Core transformations
         if self.enable_transformations:
-            steps.append(parameterize_literals_step)
+            steps.append(parameterize_literals_step)  # NULL -> None conversion happens here
             if self.enable_expression_simplification:
                 steps.append(optimize_step)
 
+        # Phase 3: Post-processing (after parameterization)
+        # Use case: ADBC NULL handling, parameter-dependent transformations
+        if self.post_process_steps:
+            steps.extend(self.post_process_steps)
+
+        # Phase 4: Validation
         if self.enable_validation:
             steps.extend([validate_dml_safety_step, validate_step])
 
@@ -1442,8 +1459,15 @@ class SQL:
                 extracted_params = self._processing_context.metadata.get("extracted_literals", [])
         return extracted_params
 
-    def compile(self, placeholder_style: "Optional[str]" = None) -> "tuple[str, Any]":
-        """Compile to SQL and parameters with driver awareness."""
+    def compile(
+        self, placeholder_style: "Optional[str]" = None, flatten_single_params: bool = False
+    ) -> "tuple[str, Any]":
+        """Compile to SQL and parameters with driver awareness.
+
+        Args:
+            placeholder_style: Target parameter placeholder style
+            flatten_single_params: If True, flatten single-element lists for scalar parameters
+        """
         # Handle special cases first
         if self._is_script:
             return self.sql, None
@@ -1468,7 +1492,43 @@ class SQL:
         if placeholder_style:
             sql, params = self._apply_placeholder_style(sql, params, placeholder_style)
 
+        # Flatten single params if requested (for ADBC compatibility)
+        if flatten_single_params and params is not None:
+            params = self._flatten_single_params(sql, params)
+
         return sql, params
+
+    def _flatten_single_params(self, sql: str, params: Any) -> Any:
+        """Flatten single-element lists for scalar parameters.
+
+        This helps with ADBC compatibility where PostgreSQL interprets
+        lists as array types instead of scalar parameters.
+
+        Args:
+            sql: The compiled SQL string
+            params: Parameters to potentially flatten
+
+        Returns:
+            Flattened parameters if applicable, otherwise original params
+        """
+        if not isinstance(params, list) or len(params) != 1:
+            return params
+
+        # Count parameter placeholders in SQL
+        param_count = sql.count("$1") + sql.count("$2") + sql.count("?") + sql.count("%s")
+
+        # If we have exactly one parameter placeholder and one parameter that is a list
+        # containing exactly one non-list element, extract it
+        single_param = params[0]
+        if (
+            param_count == 1
+            and isinstance(single_param, list)
+            and len(single_param) == 1
+            and not isinstance(single_param[0], (list, tuple))
+        ):
+            return single_param
+
+        return params
 
     def _get_processed_sql_and_params(self) -> "tuple[str, Any]":
         """Get processed SQL and parameters from the processed state."""
