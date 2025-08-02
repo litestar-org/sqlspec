@@ -171,9 +171,10 @@ def test_sql_with_typed_parameters() -> None:
     assert internal_params["param_1"].value is True
     assert internal_params["param_1"].type_hint == "boolean"
 
-    # The final output params should be unwrapped
-    assert params["param_0"] == datetime(2024, 1, 1)
-    assert params["param_1"] is True
+    # The final output params should be unwrapped and in QMARK format (tuple)
+    assert isinstance(params, tuple)
+    assert params[0] == datetime(2024, 1, 1)
+    assert params[1] is True
 
 
 def test_typed_parameter_type_inference() -> None:

@@ -13,13 +13,14 @@ from pathlib import Path
 from typing import Any, Optional, Union
 
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
+from sqlspec.statement.cache import file_cache, get_cache_config
 from sqlspec.statement.sql import SQL
 from sqlspec.storage import storage_registry
 from sqlspec.storage.registry import StorageRegistry
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
 
-__all__ = ("SQLFile", "SQLFileLoader")
+__all__ = ("CachedSQLFile", "SQLFile", "SQLFileLoader")
 
 logger = get_logger("loader")
 
@@ -74,6 +75,27 @@ class SQLFile:
         self.checksum = hashlib.md5(self.content.encode(), usedforsecurity=False).hexdigest()
 
 
+class CachedSQLFile:
+    """Cached SQL file with parsed queries for efficient reloading.
+
+    This structure is stored in the file cache to avoid re-parsing
+    SQL files when their content hasn't changed.
+    """
+
+    __slots__ = ("parsed_queries", "query_names", "sql_file")
+
+    def __init__(self, sql_file: SQLFile, parsed_queries: "dict[str, str]") -> None:
+        """Initialize cached SQL file.
+
+        Args:
+            sql_file: The original SQLFile with content and metadata.
+            parsed_queries: Pre-parsed named queries from the file.
+        """
+        self.sql_file = sql_file
+        self.parsed_queries = parsed_queries
+        self.query_names = list(parsed_queries.keys())
+
+
 class SQLFileLoader:
     """Loads and parses SQL files with aiosql-style named queries.
 
@@ -109,6 +131,56 @@ class SQLFileLoader:
         self._queries: dict[str, str] = {}
         self._files: dict[str, SQLFile] = {}
         self._query_to_file: dict[str, str] = {}  # Maps query name to file path
+
+    def _generate_file_cache_key(self, path: Union[str, Path]) -> str:
+        """Generate cache key for a file path.
+
+        Args:
+            path: File path to generate key for.
+
+        Returns:
+            Cache key string for the file.
+        """
+        path_str = str(path)
+        # Use path hash for consistent cache keys
+        path_hash = hashlib.md5(path_str.encode(), usedforsecurity=False).hexdigest()
+        return f"file:{path_hash[:16]}"
+
+    def _calculate_file_checksum(self, path: Union[str, Path]) -> str:
+        """Calculate checksum for file content validation.
+
+        Args:
+            path: File path to calculate checksum for.
+
+        Returns:
+            MD5 checksum of file content.
+
+        Raises:
+            SQLFileParseError: If file cannot be read.
+        """
+        try:
+            content = self._read_file_content(path)
+            return hashlib.md5(content.encode(), usedforsecurity=False).hexdigest()
+        except Exception as e:
+            raise SQLFileParseError(str(path), str(path), e) from e
+
+    def _is_file_unchanged(self, path: Union[str, Path], cached_file: CachedSQLFile) -> bool:
+        """Check if file has changed since caching.
+
+        Args:
+            path: File path to check.
+            cached_file: Cached file data.
+
+        Returns:
+            True if file is unchanged, False otherwise.
+        """
+        try:
+            current_checksum = self._calculate_file_checksum(path)
+        except Exception:
+            # If we can't read the file, consider it changed
+            return False
+        else:
+            return current_checksum == cached_file.sql_file.checksum
 
     def _read_file_content(self, path: Union[str, Path]) -> str:
         """Read file content using storage backend.
@@ -250,7 +322,7 @@ class SQLFileLoader:
         return len(sql_files)
 
     def _load_single_file(self, file_path: Union[str, Path], namespace: Optional[str]) -> None:
-        """Load a single SQL file with optional namespace.
+        """Load a single SQL file with optional namespace and caching.
 
         Args:
             file_path: Path to the SQL file (can be string for URIs or Path for local files).
@@ -260,6 +332,69 @@ class SQLFileLoader:
 
         if path_str in self._files:
             return  # Already loaded
+
+        # Check cache configuration
+        cache_config = get_cache_config()
+        if not cache_config.file_cache_enabled:
+            # No caching - load directly
+            self._load_file_without_cache(file_path, namespace)
+            return
+
+        # Try to load from cache
+        cache_key = self._generate_file_cache_key(file_path)
+        cached_file = file_cache.get(cache_key)
+
+        if (
+            cached_file is not None
+            and isinstance(cached_file, CachedSQLFile)
+            and self._is_file_unchanged(file_path, cached_file)
+        ):
+            # Cache hit - use cached data
+
+            # Restore file and queries from cache
+            self._files[path_str] = cached_file.sql_file
+            for name, sql in cached_file.parsed_queries.items():
+                namespaced_name = f"{namespace}.{name}" if namespace else name
+                if namespaced_name in self._queries:
+                    existing_file = self._query_to_file.get(namespaced_name, "unknown")
+                    if existing_file != path_str:
+                        raise SQLFileParseError(
+                            path_str,
+                            path_str,
+                            ValueError(f"Query name '{namespaced_name}' already exists in file: {existing_file}"),
+                        )
+                self._queries[namespaced_name] = sql
+                self._query_to_file[namespaced_name] = path_str
+            return
+
+        # Cache miss or file changed - load and cache
+
+        self._load_file_without_cache(file_path, namespace)
+
+        # Cache the loaded file
+        if path_str in self._files:
+            sql_file = self._files[path_str]
+            # Extract queries for this file
+            file_queries: dict[str, str] = {}
+            for query_name, query_path in self._query_to_file.items():
+                if query_path == path_str:
+                    # Remove namespace prefix for storage
+                    stored_name = query_name
+                    if namespace and query_name.startswith(f"{namespace}."):
+                        stored_name = query_name[len(namespace) + 1 :]
+                    file_queries[stored_name] = self._queries[query_name]
+
+            cached_file_data = CachedSQLFile(sql_file=sql_file, parsed_queries=file_queries)
+            file_cache.set(cache_key, cached_file_data)
+
+    def _load_file_without_cache(self, file_path: Union[str, Path], namespace: Optional[str]) -> None:
+        """Load a single SQL file without caching (original implementation).
+
+        Args:
+            file_path: Path to the SQL file (can be string for URIs or Path for local files).
+            namespace: Optional namespace prefix for queries.
+        """
+        path_str = str(file_path)
 
         content = self._read_file_content(file_path)
         sql_file = SQLFile(content=content, path=path_str)
@@ -317,17 +452,6 @@ class SQLFileLoader:
         # Normalize query name for lookup
         safe_name = _normalize_query_name(name)
 
-        logger.debug(
-            "Retrieving SQL query: %s",
-            name,
-            extra={
-                "query_name": name,
-                "safe_name": safe_name,
-                "has_parameters": parameters is not None,
-                "correlation_id": correlation_id,
-            },
-        )
-
         if safe_name not in self._queries:
             available = ", ".join(sorted(self._queries.keys())) if self._queries else "none"
             logger.error(
@@ -345,21 +469,6 @@ class SQLFileLoader:
         sql_kwargs = dict(kwargs)
         if parameters is not None:
             sql_kwargs["parameters"] = parameters
-
-        source_file = self._query_to_file.get(safe_name, "unknown")
-
-        logger.debug(
-            "Found query %s from %s",
-            name,
-            source_file,
-            extra={
-                "query_name": name,
-                "safe_name": safe_name,
-                "source_file": source_file,
-                "sql_length": len(self._queries[safe_name]),
-                "correlation_id": correlation_id,
-            },
-        )
 
         return SQL(self._queries[safe_name], **sql_kwargs)
 
@@ -422,6 +531,17 @@ class SQLFileLoader:
         self._files.clear()
         self._queries.clear()
         self._query_to_file.clear()
+
+        # Also clear the file cache
+        cache_config = get_cache_config()
+        if cache_config.file_cache_enabled:
+            file_cache.clear()
+
+    def clear_file_cache(self) -> None:
+        """Clear only the file cache, keeping loaded queries."""
+        cache_config = get_cache_config()
+        if cache_config.file_cache_enabled:
+            file_cache.clear()
 
     def get_query_text(self, name: str) -> str:
         """Get raw SQL text for a query.

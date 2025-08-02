@@ -38,8 +38,8 @@ All driver abstract methods must be implemented with these signatures:
 
 ```python
 def _try_special_handling(
-    self, 
-    cursor: Any, 
+    self,
+    cursor: Any,
     statement: SQL
 ) -> Optional[tuple[Any, Optional[int], Any]]:
     """Hook for database-specific operations"""
@@ -91,7 +91,7 @@ def _get_row_count(
 ### Golden Rules
 
 1. **Template Method Pattern** - Base class orchestrates, drivers implement specifics
-2. **Parameters flow through context** - User → SQL → Pipeline → Driver → Database  
+2. **Parameters flow through context** - User → SQL → Pipeline → Driver → Database
 3. **Immutability** - Always return new instances
 4. **AST over strings** - Use SQLGlot for SQL manipulation
 5. **Leverage caching** - _ProcessedState provides performance gains

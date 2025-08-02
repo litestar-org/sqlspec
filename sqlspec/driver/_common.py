@@ -400,11 +400,14 @@ class CommonDriverAttributesMixin:
                 return []
             # Check if we should convert dict to list based on supported execution styles
             # If the driver supports named parameters natively, keep dicts as dicts
-            if (statement_config.parameter_config.supported_execution_parameter_styles and
-                ParameterStyle.NAMED_PYFORMAT in statement_config.parameter_config.supported_execution_parameter_styles):
+            if (
+                statement_config.parameter_config.supported_execution_parameter_styles
+                and ParameterStyle.NAMED_PYFORMAT
+                in statement_config.parameter_config.supported_execution_parameter_styles
+            ):
                 # Driver supports named parameters, keep as dict
                 return {k: apply_type_coercion(v) for k, v in parameters.items()}
-            elif statement_config.parameter_config.default_parameter_style in {
+            if statement_config.parameter_config.default_parameter_style in {
                 ParameterStyle.NUMERIC,
                 ParameterStyle.QMARK,
                 ParameterStyle.POSITIONAL_PYFORMAT,
@@ -482,8 +485,10 @@ class CommonDriverAttributesMixin:
         elif statement_config.parameter_config.supported_execution_parameter_styles is not None:
             # New system: check if current style is supported, otherwise use default
             current_style = statement.detect_parameter_style()
-            if (current_style and 
-                current_style in statement_config.parameter_config.supported_execution_parameter_styles):
+            if (
+                current_style
+                and current_style in statement_config.parameter_config.supported_execution_parameter_styles
+            ):
                 # Current style is supported, preserve original (don't convert)
                 target_style = None
             else:

@@ -11,16 +11,18 @@ This module tests the foundational builder functionality including:
 """
 
 import math
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from unittest.mock import Mock, patch
 
 import pytest
-from sqlglot import exp
+from sqlglot import Expression, exp
 from sqlglot.dialects.dialect import Dialect
+from sqlglot.expressions import Condition
 
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.parameters import ParameterStyle
 from sqlspec.parameters.config import ParameterStyleConfig
+from sqlspec.statement.builder import ColumnExpression
 from sqlspec.statement.builder._base import QueryBuilder, SafeQuery
 from sqlspec.statement.builder._ddl import (
     AlterTable,
@@ -76,7 +78,12 @@ class WhereClauseMixinHelper(WhereClauseMixin):
         self._parameters[param_name] = value
         return self, param_name
 
-    def where(self, condition: Any) -> "WhereClauseMixinHelper":
+    def where(
+        self,
+        condition: Union[str, Expression, Condition, tuple[str, Any], tuple[str, str, Any], ColumnExpression],
+        value: Optional[Any] = ...,
+        operator: Optional[str] = ...,
+    ) -> "WhereClauseMixinHelper":
         """Mock where implementation for testing."""
         return self
 

@@ -148,15 +148,20 @@ class WhereClauseMixin:
     def where(
         self,
         condition: Union[str, exp.Expression, exp.Condition, tuple[str, Any], tuple[str, str, Any], "ColumnExpression"],
+        value: Optional[Any] = None,
+        operator: Optional[str] = None,
     ) -> Self:
         """Add a WHERE clause to the statement.
 
         Args:
             condition: The condition for the WHERE clause. Can be:
-                - A string condition
+                - A string condition (when value is None)
+                - A string column name (when value is provided)
                 - A sqlglot Expression or Condition
                 - A 2-tuple (column, value) for equality comparison
                 - A 3-tuple (column, operator, value) for custom comparison
+            value: Value for comparison (when condition is a column name)
+            operator: Operator for comparison (when both condition and value provided)
 
         Raises:
             SQLBuilderError: If the current expression is not a supported statement type.
@@ -182,7 +187,19 @@ class WhereClauseMixin:
             raise SQLBuilderError(msg)
 
         # Process different condition types
-        if isinstance(condition, str):
+        if value is not None:
+            # Handle variable arguments: where("column", value) or where("column", value, "operator")
+            if not isinstance(condition, str):
+                msg = "When value is provided, condition must be a column name (string)"
+                raise SQLBuilderError(msg)
+
+            if operator is not None:
+                # 3-argument form: where("column", value, "=")
+                where_expr = self._process_tuple_condition((condition, operator, value))
+            else:
+                # 2-argument form: where("column", value) - assume equality
+                where_expr = self._process_tuple_condition((condition, value))
+        elif isinstance(condition, str):
             where_expr = parse_condition_expression(condition)
         elif isinstance(condition, (exp.Expression, exp.Condition)):
             where_expr = condition

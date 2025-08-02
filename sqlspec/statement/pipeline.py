@@ -14,6 +14,7 @@ from sqlglot.optimizer.simplify import simplify
 
 from sqlspec.parameters import ParameterValidator
 from sqlspec.parameters.types import TypedParameter
+from sqlspec.statement.cache import analysis_cache, get_cache_config
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -26,9 +27,13 @@ __all__ = (
     "SQLTransformContext",
     "compose_pipeline",
     "create_pipeline_from_config",
+    "generate_analysis_cache_key",
+    "metadata_extraction_step",
     "normalize_step",
     "optimize_step",
+    "parameter_analysis_step",
     "parameterize_literals_step",
+    "returns_rows_analysis_step",
     "validate_dml_safety_step",
     "validate_step",
 )
@@ -98,6 +103,87 @@ class SQLTransformContext:
 
 
 PipelineStep = Callable[[SQLTransformContext], SQLTransformContext]
+
+
+def generate_analysis_cache_key(sql: str, statement_config: "StatementConfig") -> str:
+    """Generate a cache key that incorporates StatementConfig for analysis results.
+
+    The cache key includes:
+    - SQL statement hash
+    - Analysis configuration flags
+    - Dialect
+    - Parameter configuration that affects analysis
+
+    This ensures analysis results are cached per unique configuration.
+    """
+    import hashlib
+
+    # Create hash of the SQL statement
+    sql_hash = hashlib.sha256(sql.encode()).hexdigest()[:16]
+
+    # Create configuration signature for analysis-affecting settings
+    config_parts = [
+        f"analysis:{statement_config.enable_analysis}",
+        f"dialect:{statement_config.dialect or 'default'}",
+        f"param_style:{statement_config.parameter_config.default_parameter_style.value}",
+        f"transformations:{statement_config.enable_transformations}",
+        f"validation:{statement_config.enable_validation}",
+    ]
+
+    config_signature = hashlib.sha256("|".join(config_parts).encode()).hexdigest()[:8]
+
+    return f"analysis:{sql_hash}:{config_signature}"
+
+
+def with_analysis_caching(step_func: PipelineStep, step_name: str) -> PipelineStep:
+    """Wrap an analysis step with caching functionality.
+
+    Args:
+        step_func: The analysis step function to wrap
+        step_name: Name of the step for cache key generation
+
+    Returns:
+        Wrapped step function that checks cache first
+    """
+
+    def cached_step(context: SQLTransformContext) -> SQLTransformContext:
+        import hashlib
+
+        # Skip caching if no config available or caching disabled
+        cache_config = get_cache_config()
+        if not cache_config.analysis_cache_enabled:
+            return step_func(context)
+
+        # Generate cache key for this specific analysis step
+        sql_text = context.current_expression.sql(dialect=context.dialect)
+        step_cache_key = f"{step_name}:{hashlib.sha256(sql_text.encode()).hexdigest()[:16]}"
+
+        # Check cache first
+        cached_result = analysis_cache.get(step_cache_key)
+        if cached_result is not None:
+            # Merge cached results into context metadata
+            context.metadata.update(cached_result)
+            return context
+
+        # Take a snapshot of metadata before executing the step
+        metadata_before = dict(context.metadata)
+
+        # Execute the actual analysis step
+        result_context = step_func(context)
+
+        # Cache the analysis results - only metadata that was added by this step
+        step_results = {
+            key: value
+            for key, value in result_context.metadata.items()
+            if key not in metadata_before or metadata_before.get(key) != value
+        }
+
+        if step_results:
+            analysis_cache.set(step_cache_key, step_results)
+
+        return result_context
+
+    return cached_step
 
 
 def compose_pipeline(steps: list[PipelineStep]) -> PipelineStep:
@@ -354,3 +440,247 @@ def validate_dml_safety_step(context: SQLTransformContext) -> SQLTransformContex
     context.metadata["validation_issues"] = issues
     context.metadata["dml_safety_validated"] = True
     return context
+
+
+def metadata_extraction_step(context: SQLTransformContext) -> SQLTransformContext:
+    """Extract metadata from SQL expression.
+
+    Analyzes the SQL expression to extract structural metadata such as
+    tables, columns, operations, and other useful information for
+    query analysis and optimization.
+    """
+    metadata = context.metadata.setdefault("analysis_metadata", {})
+
+    try:
+        # Extract table information
+        tables = set()
+        for node in context.current_expression.walk():
+            if isinstance(node, exp.Table):
+                table_name = str(node.this) if node.this else ""
+                if table_name:
+                    tables.add(table_name)
+
+        metadata["tables"] = list(tables)
+
+        # Extract column information
+        columns = set()
+        for node in context.current_expression.walk():
+            if isinstance(node, exp.Column):
+                column_name = str(node.this) if node.this else ""
+                if column_name and column_name != "*":
+                    columns.add(column_name)
+            # For INSERT statements, column names appear as Identifiers in Schema nodes
+            elif isinstance(node, exp.Identifier) and isinstance(node.parent, exp.Schema):
+                column_name = str(node.this) if node.this else ""
+                if column_name:
+                    columns.add(column_name)
+
+        metadata["columns"] = list(columns)
+
+        # Determine operation type
+        if isinstance(context.current_expression, exp.Select):
+            metadata["operation_type"] = "SELECT"
+        elif isinstance(context.current_expression, exp.Insert):
+            metadata["operation_type"] = "INSERT"
+        elif isinstance(context.current_expression, exp.Update):
+            metadata["operation_type"] = "UPDATE"
+        elif isinstance(context.current_expression, exp.Delete):
+            metadata["operation_type"] = "DELETE"
+        elif isinstance(context.current_expression, exp.Anonymous):
+            metadata["operation_type"] = "ANONYMOUS"
+        else:
+            metadata["operation_type"] = "OTHER"
+
+        # Extract JOIN information
+        joins = []
+        for node in context.current_expression.walk():
+            if isinstance(node, exp.Join):
+                # Get join type from the 'side' attribute (LEFT, RIGHT, etc.) or default to INNER
+                join_side = getattr(node, "side", None)
+                if join_side:
+                    joins.append(join_side.upper())
+                else:
+                    joins.append("INNER")
+
+        metadata["joins"] = joins
+
+        context.metadata["metadata_extracted"] = True
+
+    except Exception as e:
+        logger.warning("Metadata extraction failed: %s", e)
+        context.metadata["metadata_extracted"] = False
+        context.metadata["metadata_extraction_error"] = str(e)
+
+    return context
+
+
+def returns_rows_analysis_step(context: SQLTransformContext) -> SQLTransformContext:
+    """Analyze whether the SQL expression returns rows.
+
+    Determines if the SQL statement will return a result set that
+    can be fetched. This is important for driver behavior and
+    result handling optimization.
+    """
+    try:
+        returns_rows = False
+
+        # Analyze the expression type using AST traversal
+        if isinstance(context.current_expression, exp.Select):
+            returns_rows = True
+        elif isinstance(context.current_expression, exp.Insert):
+            # INSERT with RETURNING clause returns rows
+            returns_rows = bool(context.current_expression.find(exp.Returning))
+        elif isinstance(context.current_expression, exp.Update):
+            # UPDATE with RETURNING clause returns rows
+            returns_rows = bool(context.current_expression.find(exp.Returning))
+        elif isinstance(context.current_expression, exp.Delete):
+            # DELETE with RETURNING clause returns rows
+            returns_rows = bool(context.current_expression.find(exp.Returning))
+        elif isinstance(context.current_expression, exp.Anonymous):
+            # For anonymous expressions, try to analyze the SQL structure more intelligently
+            returns_rows = _analyze_anonymous_returns_rows(context.current_expression)
+        elif isinstance(context.current_expression, (exp.Show, exp.Describe, exp.Pragma)):
+            # These statement types typically return rows
+            returns_rows = True
+        elif isinstance(context.current_expression, exp.With):
+            # WITH (CTE) statements - check if they contain SELECT
+            returns_rows = bool(context.current_expression.find(exp.Select))
+        else:
+            # Other statement types (CREATE, DROP, ALTER, etc.) typically don't return rows
+            returns_rows = False
+
+        context.metadata["returns_rows"] = returns_rows
+        context.metadata["returns_rows_analyzed"] = True
+
+    except Exception as e:
+        logger.warning("Returns rows analysis failed: %s", e)
+        context.metadata["returns_rows_analyzed"] = False
+        context.metadata["returns_rows_analysis_error"] = str(e)
+        # Default to False for safety
+        context.metadata["returns_rows"] = False
+
+    return context
+
+
+def parameter_analysis_step(context: SQLTransformContext) -> SQLTransformContext:
+    """Analyze parameter usage patterns in the SQL expression.
+
+    Examines the parameters used in the SQL statement to provide
+    insights about parameter types, positions, and usage patterns
+    for optimization and validation purposes.
+    """
+    try:
+        analysis: dict[str, Any] = {
+            "parameter_count": 0,
+            "parameter_types": set(),
+            "has_named_parameters": False,
+            "has_positional_parameters": False,
+            "parameter_positions": [],
+        }
+
+        # Analyze parameters from context
+        if context.parameters:
+            if isinstance(context.parameters, dict):
+                analysis["parameter_count"] = len(context.parameters)
+                analysis["has_named_parameters"] = True
+                for value in context.parameters.values():
+                    if hasattr(value, "value"):  # TypedParameter
+                        analysis["parameter_types"].add(type(value.value).__name__)
+                    else:
+                        analysis["parameter_types"].add(type(value).__name__)
+            elif isinstance(context.parameters, (list, tuple)):
+                analysis["parameter_count"] = len(context.parameters)
+                analysis["has_positional_parameters"] = True
+                for value in context.parameters:
+                    if hasattr(value, "value"):  # TypedParameter
+                        analysis["parameter_types"].add(type(value.value).__name__)
+                    else:
+                        analysis["parameter_types"].add(type(value).__name__)
+
+        # Analyze placeholders in expression
+        placeholder_count = 0
+        for node in context.current_expression.walk():
+            if isinstance(node, (exp.Placeholder, exp.Parameter)):
+                placeholder_count += 1
+                analysis["parameter_positions"].append(str(node))
+
+        analysis["placeholder_count"] = placeholder_count
+        analysis["parameter_types"] = list(analysis["parameter_types"])
+
+        context.metadata["parameter_analysis"] = analysis
+        context.metadata["parameter_analyzed"] = True
+
+    except Exception as e:
+        logger.warning("Parameter analysis failed: %s", e)
+        context.metadata["parameter_analyzed"] = False
+        context.metadata["parameter_analysis_error"] = str(e)
+
+    return context
+
+
+def _analyze_anonymous_returns_rows(anonymous_expr: exp.Anonymous) -> bool:
+    """Analyze anonymous SQL expression to determine if it returns rows.
+
+    This is a helper function for returns_rows_analysis_step to handle
+    anonymous expressions that couldn't be parsed into specific types.
+    Uses AST traversal when possible, falls back to text analysis for edge cases.
+    """
+    if not anonymous_expr or not anonymous_expr.this:
+        return False
+
+    # Try to analyze the structure first by checking for known expression types within
+    # the anonymous expression - sometimes subexpressions are parsed correctly even
+    # if the overall statement is anonymous
+
+    # Check if the anonymous expression contains SELECT statements
+    if anonymous_expr.find(exp.Select):
+        return True
+
+    # Check if it contains RETURNING clauses (for DML with RETURNING)
+    if anonymous_expr.find(exp.Returning):
+        return True
+
+    # Check for other row-returning expression types
+    if (
+        anonymous_expr.find(exp.Show)
+        or anonymous_expr.find(exp.Describe)
+        or anonymous_expr.find(exp.Pragma)
+        or anonymous_expr.find(exp.With)
+    ):
+        return True
+
+    # Fallback to text analysis for statements that couldn't be parsed
+    sql_text = str(anonymous_expr.this).strip().upper() if anonymous_expr.this else ""
+    if not sql_text:
+        return False
+
+    # Common patterns that return rows
+    returns_patterns = ["SELECT", "SHOW", "DESCRIBE", "DESC", "EXPLAIN", "PRAGMA", "WITH", "VALUES"]
+
+    # Common patterns that don't return rows
+    no_returns_patterns = [
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "CREATE",
+        "DROP",
+        "ALTER",
+        "TRUNCATE",
+        "SET",
+        "USE",
+        "COMMIT",
+        "ROLLBACK",
+    ]
+
+    first_word = sql_text.split(maxsplit=1)[0] if sql_text.split() else ""
+
+    if first_word in returns_patterns:
+        return True
+    if first_word in no_returns_patterns:
+        # Check for RETURNING clause using AST first, fallback to text
+        if anonymous_expr.find(exp.Returning):
+            return True
+        return "RETURNING" in sql_text
+
+    # Default to False for unknown patterns
+    return False

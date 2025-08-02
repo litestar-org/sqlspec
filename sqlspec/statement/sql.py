@@ -17,19 +17,21 @@ from sqlspec.parameters import (
     ParameterStyleConversionState,
     ParameterValidator,
 )
-from sqlspec.statement.cache import anonymous_returns_rows_cache, ast_fragment_cache, base_statement_cache, sql_cache
+from sqlspec.statement.cache import ast_fragment_cache, base_statement_cache
 from sqlspec.statement.filters import StatementFilter
 from sqlspec.statement.pipeline import (
     SQLTransformContext,
     compose_pipeline,
+    metadata_extraction_step,
     optimize_step,
+    parameter_analysis_step,
     parameterize_literals_step,
+    returns_rows_analysis_step,
     validate_dml_safety_step,
     validate_step,
 )
 from sqlspec.typing import Empty
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.statement_hashing import hash_sql_statement
 from sqlspec.utils.type_guards import (
     can_append_to_statement,
     can_extract_parameters,
@@ -316,7 +318,37 @@ class StatementConfig:
         if self.enable_validation:
             steps.extend([validate_dml_safety_step, validate_step])
 
+        # Phase 5: Analysis (after validation)
+        if self.enable_analysis:
+            steps.extend(self._get_analysis_steps())
+
         return steps
+
+    def _get_analysis_steps(self) -> list:
+        """Get configured analysis steps.
+
+        Returns the analysis pipeline steps in order:
+        1. metadata_extraction_step - Extract table/column metadata
+        2. returns_rows_analysis_step - Determine if query returns rows
+        3. parameter_analysis_step - Analyze parameter usage patterns
+
+        Steps are wrapped with caching when caching is enabled.
+        """
+        from sqlspec.statement.pipeline import with_analysis_caching
+
+        # Wrap analysis steps with caching if enabled
+        if self.enable_caching:
+            return [
+                with_analysis_caching(metadata_extraction_step, "metadata"),
+                with_analysis_caching(returns_rows_analysis_step, "returns_rows"),
+                with_analysis_caching(parameter_analysis_step, "parameters"),
+            ]
+
+        return [
+            metadata_extraction_step,  # Extract table/column metadata
+            returns_rows_analysis_step,  # Determine if query returns rows
+            parameter_analysis_step,  # Analyze parameter usage patterns
+        ]
 
 
 def default_analysis_handler(analysis: Any) -> None:
@@ -483,10 +515,6 @@ class SQL:
 
         self._named_params.update({k: v for k, v in kwargs.items() if not k.startswith("_")})
 
-    def _cache_key(self) -> str:
-        """Generate a cache key for the current SQL state."""
-        return hash_sql_statement(self)
-
     def _process_parameter_item(self, item: Any) -> None:
         """Process a single item from the parameters list."""
         if is_statement_filter(item):
@@ -540,17 +568,6 @@ class SQL:
         if self._processed_state is not Empty:
             return
 
-        # Check cache first if caching is enabled
-        cache_key = None
-        if self.statement_config.enable_caching:
-            cache_key = self._cache_key()
-            cached_state = sql_cache.get(cache_key)
-
-            if cached_state is not None:
-                # Cast to work around mypyc Optional type checking
-                self._processed_state = cast("_ProcessedState", cached_state)
-                return
-
         final_expr, final_params = self._build_final_state()
         has_placeholders = self._detect_placeholders()
         initial_sql_for_context, final_params = self._prepare_context_sql(final_expr, final_params)
@@ -562,12 +579,6 @@ class SQL:
         processed_sql, merged_params = self._process_pipeline_result(result_context, final_params, original_context)
 
         self._finalize_processed_state(result_context, processed_sql, merged_params)
-
-        # Store in cache if caching is enabled
-        if self.statement_config.enable_caching and cache_key is not None:
-            # We know _processed_state is not Empty after _finalize_processed_state
-            # Use cast to work around mypyc type checking
-            sql_cache.set(cache_key, cast("_ProcessedState", self._processed_state))
 
     def _detect_placeholders(self) -> bool:
         """Detect if the raw SQL has placeholders."""
@@ -803,11 +814,7 @@ class SQL:
             merged_params = converter.wrap_parameters_with_types(merged_params, param_info, literals_parameterized)
 
         # Extract analyzer results from context metadata
-        analysis_results = (
-            {key: value for key, value in context.metadata.items() if key.endswith("Analyzer")}
-            if context.metadata
-            else {}
-        )
+        analysis_results = context.metadata.copy() if context.metadata else {}
 
         # Analysis results are available in the metadata but no handler is configured
         # Analysis results can be accessed through the context metadata if needed
@@ -1335,13 +1342,8 @@ class SQL:
             sql_text = str(expression.this) if expression.this else ""
             if not sql_text.strip():
                 return False
-            cache_key = f"returns_rows:{hash(sql_text)}"
-            cached_result = anonymous_returns_rows_cache.get(cache_key)
-            if cached_result is not None:
-                return bool(cached_result)
-            result = self._check_anonymous_returns_rows(sql_text)
-            anonymous_returns_rows_cache.set(cache_key, result)
-            return result
+            # Direct cache usage removed - will use analysis pipeline when implemented
+            return self._check_anonymous_returns_rows(sql_text)
 
         return False
 
@@ -1486,13 +1488,20 @@ class SQL:
             sql, params = self._apply_parameter_transformations(sql, params, placeholder_style)
 
         # When no placeholder style is specified and no transformations applied, preserve original parameter format
-        if (placeholder_style is None and self._original_parameters is not None and 
-            not (self._processing_context and self._processing_context.metadata.get("parameter_conversion"))):
+        if (
+            placeholder_style is None
+            and self._original_parameters is not None
+            and not (self._processing_context and self._processing_context.metadata.get("parameter_conversion"))
+        ):
             if isinstance(self._original_parameters, tuple) and not self._named_params:
                 # Preserve tuple parameters for positional styles
                 params = self._original_parameters
-            elif isinstance(self._original_parameters, (tuple, list)) and len(self._original_parameters) == 1 and isinstance(self._original_parameters[0], dict):
-                # Preserve dict parameters for named styles  
+            elif (
+                isinstance(self._original_parameters, (tuple, list))
+                and len(self._original_parameters) == 1
+                and isinstance(self._original_parameters[0], dict)
+            ):
+                # Preserve dict parameters for named styles
                 params = self._original_parameters[0]
 
         # Unwrap typed parameters

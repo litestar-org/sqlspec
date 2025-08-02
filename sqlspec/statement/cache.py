@@ -4,7 +4,7 @@ import copy
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Any, Callable, Final, Optional
 
 import sqlglot
 import sqlglot.expressions as exp
@@ -23,9 +23,12 @@ __all__ = (
     "CachedFragment",
     "FilterCache",
     "SQLCache",
+    "analysis_cache",
     "anonymous_returns_rows_cache",
     "ast_fragment_cache",
     "base_statement_cache",
+    "builder_cache",
+    "file_cache",
     "filtered_ast_cache",
     "get_cache_config",
     "get_cache_stats",
@@ -42,6 +45,8 @@ DEFAULT_FRAGMENT_CACHE_SIZE: Final[int] = 5000
 DEFAULT_BASE_STATEMENT_CACHE_SIZE: Final[int] = 2000
 DEFAULT_FILTER_CACHE_SIZE: Final[int] = 1000
 DEFAULT_COMPILED_STATEMENT_CACHE_SIZE: Final[int] = 1000
+DEFAULT_BUILDER_CACHE_SIZE: Final[int] = 500
+DEFAULT_FILE_CACHE_SIZE: Final[int] = 100
 
 
 @dataclass
@@ -59,6 +64,18 @@ class CacheConfig:
     compiled_cache_size: int = DEFAULT_COMPILED_STATEMENT_CACHE_SIZE
     compiled_cache_enabled: bool = True
 
+    # Analysis caching configuration
+    analysis_cache_size: int = DEFAULT_CACHE_MAX_SIZE
+    analysis_cache_enabled: bool = True
+
+    # QueryBuilder caching configuration
+    builder_cache_size: int = DEFAULT_BUILDER_CACHE_SIZE
+    builder_cache_enabled: bool = True
+
+    # SQLFileLoader caching configuration
+    file_cache_size: int = DEFAULT_FILE_CACHE_SIZE
+    file_cache_enabled: bool = True
+
     def __post_init__(self) -> None:
         """Validate configuration values."""
         if self.sql_cache_size < 0:
@@ -75,6 +92,15 @@ class CacheConfig:
             raise ValueError(msg)
         if self.compiled_cache_size < 0:
             msg = "compiled_cache_size must be non-negative"
+            raise ValueError(msg)
+        if self.analysis_cache_size < 0:
+            msg = "analysis_cache_size must be non-negative"
+            raise ValueError(msg)
+        if self.builder_cache_size < 0:
+            msg = "builder_cache_size must be non-negative"
+            raise ValueError(msg)
+        if self.file_cache_size < 0:
+            msg = "file_cache_size must be non-negative"
             raise ValueError(msg)
 
 
@@ -112,6 +138,24 @@ class CacheStats:
     compiled_evictions: int = 0
     compiled_size: int = 0
 
+    # Analysis cache stats
+    analysis_hits: int = 0
+    analysis_misses: int = 0
+    analysis_evictions: int = 0
+    analysis_size: int = 0
+
+    # Builder cache stats
+    builder_hits: int = 0
+    builder_misses: int = 0
+    builder_evictions: int = 0
+    builder_size: int = 0
+
+    # File cache stats
+    file_hits: int = 0
+    file_misses: int = 0
+    file_evictions: int = 0
+    file_size: int = 0
+
     # Timing stats (in seconds)
     avg_cache_lookup_time: float = 0.0
     avg_parse_time: float = 0.0
@@ -148,6 +192,24 @@ class CacheStats:
         return self.compiled_hits / total if total > 0 else 0.0
 
     @property
+    def analysis_hit_rate(self) -> float:
+        """Calculate analysis cache hit rate."""
+        total = self.analysis_hits + self.analysis_misses
+        return self.analysis_hits / total if total > 0 else 0.0
+
+    @property
+    def builder_hit_rate(self) -> float:
+        """Calculate builder cache hit rate."""
+        total = self.builder_hits + self.builder_misses
+        return self.builder_hits / total if total > 0 else 0.0
+
+    @property
+    def file_hit_rate(self) -> float:
+        """Calculate file cache hit rate."""
+        total = self.file_hits + self.file_misses
+        return self.file_hits / total if total > 0 else 0.0
+
+    @property
     def overall_hit_rate(self) -> float:
         """Calculate overall cache hit rate across all caches."""
         total_hits = (
@@ -156,6 +218,9 @@ class CacheStats:
             + self.optimized_hits
             + self.anonymous_returns_rows_hits
             + self.compiled_hits
+            + self.analysis_hits
+            + self.builder_hits
+            + self.file_hits
         )
         total_accesses = (
             self.sql_hits
@@ -168,6 +233,12 @@ class CacheStats:
             + self.anonymous_returns_rows_misses
             + self.compiled_hits
             + self.compiled_misses
+            + self.analysis_hits
+            + self.analysis_misses
+            + self.builder_hits
+            + self.builder_misses
+            + self.file_hits
+            + self.file_misses
         )
         return total_hits / total_accesses if total_accesses > 0 else 0.0
 
@@ -209,6 +280,20 @@ class CacheStats:
                 "evictions": self.compiled_evictions,
                 "size": self.compiled_size,
             },
+            "analysis_cache": {
+                "hits": self.analysis_hits,
+                "misses": self.analysis_misses,
+                "hit_rate": self.analysis_hit_rate,
+                "evictions": self.analysis_evictions,
+                "size": self.analysis_size,
+            },
+            "file_cache": {
+                "hits": self.file_hits,
+                "misses": self.file_misses,
+                "hit_rate": self.file_hit_rate,
+                "evictions": self.file_evictions,
+                "size": self.file_size,
+            },
             "performance": {
                 "avg_cache_lookup_time_ms": self.avg_cache_lookup_time * 1000,
                 "avg_parse_time_ms": self.avg_parse_time * 1000,
@@ -220,7 +305,9 @@ class CacheStats:
                 + self.fragment_size
                 + self.optimized_size
                 + self.anonymous_returns_rows_size
-                + self.compiled_size,
+                + self.compiled_size
+                + self.analysis_size
+                + self.file_size,
             },
         }
 
@@ -327,30 +414,51 @@ class SQLCache:
 
     def _record_hit(self) -> None:
         """Record a cache hit in statistics."""
-        if self.cache_name == "sql":
-            _cache_stats.sql_hits += 1
-        elif self.cache_name == "optimized":
-            _cache_stats.optimized_hits += 1
-        elif self.cache_name == "anonymous_returns_rows":
-            _cache_stats.anonymous_returns_rows_hits += 1
+        hit_counters: dict[str, Callable[[], None]] = {
+            "sql": lambda: setattr(_cache_stats, "sql_hits", _cache_stats.sql_hits + 1),
+            "optimized": lambda: setattr(_cache_stats, "optimized_hits", _cache_stats.optimized_hits + 1),
+            "anonymous_returns_rows": lambda: setattr(
+                _cache_stats, "anonymous_returns_rows_hits", _cache_stats.anonymous_returns_rows_hits + 1
+            ),
+            "analysis": lambda: setattr(_cache_stats, "analysis_hits", _cache_stats.analysis_hits + 1),
+            "builder": lambda: setattr(_cache_stats, "builder_hits", _cache_stats.builder_hits + 1),
+            "file": lambda: setattr(_cache_stats, "file_hits", _cache_stats.file_hits + 1),
+        }
+        counter = hit_counters.get(self.cache_name)
+        if counter is not None:
+            counter()
 
     def _record_miss(self) -> None:
         """Record a cache miss in statistics."""
-        if self.cache_name == "sql":
-            _cache_stats.sql_misses += 1
-        elif self.cache_name == "optimized":
-            _cache_stats.optimized_misses += 1
-        elif self.cache_name == "anonymous_returns_rows":
-            _cache_stats.anonymous_returns_rows_misses += 1
+        miss_counters: dict[str, Callable[[], None]] = {
+            "sql": lambda: setattr(_cache_stats, "sql_misses", _cache_stats.sql_misses + 1),
+            "optimized": lambda: setattr(_cache_stats, "optimized_misses", _cache_stats.optimized_misses + 1),
+            "anonymous_returns_rows": lambda: setattr(
+                _cache_stats, "anonymous_returns_rows_misses", _cache_stats.anonymous_returns_rows_misses + 1
+            ),
+            "analysis": lambda: setattr(_cache_stats, "analysis_misses", _cache_stats.analysis_misses + 1),
+            "builder": lambda: setattr(_cache_stats, "builder_misses", _cache_stats.builder_misses + 1),
+            "file": lambda: setattr(_cache_stats, "file_misses", _cache_stats.file_misses + 1),
+        }
+        counter = miss_counters.get(self.cache_name)
+        if counter is not None:
+            counter()
 
     def _record_eviction(self) -> None:
         """Record a cache eviction in statistics."""
-        if self.cache_name == "sql":
-            _cache_stats.sql_evictions += 1
-        elif self.cache_name == "optimized":
-            _cache_stats.optimized_evictions += 1
-        elif self.cache_name == "anonymous_returns_rows":
-            _cache_stats.anonymous_returns_rows_evictions += 1
+        eviction_counters: dict[str, Callable[[], None]] = {
+            "sql": lambda: setattr(_cache_stats, "sql_evictions", _cache_stats.sql_evictions + 1),
+            "optimized": lambda: setattr(_cache_stats, "optimized_evictions", _cache_stats.optimized_evictions + 1),
+            "anonymous_returns_rows": lambda: setattr(
+                _cache_stats, "anonymous_returns_rows_evictions", _cache_stats.anonymous_returns_rows_evictions + 1
+            ),
+            "analysis": lambda: setattr(_cache_stats, "analysis_evictions", _cache_stats.analysis_evictions + 1),
+            "builder": lambda: setattr(_cache_stats, "builder_evictions", _cache_stats.builder_evictions + 1),
+            "file": lambda: setattr(_cache_stats, "file_evictions", _cache_stats.file_evictions + 1),
+        }
+        counter = eviction_counters.get(self.cache_name)
+        if counter is not None:
+            counter()
 
 
 class CachedFragment:
@@ -771,6 +879,21 @@ def update_cache_config(config: CacheConfig) -> None:
     else:
         anonymous_returns_rows_cache.clear()
 
+    if config.analysis_cache_enabled:
+        analysis_cache.max_size = config.analysis_cache_size
+    else:
+        analysis_cache.clear()
+
+    if config.builder_cache_enabled:
+        builder_cache.max_size = config.builder_cache_size
+    else:
+        builder_cache.clear()
+
+    if config.file_cache_enabled:
+        file_cache.max_size = config.file_cache_size
+    else:
+        file_cache.clear()
+
 
 def get_cache_stats() -> CacheStats:
     """Get current cache statistics."""
@@ -780,6 +903,9 @@ def get_cache_stats() -> CacheStats:
     _cache_stats.optimized_size = optimized_expression_cache.size
     _cache_stats.anonymous_returns_rows_size = anonymous_returns_rows_cache.size
     _cache_stats.compiled_size = base_statement_cache.size
+    _cache_stats.analysis_size = analysis_cache.size
+    _cache_stats.builder_size = builder_cache.size
+    _cache_stats.file_size = file_cache.size
     # Update fragment cache stats from internal counters
     _cache_stats.fragment_hits = ast_fragment_cache._hit_count
     _cache_stats.fragment_misses = ast_fragment_cache._miss_count
@@ -812,3 +938,6 @@ filtered_ast_cache = FilterCache()
 anonymous_returns_rows_cache = SQLCache(
     max_size=_cache_config.anonymous_returns_rows_cache_size, cache_name="anonymous_returns_rows"
 )
+analysis_cache = SQLCache(max_size=_cache_config.analysis_cache_size, cache_name="analysis")
+builder_cache = SQLCache(max_size=_cache_config.builder_cache_size, cache_name="builder")
+file_cache = SQLCache(max_size=_cache_config.file_cache_size, cache_name="file")

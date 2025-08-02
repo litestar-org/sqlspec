@@ -65,10 +65,7 @@ psycopg_statement_config = StatementConfig(
             ParameterStyle.QMARK,  # Add support for ? placeholders
         },
         # Psycopg supports both named and positional pyformat natively
-        supported_execution_parameter_styles={
-            ParameterStyle.POSITIONAL_PYFORMAT,
-            ParameterStyle.NAMED_PYFORMAT,
-        },
+        supported_execution_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT},
         # Fallback to positional when the original style is not supported
         default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
         type_coercion_map={

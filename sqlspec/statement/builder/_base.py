@@ -17,7 +17,7 @@ from sqlglot.optimizer import optimize
 from typing_extensions import Self
 
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.cache import optimized_expression_cache
+from sqlspec.statement.cache import builder_cache, get_cache_config, optimized_expression_cache
 from sqlspec.statement.sql import SQL, StatementConfig
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.statement_hashing import hash_optimized_expression
@@ -196,6 +196,49 @@ class QueryBuilder(ABC):
                 return name
             i += 1
 
+    def _generate_builder_cache_key(self, config: "Optional[StatementConfig]" = None) -> str:
+        """Generate cache key based on builder state and configuration.
+
+        Args:
+            config: Optional SQL configuration that affects the generated SQL
+
+        Returns:
+            A unique cache key representing the builder state and configuration
+        """
+        import hashlib
+
+        # Collect all builder state that affects the final SQL
+        state_components = [
+            f"expression:{self._expression.sql() if self._expression else 'None'}",
+            f"parameters:{sorted(self._parameters.items())}",
+            f"ctes:{sorted(self._with_ctes.keys())}",
+            f"dialect:{self.dialect_name or 'default'}",
+            f"schema:{self.schema}",
+            f"optimization:{self.enable_optimization}",
+            f"optimize_joins:{self.optimize_joins}",
+            f"optimize_predicates:{self.optimize_predicates}",
+            f"simplify_expressions:{self.simplify_expressions}",
+        ]
+
+        # Include StatementConfig if provided
+        if config:
+            config_components = [
+                f"config_dialect:{config.dialect or 'default'}",
+                f"enable_parsing:{config.enable_parsing}",
+                f"enable_validation:{config.enable_validation}",
+                f"enable_transformations:{config.enable_transformations}",
+                f"enable_analysis:{config.enable_analysis}",
+                f"enable_caching:{config.enable_caching}",
+                f"param_style:{config.parameter_config.default_parameter_style.value}",
+            ]
+            state_components.extend(config_components)
+
+        # Create a hash of all state components
+        state_string = "|".join(state_components)
+        cache_key = hashlib.sha256(state_string.encode()).hexdigest()[:16]
+
+        return f"builder:{cache_key}"
+
     def with_cte(self: Self, alias: str, query: "Union[QueryBuilder, exp.Select, str]") -> Self:
         """Adds a Common Table Expression (CTE) to the query.
 
@@ -308,7 +351,6 @@ class QueryBuilder(ABC):
         # Check cache first
         cached_optimized = optimized_expression_cache.get(cache_key)
         if cached_optimized:
-            logger.debug("Using cached optimized expression")
             return cast("exp.Expression", cached_optimized.copy())
 
         try:
@@ -327,7 +369,36 @@ class QueryBuilder(ABC):
             return optimized
 
     def to_statement(self, config: "Optional[StatementConfig]" = None) -> "SQL":
-        """Converts the built query into a SQL statement object.
+        """Converts the built query into a SQL statement object with caching.
+
+        Args:
+            config: Optional SQL configuration.
+
+        Returns:
+            SQL: A SQL statement object.
+        """
+        # Check cache configuration first
+        cache_config = get_cache_config()
+        if not cache_config.builder_cache_enabled:
+            return self._to_statement_without_cache(config)
+
+        # Generate cache key including the StatementConfig context
+        cache_key = self._generate_builder_cache_key(config)
+
+        # Check cache first
+        cached_sql = builder_cache.get(cache_key)
+        if cached_sql is not None:
+            # Return a copy to prevent modifications to cached object
+            return cast("SQL", cached_sql.copy())
+
+        # Build SQL statement and cache result
+        sql_statement = self._to_statement_without_cache(config)
+        builder_cache.set(cache_key, sql_statement)
+
+        return sql_statement
+
+    def _to_statement_without_cache(self, config: "Optional[StatementConfig]" = None) -> "SQL":
+        """Internal method to create SQL statement without caching.
 
         Args:
             config: Optional SQL configuration.

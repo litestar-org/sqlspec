@@ -12,12 +12,12 @@ class ParameterStyleConfig:
 
     __slots__ = (
         "allow_mixed_parameter_styles",
-        "default_parameter_style",
-        "supported_execution_parameter_styles",
         "default_execution_parameter_style",
+        "default_parameter_style",
         "has_native_list_expansion",
         "needs_static_script_compilation",
         "output_transformer",
+        "supported_execution_parameter_styles",
         "supported_parameter_styles",
         "type_coercion_map",
     )

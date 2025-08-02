@@ -136,7 +136,7 @@ from sqlspec.statement.result import SQLResult
 
 class MyDriver(SyncDriverAdapterBase):
     """Example driver implementation."""
-    
+
     dialect = "mydialect"
 
     def __init__(
@@ -157,7 +157,7 @@ class MyDriver(SyncDriverAdapterBase):
                 dialect="mydialect",
                 parameter_config=parameter_config
             )
-        
+
         super().__init__(connection, statement_config, driver_features)
 
     # Context manager for cursor
@@ -447,15 +447,15 @@ sqlspec/
 ```python
 def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[int], Any]:
     """Enhanced execution with hooks and result tuples."""
-    
+
     # Step 1: Try special handling first
     special_result = self._try_special_handling(cursor, statement)
     if special_result is not None:
         return special_result
-    
+
     # Step 2: Get compiled SQL with driver's parameter style
     sql, params = self._get_compiled_sql(statement, self.statement_config)
-    
+
     # Step 3: Route to appropriate execution method
     if statement.is_script:
         if self.statement_config.parameter_config.needs_static_script_compilation:
@@ -465,12 +465,12 @@ def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[i
             prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
             result = self._execute_script(cursor, sql, prepared_params, self.statement_config)
         return create_execution_result(result)
-    
+
     elif statement.is_many:
         prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=True)
         result = self._execute_many(cursor, sql, prepared_params)
         return create_execution_result(result)
-    
+
     else:
         prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
         result = self._execute_statement(cursor, sql, prepared_params)
@@ -486,7 +486,7 @@ def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[i
 def _try_special_handling(self, cursor: Any, statement: SQL) -> Optional[tuple[Any, Optional[int], Any]]:
     """Return None for standard execution or result tuple for special handling."""
 
-# Core execution methods  
+# Core execution methods
 def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
     """Execute single statement."""
 
@@ -549,9 +549,9 @@ from sqlspec.statement.sql import StatementConfig
 
 class SqliteDriver(SyncDriverAdapterBase):
     """Reference implementation for SQLite."""
-    
+
     dialect = "sqlite"
-    
+
     def __init__(self, connection, statement_config=None, driver_features=None):
         if statement_config is None:
             parameter_config = ParameterStyleConfig(
@@ -568,30 +568,30 @@ class SqliteDriver(SyncDriverAdapterBase):
                 needs_static_script_compilation=True,
             )
             statement_config = StatementConfig(dialect="sqlite", parameter_config=parameter_config)
-        
+
         super().__init__(connection, statement_config, driver_features)
-    
+
     def with_cursor(self, connection):
         return SqliteCursor(connection)
-    
+
     def _try_special_handling(self, cursor, statement):
         return None  # No special operations for SQLite
-    
+
     def _execute_script(self, cursor, sql, prepared_params, statement_config):
         cursor.executescript(sql)  # Uses static compilation
-    
+
     def _execute_many(self, cursor, sql, prepared_params):
         cursor.executemany(sql, prepared_params)
-    
+
     def _execute_statement(self, cursor, sql, prepared_params):
         cursor.execute(sql, prepared_params or ())
-    
+
     def _get_selected_data(self, cursor):
         fetched_data = cursor.fetchall()
         column_names = [col[0] for col in cursor.description or []]
         data = [dict(zip(column_names, row)) for row in fetched_data]
         return data, column_names, len(data)
-    
+
     def _get_row_count(self, cursor):
         return cursor.rowcount or 0
 ```
@@ -704,7 +704,7 @@ def test_special_handling(driver):
 | Script execution issues | Parameter embedding problems | Configure needs_static_script_compilation correctly |
 | Memory leaks | Growing memory usage | Implement proper cursor context managers |
 
-### Development Workflow  
+### Development Workflow
 
 1. **Start with SQLite adapter as reference** - `sqlspec/adapters/sqlite/driver.py`
 2. **Inherit from SyncDriverAdapterBase** - Use proper base class

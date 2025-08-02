@@ -177,19 +177,18 @@ def test_edge_case_parameter_scenarios(psycopg_regression_session: PsycopgSyncDr
         ("test3", 30, None, None),  # This row has NULL category
         ("test4", 40, "C", None),
     ]
-    
+
     for name, value, category, metadata in test_data:
         psycopg_regression_session.execute(
             "INSERT INTO parameter_regression_test (name, value, category, metadata) VALUES (%(name)s, %(value)s, %(category)s, %(metadata)s)",
             {"name": name, "value": value, "category": category, "metadata": metadata},
         )
-    
+
     # Test with None/NULL parameters - should only return the row with NULL category
     result = psycopg_regression_session.execute(
-        "SELECT COUNT(*) as count FROM parameter_regression_test WHERE category IS NULL",
-        {},
+        "SELECT COUNT(*) as count FROM parameter_regression_test WHERE category IS NULL", {}
     )
-    
+
     # Should return 1 row (test3 has NULL category)
     assert result.data[0]["count"] == 1
 

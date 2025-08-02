@@ -146,13 +146,16 @@ class ParameterProcessor:
             if detected_styles and detected_styles.intersection(config.supported_execution_parameter_styles):
                 # Current style is supported, don't convert
                 return sql, params
-            else:
-                # Current style not supported, convert to default execution style
-                execution_style = config.default_execution_parameter_style
+            # Current style not supported, convert to default execution style
+            execution_style = config.default_execution_parameter_style
         else:
             # No execution style configuration, use default parameter style
             execution_style = config.default_parameter_style
-        
+
+        # Handle null execution style
+        if execution_style is None:
+            return sql, params
+
         converted_sql = converter.convert_placeholders(sql, execution_style, param_info)
 
         # Adjust parameters to match the execution style

@@ -2,7 +2,7 @@
 
 import threading
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from sqlspec.parameters import ParameterStyle
 from sqlspec.parameters.config import ParameterStyleConfig
@@ -151,20 +151,18 @@ class TestSQLCaching:
         result1 = sql1.sql
 
         # Store the current cache size
-        cache_size_before = len(sql_cache.cache)
+        len(sql_cache.cache)
 
         # Access sql property on second object
         result2 = sql2.sql
 
-        # Cache size should not increase (cache hit)
-        cache_size_after = len(sql_cache.cache)
-        assert cache_size_after == cache_size_before
-
+        # NOTE: Legacy cache testing removed - new caching implementation will be added
         # Both should have the same result
         assert result1 == result2
 
-        # Both should have the same processed state (cache hit)
-        assert sql2._processed_state is sql1._processed_state
+        # Both should have processed states (not testing cache sharing until new implementation)
+        assert sql1._processed_state is not None
+        assert sql2._processed_state is not None
 
     def test_sql_cache_miss_different_queries(self) -> None:
         """Test cache miss for different SQL queries."""
@@ -174,8 +172,8 @@ class TestSQLCaching:
         sql1 = SQL("SELECT * FROM users", statement_config=config)
         sql2 = SQL("SELECT * FROM products", statement_config=config)
 
-        # These should have different cache keys
-        assert sql1._cache_key() != sql2._cache_key()
+        # These should be different SQL objects (cache keys not tested in legacy cleanup)
+        assert sql1.sql != sql2.sql
 
     def test_sql_cache_miss_different_parameters(self) -> None:
         """Test cache miss for same query with different parameters."""
@@ -185,8 +183,8 @@ class TestSQLCaching:
         sql1 = SQL("SELECT * FROM users WHERE id = :id", id=1, statement_config=config)
         sql2 = SQL("SELECT * FROM users WHERE id = :id", id=2, statement_config=config)
 
-        # Different parameters should result in different cache keys
-        assert sql1._cache_key() != sql2._cache_key()
+        # Different parameters should result in different SQL objects
+        assert sql1.parameters != sql2.parameters
 
     def test_sql_cache_disabled(self) -> None:
         """Test that caching can be disabled."""
@@ -194,13 +192,10 @@ class TestSQLCaching:
 
         sql = SQL("SELECT * FROM users", statement_config=config)
 
-        # Mock sql_cache to verify it's not accessed
-        with patch("sqlspec.statement.sql.sql_cache") as mock_cache:
-            _ = sql.sql
-
-            # Cache should not be accessed
-            mock_cache.get.assert_not_called()
-            mock_cache.set.assert_not_called()
+        # NOTE: Legacy cache mocking removed - new caching implementation will respect enable_caching
+        # SQL should still process normally
+        result = sql.sql
+        assert result == "SELECT * FROM users"
 
     def test_sql_cache_with_filters(self) -> None:
         """Test caching with filters applied."""
@@ -210,8 +205,8 @@ class TestSQLCaching:
         sql1 = SQL("SELECT * FROM users", statement_config=config)
         sql2 = sql1.where("active = true")
 
-        # Different filters should result in different cache keys
-        assert sql1._cache_key() != sql2._cache_key()
+        # Different filters should result in different SQL content
+        assert sql1.sql != sql2.sql
 
     def test_sql_cache_with_dialect(self) -> None:
         """Test caching with different dialects."""
@@ -221,26 +216,7 @@ class TestSQLCaching:
         sql1 = SQL("SELECT * FROM users", _dialect="mysql", statement_config=config)
         sql2 = SQL("SELECT * FROM users", _dialect="postgres", statement_config=config)
 
-        # Different dialects should result in different cache keys
-        assert sql1._cache_key() != sql2._cache_key()
+        # Different dialects should result in different internal dialect settings
+        assert sql1._dialect != sql2._dialect
 
-    def test_cache_key_generation(self) -> None:
-        """Test cache key generation includes all relevant state."""
-        param_config = ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK)
-        config = StatementConfig(parameter_config=param_config, enable_caching=True)
-
-        # Test with positional parameters
-        sql1 = SQL("SELECT * FROM users WHERE id = ?", 1, statement_config=config)
-        key1 = sql1._cache_key()
-        assert "sql:" in key1
-
-        # Test with named parameters
-        sql2 = SQL("SELECT * FROM users WHERE id = :id", id=1, statement_config=config)
-        key2 = sql2._cache_key()
-        assert key1 != key2  # Different parameter styles
-
-        # Test with mixed parameters
-        sql3 = SQL("SELECT * FROM users WHERE id = ? AND name = :name", 1, name="test", statement_config=config)
-        key3 = sql3._cache_key()
-        assert key3 != key1
-        assert key3 != key2
+    # NOTE: test_cache_key_generation() removed - _cache_key() method removed in legacy cleanup
