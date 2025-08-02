@@ -178,7 +178,7 @@ class Column:
         """SQL ROUND() function."""
         if decimals == 0:
             return FunctionColumn(exp.Round(this=self._expression))
-        return FunctionColumn(exp.Round(this=self._expression, expression=exp.Literal.number(decimals)))
+        return FunctionColumn(exp.Round(this=self._expression, expression=exp.convert(decimals)))
 
     def floor(self) -> "FunctionColumn":
         """SQL FLOOR() function."""
@@ -190,9 +190,9 @@ class Column:
 
     def substring(self, start: int, length: Optional[int] = None) -> "FunctionColumn":
         """SQL SUBSTRING() function."""
-        args = [exp.Literal.number(start)]
+        args = [exp.convert(start)]
         if length is not None:
-            args.append(exp.Literal.number(length))
+            args.append(exp.convert(length))
         return FunctionColumn(exp.Substring(this=self._expression, expressions=args))
 
     def coalesce(self, *values: Any) -> "FunctionColumn":

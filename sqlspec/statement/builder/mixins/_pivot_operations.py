@@ -56,12 +56,10 @@ class PivotClauseMixin:
         for val in pivot_values:
             if isinstance(val, exp.Expression):
                 pivot_value_exprs.append(val)
-            elif isinstance(val, str):
-                pivot_value_exprs.append(exp.Literal.string(val))
-            elif isinstance(val, (int, float)):
-                pivot_value_exprs.append(exp.Literal.number(val))
+            elif isinstance(val, (str, int, float)):
+                pivot_value_exprs.append(exp.convert(val))
             else:
-                pivot_value_exprs.append(exp.Literal.string(str(val)))
+                pivot_value_exprs.append(exp.convert(str(val)))
 
         in_expr = exp.In(this=pivot_col_expr, expressions=pivot_value_exprs)
 

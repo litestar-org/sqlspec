@@ -256,8 +256,6 @@ class SQLFactory:
         try:
             # Use SQLGlot directly for parsing - no validation here
             parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)  # type: ignore[var-annotated]
-            if parsed_expr is None:
-                parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Insert):
                 builder._expression = parsed_expr
@@ -280,8 +278,6 @@ class SQLFactory:
         try:
             # Use SQLGlot directly for parsing - no validation here
             parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)  # type: ignore[var-annotated]
-            if parsed_expr is None:
-                parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Select):
                 builder._expression = parsed_expr
@@ -298,8 +294,6 @@ class SQLFactory:
         try:
             # Use SQLGlot directly for parsing - no validation here
             parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)  # type: ignore[var-annotated]
-            if parsed_expr is None:
-                parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Update):
                 builder._expression = parsed_expr
@@ -316,8 +310,6 @@ class SQLFactory:
         try:
             # Use SQLGlot directly for parsing - no validation here
             parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)  # type: ignore[var-annotated]
-            if parsed_expr is None:
-                parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Delete):
                 builder._expression = parsed_expr
@@ -334,8 +326,6 @@ class SQLFactory:
         try:
             # Use SQLGlot directly for parsing - no validation here
             parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)  # type: ignore[var-annotated]
-            if parsed_expr is None:
-                parsed_expr = sqlglot.parse_one(sql_string, read=self.dialect)
 
             if isinstance(parsed_expr, exp.Merge):
                 builder._expression = parsed_expr

@@ -31,15 +31,10 @@ def build_column_expression(col: "ColumnDefinition") -> "exp.Expression":
             if col.default.upper() in {"CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME"} or "(" in col.default:
                 default_expr = exp.maybe_parse(col.default)
             else:
-                default_expr = exp.Literal.string(col.default)
-        elif isinstance(col.default, (int, float)):
-            default_expr = exp.Literal.number(col.default)
-        elif col.default is True:
-            default_expr = exp.true()
-        elif col.default is False:
-            default_expr = exp.false()
+                default_expr = exp.convert(col.default)
         else:
-            default_expr = exp.Literal.string(str(col.default))
+            # Use exp.convert for all other types (int, float, bool, None, etc.)
+            default_expr = exp.convert(col.default)
 
         constraints.append(exp.ColumnConstraint(kind=default_expr))
 
@@ -48,7 +43,7 @@ def build_column_expression(col: "ColumnDefinition") -> "exp.Expression":
         constraints.append(exp.ColumnConstraint(kind=check_expr))
 
     if col.comment:
-        constraints.append(exp.ColumnConstraint(kind=exp.CommentColumnConstraint(this=exp.Literal.string(col.comment))))
+        constraints.append(exp.ColumnConstraint(kind=exp.CommentColumnConstraint(this=exp.convert(col.comment))))
 
     if col.generated:
         generated_expr = exp.GeneratedAsIdentityColumnConstraint(this=exp.maybe_parse(col.generated))

@@ -10,6 +10,7 @@ Covers:
 - any() method with various parameter types
 """
 
+import math
 from typing import Any
 
 import pytest
@@ -62,7 +63,7 @@ class TestSQLFactoryDecode:
 
     def test_decode_with_float_value(self, sql_factory: SQLFactory) -> None:
         """Test decode() with float value parameters."""
-        result = sql_factory.decode("column", 3.14, 2.71)
+        result = sql_factory.decode("column", math.pi, math.e)
 
         assert isinstance(result, exp.Case)
         ifs = result.args.get("ifs", [])
@@ -170,7 +171,7 @@ class TestSQLFactoryNvl:
 
     def test_nvl_with_float_value(self, sql_factory: SQLFactory) -> None:
         """Test nvl() with float value parameter."""
-        result = sql_factory.nvl("column", 3.14)
+        result = sql_factory.nvl("column", math.pi)
 
         assert isinstance(result, exp.Coalesce)
         expressions = result.expressions
@@ -242,7 +243,7 @@ class TestSQLFactoryCase:
     def test_case_when_with_float_value(self, sql_factory: SQLFactory) -> None:
         """Test Case.when() with float value parameter."""
         case_builder = sql_factory.case()
-        case_builder = case_builder.when("condition = 1", 3.14)
+        case_builder = case_builder.when("condition = 1", math.pi)
 
         case_expr = case_builder.end()
         assert isinstance(case_expr, exp.Case)
@@ -309,7 +310,7 @@ class TestSQLFactoryCase:
         case_builder = sql_factory.case()
         case_builder = case_builder.when("condition = 1", "string_result")
         case_builder = case_builder.when("condition = 2", 42)
-        case_builder = case_builder.when("condition = 3", 3.14)
+        case_builder = case_builder.when("condition = 3", math.pi)
         case_builder = case_builder.else_("default")
 
         case_expr = case_builder.end()
@@ -370,7 +371,7 @@ class TestSQLFactoryAny:
 
     def test_any_with_mixed_values(self, sql_factory: SQLFactory) -> None:
         """Test any() with mixed value types."""
-        result = sql_factory.any(["text", 42, 3.14])
+        result = sql_factory.any(["text", 42, math.pi])
 
         assert isinstance(result, exp.Any)
         array_expr = result.args["this"]
@@ -439,7 +440,7 @@ class TestParameterTypeConsistency:
         [
             ("string", "string"),
             (42, "number"),
-            (3.14, "number"),
+            (math.pi, "number"),
             (True, "boolean"),  # Booleans become Boolean objects
             (False, "boolean"),
             (None, "null"),  # None becomes NULL
@@ -498,7 +499,7 @@ class TestParameterTypeConsistency:
         case_builder2 = case_builder2.else_(value)
         case_expr2 = case_builder2.end()
         else_literal = case_expr2.args.get("default")
-
+        assert else_literal is not None
         if expected_type == "string":
             assert else_literal.is_string
         elif expected_type == "number":

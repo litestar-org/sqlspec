@@ -115,10 +115,10 @@ def parse_condition_expression(
             _, param_name = builder.add_parameter(value)
             return exp.EQ(this=column_expr, expression=exp.Placeholder(this=param_name))
         if isinstance(value, str):
-            return exp.EQ(this=column_expr, expression=exp.Literal.string(value))
+            return exp.EQ(this=column_expr, expression=exp.convert(value))
         if isinstance(value, (int, float)):
-            return exp.EQ(this=column_expr, expression=exp.Literal.number(str(value)))
-        return exp.EQ(this=column_expr, expression=exp.Literal.string(str(value)))
+            return exp.EQ(this=column_expr, expression=exp.convert(str(value)))
+        return exp.EQ(this=column_expr, expression=exp.convert(str(value)))
 
     if not isinstance(condition_input, str):
         condition_input = str(condition_input)

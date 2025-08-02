@@ -275,7 +275,7 @@ class WhereClauseMixin:
         _, param_name = builder.add_parameter(pattern)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         if escape is not None:
-            cond = exp.Like(this=col_expr, expression=exp.var(param_name), escape=exp.Literal.string(str(escape)))
+            cond = exp.Like(this=col_expr, expression=exp.var(param_name), escape=exp.convert(str(escape)))
         else:
             cond = col_expr.like(exp.var(param_name))
         condition: exp.Expression = cond

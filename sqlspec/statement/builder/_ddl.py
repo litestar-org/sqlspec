@@ -362,16 +362,11 @@ class CreateTable(DDLBuilder):
         if self._tablespace:
             props.append(exp.Property(this=exp.to_identifier("TABLESPACE"), value=exp.to_identifier(self._tablespace)))
         if self._partition_by:
-            props.append(
-                exp.Property(this=exp.to_identifier("PARTITION BY"), value=exp.Literal.string(self._partition_by))
-            )
+            props.append(exp.Property(this=exp.to_identifier("PARTITION BY"), value=exp.convert(self._partition_by)))
 
         for key, value in self._table_options.items():
             if key != "engine":  # Skip already handled options
-                if isinstance(value, str):
-                    props.append(exp.Property(this=exp.to_identifier(key.upper()), value=exp.Literal.string(value)))
-                else:
-                    props.append(exp.Property(this=exp.to_identifier(key.upper()), value=exp.Literal.number(value)))
+                props.append(exp.Property(this=exp.to_identifier(key.upper()), value=exp.convert(value)))
 
         properties_node = exp.Properties(expressions=props) if props else None
 
@@ -939,9 +934,7 @@ class CreateMaterializedView(DDLBuilder):
 
         props: list[exp.Property] = []
         if self._refresh_mode:
-            props.append(
-                exp.Property(this=exp.to_identifier("REFRESH_MODE"), value=exp.Literal.string(self._refresh_mode))
-            )
+            props.append(exp.Property(this=exp.to_identifier("REFRESH_MODE"), value=exp.convert(self._refresh_mode)))
         if self._tablespace:
             props.append(exp.Property(this=exp.to_identifier("TABLESPACE"), value=exp.to_identifier(self._tablespace)))
         if self._using_index:
@@ -949,12 +942,10 @@ class CreateMaterializedView(DDLBuilder):
                 exp.Property(this=exp.to_identifier("USING_INDEX"), value=exp.to_identifier(self._using_index))
             )
         for k, v in self._storage_parameters.items():
-            props.append(exp.Property(this=exp.to_identifier(k), value=exp.Literal.string(str(v))))
+            props.append(exp.Property(this=exp.to_identifier(k), value=exp.convert(str(v))))
         if self._with_data is not None:
             props.append(exp.Property(this=exp.to_identifier("WITH_DATA" if self._with_data else "NO_DATA")))
-        props.extend(
-            exp.Property(this=exp.to_identifier("HINT"), value=exp.Literal.string(hint)) for hint in self._hints
-        )
+        props.extend(exp.Property(this=exp.to_identifier("HINT"), value=exp.convert(hint)) for hint in self._hints)
         properties_node = exp.Properties(expressions=props) if props else None
 
         return exp.Create(
@@ -1037,7 +1028,7 @@ class CreateView(DDLBuilder):
             schema_expr = exp.Schema(expressions=[exp.column(c) for c in self._columns])
 
         props: list[exp.Property] = [
-            exp.Property(this=exp.to_identifier("HINT"), value=exp.Literal.string(h)) for h in self._hints
+            exp.Property(this=exp.to_identifier("HINT"), value=exp.convert(h)) for h in self._hints
         ]
         properties_node = exp.Properties(expressions=props) if props else None
 
@@ -1309,15 +1300,15 @@ class AlterTable(DDLBuilder):
                 if default_val.upper() in {"CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME"} or "(" in default_val:
                     default_expr = exp.maybe_parse(default_val)
                 else:
-                    default_expr = exp.Literal.string(default_val)
+                    default_expr = exp.convert(default_val)
             elif isinstance(default_val, (int, float)):
-                default_expr = exp.Literal.number(default_val)
+                default_expr = exp.convert(default_val)
             elif default_val is True:
                 default_expr = exp.true()
             elif default_val is False:
                 default_expr = exp.false()
             else:
-                default_expr = exp.Literal.string(str(default_val))
+                default_expr = exp.convert(str(default_val))
             return exp.AlterColumn(this=exp.to_identifier(op.column_name), default=default_expr)
 
         if op_type == "ALTER COLUMN DROP DEFAULT":
@@ -1357,14 +1348,12 @@ class CommentOn(DDLBuilder):
 
     def _create_base_expression(self) -> exp.Expression:
         if self._target_type == "TABLE" and self._table and self._comment is not None:
-            return exp.Comment(
-                this=exp.to_table(self._table), kind="TABLE", expression=exp.Literal.string(self._comment)
-            )
+            return exp.Comment(this=exp.to_table(self._table), kind="TABLE", expression=exp.convert(self._comment))
         if self._target_type == "COLUMN" and self._table and self._column and self._comment is not None:
             return exp.Comment(
                 this=exp.Column(table=self._table, this=self._column),
                 kind="COLUMN",
-                expression=exp.Literal.string(self._comment),
+                expression=exp.convert(self._comment),
             )
         self._raise_sql_builder_error("Must specify target and comment for COMMENT ON statement.")
         raise AssertionError  # This line is unreachable but satisfies the linter

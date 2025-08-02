@@ -440,7 +440,7 @@ class SelectClauseMixin:
         builder = cast("SelectBuilderProtocol", self)
         col_expr = exp.column(column) if isinstance(column, str) else column
         # Use GroupConcat which SQLGlot can translate to STRING_AGG for Postgres
-        string_agg_expr = exp.GroupConcat(this=col_expr, separator=exp.Literal.string(separator))
+        string_agg_expr = exp.GroupConcat(this=col_expr, separator=exp.convert(separator))
         select_expr = exp.alias_(string_agg_expr, alias) if alias else string_agg_expr
         return cast("Self", builder.select(select_expr))
 
