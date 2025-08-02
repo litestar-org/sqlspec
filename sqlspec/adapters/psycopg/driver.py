@@ -1,10 +1,6 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
+import logging
 from typing import TYPE_CHECKING, Any, Optional
-
-if TYPE_CHECKING:
-    from sqlspec.driver._common import ExecutionResult
-    from sqlspec.statement.result import SQLResult
-    from sqlspec.statement.sql import SQL
 
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.adapters.psycopg.mixins import PsycopgCopyMixin
@@ -14,6 +10,14 @@ from sqlspec.parameters import ParameterStyle
 from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
 
+if TYPE_CHECKING:
+    from sqlspec.driver._common import ExecutionResult
+    from sqlspec.statement.result import SQLResult
+    from sqlspec.statement.sql import SQL
+
+logger = logging.getLogger(__name__)
+
+
 psycopg_statement_config = StatementConfig(
     dialect="postgres",
     parameter_config=ParameterStyleConfig(
@@ -22,6 +26,7 @@ psycopg_statement_config = StatementConfig(
             ParameterStyle.POSITIONAL_PYFORMAT,
             ParameterStyle.NAMED_PYFORMAT,
             ParameterStyle.NUMERIC,
+            ParameterStyle.QMARK,  # Add support for ? placeholders
         },
         execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,  # Convert all to positional for reliability
         type_coercion_map={},
@@ -102,12 +107,19 @@ class PsycopgSyncDriver(PsycopgCopyMixin, SyncDriverAdapterBase):
             None if standard execution should proceed
         """
         # Check if this is a COPY statement marked by the pipeline
-        if statement._processing_context and statement._processing_context.metadata.get("postgres_copy_operation"):
-            result = self._handle_copy_operation_from_pipeline(cursor, statement)
 
-            # Create ExecutionResult and build SQLResult directly
-            execution_result = self.create_execution_result(result)
-            return self.build_statement_result(statement, execution_result)
+        if statement._processing_context and statement._processing_context.metadata.get("postgres_copy_operation"):
+            try:
+                result = self._handle_copy_operation_from_pipeline(cursor, statement)
+
+                # Create ExecutionResult and build SQLResult directly - capture rowcount from cursor
+                row_count = result.rowcount if hasattr(result, "rowcount") and result.rowcount is not None else -1
+                execution_result = self.create_execution_result(result, rowcount_override=row_count)
+                return self.build_statement_result(statement, execution_result)
+            except Exception:
+                # Log the error but don't fail silently
+                logger.exception("COPY operation failed in special handling")
+                raise
 
         return None
 
@@ -115,11 +127,44 @@ class PsycopgSyncDriver(PsycopgCopyMixin, SyncDriverAdapterBase):
         """Execute COPY operation with data using Psycopg sync context manager."""
         with cursor.copy(sql_text) as copy:
             copy.write(data_str)
+        # Return cursor after copy operation completes - rowcount should be available
+        return cursor
 
     def _execute_copy_without_data(self, cursor: Any, sql_text: str) -> Any:
         """Execute COPY operation without data using Psycopg sync context manager."""
         with cursor.copy(sql_text):
             pass  # Just execute the COPY command
+        return cursor
+
+    def _handle_copy_operation_from_pipeline(self, cursor: Any, statement: "SQL") -> Any:
+        """Sync version of COPY handling using the pipeline metadata."""
+        # Get the original SQL from pipeline metadata
+        metadata = statement._processing_context.metadata if statement._processing_context else {}
+        sql_text = metadata.get("postgres_copy_original_sql")
+        if not sql_text:
+            # Fallback to expression
+            sql_text = str(statement.expression)
+
+        # Get the raw COPY data from pipeline metadata
+        copy_data = metadata.get("postgres_copy_data")
+
+        if copy_data:
+            # Handle different parameter formats (positional or keyword)
+            if isinstance(copy_data, dict):
+                # For named parameters, assume single data value or concatenate all values
+                if len(copy_data) == 1:
+                    data_str = str(next(iter(copy_data.values())))
+                else:
+                    data_str = "\n".join(str(value) for value in copy_data.values())
+            elif isinstance(copy_data, (list, tuple)):
+                # For positional parameters, if single item, use as is, otherwise join
+                data_str = str(copy_data[0]) if len(copy_data) == 1 else "\n".join(str(value) for value in copy_data)
+            else:
+                data_str = str(copy_data)
+
+            return self._execute_copy_with_data(cursor, sql_text, data_str)
+        # COPY without data (e.g., COPY TO STDOUT)
+        return self._execute_copy_without_data(cursor, sql_text)
 
     def _execute_script(
         self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig", statement: "SQL"
@@ -215,12 +260,19 @@ class PsycopgAsyncDriver(PsycopgCopyMixin, AsyncDriverAdapterBase):
             None if standard execution should proceed
         """
         # Check if this is a COPY statement marked by the pipeline
-        if statement._processing_context and statement._processing_context.metadata.get("postgres_copy_operation"):
-            result = await self._handle_copy_operation_from_pipeline(cursor, statement)
 
-            # Create ExecutionResult and build SQLResult directly
-            execution_result = self.create_execution_result(result)
-            return self.build_statement_result(statement, execution_result)
+        if statement._processing_context and statement._processing_context.metadata.get("postgres_copy_operation"):
+            try:
+                result = await self._handle_copy_operation_from_pipeline(cursor, statement)
+
+                # Create ExecutionResult and build SQLResult directly - capture rowcount from cursor
+                row_count = result.rowcount if hasattr(result, "rowcount") and result.rowcount is not None else -1
+                execution_result = self.create_execution_result(result, rowcount_override=row_count)
+                return self.build_statement_result(statement, execution_result)
+            except Exception:
+                # Log the error but don't fail silently
+                logger.exception("Async COPY operation failed in special handling")
+                raise
 
         return None
 
@@ -228,11 +280,14 @@ class PsycopgAsyncDriver(PsycopgCopyMixin, AsyncDriverAdapterBase):
         """Execute COPY operation with data using Psycopg async context manager."""
         async with cursor.copy(sql_text) as copy:
             await copy.write(data_str)
+        # Return cursor after copy operation completes - rowcount should be available
+        return cursor
 
     async def _execute_copy_without_data(self, cursor: Any, sql_text: str) -> Any:
         """Execute COPY operation without data using Psycopg async context manager."""
         async with cursor.copy(sql_text):
             pass  # Just execute the COPY command
+        return cursor
 
     async def _handle_copy_operation_from_pipeline(self, cursor: Any, statement: "SQL") -> Any:
         """Async version of COPY handling using the mixin logic."""

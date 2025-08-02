@@ -44,6 +44,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
             The result of the SQL execution.
         """
 
+        # Ensure statement is processed before special handling to make metadata available
+        statement._ensure_processed()
+
         async with self.with_cursor(connection) as cursor:
             special_result = await self._try_special_handling(cursor, statement)
             if special_result is not None:
@@ -55,7 +58,8 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
             if statement.is_script:
                 execution_result = await self._execute_script(cursor, sql, params, self.statement_config, statement)
             elif statement.is_many:
-                execution_result = await self._execute_many(cursor, sql, params, statement)
+                # For execute_many, use param_list directly - parameters are ready to execute
+                execution_result = await self._execute_many(cursor, sql, statement.param_list, statement)
             else:
                 execution_result = await self._execute_statement(cursor, sql, params, statement)
 

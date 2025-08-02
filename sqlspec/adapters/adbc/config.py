@@ -100,22 +100,16 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         self.connection_config: dict[str, Any] = dict(connection_config)
         self.connection_config.update(extras)
 
-        # Handle statement_config - use provided value or create default
+        # Create dialect-specific statement config if none provided
         if statement_config is None:
-            from sqlspec.parameters import ParameterStyle
-            from sqlspec.parameters.config import ParameterStyleConfig
-            from sqlspec.statement.sql import StatementConfig
+            # Detect dialect and create appropriate config
+            detected_dialect = str(self._get_dialect() or "sqlite")
+            statement_config = create_adbc_statement_config(detected_dialect)
 
-            default_parameter_config = ParameterStyleConfig(
-                default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
-            )
-            self.statement_config = StatementConfig(parameter_config=default_parameter_config)
-        else:
-            self.statement_config = statement_config
         super().__init__(
             connection_config=self.connection_config,
             migration_config=migration_config,
-            statement_config=self.statement_config,
+            statement_config=statement_config,
             driver_features={},
         )
 

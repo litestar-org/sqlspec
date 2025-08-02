@@ -418,6 +418,7 @@ class SQL:
         self._positional_params.extend(statement._positional_params)
         self._named_params.update(statement._named_params)
         self._filters.extend(statement._filters)
+        self._processing_context = statement._processing_context
 
     def _init_from_str_or_expression(self, statement: "Union[str, exp.Expression]") -> None:
         """Initialize from a string or expression."""
@@ -1418,8 +1419,10 @@ class SQL:
 
                 if should_denormalize and original_style in SQLGLOT_INCOMPATIBLE_STYLES:
                     # Denormalize SQL back to original style
+                    # Need to extract current parameter info from the processed SQL instead of using original positions
+                    current_param_info = self.statement_config.parameter_validator.extract_parameters(sql)
                     sql = self.statement_config.parameter_converter._convert_sql_placeholders(
-                        sql, original_style, norm_state.original_param_info
+                        sql, original_style, current_param_info
                     )
 
         if placeholder_style:
