@@ -1,6 +1,22 @@
 # SQLSpec Quick Reference
 
-*Essential patterns and commands for SQLSpec development*
+*Essential patterns and commands for SQLSpec development - Updated for current implementation*
+
+## 🚨 CRITICAL UPDATES - Current Implementation
+
+### Method Signature Changes (BREAKING)
+- **OLD**: `_extract_select_data()` and `_extract_execute_rowcount()`
+- **NEW**: `_get_selected_data()` and `_get_row_count()` ✅
+
+### Enhanced Caching System (NEW)
+- Multi-tier caching with StatementConfig-aware cache keys
+- File cache with checksum validation providing 12x+ performance improvements
+- Analysis cache for pipeline step results
+
+### Pipeline Architecture (ENHANCED)
+- SQLTransformContext for state management
+- compose_pipeline for efficient step composition
+- Enhanced StatementConfig.get_pipeline_steps() support
 
 ## Public API - Driver Execute Methods
 
@@ -53,7 +69,7 @@ def execute_script(
     """Execute multi-statement script."""
 ```
 
-## Pipeline Processing Order
+## Enhanced Pipeline Processing Order
 
 ```mermaid
 graph TD
@@ -63,20 +79,22 @@ graph TD
     D --> E[SQLTransformContext]
     E --> F[compose_pipeline]
     F --> G[parameterize_literals_step]
-    G --> H[optimize_step + caching]
+    G --> H[optimize_step + multi-tier caching]
     H --> I[validate_step]
-    I --> J[_ProcessedState]
-    J --> K[compile]
+    I --> J[_ProcessedState + analysis_cache]
+    J --> K[compile with StatementConfig-aware keys]
     K --> L[Driver._dispatch_execution]
     L --> M[Driver._perform_execute]
     M --> N[cursor.execute]
 ```
 
-### Caching Layers
+### Multi-Tier Caching Architecture (ENHANCED)
 
-- **Base Statement Cache**: Processed SQL objects via _ProcessedState
-- **AST Fragment Cache**: Parsed expression components
-- **SQL Cache**: Final compiled SQL strings
+- **SQL Cache**: Compiled SQL strings with StatementConfig-aware cache keys
+- **Optimized Cache**: Post-optimization AST expressions for reuse
+- **Builder Cache**: QueryBuilder instances with state serialization
+- **File Cache**: SQLFileLoader with checksum validation (12x+ speedup)
+- **Analysis Cache**: Pipeline analysis results with step-specific caching
 
 ## Key Classes & Their Roles
 
@@ -198,7 +216,7 @@ class MyDriver(SyncDriverAdapterBase):
         for stmt in statements:
             cursor.execute(stmt, prepared_params or ())
 
-    # Data extraction methods
+    # Data extraction methods (CURRENT SIGNATURES)
     def _get_selected_data(self, cursor: Any) -> tuple[list[dict[str, Any]], list[str], int]:
         """Extract SELECT results."""
         data = cursor.fetchall()
@@ -440,7 +458,7 @@ sqlspec/
 
 ## Current Execution Architecture
 
-### Enhanced _perform_execute Pattern
+### Enhanced _perform_execute Pattern (CURRENT IMPLEMENTATION)
 
 **✅ CURRENT APPROACH - Template Method Pattern:**
 
@@ -477,7 +495,7 @@ def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[i
         return create_execution_result(result)
 ```
 
-### Abstract Methods Pattern
+### Abstract Methods Pattern (CURRENT IMPLEMENTATION)
 
 **Required Implementation Methods:**
 
@@ -486,7 +504,7 @@ def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[i
 def _try_special_handling(self, cursor: Any, statement: SQL) -> Optional[tuple[Any, Optional[int], Any]]:
     """Return None for standard execution or result tuple for special handling."""
 
-# Core execution methods
+# Core execution methods (CURRENT SIGNATURES)
 def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
     """Execute single statement."""
 
@@ -496,7 +514,7 @@ def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
 def _execute_script(self, cursor: Any, sql: str, prepared_params: Any, statement_config: StatementConfig) -> Any:
     """Execute multi-statement script."""
 
-# Data extraction methods
+# Data extraction methods (CURRENT SIGNATURES)
 def _get_selected_data(self, cursor: Any) -> tuple[list[dict[str, Any]], list[str], int]:
     """Extract SELECT results: (data, columns, count)."""
 
@@ -587,12 +605,14 @@ class SqliteDriver(SyncDriverAdapterBase):
         cursor.execute(sql, prepared_params or ())
 
     def _get_selected_data(self, cursor):
+        """CURRENT SIGNATURE: Extract SELECT results."""
         fetched_data = cursor.fetchall()
         column_names = [col[0] for col in cursor.description or []]
         data = [dict(zip(column_names, row)) for row in fetched_data]
         return data, column_names, len(data)
 
     def _get_row_count(self, cursor):
+        """CURRENT SIGNATURE: Extract row count."""
         return cursor.rowcount or 0
 ```
 
@@ -610,7 +630,7 @@ if statement.is_script:
 
 ```python
 if statement.is_script:
-    sql, params = statement.compile(placeholder_style=self.parameterstatement_config.default_parameter_style)
+    sql, params = statement.compile(placeholder_style=self.statement_config.parameter_config.default_parameter_style)
     prepared_params = self._prepare_driver_parameters(params)
     statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
     for stmt in statements:
@@ -622,7 +642,7 @@ if statement.is_script:
 
 ```python
 if statement.is_script:
-    sql, params = statement.compile(placeholder_style=self.parameterstatement_config.default_parameter_style)
+    sql, params = statement.compile(placeholder_style=self.statement_config.parameter_config.default_parameter_style)
     prepared_params = self._prepare_driver_parameters(params)
     statements = self._split_script_statements(sql)
     jobs = []
@@ -700,9 +720,10 @@ def test_special_handling(driver):
 |---------|---------|----------|
 | Missing abstract methods | NotImplementedError at runtime | Implement all required abstract methods |
 | Wrong parameter processing | Type errors, parameter mismatches | Use prepare_driver_parameters() |
-| Incorrect execution result | Missing data extraction | Implement _get_selected_data() and_get_row_count() |
+| Incorrect execution result | Missing data extraction | Implement _get_selected_data() and _get_row_count() (CURRENT SIGNATURES) |
 | Script execution issues | Parameter embedding problems | Configure needs_static_script_compilation correctly |
 | Memory leaks | Growing memory usage | Implement proper cursor context managers |
+| Method signature errors | AttributeError on _extract_* methods | Use _get_selected_data and _get_row_count (current) |
 
 ### Development Workflow
 

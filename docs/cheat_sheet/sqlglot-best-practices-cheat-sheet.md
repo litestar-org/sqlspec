@@ -407,12 +407,72 @@ def remove_comments(sql):
 
 ---
 
-## Common Patterns in SQLSpec
+## SQLSpec Pipeline Integration (CURRENT IMPLEMENTATION)
 
-### 1. Expression Parsing Utilities
+### 1. SQLTransformContext Usage
 
 ```python
-# Based on sqlspec/statement/builder/_parsing_utils.py
+# Current SQLSpec pipeline architecture uses SQLTransformContext
+from sqlspec.statement.pipeline import SQLTransformContext
+
+def custom_pipeline_step(context: SQLTransformContext) -> SQLTransformContext:
+    """Example pipeline step using current architecture."""
+    
+    # Access expression and parameters
+    expression = context.current_expression
+    params = context.parameters
+    
+    # Apply transformation
+    transformed_expr = expression.transform(your_transformer)
+    
+    # Update context
+    context.current_expression = transformed_expr
+    context.metadata["step_name"] = "custom_step_completed"
+    
+    return context
+
+# Use with compose_pipeline
+from sqlspec.statement.pipeline import compose_pipeline
+pipeline = compose_pipeline([
+    parameterize_literals_step,
+    custom_pipeline_step,
+    validate_step
+])
+```
+
+### 2. Enhanced Caching Integration
+
+```python
+# Current implementation uses multi-tier caching
+def cached_transformation_step(context: SQLTransformContext) -> SQLTransformContext:
+    """Pipeline step with caching integration."""
+    
+    # Generate cache key from StatementConfig and expression
+    cache_key = generate_cache_key(context.current_expression, context.statement_config)
+    
+    # Check analysis cache first
+    if cached_result := context.metadata.get("analysis_cache", {}).get(cache_key):
+        context.current_expression = cached_result
+        return context
+    
+    # Apply transformation
+    transformed = apply_transformation(context.current_expression)
+    
+    # Store in cache for reuse
+    if "analysis_cache" not in context.metadata:
+        context.metadata["analysis_cache"] = {}
+    context.metadata["analysis_cache"][cache_key] = transformed
+    
+    context.current_expression = transformed
+    return context
+```
+
+## Common Patterns in SQLSpec
+
+### 1. Expression Parsing Utilities (UPDATED)
+
+```python
+# Based on current sqlspec/statement/builder/_parsing_utils.py
 def parse_column_expression(column_input):
     """Parse column input handling various formats."""
     if isinstance(column_input, exp.Expression):
@@ -447,41 +507,51 @@ def parse_condition_expression(condition_input):
     return exp.condition(str(condition_input))
 ```
 
-### 2. Literal Parameterization
+### 2. Literal Parameterization (CURRENT PIPELINE)
 
 ```python
-# Based on sqlspec/statement/pipelines/transformers/_literal_parameterizer.py
-class ParameterizeLiterals:
-    """Extract literals and replace with placeholders."""
+# Based on current sqlspec pipeline steps
+def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformContext:
+    """Extract literals and replace with placeholders using current pipeline."""
+    
+    def extract_literal(node):
+        if isinstance(node, exp.Literal):
+            if isinstance(node.this, str):
+                # String literal
+                param_key = f"literal_param_{len(context.parameters)}"
+                context.parameters[param_key] = node.this
+                return exp.Placeholder(this="?")  # Use driver's placeholder style
+            elif isinstance(node.this, (int, float)):
+                # Numeric literal
+                param_key = f"literal_param_{len(context.parameters)}"
+                context.parameters[param_key] = node.this
+                return exp.Placeholder(this="?")
+        return node
 
-    def process(self, expression):
-        parameters = []
+    # Transform expression and update context
+    context.current_expression = context.current_expression.transform(extract_literal)
+    context.metadata["parameterize_literals"] = "completed"
+    
+    return context
 
-        def extract_literal(node):
-            if isinstance(node, exp.Literal):
-                if isinstance(node.this, str):
-                    # String literal
-                    param_name = f"param_{len(parameters)}"
-                    parameters.append(node.this)
-                    return exp.Placeholder(this=param_name)
-                elif isinstance(node.this, (int, float)):
-                    # Numeric literal
-                    param_name = f"param_{len(parameters)}"
-                    parameters.append(node.this)
-                    return exp.Placeholder(this=param_name)
-            return node
-
-        parameterized = expression.transform(extract_literal)
-        return parameterized, parameters
+# Integration with SQLSpec pipeline
+def create_parameterization_pipeline():
+    """Create pipeline with parameterization step."""
+    return compose_pipeline([
+        parameterize_literals_step,
+        optimize_step,
+        validate_step
+    ])
 ```
 
-### 3. Security Validation
+### 3. Security Validation (CURRENT PIPELINE)
 
 ```python
-# Based on sqlspec/statement/pipelines/validators/_security.py
-def validate_security(expression):
-    """Comprehensive security validation."""
+# Based on current sqlspec pipeline validation steps
+def validate_step(context: SQLTransformContext) -> SQLTransformContext:
+    """Comprehensive security validation using current pipeline."""
     issues = []
+    expression = context.current_expression
 
     for node in expression.walk():
         # Check for suspicious functions
@@ -508,7 +578,29 @@ def validate_security(expression):
                 and left.this == right.this):
                 issues.append("Tautology condition detected")
 
-    return issues
+    # Store validation results in context
+    context.metadata["security_validation"] = {
+        "issues": issues,
+        "status": "failed" if issues else "passed"
+    }
+    
+    # Raise on critical security issues
+    if issues:
+        critical_issues = [issue for issue in issues if "injection" in issue.lower()]
+        if critical_issues:
+            raise SecurityValidationError(f"Critical security issues: {critical_issues}")
+    
+    return context
+
+# Security validation patterns
+SUSPICIOUS_FUNCTIONS = {
+    'xp_cmdshell', 'sp_executesql', 'eval', 'execute', 'exec',
+    'load_file', 'outfile', 'dumpfile', 'pg_read_file'
+}
+
+class SecurityValidationError(Exception):
+    """Raised when critical security validation fails."""
+    pass
 ```
 
 ---
@@ -661,16 +753,36 @@ sql_repr = node.sql() if hasattr(node, 'sql') else str(node)
 
 ---
 
-## Contributing to SQLSpec
+## Contributing to SQLSpec (CURRENT IMPLEMENTATION)
 
 When adding new SQLGlot patterns to SQLSpec:
 
-1. **Follow existing patterns** in `sqlspec/statement/`
+1. **Follow pipeline architecture** - Use SQLTransformContext and compose_pipeline patterns
 2. **Use type guards** from `sqlspec.utils.type_guards`
-3. **Handle parse failures** gracefully
-4. **Add comprehensive tests** including edge cases
-5. **Document security implications** for new transformations
-6. **Consider performance impact** of AST operations
-7. **Validate against multiple SQL dialects**
+3. **Handle parse failures** gracefully with appropriate fallbacks
+4. **Integrate with caching** - Respect multi-tier caching with StatementConfig-aware keys
+5. **Add comprehensive tests** including edge cases and dialect variations
+6. **Document security implications** for new transformations and validation steps
+7. **Consider performance impact** of AST operations in pipeline context
+8. **Validate against multiple SQL dialects** using current testing patterns
+9. **Use current method signatures** - _get_selected_data() and _get_row_count()
+10. **Respect StatementConfig** - Ensure all transformations are configuration-aware
 
-Remember: SQLGlot's power comes from its AST-based approach. Always prefer AST manipulation over string operations for reliable, dialect-aware SQL processing.
+### Pipeline Integration Checklist
+
+- [ ] Pipeline step takes and returns SQLTransformContext
+- [ ] Respects enable_parsing, enable_validation, enable_transformations flags
+- [ ] Updates context.metadata with step completion status
+- [ ] Integrates with analysis_cache for performance
+- [ ] Handles errors gracefully without breaking pipeline
+- [ ] Documented with current examples and patterns
+
+### Current Architecture Integration
+
+- **Pipeline Steps**: Use SQLTransformContext pattern consistently
+- **Caching**: Leverage multi-tier caching system for performance
+- **Configuration**: Respect StatementConfig throughout processing
+- **Error Handling**: Follow current error handling patterns
+- **Testing**: Use current testing infrastructure with proper isolation
+
+Remember: SQLGlot's power comes from its AST-based approach, enhanced by SQLSpec's pipeline architecture for consistent, secure, and performant SQL processing across all database adapters.

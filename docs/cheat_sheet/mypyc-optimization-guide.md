@@ -482,8 +482,7 @@ debug_level = "0"  # No debug info in production
 # ├── __init__.py          # NOT compiled (just imports)
 # ├── statement/
 # │   ├── __init__.py      # NOT compiled
-# │   ├── sql.py           # COMPILED (hot path)
-# │   ├── parameters.py    # COMPILED (hot path)
+# │   ├── sql.py           # COMPILED (hot path) 
 # │   └── result.py        # COMPILED (used everywhere)
 # ├── adapters/
 # │   ├── __init__.py      # NOT compiled
@@ -500,27 +499,26 @@ debug_level = "0"  # No debug info in production
 ```bash
 # ✅ DO: Use SQLSpec's Makefile commands for compilation
 
-# Install with mypyc compilation (recommended)
-$ make install-compiled
+# Install with mypyc compilation (UPDATED COMMANDS)
+$ HATCH_BUILD_HOOKS_ENABLE=1 uv sync --all-extras --dev
 # This will:
-# - Set up a fresh virtual environment
-# - Install in editable mode with HATCH_BUILD_HOOKS_ENABLE=1
+# - Enable hatch-mypyc build hook
+# - Install in editable mode with compilation
 # - Compile all hot-path modules to .so files
-# - Verify compilation success
+# - Install all development dependencies
+
+# Alternative: Force reinstall with compilation
+$ HATCH_BUILD_HOOKS_ENABLE=1 uv pip install -e . --force-reinstall
 
 # Regular installation (for development)
 $ make install
 
 # Build compiled wheel for distribution
-$ make build-performance
-# Equivalent to: HATCH_BUILD_HOOKS_ENABLE=1 uv build
+$ HATCH_BUILD_HOOKS_ENABLE=1 uv build --wheel
 
-# Build without compilation
-$ make build
-# Equivalent to: uv build
-
-# Test mypyc compilation on specific modules
-$ make test-mypyc
+# Test installation and compilation verification
+$ make install
+$ make test
 
 # ✅ DO: Verify compilation after installation
 $ python -c "import sqlspec.statement.sql; print(sqlspec.statement.sql.__file__)"
@@ -584,40 +582,63 @@ def process() -> None:
 ### 5. SQLSpec's MyPyC Configuration
 
 ```toml
-# ✅ EXAMPLE: SQLSpec's actual configuration
+# ✅ CURRENT: SQLSpec's actual configuration from pyproject.toml
 [tool.hatch.build.targets.wheel.hooks.mypyc]
 dependencies = ["hatch-mypyc"]
 enable-by-default = false
+exclude = [
+    "tests/**",                          # Test files
+    "sqlspec/__main__.py",               # Entry point (can't run directly when compiled)
+    "sqlspec/cli.py",                    # CLI module (not performance critical)
+    "sqlspec/typing.py",                 # Type aliases
+    "sqlspec/_typing.py",                # Type aliases
+    "sqlspec/adapters/*/config.py",      # Configuration classes
+    "sqlspec/adapters/*/_types.py",      # Types classes Often not found during mypy checks
+    "sqlspec/config.py",                 # Main config
+    "sqlspec/**/__init__.py",            # Init files (usually just imports)
+]
+include = [
+ "sqlspec/statement/**/*.py", # All statement-related modules
+  "sqlspec/loader.py",
+
+  # === DRIVER CORE ===
+  "sqlspec/driver/*.py",
+  "sqlspec/driver/mixins/*.py",
+  "sqlspec/parameters/**/*.py",
+
+  # === STORAGE LAYER ===
+  "sqlspec/storage/registry.py",
+  "sqlspec/storage/capabilities.py",
+  "sqlspec/storage/backends/obstore.py",
+  "sqlspec/storage/backends/fsspec.py",
+
+  # === CORE ADAPTERS ===
+  "sqlspec/adapters/*/*.py", # All adapters
+
+  # === UTILITY MODULES ===
+  "sqlspec/utils/statement_hashing.py",
+  "sqlspec/utils/text.py",
+  "sqlspec/utils/sync_tools.py",
+  "sqlspec/utils/type_guards.py",
+  "sqlspec/utils/fixtures.py",
+]
+mypy-args = [
+  "--ignore-missing-imports",
+  "--allow-untyped-defs",
+  "--allow-untyped-globals",
+  "--no-implicit-reexport",
+  "--no-warn-redundant-casts",
+  "--no-warn-unused-ignores",
+  "--follow-imports=skip",
+]
 require-runtime-dependencies = true
 require-runtime-features = ["performance"]  # sqlglot[rs], msgspec
 
-include = [
-    # Hot path modules identified by profiling
-    "sqlspec/statement/sql.py",        # 0.2-1.3ms bottleneck
-    "sqlspec/statement/parameters.py", # Parameter processing
-    "sqlspec/statement/pipeline.py",   # AST transformation
-
-    # Query builders (frequently instantiated)
-    "sqlspec/statement/builder/_base.py",
-    "sqlspec/statement/builder/_select.py",
-    "sqlspec/statement/builder/_insert.py",
-    "sqlspec/statement/builder/_update.py",
-    "sqlspec/statement/builder/_delete.py",
-
-    # Builder mixins
-    "sqlspec/statement/builder/mixins/_where_clause.py",
-    "sqlspec/statement/builder/mixins/_join_operations.py",
-
-    # Utilities in hot paths
-    "sqlspec/utils/type_guards.py",
-    "sqlspec/utils/statement_hashing.py",
-]
-
 # Compilation options for maximum performance
 [tool.hatch.build.targets.wheel.hooks.mypyc.options]
-opt_level = "3"    # Maximum optimization
+opt_level = "3"    # Maximum optimization (0-3)
 multi_file = true  # Enable cross-module optimization
-debug_level = "0"  # No debug info in production
+debug_level = "0"  # No debug info in production (0-2)
 ```
 
 ---
@@ -683,7 +704,7 @@ def unsafe_divide(a: int, b: int) -> Any:
 
 ```python
 # ✅ DO: Use TypedParameter for type preservation
-from sqlspec.protocols import TypedParameterProtocol
+from sqlspec.parameters.types import TypedParameter
 
 class TypedParameter:
     __slots__ = ("name", "value", "type")
@@ -697,7 +718,35 @@ class TypedParameter:
 params = {"name": "value"}  # Type information lost
 ```
 
-### 2. Single-Pass Processing
+### 2. File Caching Optimization
+
+```python
+# ✅ DO: Use regular class with __slots__ for optimal MyPyC performance
+class CachedSQLFile:
+    """Cached SQL file with parsed queries for efficient reloading.
+    
+    CRITICAL: Uses regular class with __slots__ instead of @dataclass
+    for MyPyC compilation compatibility and optimal performance.
+    This pattern provides 22x speedup after compilation.
+    """
+
+    __slots__ = ("parsed_queries", "query_names", "sql_file")
+
+    def __init__(self, sql_file: SQLFile, parsed_queries: dict[str, str]) -> None:
+        """Initialize cached SQL file."""
+        self.sql_file = sql_file
+        self.parsed_queries = parsed_queries
+        self.query_names = list(parsed_queries.keys())
+
+# ❌ DON'T: Use @dataclass for performance-critical cached structures
+@dataclass
+class CachedSQLFile:  # This prevents MyPyC optimization
+    sql_file: SQLFile
+    parsed_queries: dict[str, str]
+    query_names: list[str] = field(init=False)
+```
+
+### 3. Single-Pass Processing
 
 ```python
 # ✅ DO: Process once, validate once
@@ -720,7 +769,7 @@ def process_query(sql: str) -> SQLResult:
     return execute_ast(optimized)
 ```
 
-### 3. Adapter Pattern
+### 4. Adapter Pattern
 
 ```python
 # ✅ DO: Inherit from typed mixins

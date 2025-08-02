@@ -37,7 +37,7 @@ graph TD
     F --> G[User Code];
 ```
 
-**Note**: The architecture uses a single-pass pipeline system with `SQLTransformContext` and `compose_pipeline`, delivering significant performance improvements, further enhanced by a multi-tier caching system.
+**Note**: The architecture uses a single-pass pipeline system with `SQLTransformContext` and `compose_pipeline`, delivering significant performance improvements, further enhanced by a comprehensive multi-tier caching system providing 12x+ performance improvements.
 
 ---
 
@@ -92,6 +92,39 @@ StatementConfig(
 
 Carries type information through the pipeline, ensuring that data types are handled correctly by each database driver.
 
+### Enhanced Caching Architecture (NEW)
+
+SQLSpec now implements a comprehensive multi-tier caching system:
+
+```python
+# Multi-tier caching configuration
+class CachingConfig:
+    sql_cache: bool = True           # Compiled SQL strings
+    optimized_cache: bool = True     # Post-optimization AST expressions  
+    builder_cache: bool = True       # QueryBuilder instances
+    file_cache: bool = True          # SQLFileLoader with checksums
+    analysis_cache: bool = True      # Pipeline analysis results
+
+# Cache integration in StatementConfig
+StatementConfig(
+    enable_caching=True,             # Master caching switch
+    cache_config=CachingConfig(...), # Detailed cache control
+    # ... other configuration
+)
+```
+
+**Performance Benefits:**
+- **SQL Cache**: Avoids recompilation of identical queries
+- **Optimized Cache**: Reuses AST optimization results  
+- **Builder Cache**: Accelerates QueryBuilder state serialization
+- **File Cache**: 12x+ speedup with checksum validation
+- **Analysis Cache**: Caches pipeline step results for reuse
+
+**StatementConfig-Aware Caching:**
+- All cache keys include StatementConfig hash to prevent cross-contamination
+- Different configurations maintain separate cache entries
+- Automatic cache invalidation on configuration changes
+
 ---
 
 ## Driver Implementation
@@ -117,60 +150,110 @@ class MyDriver(SyncDriverAdapterBase):
     def _perform_execute(self, cursor: Any, statement: "SQL") -> None:
         # ...
 
-    def _extract_select_data(self, cursor: Any) -> tuple[list[dict[str, Any]], list[str], int]:
-        # ...
+    def _get_selected_data(self, cursor: Any) -> tuple[list[dict[str, Any]], list[str], int]:
+        # ... (CURRENT SIGNATURE)
 
-    def _extract_execute_rowcount(self, cursor: Any) -> int:
-        # ...
+    def _get_row_count(self, cursor: Any) -> int:
+        # ... (CURRENT SIGNATURE)
 
     # begin(), commit(), rollback() are also required
 ```
 
-### Implementation Pattern
+### Implementation Pattern (CURRENT)
 
-The `_dispatch_execution` method in the base class handles the overall flow. Your driver's main responsibility is to implement `_perform_execute` to send the compiled SQL and parameters to the database.
+The `_dispatch_execution` method in the base class handles the overall flow using a template method pattern. Modern drivers implement specific execution methods rather than a single `_perform_execute`:
 
 ```python
-def _perform_execute(self, cursor: Any, statement: "SQL") -> None:
-    # 1. Compile the SQL to the driver's expected parameter style
-    sql, params = statement.compile(placeholder_style=self.parameter_config.default_parameter_style)
-
-    # 2. Execute the query using the DB-API cursor
-    if statement.is_many:
-        cursor.executemany(sql, params)
+# Current template method pattern
+def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[int], Any]:
+    """Enhanced execution with special handling and routing."""
+    
+    # 1. Try special handling first
+    special_result = self._try_special_handling(cursor, statement)
+    if special_result is not None:
+        return special_result
+    
+    # 2. Get compiled SQL with driver's parameter style
+    sql, params = self._get_compiled_sql(statement, self.statement_config)
+    
+    # 3. Route to appropriate execution method
+    if statement.is_script:
+        if self.statement_config.parameter_config.needs_static_script_compilation:
+            static_sql = self._prepare_script_sql(statement)
+            result = self._execute_script(cursor, static_sql, None, self.statement_config)
+        else:
+            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
+            result = self._execute_script(cursor, sql, prepared_params, self.statement_config)
+    elif statement.is_many:
+        prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=True)
+        result = self._execute_many(cursor, sql, prepared_params)
     else:
-        cursor.execute(sql, params)
+        prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
+        result = self._execute_statement(cursor, sql, prepared_params)
+    
+    return create_execution_result(result)
+
+# Drivers implement these specific methods:
+def _try_special_handling(self, cursor: Any, statement: SQL) -> Optional[tuple]:
+    """Hook for database-specific operations (COPY, bulk ops, etc.)"""
+    
+def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+    """Execute single statement"""
+    
+def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+    """Execute with parameter batches"""
+    
+def _execute_script(self, cursor: Any, sql: str, prepared_params: Any, statement_config: StatementConfig) -> Any:
+    """Execute multi-statement script"""
 ```
 
 ---
 
 ## Parameter Handling
 
-### `ParameterProcessor` (`sqlspec.parameters.core.ParameterProcessor`)
+### Enhanced Parameter Processing (CURRENT)
 
-This class is the heart of `sqlspec`'s parameter handling. It is used internally by `SQL.compile()` to:
-
-- Convert between parameter styles (e.g., `qmark` to `pyformat`).
-- Apply driver-specific type coercions.
-- Expand lists for `IN` clauses if the driver doesn't support it natively.
-
-### `DriverParameterConfig` (`sqlspec.parameters.config.DriverParameterConfig`)
-
-Each driver defines a `DriverParameterConfig` to declare its parameter handling requirements:
+The current parameter processing system uses `ParameterStyleConfig` integrated with the pipeline architecture:
 
 ```python
-self.parameter_config = DriverParameterConfig(
-    supported_parameter_styles=[ParameterStyle.QMARK],
+# Current parameter configuration
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
+
+parameter_config = ParameterStyleConfig(
     default_parameter_style=ParameterStyle.QMARK,
+    supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
     type_coercion_map={
         bool: int,
         datetime.datetime: lambda v: v.isoformat(),
+        Decimal: str,
+        dict: to_json,
+        list: to_json,
     },
     has_native_list_expansion=False,
+    needs_static_script_compilation=True,  # New flag for script handling
+)
+
+# Integration with StatementConfig  
+statement_config = StatementConfig(
+    dialect="postgres", 
+    parameter_config=parameter_config,
+    enable_caching=True,  # Cache-aware parameter processing
 )
 ```
 
-This declarative approach centralizes the parameter processing logic, making drivers simpler and more consistent.
+**Key Enhancements:**
+- **StatementConfig Integration**: Parameter processing respects overall configuration
+- **Pipeline Awareness**: Works with SQLTransformContext for consistency
+- **Enhanced Caching**: Parameter processing results are cached with StatementConfig keys
+- **Script Compilation**: New `needs_static_script_compilation` flag for script handling
+- **Type Preservation**: Enhanced TypedParameter support through pipeline
+
+**Current Processing Flow:**
+1. SQL object processes parameters through pipeline (parameterize_literals_step)
+2. Parameters are compiled with StatementConfig-aware caching
+3. Driver receives pre-processed parameters via prepare_driver_parameters()
+4. Type coercion and style conversion applied consistently
+5. Results cached for identical StatementConfig + SQL combinations
 
 ---
 
@@ -187,20 +270,28 @@ sqlspec/
 │   └── integration/# Full adapter tests
 ```
 
-### Testing Commands
+### Testing Commands (CURRENT)
 
 ```bash
 # Run all tests
 make test
 
-# Run specific adapter tests
-uv run pytest tests/integration/test_adapter_adbc.py -xvs
+# Run specific adapter tests (current naming)
+uv run pytest tests/integration/test_adapters/test_adbc/test_driver.py -xvs
+
+# Run integration tests for specific database
+uv run pytest tests/integration/test_adapters/test_psycopg/ -xvs
 
 # Type checking
-make type-check
+make type-check  # Runs both mypy and pyright
 
-# Linting
-make lint
+# Linting and formatting
+make lint        # All linting checks
+make fix         # Auto-fix formatting issues
+
+# MyPyC compilation testing
+HATCH_BUILD_HOOKS_ENABLE=1 uv sync --all-extras --dev  # Install with compilation
+make install     # Standard development installation
 ```
 
 ### Adding a New Adapter
