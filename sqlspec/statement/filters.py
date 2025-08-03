@@ -88,6 +88,11 @@ class BeforeAfterFilter(StatementFilter):
 
     __slots__ = ("_param_name_after", "_param_name_before", "after", "before", "field_name")
 
+    # Explicit property declarations for better IDE/linter support
+    field_name: str
+    before: Optional[datetime]
+    after: Optional[datetime]
+
     def __init__(self, field_name: str, before: Optional[datetime] = None, after: Optional[datetime] = None) -> None:
         """Initialize the BeforeAfterFilter.
 
@@ -149,6 +154,11 @@ class OnBeforeAfterFilter(StatementFilter):
     """Data required to filter a query on a ``datetime`` column."""
 
     __slots__ = ("_param_name_on_or_after", "_param_name_on_or_before", "field_name", "on_or_after", "on_or_before")
+
+    # Explicit property declarations for better IDE/linter support
+    field_name: str
+    on_or_before: Optional[datetime]
+    on_or_after: Optional[datetime]
 
     def __init__(
         self, field_name: str, on_or_before: Optional[datetime] = None, on_or_after: Optional[datetime] = None
@@ -231,6 +241,10 @@ class InCollectionFilter(InAnyFilter[T]):
 
     __slots__ = ("_param_names", "field_name", "values")
 
+    # Explicit property declarations for better IDE/linter support
+    field_name: str
+    values: Optional[abc.Collection[T]]
+
     def __init__(self, field_name: str, values: Optional[abc.Collection[T]]) -> None:
         """Initialize the InCollectionFilter.
 
@@ -285,6 +299,10 @@ class NotInCollectionFilter(InAnyFilter[T]):
 
     __slots__ = ("_param_names", "field_name", "values")
 
+    # Explicit property declarations for better IDE/linter support
+    field_name: str
+    values: Optional[abc.Collection[T]]
+
     def __init__(self, field_name: str, values: Optional[abc.Collection[T]]) -> None:
         """Initialize the NotInCollectionFilter.
 
@@ -336,6 +354,10 @@ class AnyCollectionFilter(InAnyFilter[T]):
     """Data required to construct a ``WHERE column_name = ANY (array_expression)`` clause."""
 
     __slots__ = ("_param_names", "field_name", "values")
+
+    # Explicit property declarations for better IDE/linter support
+    field_name: str
+    values: Optional[abc.Collection[T]]
 
     def __init__(self, field_name: str, values: Optional[abc.Collection[T]]) -> None:
         """Initialize the AnyCollectionFilter.
@@ -462,6 +484,10 @@ class LimitOffsetFilter(PaginationFilter):
 
     __slots__ = ("_limit_param_name", "_offset_param_name", "limit", "offset")
 
+    # Explicit property declarations for better IDE/linter support
+    limit: int
+    offset: int
+
     def __init__(self, limit: int, offset: int) -> None:
         """Initialize the LimitOffsetFilter.
 
@@ -524,6 +550,10 @@ class OrderByFilter(StatementFilter):
 
     __slots__ = ("field_name", "sort_order")
 
+    # Explicit property declarations for better IDE/linter support
+    field_name: str
+    sort_order: Literal["asc", "desc"]
+
     def __init__(self, field_name: str, sort_order: Literal["asc", "desc"] = "asc") -> None:
         """Initialize the OrderByFilter.
 
@@ -570,6 +600,11 @@ class SearchFilter(StatementFilter):
     """
 
     __slots__ = ("_param_name", "field_name", "ignore_case", "value")
+
+    # Explicit property declarations for better IDE/linter support
+    field_name: Union[str, set[str]]
+    value: str
+    ignore_case: Optional[bool]
 
     def __init__(self, field_name: Union[str, set[str]], value: str, ignore_case: Optional[bool] = False) -> None:
         """Initialize the SearchFilter.
@@ -705,6 +740,12 @@ class OffsetPagination(Generic[T]):
     """Container for data returned using limit/offset pagination."""
 
     __slots__ = ("items", "limit", "offset", "total")
+
+    # Explicit property declarations for better IDE/linter support
+    items: Sequence[T]
+    limit: int
+    offset: int
+    total: int
 
     def __init__(self, items: Sequence[T], limit: int, offset: int, total: int) -> None:
         """Initialize OffsetPagination.
