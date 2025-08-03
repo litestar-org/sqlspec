@@ -368,7 +368,9 @@ class PythonFileLoader(BaseMigrationLoader):
         raise MigrationLoadError(msg)
 
 
-def get_migration_loader(file_path: Path, migrations_dir: Path, project_root: "Optional[Path]" = None) -> BaseMigrationLoader:
+def get_migration_loader(
+    file_path: Path, migrations_dir: Path, project_root: "Optional[Path]" = None
+) -> BaseMigrationLoader:
     """Factory function to get appropriate loader for migration file.
 
     Args:
