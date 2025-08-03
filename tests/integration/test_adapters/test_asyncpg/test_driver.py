@@ -41,8 +41,7 @@ async def asyncpg_session(postgres_service: PostgresService) -> AsyncGenerator[A
             await session.execute_script("DROP TABLE IF EXISTS test_table")
     finally:
         # Ensure pool is closed properly to avoid threading issues during test shutdown
-        if config.pool_instance:
-            await config.close_pool()
+        await config.close_pool()
 
 
 @pytest.mark.xdist_group("postgres")

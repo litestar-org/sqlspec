@@ -44,9 +44,7 @@ async def psycopg_async_session(postgres_service: PostgresService) -> AsyncGener
                 pass
     finally:
         # Ensure pool is closed properly with timeout
-        if config.pool_instance:
-            await config.pool_instance.close(timeout=5.0)
-            config.pool_instance = None
+        await config.close_pool()
 
 
 @pytest.mark.xdist_group("postgres")

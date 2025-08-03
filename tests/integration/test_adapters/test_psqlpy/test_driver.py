@@ -45,8 +45,7 @@ async def _manage_table(psqlpy_config: PsqlpyConfig) -> AsyncGenerator[None, Non
             await driver.execute_script(drop_sql)
     finally:
         # Ensure pool is closed properly to avoid threading issues during test shutdown
-        if psqlpy_config.pool_instance:
-            await psqlpy_config.close_pool()
+        await psqlpy_config.close_pool()
 
 
 # --- Test Parameter Styles --- #

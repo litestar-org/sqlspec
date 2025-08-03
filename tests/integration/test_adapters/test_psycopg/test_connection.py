@@ -24,9 +24,7 @@ async def test_async_connection(postgres_service: PostgresService) -> None:
             assert result == {"id": 1}
 
     # Ensure pool is closed properly with timeout
-    if async_config.pool_instance:
-        await async_config.pool_instance.close(timeout=5.0)
-        async_config.pool_instance = None
+    await async_config.close_pool()
     # Test connection pool
     another_config = PsycopgAsyncConfig(
         pool_config={
@@ -45,9 +43,7 @@ async def test_async_connection(postgres_service: PostgresService) -> None:
             assert result == {"value": 1}  # type: ignore[comparison-overlap]
 
     # Ensure pool is closed properly with timeout
-    if another_config.pool_instance:
-        await another_config.pool_instance.close(timeout=5.0)
-        another_config.pool_instance = None
+    await another_config.close_pool()
 
 
 @pytest.mark.xdist_group("postgres")
@@ -70,9 +66,7 @@ def test_sync_connection(postgres_service: PostgresService) -> None:
                 assert result == {"id": 1}
     finally:
         # Ensure pool is closed properly with timeout
-        if sync_config.pool_instance:
-            sync_config.pool_instance.close(timeout=5.0)
-            sync_config.pool_instance = None
+        sync_config.close_pool()
 
     # Test connection pool
     another_config = PsycopgSyncConfig(
@@ -93,6 +87,4 @@ def test_sync_connection(postgres_service: PostgresService) -> None:
                 assert result == {"id": 1}
     finally:
         # Ensure pool is closed properly with timeout
-        if another_config.pool_instance:
-            another_config.pool_instance.close(timeout=5.0)
-            another_config.pool_instance = None
+        another_config.close_pool()

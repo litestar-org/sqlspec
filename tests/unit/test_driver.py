@@ -766,7 +766,7 @@ async def test_async_driver_execute_script() -> None:
 # Error Handling Tests
 
 
-def test_sync_driverdispatch_statement_execution_exception() -> None:
+def test_sync_driver_dispatch_statement_execution_exception() -> None:
     """Test sync driver dispatch_statement_execution exception handling."""
     connection = MockConnection()
     driver = MockSyncDriver(connection)
@@ -776,7 +776,7 @@ def test_sync_driverdispatch_statement_execution_exception() -> None:
             driver.execute("SELECT * FROM users")
 
 
-async def test_async_driverdispatch_statement_execution_exception() -> None:
+async def test_async_driver_dispatch_statement_execution_exception() -> None:
     """Test async driver dispatch_statement_execution exception handling."""
     connection = MockAsyncConnection()
     driver = MockAsyncDriver(connection)

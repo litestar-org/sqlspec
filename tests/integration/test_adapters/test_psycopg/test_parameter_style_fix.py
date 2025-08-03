@@ -59,9 +59,7 @@ def psycopg_regression_session(postgres_service: PostgresService) -> Generator[P
             # Cleanup
             session.execute_script("DROP TABLE IF EXISTS parameter_regression_test")
     finally:
-        if config.pool_instance:
-            config.pool_instance.close(timeout=5.0)
-            config.pool_instance = None
+        config.close_pool()
 
 
 @pytest.mark.xdist_group("postgres")

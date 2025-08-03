@@ -55,9 +55,7 @@ def psycopg_params_session(postgres_service: PostgresService) -> "Generator[Psyc
             session.execute_script("DROP TABLE IF EXISTS test_params")
     finally:
         # Ensure pool is closed properly to avoid "cannot join current thread" warnings
-        if config.pool_instance:
-            config.pool_instance.close(timeout=5.0)
-            config.pool_instance = None
+        config.close_pool()
 
 
 @pytest.mark.xdist_group("postgres")

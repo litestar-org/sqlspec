@@ -46,8 +46,7 @@ def sqlite_session() -> Generator[SqliteDriver, None, None]:
             # Cleanup is automatic with in-memory database
     finally:
         # Ensure pool is closed properly to avoid threading issues during test shutdown
-        if config.pool_instance:
-            config.close_pool()
+        config.close_pool()
 
 
 @pytest.mark.xdist_group("sqlite")

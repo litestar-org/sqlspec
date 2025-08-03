@@ -37,8 +37,7 @@ def duckdb_session() -> Generator[DuckDBDriver, None, None]:
             session.execute_script("DROP SEQUENCE IF EXISTS test_id_seq")
     finally:
         # Ensure pool is closed properly to avoid threading issues during test shutdown
-        if adapter.pool_instance:
-            adapter.close_pool()
+        adapter.close_pool()
 
 
 @pytest.mark.parametrize(

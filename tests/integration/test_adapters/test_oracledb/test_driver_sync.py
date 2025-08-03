@@ -33,11 +33,7 @@ def oracle_sync_session(oracle_23ai_service: OracleService) -> Generator[OracleS
         yield config
     finally:
         # Ensure pool is closed properly to avoid threading issues during test shutdown
-        if config.pool_instance:
-            try:
-                config.pool_instance.close()
-            except Exception:
-                pass
+        config.close_pool()
 
 
 @pytest.mark.parametrize(

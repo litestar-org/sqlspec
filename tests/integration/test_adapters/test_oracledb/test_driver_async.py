@@ -37,11 +37,7 @@ async def oracle_async_session(oracle_23ai_service: OracleService) -> AsyncGener
         yield config
     finally:
         # Ensure pool is closed properly to avoid threading issues during test shutdown
-        if config.pool_instance:
-            try:
-                await config.pool_instance.close()
-            except Exception:
-                pass
+        await config.close_pool()
 
 
 @pytest.mark.parametrize(
