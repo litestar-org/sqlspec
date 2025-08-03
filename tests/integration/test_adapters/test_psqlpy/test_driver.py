@@ -161,7 +161,7 @@ async def test_select_methods(psqlpy_config: PsqlpyConfig) -> None:
         params_list = [("name1",), ("name2",)]
         many_result = await driver.execute_many(insert_sql, params_list)
         assert isinstance(many_result, SQLResult)
-        assert many_result.rows_affected == -1  # psqlpy doesn't provide this for execute_many
+        assert many_result.rows_affected == 2  # psqlpy now tracks execute_many rows correctly
 
         # Test select (multiple results)
         select_result = await driver.execute("SELECT name FROM test_table ORDER BY name")
@@ -229,7 +229,7 @@ async def test_multiple_positional_parameters(psqlpy_config: PsqlpyConfig) -> No
         params_list = [("param1"), ("param2")]
         many_result = await driver.execute_many(insert_sql, params_list)
         assert isinstance(many_result, SQLResult)
-        assert many_result.rows_affected == -1  # psqlpy doesn't provide this for execute_many
+        assert many_result.rows_affected == 2  # psqlpy now tracks execute_many rows correctly
 
         # Query with multiple parameters
         select_result = await driver.execute(
@@ -353,7 +353,7 @@ async def test_regex_parameter_binding_complex_case(psqlpy_config: PsqlpyConfig)
         params_list = [("complex1"), ("complex2"), ("complex3")]
         many_result = await driver.execute_many(insert_sql, params_list)
         assert isinstance(many_result, SQLResult)
-        assert many_result.rows_affected == -1  # psqlpy limitation
+        assert many_result.rows_affected == 3  # psqlpy now tracks execute_many rows correctly
 
         # Complex query with parameters at various positions
         select_result = await driver.execute(
@@ -409,7 +409,7 @@ async def test_execute_many_insert(psqlpy_config: PsqlpyConfig) -> None:
 
         result = await driver.execute_many(insert_sql, params_list)
         assert isinstance(result, SQLResult)
-        assert result.rows_affected == -1  # psqlpy doesn't provide this for execute_many
+        assert result.rows_affected == 3  # psqlpy now tracks execute_many rows correctly
 
         # Verify all records were inserted
         select_result = await driver.execute("SELECT COUNT(*) as count FROM test_table")
