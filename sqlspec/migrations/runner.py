@@ -96,13 +96,34 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase"]):
         Returns:
             Dictionary mapping query names to SQL objects.
         """
+        from sqlspec.migrations.loaders import get_migration_loader
+        from sqlspec.statement.sql import SQL
+
         all_queries = {}
         migrations = self.get_migration_files()
 
-        for _version, file_path in migrations:
-            self.loader.load_sql(file_path)
-            for query_name in self.loader.list_queries():
-                all_queries[query_name] = self.loader.get_sql(query_name)
+        for version, file_path in migrations:
+            if file_path.suffix == ".sql":
+                self.loader.load_sql(file_path)
+                for query_name in self.loader.list_queries():
+                    all_queries[query_name] = self.loader.get_sql(query_name)
+            else:
+                loader = get_migration_loader(file_path, self.migrations_path, self.project_root)
+
+                try:
+                    from sqlspec.utils.sync_tools import run_
+
+                    up_sql = run_(loader.get_up_sql)(file_path)
+                    down_sql = run_(loader.get_down_sql)(file_path)
+
+                    if up_sql:
+                        all_queries[f"migrate-{version}-up"] = SQL(up_sql[0])
+                    if down_sql:
+                        all_queries[f"migrate-{version}-down"] = SQL(down_sql[0])
+
+                except Exception as e:
+                    logger.debug("Failed to load Python migration %s: %s", file_path, e)
+
         return all_queries
 
 
@@ -183,11 +204,30 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase"]):
         Returns:
             Dictionary mapping query names to SQL objects.
         """
+        from sqlspec.migrations.loaders import get_migration_loader
+        from sqlspec.statement.sql import SQL
+
         all_queries = {}
         migrations = await self.get_migration_files()
 
-        for _version, file_path in migrations:
-            self.loader.load_sql(file_path)
-            for query_name in self.loader.list_queries():
-                all_queries[query_name] = self.loader.get_sql(query_name)
+        for version, file_path in migrations:
+            if file_path.suffix == ".sql":
+                self.loader.load_sql(file_path)
+                for query_name in self.loader.list_queries():
+                    all_queries[query_name] = self.loader.get_sql(query_name)
+            else:
+                loader = get_migration_loader(file_path, self.migrations_path, self.project_root)
+
+                try:
+                    up_sql = await loader.get_up_sql(file_path)
+                    down_sql = await loader.get_down_sql(file_path)
+
+                    if up_sql:
+                        all_queries[f"migrate-{version}-up"] = SQL(up_sql[0])
+                    if down_sql:
+                        all_queries[f"migrate-{version}-down"] = SQL(down_sql[0])
+
+                except Exception as e:
+                    logger.debug("Failed to load Python migration %s: %s", file_path, e)
+
         return all_queries

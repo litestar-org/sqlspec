@@ -3,14 +3,17 @@
 This module provides abstract base classes for migration components.
 """
 
+import operator
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Generic, Optional, TypeVar
 
 from sqlspec import sql
 from sqlspec.loader import SQLFileLoader
+from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.statement.sql import SQL
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.sync_tools import run_
 
 __all__ = ("BaseMigrationCommands", "BaseMigrationRunner", "BaseMigrationTracker")
 
@@ -153,6 +156,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         """
         self.migrations_path = migrations_path
         self.loader = SQLFileLoader()
+        self.project_root: Optional[Path] = None
 
     def _extract_version(self, filename: str) -> Optional[str]:
         """Extract version from filename (e.g., '0001_initial.sql' -> '0001').
@@ -191,14 +195,15 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             return []
 
         migrations = []
-        for file_path in self.migrations_path.glob("*.sql"):
-            if file_path.name.startswith("."):
-                continue
-            version = self._extract_version(file_path.name)
-            if version:
-                migrations.append((version, file_path))
+        for pattern in ["*.sql", "*.py"]:
+            for file_path in self.migrations_path.glob(pattern):
+                if file_path.name.startswith("."):
+                    continue
+                version = self._extract_version(file_path.name)
+                if version:
+                    migrations.append((version, file_path))
 
-        return sorted(migrations, key=lambda x: x[0])
+        return sorted(migrations, key=operator.itemgetter(0))
 
     def _load_migration_metadata(self, file_path: Path) -> "dict[str, Any]":
         """Load migration metadata from file.
@@ -209,30 +214,51 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         Returns:
             Dictionary containing migration metadata.
         """
-        self.loader.clear_cache()
-        self.loader.load_sql(file_path)
+
+        # Get appropriate loader for file type
+        loader = get_migration_loader(file_path, self.migrations_path, self.project_root)
+
+        # Validate migration file
+        loader.validate_migration_file(file_path)
 
         # Read raw content for checksum
-        content = file_path.read_text()
+        content = file_path.read_text(encoding="utf-8")
         checksum = self._calculate_checksum(content)
 
         # Extract metadata
         version = self._extract_version(file_path.name)
         description = file_path.stem.split("_", 1)[1] if "_" in file_path.stem else ""
 
-        # Query names use versioned pattern
-        up_query = f"migrate-{version}-up"
-        down_query = f"migrate-{version}-down"
+        # For SQL files, check if queries exist
+        has_upgrade = True
+        has_downgrade = False
+
+        if file_path.suffix == ".sql":
+            # Query names use versioned pattern
+            up_query = f"migrate-{version}-up"
+            down_query = f"migrate-{version}-down"
+
+            self.loader.clear_cache()
+            self.loader.load_sql(file_path)
+            has_upgrade = self.loader.has_query(up_query)
+            has_downgrade = self.loader.has_query(down_query)
+        else:
+            # For Python files, loader validation ensures migrate_up exists
+            # Check for migrate_down by attempting to load
+            try:
+                down_sql = run_(loader.get_down_sql)(file_path)
+                has_downgrade = bool(down_sql)
+            except Exception:
+                has_downgrade = False
 
         return {
             "version": version,
             "description": description,
             "file_path": file_path,
             "checksum": checksum,
-            "up_query": up_query,
-            "down_query": down_query,
-            "has_upgrade": self.loader.has_query(up_query),
-            "has_downgrade": self.loader.has_query(down_query),
+            "has_upgrade": has_upgrade,
+            "has_downgrade": has_downgrade,
+            "loader": loader,
         }
 
     def _get_migration_sql(self, migration: "dict[str, Any]", direction: str) -> Optional[SQL]:
@@ -245,7 +271,6 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         Returns:
             SQL object for the migration.
         """
-        query_key = f"{direction}_query"
         has_key = f"has_{direction}grade"
 
         if not migration.get(has_key):
@@ -255,7 +280,29 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             msg = f"Migration {migration['version']} has no upgrade query"
             raise ValueError(msg)
 
-        return self.loader.get_sql(migration[query_key])
+        file_path = migration["file_path"]
+        loader = migration["loader"]
+
+        # Get SQL statements from appropriate loader
+
+        try:
+            if direction == "up":
+                sql_statements = run_(loader.get_up_sql)(file_path)
+            else:
+                sql_statements = run_(loader.get_down_sql)(file_path)
+
+        except Exception as e:
+            if direction == "down":
+                logger.warning("Failed to load downgrade for migration %s: %s", migration["version"], e)
+                return None
+            msg = f"Failed to load upgrade for migration {migration['version']}: {e}"
+            raise ValueError(msg) from e
+        else:
+            if sql_statements:
+                from sqlspec.statement.sql import SQL
+
+                return SQL(sql_statements[0])
+            return None
 
     @abstractmethod
     def get_migration_files(self) -> Any:
@@ -299,6 +346,7 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
 
         self.version_table = migration_config.get("version_table_name", "sqlspec_migrations")
         self.migrations_path = Path(migration_config.get("script_location", "migrations"))
+        self.project_root = Path(migration_config["project_root"]) if "project_root" in migration_config else None
 
     def _get_init_readme_content(self) -> str:
         """Get the README content for migration directory initialization.
@@ -395,6 +443,6 @@ This naming ensures proper sorting and avoids conflicts when loading multiple fi
         ...
 
     @abstractmethod
-    def revision(self, message: str) -> Any:
+    def revision(self, message: str, file_type: str = "sql") -> Any:
         """Create a new migration file."""
         ...

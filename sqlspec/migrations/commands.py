@@ -181,11 +181,12 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             self.tracker.record_migration(driver, revision, f"Stamped to {revision}", 0, "manual-stamp")
             console.print(f"[green]Database stamped at revision {revision}[/]")
 
-    def revision(self, message: str) -> None:
+    def revision(self, message: str, file_type: str = "sql") -> None:
         """Create a new migration file.
 
         Args:
             message: Description for the migration.
+            file_type: Type of migration file to create ('sql' or 'py').
         """
         existing = self.runner.get_migration_files()
         if existing:
@@ -194,7 +195,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         else:
             next_num = 1
         next_version = str(next_num).zfill(4)
-        file_path = create_migration_file(self.migrations_path, next_version, message)
+        file_path = create_migration_file(self.migrations_path, next_version, message, file_type)
         console.print(f"[green]Created migration:[/] {file_path}")
 
 
@@ -347,11 +348,12 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             await self.tracker.record_migration(driver, revision, f"Stamped to {revision}", 0, "manual-stamp")
             console.print(f"[green]Database stamped at revision {revision}[/]")
 
-    async def revision(self, message: str) -> None:
+    async def revision(self, message: str, file_type: str = "sql") -> None:
         """Create a new migration file.
 
         Args:
             message: Description of the migration.
+            file_type: Type of migration file to create ('sql' or 'py').
         """
         existing = await self.runner.get_migration_files()
         if existing:
@@ -360,7 +362,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         else:
             next_num = 1
         next_version = str(next_num).zfill(4)
-        file_path = create_migration_file(self.migrations_path, next_version, message)
+        file_path = create_migration_file(self.migrations_path, next_version, message, file_type)
         console.print(f"[green]Created migration:[/] {file_path}")
 
 
@@ -437,13 +439,14 @@ class MigrationCommands:
         else:
             cast("SyncMigrationCommands[Any]", self._impl).stamp(revision)
 
-    def revision(self, message: str) -> None:
+    def revision(self, message: str, file_type: str = "sql") -> None:
         """Create a new migration file.
 
         Args:
             message: Description for the migration.
+            file_type: Type of migration file to create ('sql' or 'py').
         """
         if self._is_async:
-            await_(cast("AsyncMigrationCommands[Any]", self._impl).revision, raise_sync_error=False)(message)
+            await_(cast("AsyncMigrationCommands[Any]", self._impl).revision, raise_sync_error=False)(message, file_type)
         else:
-            cast("SyncMigrationCommands[Any]", self._impl).revision(message)
+            cast("SyncMigrationCommands[Any]", self._impl).revision(message, file_type)

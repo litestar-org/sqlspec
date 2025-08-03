@@ -14,13 +14,14 @@ if TYPE_CHECKING:
 __all__ = ("create_migration_file", "drop_all", "get_author")
 
 
-def create_migration_file(migrations_dir: Path, version: str, message: str) -> Path:
+def create_migration_file(migrations_dir: Path, version: str, message: str, file_type: str = "sql") -> Path:
     """Create a new migration file from template.
 
     Args:
         migrations_dir: Directory to create the migration in.
         version: Version number for the migration.
         message: Description message for the migration.
+        file_type: Type of migration file to create ('sql' or 'py').
 
     Returns:
         Path to the created migration file.
@@ -29,9 +30,53 @@ def create_migration_file(migrations_dir: Path, version: str, message: str) -> P
     safe_message = "".join(c if c.isalnum() or c in " -" else "" for c in safe_message)
     safe_message = safe_message.replace(" ", "_").replace("-", "_")
     safe_message = "_".join(filter(None, safe_message.split("_")))[:50]
-    filename = f"{version}_{safe_message}.sql"
-    file_path = migrations_dir / filename
-    template = f"""-- SQLSpec Migration
+
+    if file_type == "py":
+        filename = f"{version}_{safe_message}.py"
+        file_path = migrations_dir / filename
+        template = f'''"""SQLSpec Migration - {message}
+
+Version: {version}
+Created: {datetime.now(timezone.utc).isoformat()}
+Author: {get_author()}
+"""
+
+from typing import List, Union
+
+
+def migrate_up() -> Union[str, List[str]]:
+    """Apply the migration (upgrade).
+
+    Returns:
+        SQL statement(s) to execute for upgrade.
+        Can return a single string or list of strings.
+    """
+    # TODO: Add your upgrade SQL statements here
+    # Example:
+    return """
+    CREATE TABLE example (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL
+    );
+    """
+
+
+def migrate_down() -> Union[str, List[str]]:
+    """Reverse the migration (downgrade).
+
+    Returns:
+        SQL statement(s) to execute for downgrade.
+        Can return a single string or list of strings.
+        Return empty string or empty list if downgrade is not supported.
+    """
+    # TODO: Add your downgrade SQL statements here (optional)
+    # Example:
+    return "DROP TABLE example;"
+'''
+    else:
+        filename = f"{version}_{safe_message}.sql"
+        file_path = migrations_dir / filename
+        template = f"""-- SQLSpec Migration
 -- Version: {version}
 -- Description: {message}
 -- Created: {datetime.now(timezone.utc).isoformat()}
@@ -39,17 +84,15 @@ def create_migration_file(migrations_dir: Path, version: str, message: str) -> P
 
 -- name: migrate-{version}-up
 -- TODO: Add your upgrade SQL statements here
--- Example:
--- CREATE TABLE example (
---     id INTEGER PRIMARY KEY,
---     name TEXT NOT NULL
--- );
+CREATE TABLE placeholder (
+    id INTEGER PRIMARY KEY
+);
 
 -- name: migrate-{version}-down
 -- TODO: Add your downgrade SQL statements here (optional)
--- Example:
--- DROP TABLE example;
+DROP TABLE placeholder;
 """
+
     file_path.write_text(template)
     return file_path
 
