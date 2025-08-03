@@ -498,7 +498,13 @@ class CommonDriverAttributesMixin:
             # No execution style configuration, use default parameter style for explicit compilation
             target_style = statement_config.parameter_config.default_parameter_style
         sql, params = statement.compile(placeholder_style=target_style, flatten_single_params=flatten_single_params)
-        return sql, self.prepare_driver_parameters(params, statement_config, is_many=statement.is_many)
+        prepared_params = self.prepare_driver_parameters(params, statement_config, is_many=statement.is_many)
+
+        # Apply output_transformer if configured
+        if statement_config.parameter_config.output_transformer:
+            sql, prepared_params = statement_config.parameter_config.output_transformer(sql, prepared_params)
+
+        return sql, prepared_params
 
     def _create_count_query(self, original_sql: "SQL") -> "SQL":
         """Create a COUNT query from the original SQL statement.

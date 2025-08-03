@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import operator
 from collections.abc import Generator
-from typing import Any, Literal
+from typing import Literal
 
 import pytest
 from pytest_databases.docker.bigquery import BigQueryService
@@ -91,29 +91,20 @@ def test_bigquery_basic_crud(bigquery_session: BigQueryDriver, bigquery_service:
     assert empty_result.data[0]["count"] == 0
 
 
-@pytest.mark.parametrize(
-    ("params", "style"),
-    [
-        pytest.param(("test_value"), "tuple_binds", id="tuple_binds"),
-        pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
-    ],
-)
 @pytest.mark.xdist_group("bigquery")
-@pytest.mark.xfail(reason="BigQuery emulator has issues with table name parsing in fully qualified table names")
-def test_bigquery_parameter_styles(
-    bigquery_session: BigQueryDriver, bigquery_service: BigQueryService, params: Any, style: ParamStyle
-) -> None:
-    """Test different parameter binding styles."""
-    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+def test_bigquery_parameter_styles(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
+    """Test BigQuery named parameter binding (only supported style)."""
+    # Use unqualified table name to avoid SQL parsing issues
+    table_name = "test_table"
 
     # Insert test data
-    bigquery_session.execute(f"INSERT INTO {table_name} (id, name) VALUES (?, ?)", (1, "test_value"))
+    bigquery_session.execute(
+        f"INSERT INTO {table_name} (id, name) VALUES (@id, @name)", {"id": 1, "name": "test_value"}
+    )
 
-    # Test parameter style
-    if style == "tuple_binds":
-        sql = f"SELECT name FROM {table_name} WHERE name = ?"
-    else:  # dict_binds
-        sql = f"SELECT name FROM {table_name} WHERE name = @name"
+    # Test named parameter style (BigQuery's native parameter style)
+    sql = f"SELECT name FROM {table_name} WHERE name = @name"
+    params = {"name": "test_value"}
 
     result = bigquery_session.execute(sql, params)
     assert isinstance(result, SQLResult)

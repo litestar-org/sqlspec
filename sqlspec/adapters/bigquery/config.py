@@ -27,17 +27,23 @@ logger = logging.getLogger(__name__)
 
 
 class BigQueryConnectionParams(TypedDict, total=False):
-    """BigQuery connection parameters."""
+    """Standard BigQuery connection parameters.
 
+    Includes both official BigQuery client parameters and BigQuery-specific configuration options.
+    """
+
+    # Official BigQuery client constructor parameters
     project: NotRequired[str]
     location: NotRequired[str]
     credentials: NotRequired["Credentials"]
-    dataset_id: NotRequired[str]
-    credentials_path: NotRequired[str]
     client_options: NotRequired["ClientOptions"]
     client_info: NotRequired["ClientInfo"]
+
+    # BigQuery-specific configuration options
     default_query_job_config: NotRequired[QueryJobConfig]
     default_load_job_config: NotRequired[LoadJobConfig]
+    dataset_id: NotRequired[str]
+    credentials_path: NotRequired[str]
     use_query_cache: NotRequired[bool]
     maximum_bytes_billed: NotRequired[int]
     enable_bigquery_ml: NotRequired[bool]
@@ -59,7 +65,18 @@ class BigQueryConnectionParams(TypedDict, total=False):
     extra: NotRequired[dict[str, Any]]
 
 
-__all__ = ("BigQueryConfig", "BigQueryConnectionParams")
+class BigQueryDriverFeatures(TypedDict, total=False):
+    """BigQuery driver-specific features configuration.
+
+    Only non-standard BigQuery client parameters that are SQLSpec-specific extensions.
+    """
+
+    on_job_start: NotRequired["Callable[[str], None]"]
+    on_job_complete: NotRequired["Callable[[str, Any], None]"]
+    on_connection_create: NotRequired["Callable[[Any], None]"]
+
+
+__all__ = ("BigQueryConfig", "BigQueryConnectionParams", "BigQueryDriverFeatures")
 
 
 class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
@@ -68,16 +85,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     BigQuery is Google Cloud's serverless, highly scalable data warehouse with
     advanced analytics, machine learning, and AI capabilities. This configuration
     supports all BigQuery features including:
-
-    - Gemini in BigQuery for AI-powered analytics
-    - BigQuery ML for machine learning workflows
-    - BigQuery DataFrames for Python-based analytics
-    - Multi-modal data analysis (text, images, video, audio)
-    - Cross-cloud data access (AWS S3, Azure Blob Storage)
-    - Vector search and embeddings
-    - Continuous queries for real-time processing
-    - Advanced security and governance features
-    - Parquet and Arrow format optimization
     """
 
     driver_type: ClassVar[type[BigQueryDriver]] = BigQueryDriver
@@ -88,22 +95,18 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         *,
         connection_instance: "Optional[BigQueryConnection]" = None,
         connection_config: "Optional[Union[BigQueryConnectionParams, dict[str, Any]]]" = None,
-        on_connection_create: Optional[Callable[[BigQueryConnection], None]] = None,
-        on_job_start: Optional[Callable[[str], None]] = None,
-        on_job_complete: Optional[Callable[[str, Any], None]] = None,
         migration_config: Optional[dict[str, Any]] = None,
         statement_config: "Optional[StatementConfig]" = None,
+        driver_features: "Optional[Union[BigQueryDriverFeatures, dict[str, Any]]]" = None,
     ) -> None:
         """Initialize BigQuery configuration with comprehensive feature support.
 
         Args:
-            connection_config: Connection configuration parameters
+            connection_config: Standard connection configuration parameters
             connection_instance: Existing connection instance to use
-            on_connection_create: Callback executed when connection is created
-            on_job_start: Callback executed when a BigQuery job starts
-            on_job_complete: Callback executed when a BigQuery job completes
             migration_config: Migration configuration
             statement_config: Statement configuration override
+            driver_features: BigQuery-specific driver features and configurations
 
         Example:
             >>> # Basic BigQuery connection
@@ -140,30 +143,38 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             ... )
         """
 
+        # Store connection instance
+        self._connection_instance = connection_instance
+
+        # Setup configuration following DuckDB pattern
         self.connection_config: dict[str, Any] = dict(connection_config) if connection_config else {}
         if "extra" in self.connection_config:
             extras = self.connection_config.pop("extra")
             self.connection_config.update(extras)
 
-        self._connection_instance = connection_instance
+        # Setup driver features
+        self.driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
 
-        # Store other config
-        self.on_connection_create = on_connection_create
-        self.on_job_start = on_job_start
-        self.on_job_complete = on_job_complete
-
-        if self.connection_config.get("default_query_job_config") is None:
+        # Setup default job config if not provided
+        if "default_query_job_config" not in self.connection_config:
             self._setup_default_job_config()
+
+        if statement_config is None:
+            statement_config = bigquery_statement_config
 
         super().__init__(
             connection_config=self.connection_config,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features={},
+            driver_features=self.driver_features,
         )
 
     def _setup_default_job_config(self) -> None:
-        """Set up default job configuration based on connection settings."""
+        """Set up default job configuration based on connection config."""
+        # Check if already provided in connection_config
+        if self.connection_config.get("default_query_job_config") is not None:
+            return
+
         job_config = QueryJobConfig()
 
         dataset_id = self.connection_config.get("dataset_id")
@@ -203,7 +214,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             return self._connection_instance
 
         try:
-            # Filter out BigQuery-specific enhancement flags and keep only client fields
+            # Filter out extra fields and keep only official BigQuery client constructor fields
             client_fields = {"project", "location", "credentials", "client_options", "client_info"}
             config_dict: dict[str, Any] = {
                 field: value
@@ -211,8 +222,20 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
                 if field in client_fields and value is not None and value is not Empty
             }
             connection = self.connection_type(**config_dict)
-            if self.on_connection_create:
-                self.on_connection_create(connection)
+
+            # Store BigQuery-specific config in driver_features for driver access
+            default_query_job_config = self.connection_config.get("default_query_job_config")
+            if default_query_job_config is not None:
+                self.driver_features["default_query_job_config"] = default_query_job_config
+
+            default_load_job_config = self.connection_config.get("default_load_job_config")
+            if default_load_job_config is not None:
+                self.driver_features["default_load_job_config"] = default_load_job_config
+
+            # Call connection create callback from driver features
+            on_connection_create = self.driver_features.get("on_connection_create")
+            if on_connection_create:
+                on_connection_create(connection)
 
             self._connection_instance = connection
 
@@ -223,7 +246,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         return connection
 
     @contextlib.contextmanager
-    def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[BigQueryConnection, None, None]":
+    def provide_connection(self, *_args: Any, **_kwargs: Any) -> "Generator[BigQueryConnection, None, None]":
         """Provide a BigQuery client within a context manager.
 
         Args:
@@ -238,7 +261,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
     @contextlib.contextmanager
     def provide_session(
-        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+        self, *_args: Any, statement_config: "Optional[StatementConfig]" = None, **_kwargs: Any
     ) -> "Generator[BigQueryDriver, None, None]":
         """Provide a BigQuery driver session context manager.
 
@@ -251,15 +274,12 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             A context manager that yields a BigQueryDriver instance.
         """
 
-        with self.provide_connection(*args, **kwargs) as connection:
+        with self.provide_connection(*_args, **_kwargs) as connection:
             # Use shared config or user-provided config or instance default
-            final_statement_config = statement_config or self.statement_config or bigquery_statement_config
+            final_statement_config = statement_config or self.statement_config
+
             driver = self.driver_type(
-                connection=connection,
-                statement_config=final_statement_config,
-                default_query_job_config=self.connection_config.get("default_query_job_config"),
-                on_job_start=self.on_job_start,
-                on_job_complete=self.on_job_complete,
+                connection=connection, statement_config=final_statement_config, driver_features=self.driver_features
             )
             yield driver
 
