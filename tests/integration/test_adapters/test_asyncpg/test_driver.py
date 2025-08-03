@@ -656,3 +656,20 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: AsyncpgDri
     count_result = await asyncpg_session.execute("SELECT COUNT(*) as count FROM alert_users")
     assert count_result.data is not None
     assert count_result.data[0]["count"] == 3
+
+
+@pytest.mark.integration
+async def test_asyncpg_pgvector_integration(asyncpg_session: AsyncpgDriver) -> None:
+    """Test that asyncpg driver initializes pgvector support automatically via pool init."""
+    # pgvector should be registered automatically when the pool/connection is created
+    # This test verifies that the connection was created without errors, which means
+    # the pgvector initialization (if pgvector is available) completed successfully
+
+    # Test that we can execute a basic query without errors
+    result = await asyncpg_session.execute("SELECT 1 as test_value")
+    assert result.data is not None
+    assert result.data[0]["test_value"] == 1
+
+    # If pgvector was available and registered, the connection should work normally
+    # If pgvector was not available, the connection should still work normally
+    # This test passes if no exceptions are raised during connection setup

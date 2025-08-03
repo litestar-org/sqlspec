@@ -127,7 +127,23 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
     async def _create_pool(self) -> "Pool[Record]":
         """Create the actual async connection pool."""
         config = self._get_pool_config_dict()
+
+        # Auto-register pgvector if available and no custom init function provided
+        if "init" not in config:
+            config["init"] = self._init_pgvector_connection
+
         return await asyncpg_create_pool(**config)
+
+    async def _init_pgvector_connection(self, connection: "AsyncpgConnection") -> None:
+        """Initialize pgvector support for asyncpg connections."""
+        try:
+            import pgvector.asyncpg
+
+            await pgvector.asyncpg.register_vector(connection)
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.debug("Failed to register pgvector for asyncpg: %s", e)
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""

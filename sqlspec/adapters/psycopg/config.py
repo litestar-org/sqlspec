@@ -139,6 +139,16 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 if autocommit_setting is not None:
                     conn.autocommit = autocommit_setting
 
+                try:
+                    import pgvector.psycopg
+
+                    pgvector.psycopg.register_vector(conn)
+                    logger.debug("pgvector registered successfully for psycopg sync connection")
+                except ImportError:
+                    pass
+                except Exception as e:
+                    logger.debug("Failed to register pgvector for psycopg sync: %s", e)
+
             pool_params["configure"] = all_config.pop("configure", configure_connection)
 
             pool_params = {k: v for k, v in pool_params.items() if v is not None}
@@ -315,6 +325,17 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             # Apply autocommit setting if specified (async version requires await)
             if autocommit_setting is not None:
                 await conn.set_autocommit(autocommit_setting)
+
+            try:
+                from pgvector.psycopg import register_vector_async
+
+                await register_vector_async(conn)
+                logger.debug("pgvector registered successfully for psycopg async connection")
+            except ImportError:
+                pass
+            except Exception as e:
+                # pgvector setup failed - log warning but continue
+                logger.debug("Failed to register pgvector for psycopg async: %s", e)
 
         pool_params["configure"] = all_config.pop("configure", configure_connection)
 

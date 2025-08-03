@@ -395,6 +395,7 @@ class PsycopgAsyncDriver(PsycopgCopyMixin, AsyncDriverAdapterBase):
         self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL"
     ) -> "ExecutionResult":
         """Execute single SQL statement using Psycopg execute."""
+
         result = await cursor.execute(sql, prepared_params or ())
 
         if statement.returns_rows():

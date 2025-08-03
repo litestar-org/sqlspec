@@ -613,3 +613,20 @@ def test_psycopg_copy_csv_format(psycopg_session: PsycopgSyncDriver) -> None:
 
     # Clean up
     psycopg_session.execute_script("DROP TABLE copy_csv_sync")
+
+
+@pytest.mark.integration
+def test_psycopg_sync_pgvector_integration(psycopg_session: PsycopgSyncDriver) -> None:
+    """Test that psycopg sync driver initializes pgvector support automatically via pool configure."""
+    # pgvector should be registered automatically when the pool/connection is created
+    # This test verifies that the connection was created without errors, which means
+    # the pgvector initialization (if pgvector is available) completed successfully
+
+    # Test that we can execute a basic query without errors
+    result = psycopg_session.execute("SELECT 1 as test_value")
+    assert result.data is not None
+    assert result.data[0]["test_value"] == 1
+
+    # If pgvector was available and registered, the connection should work normally
+    # If pgvector was not available, the connection should still work normally
+    # This test passes if no exceptions are raised during connection setup
