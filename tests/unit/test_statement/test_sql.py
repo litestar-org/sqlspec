@@ -5,10 +5,8 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from sqlglot import exp
 
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
-from sqlspec.statement.filters import LimitOffsetFilter, SearchFilter
-from sqlspec.statement.sql import SQL, StatementConfig
+from sqlspec import SQL, ParameterStyle, ParameterStyleConfig, StatementConfig
+from sqlspec.statement import LimitOffsetFilter, SearchFilter
 
 # Create a default test config
 DEFAULT_PARAMETER_CONFIG = ParameterStyleConfig(

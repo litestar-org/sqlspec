@@ -8,12 +8,16 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from sqlglot import exp
 
-from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
-from sqlspec.driver._common import ExecutionResult
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
-from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL, StatementConfig
+from sqlspec import (
+    SQL,
+    AsyncDriverAdapterBase,
+    ExecutionResult,
+    ParameterStyle,
+    ParameterStyleConfig,
+    SQLResult,
+    StatementConfig,
+    SyncDriverAdapterBase,
+)
 
 # Test Fixtures and Mock Classes
 
