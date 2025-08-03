@@ -78,6 +78,13 @@ def test_parameter_conversion_only_when_necessary() -> None:
     mock_statement.compile.return_value = ("SELECT * FROM test WHERE id = ?", [1])
     mock_statement.parameters = [1]  # Mock parameters attribute
     mock_statement.is_many = False  # Mock is_many attribute
+    # Mock internal attributes used by hash_sql_statement
+    mock_statement._positional_params = [1]
+    mock_statement._named_params = {}
+    mock_statement._original_parameters = [1]
+    mock_statement._raw_sql = "SELECT * FROM test WHERE id = ?"
+    mock_statement._statement = None  # Indicates raw SQL
+    mock_statement._filters = []
 
     # Test that _get_compiled_sql uses explicit placeholder_style
     sql, params = adapter._get_compiled_sql(mock_statement, statement_config)
@@ -105,6 +112,13 @@ def test_parameter_style_conversion_when_different() -> None:
     mock_statement.compile.return_value = ("SELECT * FROM test WHERE id = $1", [1])
     mock_statement.parameters = [1]  # Mock parameters attribute
     mock_statement.is_many = False  # Mock is_many attribute
+    # Mock internal attributes used by hash_sql_statement
+    mock_statement._positional_params = [1]
+    mock_statement._named_params = {}
+    mock_statement._original_parameters = [1]
+    mock_statement._raw_sql = "SELECT * FROM test WHERE id = $1"
+    mock_statement._statement = None  # Indicates raw SQL
+    mock_statement._filters = []
 
     # Test compilation with different execution style
     sql, params = adapter._get_compiled_sql(mock_statement, statement_config)
@@ -138,6 +152,13 @@ def test_no_parameter_conversion_without_target_style() -> None:
     mock_statement.compile.return_value = ("SELECT * FROM test WHERE id = ?", [1])
     mock_statement.parameters = [1]  # Mock parameters attribute
     mock_statement.is_many = False  # Mock is_many attribute
+    # Mock internal attributes used by hash_sql_statement
+    mock_statement._positional_params = [1]
+    mock_statement._named_params = {}
+    mock_statement._original_parameters = [1]
+    mock_statement._raw_sql = "SELECT * FROM test WHERE id = ?"
+    mock_statement._statement = None  # Indicates raw SQL
+    mock_statement._filters = []
 
     # Test compilation - should use explicit style from default parameter style
     sql, params = adapter._get_compiled_sql(mock_statement, statement_config)
@@ -224,6 +245,13 @@ def test_base_get_compiled_sql_always_explicit() -> None:
     mock_statement.compile.return_value = ("SELECT * FROM test WHERE id = ?", [1])
     mock_statement.parameters = [1]  # Mock parameters attribute
     mock_statement.is_many = False  # Mock is_many attribute
+    # Mock internal attributes used by hash_sql_statement
+    mock_statement._positional_params = [1]
+    mock_statement._named_params = {}
+    mock_statement._original_parameters = [1]
+    mock_statement._raw_sql = "SELECT * FROM test WHERE id = ?"
+    mock_statement._statement = None  # Indicates raw SQL
+    mock_statement._filters = []
 
     # Call base implementation
     _ = adapter._get_compiled_sql(mock_statement, statement_config)
@@ -262,6 +290,13 @@ def test_parameter_style_compilation(adapter_style: ParameterStyle, expected_sty
     mock_statement.compile.return_value = ("SELECT * FROM test", [])
     mock_statement.parameters = []  # Mock parameters attribute (empty for this test)
     mock_statement.is_many = False  # Mock is_many attribute
+    # Mock internal attributes used by hash_sql_statement
+    mock_statement._positional_params = []
+    mock_statement._named_params = {}
+    mock_statement._original_parameters = []
+    mock_statement._raw_sql = "SELECT * FROM test"
+    mock_statement._statement = None  # Indicates raw SQL
+    mock_statement._filters = []
 
     # Test compilation
     adapter._get_compiled_sql(mock_statement, statement_config)

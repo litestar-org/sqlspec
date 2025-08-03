@@ -203,7 +203,7 @@ class TestPythonFileLoader:
 
             # Mock the marker detection to avoid system-level files
 
-            def mock_find_project_root(start_path: Path) -> Path:
+            def mock_find_project_root(self, start_path: Path) -> Path:
                 """Mock that returns the parent directory as fallback."""
                 return start_path.resolve().parent
 

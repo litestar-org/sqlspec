@@ -9,11 +9,15 @@ import pytest
 from msgspec import Struct
 from pydantic import BaseModel
 
-from sqlspec.typing import Empty
+from sqlspec.typing import ATTRS_INSTALLED, Empty, attrs_define, attrs_field
 from sqlspec.utils.type_guards import (
     dataclass_to_dict,
     extract_dataclass_fields,
     extract_dataclass_items,
+    is_attrs_instance,
+    is_attrs_instance_with_field,
+    is_attrs_instance_without_field,
+    is_attrs_schema,
     is_dataclass,
     is_dataclass_instance,
     is_dataclass_with_field,
@@ -27,6 +31,7 @@ from sqlspec.utils.type_guards import (
     is_pydantic_model,
     is_pydantic_model_with_field,
     is_pydantic_model_without_field,
+    is_schema,
     schema_dump,
 )
 
@@ -55,6 +60,14 @@ class SampleMsgspecModel(Struct):
     value: int | None = None
 
 
+@attrs_define
+class SampleAttrsModel:
+    """Sample attrs model for testing."""
+
+    name: str = attrs_field()
+    value: int | None = attrs_field(default=None)
+
+
 @pytest.fixture(scope="session")
 def sample_dataclass() -> SampleDataclass:
     """Create a sample dataclass instance."""
@@ -77,6 +90,14 @@ def sample_msgspec() -> SampleMsgspecModel:
 def sample_dict() -> dict[str, Any]:
     """Create a sample dictionary."""
     return {"name": "test", "value": 42}
+
+
+@pytest.fixture(scope="session")
+def sample_attrs() -> SampleAttrsModel:
+    """Create a sample attrs model instance."""
+    if not ATTRS_INSTALLED:
+        pytest.skip("attrs not installed")
+    return SampleAttrsModel(name="test", value=42)
 
 
 def test_is_dataclass(sample_dataclass: SampleDataclass) -> None:
@@ -267,5 +288,51 @@ def test_schema_dump_msgspec(sample_msgspec: SampleMsgspecModel) -> None:
 def test_schema_dump_dict(sample_dict: dict[str, Any]) -> None:
     """Test schema dumping for dictionaries."""
     schema = schema_dump(sample_dict)
+    assert schema["name"] == "test"
+    assert schema["value"] == 42
+
+
+# Attrs tests
+@pytest.mark.skipif(not ATTRS_INSTALLED, reason="attrs not installed")
+def test_is_attrs_instance(sample_attrs: SampleAttrsModel) -> None:
+    """Test attrs instance checking."""
+    assert is_attrs_instance(sample_attrs)
+    assert not is_attrs_instance({"name": "test"})
+    assert not is_attrs_instance(SampleAttrsModel)
+
+
+@pytest.mark.skipif(not ATTRS_INSTALLED, reason="attrs not installed")
+def test_is_attrs_schema() -> None:
+    """Test attrs schema type checking."""
+    assert is_attrs_schema(SampleAttrsModel)
+    assert not is_attrs_schema(dict)
+    assert not is_attrs_schema({"name": "test"})
+
+
+@pytest.mark.skipif(not ATTRS_INSTALLED, reason="attrs not installed")
+def test_is_attrs_instance_with_field(sample_attrs: SampleAttrsModel) -> None:
+    """Test attrs instance field checking."""
+    assert is_attrs_instance_with_field(sample_attrs, "name")
+    assert not is_attrs_instance_with_field(sample_attrs, "nonexistent")
+
+
+@pytest.mark.skipif(not ATTRS_INSTALLED, reason="attrs not installed")
+def test_is_attrs_instance_without_field(sample_attrs: SampleAttrsModel) -> None:
+    """Test attrs instance field absence checking."""
+    assert is_attrs_instance_without_field(sample_attrs, "nonexistent")
+    assert not is_attrs_instance_without_field(sample_attrs, "name")
+
+
+@pytest.mark.skipif(not ATTRS_INSTALLED, reason="attrs not installed")
+def test_is_schema_with_attrs(sample_attrs: SampleAttrsModel) -> None:
+    """Test that is_schema works with attrs instances."""
+    assert is_schema(sample_attrs)
+    assert is_schema(SampleAttrsModel)
+
+
+@pytest.mark.skipif(not ATTRS_INSTALLED, reason="attrs not installed")
+def test_schema_dump_attrs(sample_attrs: SampleAttrsModel) -> None:
+    """Test schema dumping for attrs models."""
+    schema = schema_dump(sample_attrs)
     assert schema["name"] == "test"
     assert schema["value"] == 42

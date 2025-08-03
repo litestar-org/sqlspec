@@ -181,6 +181,60 @@ except ImportError:
 
     LITESTAR_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
 
+try:
+    from attrs import AttrsInstance  # pyright: ignore
+    from attrs import asdict as attrs_asdict
+    from attrs import define as attrs_define
+    from attrs import field as attrs_field
+    from attrs import fields as attrs_fields
+    from attrs import has as attrs_has
+
+    ATTRS_INSTALLED = True
+except ImportError:
+
+    @runtime_checkable
+    class AttrsInstance(Protocol):  # type: ignore[no-redef]
+        """Placeholder Implementation for attrs classes"""
+
+    def attrs_asdict(*args: Any, **kwargs: Any) -> "dict[str, Any]":  # type: ignore[misc] # noqa: ARG001
+        """Placeholder implementation"""
+        return {}
+
+    def attrs_define(*args: Any, **kwargs: Any) -> Any:  # type: ignore[no-redef] # noqa: ARG001
+        """Placeholder implementation"""
+        return lambda cls: cls  # pyright: ignore[reportUnknownVariableType,reportUnknownLambdaType]
+
+    def attrs_field(*args: Any, **kwargs: Any) -> Any:  # type: ignore[no-redef] # noqa: ARG001
+        """Placeholder implementation"""
+        return None
+
+    def attrs_fields(*args: Any, **kwargs: Any) -> "tuple[Any, ...]":  # type: ignore[misc] # noqa: ARG001
+        """Placeholder implementation"""
+        return ()
+
+    def attrs_has(*args: Any, **kwargs: Any) -> bool:  # type: ignore[misc] # noqa: ARG001
+        """Placeholder implementation"""
+        return False
+
+    ATTRS_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
+
+try:
+    from cattrs import structure as cattrs_structure
+    from cattrs import unstructure as cattrs_unstructure
+
+    CATTRS_INSTALLED = True
+except ImportError:
+
+    def cattrs_unstructure(*args: Any, **kwargs: Any) -> Any:  # noqa: ARG001
+        """Placeholder implementation"""
+        return {}
+
+    def cattrs_structure(*args: Any, **kwargs: Any) -> Any:  # noqa: ARG001
+        """Placeholder implementation"""
+        return {}
+
+    CATTRS_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]
+
 
 class EmptyEnum(Enum):
     """A sentinel enum used as placeholder."""
@@ -500,6 +554,8 @@ PGVECTOR_INSTALLED = bool(find_spec("pgvector"))
 
 __all__ = (
     "AIOSQL_INSTALLED",
+    "ATTRS_INSTALLED",
+    "CATTRS_INSTALLED",
     "FSSPEC_INSTALLED",
     "LITESTAR_INSTALLED",
     "MSGSPEC_INSTALLED",
@@ -519,6 +575,7 @@ __all__ = (
     "ArrowRecordBatchResult",
     "ArrowTable",
     "ArrowTableResult",
+    "AttrsInstance",
     "BaseModel",
     "Counter",
     "DTOData",
@@ -539,6 +596,13 @@ __all__ = (
     "TypeAdapter",
     "UnsetType",
     "aiosql",
+    "attrs_asdict",
+    "attrs_define",
+    "attrs_field",
+    "attrs_fields",
+    "attrs_has",
+    "cattrs_structure",
+    "cattrs_unstructure",
     "convert",
     "trace",
 )

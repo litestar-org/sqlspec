@@ -13,13 +13,17 @@ from collections.abc import Set as AbstractSet
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from sqlspec.typing import (
+    ATTRS_INSTALLED,
     LITESTAR_INSTALLED,
     MSGSPEC_INSTALLED,
     PYDANTIC_INSTALLED,
+    AttrsInstance,
     BaseModel,
     DataclassProtocol,
     DTOData,
     Struct,
+    attrs_asdict,
+    attrs_has,
 )
 
 if TYPE_CHECKING:
@@ -96,6 +100,10 @@ __all__ = (
     "is_async_pipeline_capable_driver",
     "is_async_transaction_capable",
     "is_async_transaction_state_capable",
+    "is_attrs_instance",
+    "is_attrs_instance_with_field",
+    "is_attrs_instance_without_field",
+    "is_attrs_schema",
     "is_copy_statement",
     "is_dataclass",
     "is_dataclass_instance",
@@ -337,7 +345,7 @@ def is_dataclass_without_field(obj: Any, field_name: str) -> "TypeGuard[object]"
 
 
 def is_pydantic_model(obj: Any) -> "TypeGuard[BaseModel]":
-    """Check if a value is a pydantic model.
+    """Check if a value is a pydantic model class or instance.
 
     Args:
         obj: Value to check.
@@ -345,7 +353,14 @@ def is_pydantic_model(obj: Any) -> "TypeGuard[BaseModel]":
     Returns:
         bool
     """
-    return PYDANTIC_INSTALLED and isinstance(obj, BaseModel)
+    if not PYDANTIC_INSTALLED:
+        return False
+    if isinstance(obj, type):
+        try:
+            return issubclass(obj, BaseModel)
+        except TypeError:
+            return False
+    return isinstance(obj, BaseModel)
 
 
 def is_pydantic_model_with_field(obj: Any, field_name: str) -> "TypeGuard[BaseModel]":
@@ -389,7 +404,7 @@ def is_pydantic_model_without_field(obj: Any, field_name: str) -> "TypeGuard[Bas
 
 
 def is_msgspec_struct(obj: Any) -> "TypeGuard[Struct]":
-    """Check if a value is a msgspec struct.
+    """Check if a value is a msgspec struct class or instance.
 
     Args:
         obj: Value to check.
@@ -397,7 +412,14 @@ def is_msgspec_struct(obj: Any) -> "TypeGuard[Struct]":
     Returns:
         bool
     """
-    return MSGSPEC_INSTALLED and isinstance(obj, Struct)
+    if not MSGSPEC_INSTALLED:
+        return False
+    if isinstance(obj, type):
+        try:
+            return issubclass(obj, Struct)
+        except TypeError:
+            return False
+    return isinstance(obj, Struct)
 
 
 def is_msgspec_struct_with_field(obj: Any, field_name: str) -> "TypeGuard[Struct]":
@@ -439,6 +461,56 @@ def is_msgspec_struct_without_field(obj: Any, field_name: str) -> "TypeGuard[Str
     return False
 
 
+def is_attrs_instance(obj: Any) -> "TypeGuard[AttrsInstance]":
+    """Check if a value is an attrs class instance.
+
+    Args:
+        obj: Value to check.
+
+    Returns:
+        bool
+    """
+    return ATTRS_INSTALLED and attrs_has(obj.__class__)
+
+
+def is_attrs_schema(cls: Any) -> "TypeGuard[type[AttrsInstance]]":
+    """Check if a class type is an attrs schema.
+
+    Args:
+        cls: Class to check.
+
+    Returns:
+        bool
+    """
+    return ATTRS_INSTALLED and attrs_has(cls)
+
+
+def is_attrs_instance_with_field(obj: Any, field_name: str) -> "TypeGuard[AttrsInstance]":
+    """Check if an attrs instance has a specific field.
+
+    Args:
+        obj: Value to check.
+        field_name: Field name to check for.
+
+    Returns:
+        bool
+    """
+    return is_attrs_instance(obj) and hasattr(obj, field_name)
+
+
+def is_attrs_instance_without_field(obj: Any, field_name: str) -> "TypeGuard[AttrsInstance]":
+    """Check if an attrs instance does not have a specific field.
+
+    Args:
+        obj: Value to check.
+        field_name: Field name to check for.
+
+    Returns:
+        bool
+    """
+    return is_attrs_instance(obj) and not hasattr(obj, field_name)
+
+
 def is_dict(obj: Any) -> "TypeGuard[dict[str, Any]]":
     """Check if a value is a dictionary.
 
@@ -478,7 +550,7 @@ def is_dict_without_field(obj: Any, field_name: str) -> "TypeGuard[dict[str, Any
 
 
 def is_schema(obj: Any) -> "TypeGuard[SupportedSchemaModel]":
-    """Check if a value is a msgspec Struct or Pydantic model.
+    """Check if a value is a msgspec Struct, Pydantic model, attrs instance, or schema class.
 
     Args:
         obj: Value to check.
@@ -486,7 +558,13 @@ def is_schema(obj: Any) -> "TypeGuard[SupportedSchemaModel]":
     Returns:
         bool
     """
-    return is_msgspec_struct(obj) or is_pydantic_model(obj)
+    return (
+        is_msgspec_struct(obj)
+        or is_pydantic_model(obj)
+        or is_attrs_instance(obj)
+        or is_attrs_schema(obj)
+        or is_dataclass(obj)
+    )
 
 
 def is_schema_or_dict(obj: Any) -> "TypeGuard[Union[SupportedSchemaModel, dict[str, Any]]]":
@@ -843,12 +921,12 @@ def dataclass_to_dict(
 
 
 def schema_dump(
-    data: "Union[dict[str, Any], DataclassProtocol, Struct, BaseModel]", exclude_unset: bool = True
+    data: "Union[dict[str, Any], DataclassProtocol, Struct, BaseModel, AttrsInstance]", exclude_unset: bool = True
 ) -> "dict[str, Any]":
     """Dump a data object to a dictionary.
 
     Args:
-        data:  :type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel`
+        data:  :type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`AttrsInstance`
         exclude_unset: :type:`bool` Whether to exclude unset values.
 
     Returns:
@@ -866,6 +944,8 @@ def schema_dump(
         if exclude_unset:
             return {f: val for f in data.__struct_fields__ if (val := getattr(data, f, None)) != UNSET}
         return {f: getattr(data, f, None) for f in data.__struct_fields__}
+    if is_attrs_instance(data):
+        return attrs_asdict(data)
 
     if has_dict_attribute(data):
         return data.__dict__

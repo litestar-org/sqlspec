@@ -7,6 +7,8 @@ from typing_extensions import TypeAlias, TypeVar
 
 from sqlspec._typing import (
     AIOSQL_INSTALLED,
+    ATTRS_INSTALLED,
+    CATTRS_INSTALLED,
     FSSPEC_INSTALLED,
     LITESTAR_INSTALLED,
     MSGSPEC_INSTALLED,
@@ -24,6 +26,7 @@ from sqlspec._typing import (
     AiosqlSyncProtocol,  # pyright: ignore[reportAttributeAccessIssue]
     ArrowRecordBatch,
     ArrowTable,
+    AttrsInstance,
     BaseModel,
     Counter,  # pyright: ignore[reportAttributeAccessIssue]
     DataclassProtocol,
@@ -40,6 +43,13 @@ from sqlspec._typing import (
     TypeAdapter,
     UnsetType,
     aiosql,
+    attrs_asdict,
+    attrs_define,
+    attrs_field,
+    attrs_fields,
+    attrs_has,
+    cattrs_structure,
+    cattrs_unstructure,
     convert,  # pyright: ignore[reportAttributeAccessIssue]
     trace,
 )
@@ -69,10 +79,10 @@ if TYPE_CHECKING:
 
     :class:`~sqlspec.typing.PoolT_co`
     """
-    ModelT = TypeVar("ModelT", bound="Union[dict[str, Any], Struct, BaseModel, DataclassProtocol]")
+    ModelT = TypeVar("ModelT", bound="Union[dict[str, Any], Struct, BaseModel, DataclassProtocol, AttrsInstance]")
     """Type variable for model types.
 
-    :class:`dict[str, Any]` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol`
+    :class:`dict[str, Any]` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
     """
     RowT = TypeVar("RowT", bound="dict[str, Any]")
 else:
@@ -89,10 +99,10 @@ DictRow: TypeAlias = "dict[str, Any]"
 TupleRow: TypeAlias = "tuple[Any, ...]"
 """Type variable for TupleRow types."""
 
-SupportedSchemaModel: TypeAlias = "Union[Struct, BaseModel, DataclassProtocol]"
+SupportedSchemaModel: TypeAlias = "Union[Struct, BaseModel, DataclassProtocol, AttrsInstance]"
 """Type alias for pydantic or msgspec models.
 
-:class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol`
+:class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
 """
 StatementParameters: TypeAlias = "Union[Any, dict[str, Any], list[Any], tuple[Any, ...], None]"
 """Type alias for statement parameters.
@@ -166,6 +176,8 @@ def MixinOf(base: type[T]) -> type[T]:  # noqa: N802
 
 __all__ = (
     "AIOSQL_INSTALLED",
+    "ATTRS_INSTALLED",
+    "CATTRS_INSTALLED",
     "FSSPEC_INSTALLED",
     "LITESTAR_INSTALLED",
     "MSGSPEC_INSTALLED",
@@ -184,6 +196,7 @@ __all__ = (
     "AiosqlSyncProtocol",
     "ArrowRecordBatch",
     "ArrowTable",
+    "AttrsInstance",
     "BaseModel",
     "BulkModelDict",
     "ConnectionT",
@@ -219,6 +232,13 @@ __all__ = (
     "TypeAdapter",
     "UnsetType",
     "aiosql",
+    "attrs_asdict",
+    "attrs_define",
+    "attrs_field",
+    "attrs_fields",
+    "attrs_has",
+    "cattrs_structure",
+    "cattrs_unstructure",
     "convert",
     "get_type_adapter",
     "trace",
@@ -282,3 +302,18 @@ if TYPE_CHECKING:
         from aiosql.types import (  # noqa: TC004 # pyright: ignore[reportMissingImports]
             SyncDriverAdapterProtocol as AiosqlSyncProtocol,
         )
+
+    if not ATTRS_INSTALLED:
+        from sqlspec._typing import AttrsInstance, attrs_define, attrs_field, attrs_fields, attrs_has
+    else:
+        from attrs import AttrsInstance  # noqa: TC004
+        from attrs import define as attrs_define  # noqa: TC004
+        from attrs import field as attrs_field  # noqa: TC004
+        from attrs import fields as attrs_fields  # noqa: TC004
+        from attrs import has as attrs_has  # noqa: TC004
+
+    if not CATTRS_INSTALLED:
+        from sqlspec._typing import cattrs_structure, cattrs_unstructure
+    else:
+        from cattrs import structure as cattrs_structure  # noqa: TC004
+        from cattrs import unstructure as cattrs_unstructure  # noqa: TC004

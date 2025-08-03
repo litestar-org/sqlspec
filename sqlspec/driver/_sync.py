@@ -348,7 +348,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         return cast(
             "Union[list[ModelT], list[ModelDTOT]]",
-            self.to_schema(cast("list[ModelT]", result.get_data()), schema_type=schema_type),  # type: ignore[arg-type]
+            self.to_schema(cast("list[ModelT]", result.get_data()), schema_type=schema_type),
         )
 
     def select_value(
