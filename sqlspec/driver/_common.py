@@ -10,11 +10,13 @@ from sqlspec.parameters import ParameterStyle
 from sqlspec.parameters.types import TypedParameter
 from sqlspec.statement import SQLResult, Statement, StatementFilter
 from sqlspec.statement.builder import QueryBuilder
+from sqlspec.statement.cache import get_cache_config, sql_cache
 from sqlspec.statement.pipeline import SQLTransformContext, create_pipeline_from_config
 from sqlspec.statement.result import OperationType
 from sqlspec.statement.splitter import split_sql_script
 from sqlspec.statement.sql import SQL, StatementConfig
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.statement_hashing import hash_sql_statement
 
 if TYPE_CHECKING:
     from sqlspec.typing import StatementParameters
@@ -469,7 +471,7 @@ class CommonDriverAttributesMixin:
     def _get_compiled_sql(
         self, statement: "SQL", statement_config: "StatementConfig", flatten_single_params: bool = False
     ) -> tuple[str, Any]:
-        """Get compiled SQL with optimal parameter style (only converts when needed).
+        """Get compiled SQL with optimal parameter style and caching support.
 
         Args:
             statement: SQL statement to compile
@@ -479,6 +481,26 @@ class CommonDriverAttributesMixin:
         Returns:
             Tuple of (compiled_sql, parameters)
         """
+
+        # Check if caching is enabled
+        cache_config = get_cache_config()
+        cache_key = None
+        if cache_config.compiled_cache_enabled and statement_config.enable_caching:
+            # Generate cache key that includes parameter style context
+            cache_key = self._generate_compilation_cache_key(statement, statement_config, flatten_single_params)
+
+            # Try cache first
+            cached_result = sql_cache.get(cache_key)
+            if cached_result is not None:
+                sql, params = cached_result
+                # Apply driver parameter preparation to cached params
+                prepared_params = self.prepare_driver_parameters(params, statement_config, is_many=statement.is_many)
+                # Apply output_transformer if configured
+                if statement_config.parameter_config.output_transformer:
+                    sql, prepared_params = statement_config.parameter_config.output_transformer(sql, prepared_params)
+                return sql, prepared_params
+
+        # Determine target parameter style (existing logic)
         if statement.is_script and not statement_config.parameter_config.needs_static_script_compilation:
             target_style = ParameterStyle.STATIC
         elif statement_config.parameter_config.supported_execution_parameter_styles is not None:
@@ -496,7 +518,15 @@ class CommonDriverAttributesMixin:
         else:
             # No execution style configuration, use default parameter style for explicit compilation
             target_style = statement_config.parameter_config.default_parameter_style
+
+        # Compile the SQL
         sql, params = statement.compile(placeholder_style=target_style, flatten_single_params=flatten_single_params)
+
+        # Cache the compilation result if caching is enabled (before driver preparation)
+        if cache_key is not None:
+            sql_cache.set(cache_key, (sql, params))
+
+        # Prepare parameters for driver
         prepared_params = self.prepare_driver_parameters(params, statement_config, is_many=statement.is_many)
 
         # Apply output_transformer if configured
@@ -504,6 +534,32 @@ class CommonDriverAttributesMixin:
             sql, prepared_params = statement_config.parameter_config.output_transformer(sql, prepared_params)
 
         return sql, prepared_params
+
+    def _generate_compilation_cache_key(
+        self, statement: "SQL", config: "StatementConfig", flatten_single_params: bool
+    ) -> str:
+        """Generate cache key that includes all compilation context.
+
+        This method creates a deterministic cache key that includes all factors
+        that affect SQL compilation, preventing cache contamination between
+        different compilation contexts.
+        """
+
+        # Include all factors that affect compilation
+        context_hash = hash(
+            (
+                config.parameter_config.hash(),
+                config.dialect,
+                statement.is_script,
+                statement.is_many,
+                flatten_single_params,
+                bool(config.parameter_config.output_transformer),
+                bool(config.parameter_config.needs_static_script_compilation),
+            )
+        )
+
+        base_hash = hash_sql_statement(statement)
+        return f"compiled:{base_hash}:{context_hash}"
 
     def _create_count_query(self, original_sql: "SQL") -> "SQL":
         """Create a COUNT query from the original SQL statement.

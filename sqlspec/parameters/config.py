@@ -48,3 +48,26 @@ class ParameterStyleConfig:
         self.output_transformer = output_transformer
         self.needs_static_script_compilation = needs_static_script_compilation
         self.allow_mixed_parameter_styles = allow_mixed_parameter_styles
+
+    def hash(self) -> int:
+        """Generate hash for cache key generation.
+
+        This method creates a deterministic hash of the parameter configuration
+        for use in cache keys, ensuring different parameter configurations
+        don't share cache entries.
+        """
+        # Create tuple of all configuration values that affect compilation
+        config_tuple = (
+            self.default_parameter_style.value if self.default_parameter_style else None,
+            tuple(sorted(s.value for s in self.supported_parameter_styles)) if self.supported_parameter_styles else (),
+            tuple(sorted(s.value for s in self.supported_execution_parameter_styles))
+            if self.supported_execution_parameter_styles
+            else (),
+            self.default_execution_parameter_style.value if self.default_execution_parameter_style else None,
+            self.has_native_list_expansion,
+            bool(self.output_transformer),  # Don't hash the function object itself
+            self.needs_static_script_compilation,
+            self.allow_mixed_parameter_styles,
+            tuple(sorted(str(k) for k in self.type_coercion_map)) if self.type_coercion_map else (),
+        )
+        return hash(config_tuple)

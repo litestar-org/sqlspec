@@ -32,6 +32,7 @@ from sqlspec.statement.pipeline import (
 )
 from sqlspec.typing import Empty
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.statement_hashing import hash_sql_statement
 from sqlspec.utils.type_guards import (
     can_append_to_statement,
     can_extract_parameters,
@@ -1689,6 +1690,46 @@ class SQL:
             return converted_params
 
         return params
+
+    def generate_cache_key_with_config(self, config: "Optional[StatementConfig]" = None) -> str:
+        """Generate cache key that includes StatementConfig context.
+
+        This method creates a deterministic cache key that includes both the SQL content
+        and the StatementConfig settings to prevent cross-contamination between different
+        configurations.
+
+        Args:
+            config: Optional StatementConfig to use for key generation.
+                   Uses self.statement_config if not provided.
+
+        Returns:
+            String cache key that includes both SQL and configuration context
+        """
+
+        effective_config = config or self.statement_config
+
+        # Create hash of configuration values that affect processing
+        config_hash = hash(
+            (
+                effective_config.enable_parsing,
+                effective_config.enable_validation,
+                effective_config.enable_transformations,
+                effective_config.enable_analysis,
+                effective_config.enable_expression_simplification,
+                effective_config.enable_parameter_type_wrapping,
+                effective_config.enable_caching,
+                effective_config.dialect,
+                effective_config.parameter_config.hash(),
+                tuple(effective_config.pre_process_steps) if effective_config.pre_process_steps else (),
+                tuple(effective_config.post_process_steps) if effective_config.post_process_steps else (),
+            )
+        )
+
+        # Include filter context in the cache key
+        filter_hash = hash(tuple(str(f) for f in self._filters)) if self._filters else 0
+
+        base_hash = hash_sql_statement(self)
+        return f"sql:{base_hash}:{config_hash}:{filter_hash}"
 
     def _apply_placeholder_style(self, sql: "str", params: Any, placeholder_style: "str") -> "tuple[str, Any]":
         """Apply placeholder style conversion using ParameterConverter."""
