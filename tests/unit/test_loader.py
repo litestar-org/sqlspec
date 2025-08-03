@@ -247,8 +247,10 @@ SELECT * FROM users WHERE id = 2;
 
         # Mock the storage backend with different content for each file
         mock_backend = MagicMock()
+
         def mock_read_text(path, encoding=None):
             return contents[path]
+
         mock_backend.read_text.side_effect = mock_read_text
 
         with patch("sqlspec.loader.StorageRegistry.get", return_value=mock_backend):

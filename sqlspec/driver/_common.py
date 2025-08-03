@@ -299,13 +299,12 @@ class CommonDriverAttributesMixin:
             return statement.to_statement(statement_config)
         if isinstance(statement, SQL):
             if parameters or kwargs:
-                return statement.copy(
-                    parameters=(*statement._positional_params, *parameters)
-                    if parameters
-                    else statement._positional_params,
-                    statement_config=statement_config,
-                    **kwargs,
+                # Create a brand new SQL object instead of copying to avoid parameter type conversion issues
+                # This ensures clean parameter handling especially for ADBC drivers
+                merged_params = (
+                    (*statement._positional_params, *parameters) if parameters else statement._positional_params
                 )
+                return SQL(statement.sql, *merged_params, statement_config=statement_config, **kwargs)
             if self.statement_config.dialect and (
                 not statement.statement_config.dialect
                 or statement.statement_config.dialect != self.statement_config.dialect
