@@ -248,7 +248,7 @@ SELECT * FROM users WHERE id = 2;
         # Mock the storage backend with different content for each file
         mock_backend = MagicMock()
 
-        def mock_read_text(path, encoding=None):
+        def mock_read_text(path: str, encoding: str = "utf-8") -> str:
             return contents[path]
 
         mock_backend.read_text.side_effect = mock_read_text

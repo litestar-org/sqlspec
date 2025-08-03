@@ -83,32 +83,12 @@ def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
 
     # PostgreSQL-specific type handling
     if dialect == "postgres":
-        # PostgreSQL arrays need conversion to proper format for ADBC
-        # Convert Python lists to PostgreSQL array literal format when needed
-        def convert_postgres_array(x: "Any") -> "Any":
-            if x is None:
-                return None
-            if isinstance(x, (list, tuple)):
-                # Convert to PostgreSQL array literal format: {1,2,3}
-                if not x:  # Empty array
-                    return "{}"
-                # Format elements as string and join with commas
-                elements = []
-                for item in x:
-                    if item is None:
-                        elements.append("NULL")
-                    elif isinstance(item, str):
-                        # Escape quotes and wrap in quotes for strings
-                        escaped = item.replace('"', '\\"')
-                        elements.append(f'"{escaped}"')
-                    else:
-                        elements.append(str(item))
-                return "{" + ",".join(elements) + "}"
-            return x
-
-        type_map[list] = convert_postgres_array
         # PostgreSQL JSON types - convert dict to JSON string
         type_map[dict] = lambda x: to_json(x) if x is not None else None
+
+        # Note: PostgreSQL arrays are handled natively by ADBC driver
+        # ADBC can pass Python lists directly to PostgreSQL without conversion
+        # The has_native_list_expansion=True flag indicates this capability
 
     return type_map
 
