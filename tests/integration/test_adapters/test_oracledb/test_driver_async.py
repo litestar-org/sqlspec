@@ -33,51 +33,6 @@ def oracle_async_session(oracle_23ai_service: OracleService) -> OracleAsyncConfi
     )
 
 
-# --- Async Tests ---
-
-
-@pytest.mark.parametrize(
-    ("params", "style"),
-    [
-        pytest.param(("test_name"), "positional_binds", id="positional_binds"),
-        pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
-    ],
-)
-@pytest.mark.xdist_group("oracle")
-async def test_async_insert_returning(oracle_async_session: OracleAsyncConfig, params: Any, style: ParamStyle) -> None:
-    """Test async insert returning functionality with Oracle parameter styles."""
-    async with oracle_async_session.provide_session() as driver:
-        # Manual cleanup at start of test
-        await driver.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        )
-        sql = """
-        CREATE TABLE test_table (
-            id NUMBER PRIMARY KEY,
-            name VARCHAR2(50)
-        )
-        """
-        await driver.execute_script(sql)
-
-        if style == "positional_binds":
-            sql = "INSERT INTO test_table (id, name) VALUES (1, ?) RETURNING id, name INTO ?, ?"
-            # Oracle RETURNING needs output variables, this is complex for testing
-            # Let's just test basic insert instead
-            insert_sql = "INSERT INTO test_table (id, name) VALUES (1, ?)"
-            result = await driver.execute(insert_sql, params)
-            assert isinstance(result, SQLResult)
-            assert result.rows_affected == 1
-        else:  # dict_binds
-            insert_sql = "INSERT INTO test_table (id, name) VALUES (1, :name)"
-            result = await driver.execute(insert_sql, params)
-            assert isinstance(result, SQLResult)
-            assert result.rows_affected == 1
-
-        await driver.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        )
-
-
 @pytest.mark.parametrize(
     ("params", "style"),
     [

@@ -256,7 +256,8 @@ async def test_asyncpg_execute_many_with_arrays(asyncpg_batch_session: AsyncpgDr
             name TEXT,
             tags TEXT[],
             scores INTEGER[]
-        )
+        );
+        TRUNCATE TABLE test_arrays RESTART IDENTITY;
     """)
 
     parameters = [
@@ -293,7 +294,8 @@ async def test_asyncpg_execute_many_with_json(asyncpg_batch_session: AsyncpgDriv
             id SERIAL PRIMARY KEY,
             name TEXT,
             metadata JSONB
-        )
+        );
+        TRUNCATE TABLE test_json RESTART IDENTITY;
     """)
 
     # AsyncPG expects JSON data to be serialized as strings
