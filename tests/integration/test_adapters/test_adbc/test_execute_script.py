@@ -9,7 +9,7 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL, StatementConfig
+from sqlspec.statement.sql import SQL
 
 # Import the decorator
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
@@ -32,9 +32,7 @@ def adbc_postgresql_script_session(postgres_service: PostgresService) -> Generat
 @pytest.fixture
 def adbc_sqlite_script_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session for script testing."""
-    config = AdbcConfig(
-        connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"}, statement_config=StatementConfig()
-    )
+    config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"})
 
     with config.provide_session() as session:
         yield session

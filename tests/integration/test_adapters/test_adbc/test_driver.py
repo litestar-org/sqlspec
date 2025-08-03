@@ -11,7 +11,6 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import StatementConfig
 
 # Import the decorator
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
@@ -56,10 +55,7 @@ def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[Adbc
 @pytest.fixture
 def adbc_sqlite_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session with test table."""
-    config = AdbcConfig(
-        connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"},
-        statement_config=StatementConfig(),  # Allow DDL statements for tests
-    )
+    config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"})
 
     with config.provide_session() as session:
         # Create test table
@@ -108,8 +104,7 @@ def adbc_bigquery_session(bigquery_service: BigQueryService) -> Generator[AdbcDr
                 "client_options": {"api_endpoint": f"http://{bigquery_service.host}:{bigquery_service.port}"},
                 "credentials": None,
             },
-        },
-        statement_config=StatementConfig(),
+        }
     )
 
     with config.provide_session() as session:

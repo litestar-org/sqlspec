@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from typing import Any, Literal
+from uuid import uuid4
 
 import pytest
 
@@ -17,7 +18,10 @@ ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 @pytest.fixture
 async def aiosqlite_session() -> AsyncGenerator[AiosqliteDriver, None]:
     """Create an aiosqlite session with test table."""
-    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+    # Use unique shared memory database name to ensure test isolation
+    # Format: file:memdb<unique_id>?mode=memory&cache=shared
+    unique_db = f"file:memdb{uuid4().hex}?mode=memory&cache=shared"
+    config = AiosqliteConfig(pool_config={"database": unique_db})
 
     async with config.provide_session() as session:
         # Create test table
@@ -229,7 +233,7 @@ async def test_aiosqlite_data_types(aiosqlite_session: AiosqliteDriver) -> None:
     """Test SQLite data type handling with aiosqlite."""
     # Create table with various data types
     await aiosqlite_session.execute_script("""
-        CREATE TABLE data_types_test (
+        CREATE TABLE data_types_test_unique (
             id INTEGER PRIMARY KEY,
             text_col TEXT,
             integer_col INTEGER,
@@ -245,7 +249,7 @@ async def test_aiosqlite_data_types(aiosqlite_session: AiosqliteDriver) -> None:
     test_data = ("text_value", 42, math.pi, b"binary_data", None)
 
     insert_result = await aiosqlite_session.execute(
-        "INSERT INTO data_types_test (text_col, integer_col, real_col, blob_col, null_col) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO data_types_test_unique (text_col, integer_col, real_col, blob_col, null_col) VALUES (?, ?, ?, ?, ?)",
         test_data,
     )
     assert isinstance(insert_result, SQLResult)
@@ -253,7 +257,7 @@ async def test_aiosqlite_data_types(aiosqlite_session: AiosqliteDriver) -> None:
 
     # Retrieve and verify data
     select_result = await aiosqlite_session.execute(
-        "SELECT text_col, integer_col, real_col, blob_col, null_col FROM data_types_test"
+        "SELECT text_col, integer_col, real_col, blob_col, null_col FROM data_types_test_unique"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -267,7 +271,7 @@ async def test_aiosqlite_data_types(aiosqlite_session: AiosqliteDriver) -> None:
     assert row["null_col"] is None
 
     # Clean up
-    await aiosqlite_session.execute_script("DROP TABLE data_types_test")
+    await aiosqlite_session.execute_script("DROP TABLE data_types_test_unique")
 
 
 @pytest.mark.xdist_group("aiosqlite")

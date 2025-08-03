@@ -238,16 +238,18 @@ SELECT * FROM users WHERE id = 2;
         self, mock_path_read: Mock, mock_path_exists: Mock, mock_path_is_file: Mock
     ) -> None:
         """Test error when query name exists in different file."""
-        contents = [
-            "-- name: get_user\nSELECT 1;",
-            "-- name: get_user\nSELECT 2;",  # Same name
-        ]
+        contents = {
+            "file1.sql": "-- name: get_user\nSELECT 1;",
+            "file2.sql": "-- name: get_user\nSELECT 2;",  # Same name
+        }
 
         loader = SQLFileLoader()
 
         # Mock the storage backend with different content for each file
         mock_backend = MagicMock()
-        mock_backend.read_text.side_effect = contents
+        def mock_read_text(path, encoding=None):
+            return contents[path]
+        mock_backend.read_text.side_effect = mock_read_text
 
         with patch("sqlspec.loader.StorageRegistry.get", return_value=mock_backend):
             loader.load_sql("file1.sql")
@@ -255,7 +257,7 @@ SELECT * FROM users WHERE id = 2;
             with pytest.raises(SQLFileParseError) as exc_info:
                 loader.load_sql("file2.sql")
 
-            assert "Query name 'get_user' already exists" in str(exc_info.value)
+            assert "Query name 'get_user' already exists in file: file1.sql" in str(exc_info.value)
 
     def test_get_file_info(
         self,

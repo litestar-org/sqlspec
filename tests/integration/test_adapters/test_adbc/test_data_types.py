@@ -11,7 +11,6 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
-from sqlspec.statement.sql import StatementConfig
 
 # Import the decorator
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
@@ -53,9 +52,7 @@ def adbc_postgresql_types_session(postgres_service: PostgresService) -> Generato
 @pytest.fixture
 def adbc_sqlite_types_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session for data type testing."""
-    config = AdbcConfig(
-        connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"}, statement_config=StatementConfig()
-    )
+    config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"})
 
     with config.provide_session() as session:
         # Create table with SQLite data types

@@ -9,7 +9,6 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import StatementConfig
 
 # Import the decorator
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
@@ -41,9 +40,7 @@ def adbc_postgresql_session_returning(postgres_service: PostgresService) -> Gene
 @pytest.fixture
 def adbc_sqlite_session_returning() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session with test table supporting RETURNING."""
-    config = AdbcConfig(
-        connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"}, statement_config=StatementConfig()
-    )
+    config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"})
 
     with config.provide_session() as session:
         # Create test table
