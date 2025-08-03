@@ -1,7 +1,7 @@
 # pyright: ignore[reportAttributeAccessIssue]
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from functools import lru_cache
-from typing import TYPE_CHECKING, Annotated, Any, Union
+from typing import TYPE_CHECKING, Annotated, Any, Protocol, Union
 
 from typing_extensions import TypeAlias, TypeVar
 
@@ -58,6 +58,14 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
+class DictLike(Protocol):
+    """A protocol for objects that behave like a dictionary for reading."""
+
+    def __getitem__(self, key: str) -> Any: ...
+    def __iter__(self) -> Iterator[str]: ...
+    def __len__(self) -> int: ...
+
+
 PYDANTIC_USE_FAILFAST = False  # leave permanently disabled for now
 
 
@@ -79,10 +87,10 @@ if TYPE_CHECKING:
 
     :class:`~sqlspec.typing.PoolT_co`
     """
-    ModelT = TypeVar("ModelT", bound="Union[dict[str, Any], Struct, BaseModel, DataclassProtocol, AttrsInstance]")
+    ModelT = TypeVar("ModelT", bound="Union[DictLike, Struct, BaseModel, DataclassProtocol, AttrsInstance]")
     """Type variable for model types.
 
-    :class:`dict[str, Any]` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
+    :class:`DictLike` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
     """
     RowT = TypeVar("RowT", bound="dict[str, Any]")
 else:
@@ -203,6 +211,7 @@ __all__ = (
     "Counter",
     "DTOData",
     "DataclassProtocol",
+    "DictLike",
     "DictRow",
     "Empty",
     "EmptyType",

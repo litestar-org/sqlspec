@@ -16,6 +16,7 @@ from sqlspec.typing import (
     AttrsInstance,
     BaseModel,
     DataclassProtocol,
+    DictLike,
     ModelDTOT,
     ModelT,
     Struct,
@@ -77,20 +78,23 @@ class ToSchemaMixin:
     def to_schema(data: "list[dict[str, Any]]", *, schema_type: "type[ModelDTOT]") -> "list[ModelDTOT]": ...
     @overload
     @staticmethod
+    def to_schema(data: "list[DictLike]", *, schema_type: "type[ModelDTOT]") -> "list[ModelDTOT]": ...
+    @overload
+    @staticmethod
     def to_schema(data: "Sequence[ModelT]", *, schema_type: "type[ModelDTOT]") -> "Sequence[ModelDTOT]": ...
     @overload
     @staticmethod
     def to_schema(data: "dict[str, Any]", *, schema_type: "type[ModelDTOT]") -> "ModelDTOT": ...
     @overload
     @staticmethod
+    def to_schema(data: "DictLike", *, schema_type: "type[ModelDTOT]") -> "ModelDTOT": ...
+    @overload
+    @staticmethod
     def to_schema(
-        data: "Union[dict[str, Any], Struct, BaseModel, DataclassProtocol, AttrsInstance]",
+        data: "Union[dict[str, Any], DictLike, Struct, BaseModel, DataclassProtocol, AttrsInstance]",
         *,
         schema_type: "type[ModelDTOT]",
     ) -> "ModelDTOT": ...
-    @overload
-    @staticmethod
-    def to_schema(data: Any, *, schema_type: "type[ModelDTOT]") -> "ModelDTOT": ...
     @overload
     @staticmethod
     def to_schema(data: "list[ModelT]", *, schema_type: None = None) -> "list[ModelT]": ...
@@ -100,7 +104,7 @@ class ToSchemaMixin:
 
     @staticmethod
     def to_schema(
-        data: "Union[ModelT, dict[str, Any], list[ModelT], list[dict[str, Any]]]",
+        data: "Union[ModelT, dict[str, Any], DictLike, list[ModelT], list[dict[str, Any]], list[DictLike]]",
         *,
         schema_type: "Optional[type[ModelDTOT]]" = None,
     ) -> "Union[ModelT, ModelDTOT, Sequence[ModelT], Sequence[ModelDTOT]]":
@@ -108,6 +112,13 @@ class ToSchemaMixin:
 
         Supports conversion to dataclasses, msgspec structs, Pydantic models, and attrs classes.
         Handles both single objects and sequences.
+
+        Raises:
+            SQLSpecError if `schema_type` is not a valid type.
+
+        Returns:
+            Converted data in the specified schema type.
+
         """
         if schema_type is None:
             if not isinstance(data, Sequence):

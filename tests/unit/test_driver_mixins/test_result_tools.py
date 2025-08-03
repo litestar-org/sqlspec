@@ -198,6 +198,9 @@ class TestToSchemaMixin:
             def __iter__(self) -> Any:
                 return iter(self._data)
 
+            def __len__(self) -> int:
+                return len(self._data)
+
         dict_like = DictLike({"name": "Test", "email": "test@example.com", "age": 22})
         result = ToSchemaMixin.to_schema(dict_like, schema_type=UserDataclass)
         assert isinstance(result, UserDataclass)
@@ -220,6 +223,9 @@ class TestToSchemaMixin:
 
             def __iter__(self) -> Any:
                 return iter(self._data)
+
+            def __len__(self) -> int:
+                return len(self._data)
 
         mixed_data: list[dict[str, Any]] = [
             {"name": "John", "email": "john@example.com", "age": 30},

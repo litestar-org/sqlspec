@@ -172,7 +172,10 @@ include = [
   "sqlspec/storage/backends/fsspec.py",
 
   # === CORE ADAPTERS ===
-  "sqlspec/adapters/*/*.py", # All adapters
+  "sqlspec/adapters/*/*.py",
+
+  # === MIGRATION ADAPTERS ===
+  "sqlspec/migrations/*.py",
 
   # === UTILITY MODULES ===
   "sqlspec/utils/statement_hashing.py",
