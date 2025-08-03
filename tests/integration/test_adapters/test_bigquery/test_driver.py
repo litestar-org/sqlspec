@@ -94,8 +94,8 @@ def test_bigquery_basic_crud(bigquery_session: BigQueryDriver, bigquery_service:
 @pytest.mark.xdist_group("bigquery")
 def test_bigquery_parameter_styles(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test BigQuery named parameter binding (only supported style)."""
-    # Use unqualified table name to avoid SQL parsing issues
-    table_name = "test_table"
+    # Use fully qualified table name like main branch
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
 
     # Insert test data
     bigquery_session.execute(

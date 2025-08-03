@@ -6,9 +6,9 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from google.cloud.bigquery import ArrayQueryParameter, QueryJob, QueryJobConfig, ScalarQueryParameter
+from sqlglot import exp
 
 from sqlspec.adapters.bigquery._types import BigQueryConnection
-from sqlspec.adapters.bigquery.pipeline_steps import bigquery_execute_many_to_script_step
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.driver._common import ExecutionResult
 from sqlspec.exceptions import SQLSpecError
@@ -21,6 +21,35 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.statement.result import SQLResult
+__all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryParameterMapper", "bigquery_statement_config")
+
+
+class BigQueryParameterMapper:
+    def __init__(self, param_mapping: dict[str, Any]) -> None:
+        self.param_mapping = param_mapping
+        self.placeholder_counter = 0
+
+    def substitute(self, node: Any) -> Any:
+        if isinstance(node, exp.Placeholder):
+            value = None
+            if node.this is None:  # Positional placeholder ?
+                param_key = f"param_{self.placeholder_counter}"
+                self.placeholder_counter += 1
+                if param_key in self.param_mapping:
+                    value = self.param_mapping[param_key]
+            elif node.this in self.param_mapping:  # Named placeholder @name
+                value = self.param_mapping[node.this]
+
+            if value is not None:
+                # Convert value to appropriate SQLGlot literal
+                if isinstance(value, (int, float)):
+                    return exp.Literal.number(str(value))
+                if isinstance(value, bool):
+                    return exp.Literal.string("true" if value else "false")
+                if value is None:
+                    return exp.Null()
+                return exp.Literal.string(str(value))
+        return node
 
 
 def _get_bq_param_type(value: Any) -> tuple[Optional[str], Optional[str]]:
@@ -118,9 +147,6 @@ bigquery_type_coercion_map = {
 
 bigquery_statement_config = StatementConfig(
     dialect="bigquery",
-    # Enhanced pipeline steps for BigQuery-specific processing
-    pre_process_steps=[bigquery_execute_many_to_script_step],  # Convert execute_many to script before parameterization
-    post_process_steps=None,  # No post-processing needed for BigQuery
     # Core pipeline configuration
     enable_parsing=True,
     enable_transformations=True,
@@ -139,7 +165,6 @@ bigquery_statement_config = StatementConfig(
     ),
 )
 
-__all__ = ("BigQueryCursor", "BigQueryDriver", "bigquery_statement_config")
 
 logger = logging.getLogger("sqlspec.adapters.bigquery")
 
@@ -246,26 +271,55 @@ class BigQueryDriver(SyncDriverAdapterBase):
         return None
 
     def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: SQL) -> ExecutionResult:
-        """BigQuery execute_many implementation - should be converted to script by pipeline."""
-        # The pipeline step should have converted this to a script execution
-        # If we reach here, it means the pipeline step didn't work as expected
-        # Fall back to individual execution
+        """BigQuery execute_many implementation - converts to script execution."""
         if not prepared_params:
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
-        logger.warning("BigQuery execute_many: Pipeline conversion to script failed, using fallback individual execution")
+        # Generate individual SQL statements for each parameter set
 
-        total_rows_affected = 0
-        last_job = None
+        script_statements = []
 
         for param_set in prepared_params:
-            last_job = self._run_query_job(sql, param_set, connection=cursor.connection)
-            last_job.result()
+            # Use the statement's already-parsed expression if available
+            parsed_expr = statement.expression
+            if parsed_expr is None:
+                # If no parsed expression, fall back to string replacement
+                script_statements.append(sql)
+                continue
 
-            if last_job.num_dml_affected_rows is not None:
-                total_rows_affected += last_job.num_dml_affected_rows
+            parsed_expr = parsed_expr.copy()
 
-        return self.create_execution_result(last_job, rowcount_override=total_rows_affected, is_many_result=True)
+            # Create parameter mapping for substitution
+            param_dict = {}
+            if isinstance(param_set, dict):
+                for name, value in param_set.items():
+                    # Handle TypedParameter wrapper
+                    actual_value = getattr(value, "value", value)
+                    param_dict[name.lstrip("@")] = actual_value
+            elif isinstance(param_set, (list, tuple)):
+                # Handle positional parameters converted to named parameters
+                for i, value in enumerate(param_set):
+                    actual_value = getattr(value, "value", value)
+                    param_dict[f"param_{i}"] = actual_value
+            else:
+                # Single parameter
+                actual_value = getattr(param_set, "value", param_set)
+                param_dict["param_0"] = actual_value
+
+            try:
+                substituter = BigQueryParameterMapper(param_dict)
+                substituted_expr = parsed_expr.transform(substituter.substitute)
+                stmt_sql = substituted_expr.sql(dialect="bigquery")
+                script_statements.append(stmt_sql)
+            except Exception:
+                # If substitution fails, use the original statement
+                script_statements.append(sql)
+
+        # Execute as a script
+        script_sql = ";\n".join(script_statements) + ";"
+
+        # Execute the script using base class script execution
+        return self._execute_script(cursor, script_sql, None, self.statement_config, statement)
 
     def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any, statement: SQL) -> ExecutionResult:
         """BigQuery single statement execution."""
