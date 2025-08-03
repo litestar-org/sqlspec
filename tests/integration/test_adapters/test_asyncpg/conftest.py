@@ -19,32 +19,37 @@ async def asyncpg_arrow_session(postgres_service: PostgresService) -> "AsyncGene
         }
     )
 
-    async with config.provide_session() as session:
-        # Create test table with various data types
-        await session.execute_script("""
-            CREATE TABLE IF NOT EXISTS test_arrow (
-                id SERIAL PRIMARY KEY,
-                name TEXT NOT NULL,
-                value INTEGER,
-                price DECIMAL(10, 2),
-                is_active BOOLEAN,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        # Clear any existing data
-        await session.execute_script("TRUNCATE TABLE test_arrow RESTART IDENTITY")
+    try:
+        async with config.provide_session() as session:
+            # Create test table with various data types
+            await session.execute_script("""
+                CREATE TABLE IF NOT EXISTS test_arrow (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    value INTEGER,
+                    price DECIMAL(10, 2),
+                    is_active BOOLEAN,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            # Clear any existing data
+            await session.execute_script("TRUNCATE TABLE test_arrow RESTART IDENTITY")
 
-        # Insert test data
-        await session.execute_many(
-            "INSERT INTO test_arrow (name, value, price, is_active) VALUES ($1, $2, $3, $4)",
-            [
-                ("Product A", 100, 19.99, True),
-                ("Product B", 200, 29.99, True),
-                ("Product C", 300, 39.99, False),
-                ("Product D", 400, 49.99, True),
-                ("Product E", 500, 59.99, False),
-            ],
-        )
-        yield session
-        # Cleanup
-        await session.execute_script("DROP TABLE IF EXISTS test_arrow")
+            # Insert test data
+            await session.execute_many(
+                "INSERT INTO test_arrow (name, value, price, is_active) VALUES ($1, $2, $3, $4)",
+                [
+                    ("Product A", 100, 19.99, True),
+                    ("Product B", 200, 29.99, True),
+                    ("Product C", 300, 39.99, False),
+                    ("Product D", 400, 49.99, True),
+                    ("Product E", 500, 59.99, False),
+                ],
+            )
+            yield session
+            # Cleanup
+            await session.execute_script("DROP TABLE IF EXISTS test_arrow")
+    finally:
+        # Ensure pool is closed properly to avoid threading issues during test shutdown
+        if config.pool_instance:
+            await config.close_pool()

@@ -21,19 +21,24 @@ def duckdb_session() -> Generator[DuckDBDriver, None, None]:
         A DuckDB session with a test table.
     """
     adapter = DuckDBConfig(pool_config={"database": ":memory:"})
-    with adapter.provide_session() as session:
-        session.execute_script("CREATE SEQUENCE IF NOT EXISTS test_id_seq START 1")
-        create_table_sql = """
-            CREATE TABLE IF NOT EXISTS test_table (
-                id INTEGER PRIMARY KEY DEFAULT nextval('test_id_seq'),
-                name TEXT NOT NULL
-            )
-        """
-        session.execute_script(create_table_sql)
-        yield session
-        # Clean up
-        session.execute_script("DROP TABLE IF EXISTS test_table")
-        session.execute_script("DROP SEQUENCE IF EXISTS test_id_seq")
+    try:
+        with adapter.provide_session() as session:
+            session.execute_script("CREATE SEQUENCE IF NOT EXISTS test_id_seq START 1")
+            create_table_sql = """
+                CREATE TABLE IF NOT EXISTS test_table (
+                    id INTEGER PRIMARY KEY DEFAULT nextval('test_id_seq'),
+                    name TEXT NOT NULL
+                )
+            """
+            session.execute_script(create_table_sql)
+            yield session
+            # Clean up
+            session.execute_script("DROP TABLE IF EXISTS test_table")
+            session.execute_script("DROP SEQUENCE IF EXISTS test_id_seq")
+    finally:
+        # Ensure pool is closed properly to avoid threading issues during test shutdown
+        if adapter.pool_instance:
+            adapter.close_pool()
 
 
 @pytest.mark.parametrize(

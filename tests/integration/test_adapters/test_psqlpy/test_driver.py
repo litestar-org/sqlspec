@@ -36,11 +36,17 @@ async def _manage_table(psqlpy_config: PsqlpyConfig) -> AsyncGenerator[None, Non
     );
     """
     drop_sql = "DROP TABLE IF EXISTS test_table;"
-    async with psqlpy_config.provide_session() as driver:
-        await driver.execute_script(create_sql)
-    yield
-    async with psqlpy_config.provide_session() as driver:
-        await driver.execute_script(drop_sql)
+
+    try:
+        async with psqlpy_config.provide_session() as driver:
+            await driver.execute_script(create_sql)
+        yield
+        async with psqlpy_config.provide_session() as driver:
+            await driver.execute_script(drop_sql)
+    finally:
+        # Ensure pool is closed properly to avoid threading issues during test shutdown
+        if psqlpy_config.pool_instance:
+            await psqlpy_config.close_pool()
 
 
 # --- Test Parameter Styles --- #

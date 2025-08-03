@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from typing import Any, Literal
 
 import pytest
@@ -18,9 +19,9 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
 @pytest.fixture
-def oracle_async_session(oracle_23ai_service: OracleService) -> OracleAsyncConfig:
+async def oracle_async_session(oracle_23ai_service: OracleService) -> AsyncGenerator[OracleAsyncConfig, None]:
     """Create an Oracle asynchronous session."""
-    return OracleAsyncConfig(
+    config = OracleAsyncConfig(
         pool_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
@@ -31,6 +32,16 @@ def oracle_async_session(oracle_23ai_service: OracleService) -> OracleAsyncConfi
             "max": 5,
         }
     )
+
+    try:
+        yield config
+    finally:
+        # Ensure pool is closed properly to avoid threading issues during test shutdown
+        if config.pool_instance:
+            try:
+                await config.pool_instance.close()
+            except Exception:
+                pass
 
 
 @pytest.mark.parametrize(

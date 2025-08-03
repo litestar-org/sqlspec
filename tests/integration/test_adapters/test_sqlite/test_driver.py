@@ -17,32 +17,37 @@ def sqlite_session() -> Generator[SqliteDriver, None, None]:
     """Create a SQLite session with test table."""
     config = SqliteConfig(pool_config={"database": ":memory:"})
 
-    with config.provide_session() as session:
-        # Create test table
-        session.execute_script("""
-            CREATE TABLE IF NOT EXISTS test_table (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                value INTEGER DEFAULT 0,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        # Commit DDL to prevent table locking issues in subsequent operations
-        session.commit()
+    try:
+        with config.provide_session() as session:
+            # Create test table
+            session.execute_script("""
+                CREATE TABLE IF NOT EXISTS test_table (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    value INTEGER DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            # Commit DDL to prevent table locking issues in subsequent operations
+            session.commit()
 
-        try:
-            yield session
-        finally:
-            # Ensure any pending transactions are committed before test ends
             try:
-                session.commit()
-            except Exception:
-                # If commit fails, try rollback to clean up transaction state
+                yield session
+            finally:
+                # Ensure any pending transactions are committed before test ends
                 try:
-                    session.rollback()
+                    session.commit()
                 except Exception:
-                    pass
-        # Cleanup is automatic with in-memory database
+                    # If commit fails, try rollback to clean up transaction state
+                    try:
+                        session.rollback()
+                    except Exception:
+                        pass
+            # Cleanup is automatic with in-memory database
+    finally:
+        # Ensure pool is closed properly to avoid threading issues during test shutdown
+        if config.pool_instance:
+            config.close_pool()
 
 
 @pytest.mark.xdist_group("sqlite")

@@ -29,27 +29,32 @@ async def asyncpg_params_session(postgres_service: PostgresService) -> "AsyncGen
         }
     )
 
-    async with config.provide_session() as session:
-        # Create test table efficiently
-        await session.execute_script("""
-            DROP TABLE IF EXISTS test_params CASCADE;
-            CREATE TABLE test_params (
-                id SERIAL PRIMARY KEY,
-                name TEXT NOT NULL,
-                value INTEGER DEFAULT 0,
-                description TEXT
-            );
-            -- Insert all test data in one go
-            INSERT INTO test_params (name, value, description) VALUES
-                ('test1', 100, 'First test'),
-                ('test2', 200, 'Second test'),
-                ('test3', 300, NULL),
-                ('alpha', 50, 'Alpha test'),
-                ('beta', 75, 'Beta test'),
-                ('gamma', 250, 'Gamma test');
-        """)
+    try:
+        async with config.provide_session() as session:
+            # Create test table efficiently
+            await session.execute_script("""
+                DROP TABLE IF EXISTS test_params CASCADE;
+                CREATE TABLE test_params (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    value INTEGER DEFAULT 0,
+                    description TEXT
+                );
+                -- Insert all test data in one go
+                INSERT INTO test_params (name, value, description) VALUES
+                    ('test1', 100, 'First test'),
+                    ('test2', 200, 'Second test'),
+                    ('test3', 300, NULL),
+                    ('alpha', 50, 'Alpha test'),
+                    ('beta', 75, 'Beta test'),
+                    ('gamma', 250, 'Gamma test');
+            """)
 
-        yield session
+            yield session
+    finally:
+        # Ensure pool is closed properly to avoid threading issues during test shutdown
+        if config.pool_instance:
+            await config.close_pool()
 
 
 @pytest.mark.asyncio

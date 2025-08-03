@@ -22,22 +22,27 @@ async def asyncpg_batch_session(postgres_service: PostgresService) -> "AsyncGene
         }
     )
 
-    async with config.provide_session() as session:
-        # Create test table
-        await session.execute_script("""
-            CREATE TABLE IF NOT EXISTS test_batch (
-                id SERIAL PRIMARY KEY,
-                name TEXT NOT NULL,
-                value INTEGER DEFAULT 0,
-                category TEXT
-            )
-        """)
-        # Clear any existing data
-        await session.execute_script("TRUNCATE TABLE test_batch RESTART IDENTITY")
+    try:
+        async with config.provide_session() as session:
+            # Create test table
+            await session.execute_script("""
+                CREATE TABLE IF NOT EXISTS test_batch (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    value INTEGER DEFAULT 0,
+                    category TEXT
+                )
+            """)
+            # Clear any existing data
+            await session.execute_script("TRUNCATE TABLE test_batch RESTART IDENTITY")
 
-        yield session
-        # Cleanup
-        await session.execute_script("DROP TABLE IF EXISTS test_batch")
+            yield session
+            # Cleanup
+            await session.execute_script("DROP TABLE IF EXISTS test_batch")
+    finally:
+        # Ensure pool is closed properly to avoid threading issues during test shutdown
+        if config.pool_instance:
+            await config.close_pool()
 
 
 @pytest.mark.asyncio

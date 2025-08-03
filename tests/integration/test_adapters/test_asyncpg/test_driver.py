@@ -25,19 +25,24 @@ async def asyncpg_session(postgres_service: PostgresService) -> AsyncGenerator[A
         }
     )
 
-    async with config.provide_session() as session:
-        # Create test table
-        await session.execute_script("""
-            CREATE TABLE IF NOT EXISTS test_table (
-                id SERIAL PRIMARY KEY,
-                name TEXT NOT NULL,
-                value INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        yield session
-        # Cleanup
-        await session.execute_script("DROP TABLE IF EXISTS test_table")
+    try:
+        async with config.provide_session() as session:
+            # Create test table
+            await session.execute_script("""
+                CREATE TABLE IF NOT EXISTS test_table (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    value INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            yield session
+            # Cleanup
+            await session.execute_script("DROP TABLE IF EXISTS test_table")
+    finally:
+        # Ensure pool is closed properly to avoid threading issues during test shutdown
+        if config.pool_instance:
+            await config.close_pool()
 
 
 @pytest.mark.xdist_group("postgres")

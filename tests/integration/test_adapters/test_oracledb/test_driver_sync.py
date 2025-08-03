@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from typing import Any, Literal
 
 import pytest
@@ -16,9 +17,9 @@ ParamStyle = Literal["positional_binds", "dict_binds"]
 
 
 @pytest.fixture
-def oracle_sync_session(oracle_23ai_service: OracleService) -> OracleSyncConfig:
+def oracle_sync_session(oracle_23ai_service: OracleService) -> Generator[OracleSyncConfig, None, None]:
     """Create an Oracle synchronous session."""
-    return OracleSyncConfig(
+    config = OracleSyncConfig(
         pool_config={
             "host": oracle_23ai_service.host,
             "port": oracle_23ai_service.port,
@@ -27,6 +28,16 @@ def oracle_sync_session(oracle_23ai_service: OracleService) -> OracleSyncConfig:
             "password": oracle_23ai_service.password,
         }
     )
+
+    try:
+        yield config
+    finally:
+        # Ensure pool is closed properly to avoid threading issues during test shutdown
+        if config.pool_instance:
+            try:
+                config.pool_instance.close()
+            except Exception:
+                pass
 
 
 @pytest.mark.parametrize(
