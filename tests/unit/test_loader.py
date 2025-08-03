@@ -176,7 +176,7 @@ INSERT INTO users (username, email) VALUES (:username, :email);
             loader.get_sql("missing_query")
 
         assert "missing_query" in str(exc_info.value)
-        assert "Available queries: none" in str(exc_info.value)
+        assert "Available statements: none" in str(exc_info.value)
 
     def test_file_not_found(self, mock_path_exists: Mock) -> None:
         """Test error when file not found."""
@@ -232,7 +232,7 @@ SELECT * FROM users WHERE id = 2;
             with pytest.raises(SQLFileParseError) as exc_info:
                 loader.load_sql("duplicates.sql")
 
-            assert "Duplicate query name: get_user" in str(exc_info.value)
+            assert "Duplicate statement name: get_user" in str(exc_info.value)
 
     def test_duplicate_query_names_across_files(
         self, mock_path_read: Mock, mock_path_exists: Mock, mock_path_is_file: Mock
@@ -491,3 +491,243 @@ class TestSQLFileLoaderWithFixtures:
         raw_text = loader.get_query_text("oracle_ddl_script")
         assert "CREATE TABLE" in raw_text
         assert "VECTOR(768, FLOAT32)" in raw_text
+
+    # =================
+    # DIALECT TESTS
+    # =================
+
+    def test_dialect_parsing_basic(self) -> None:
+        """Test basic dialect detection and parsing."""
+        content = """
+-- name: get_user_postgresql
+-- dialect: postgresql
+SELECT id, name, email FROM users WHERE id = :user_id;
+
+-- name: get_user_oracle
+-- dialect: oracle
+SELECT id, name, email FROM users WHERE id = :user_id;
+
+-- name: get_user_generic
+SELECT id, name, email FROM users WHERE id = :user_id;
+"""
+
+        loader = SQLFileLoader()
+        # Mock the storage backend
+        mock_backend = MagicMock()
+        mock_backend.read_text.return_value = content.strip()
+
+        with patch("sqlspec.loader.StorageRegistry.get", return_value=mock_backend):
+            loader.load_sql("dialect_test.sql")
+
+        # Check that queries were loaded with correct dialects
+        postgresql_stmt = loader._queries["get_user_postgresql"]
+        oracle_stmt = loader._queries["get_user_oracle"]
+        generic_stmt = loader._queries["get_user_generic"]
+
+        assert postgresql_stmt.dialect == "postgres"  # Normalized for SQLGlot
+        assert oracle_stmt.dialect == "oracle"
+        assert generic_stmt.dialect is None
+
+        # Test that SQL objects are created with correct dialects
+        postgresql_sql = loader.get_sql("get_user_postgresql")
+        oracle_sql = loader.get_sql("get_user_oracle")
+        generic_sql = loader.get_sql("get_user_generic")
+
+        assert postgresql_sql._dialect == "postgres"
+        assert oracle_sql._dialect == "oracle"
+        assert generic_sql._dialect is None
+
+    def test_dialect_case_insensitive(self) -> None:
+        """Test dialect names are case insensitive."""
+        content = """
+-- name: test_uppercase
+-- dialect: POSTGRESQL
+SELECT 1;
+
+-- name: test_mixedcase
+-- dialect: Oracle
+SELECT 2;
+"""
+
+        loader = SQLFileLoader()
+        mock_backend = MagicMock()
+        mock_backend.read_text.return_value = content.strip()
+
+        with patch("sqlspec.loader.StorageRegistry.get", return_value=mock_backend):
+            loader.load_sql("case_test.sql")
+
+        uppercase_stmt = loader._queries["test_uppercase"]
+        mixedcase_stmt = loader._queries["test_mixedcase"]
+
+        assert uppercase_stmt.dialect == "postgres"  # Normalized
+        assert mixedcase_stmt.dialect == "oracle"
+
+    def test_unknown_dialect_warning(self) -> None:
+        """Test that unknown dialects generate warnings but don't fail."""
+        content = """
+-- name: test_unknown
+-- dialect: unknown_dialect
+SELECT 1;
+"""
+
+        loader = SQLFileLoader()
+        mock_backend = MagicMock()
+        mock_backend.read_text.return_value = content.strip()
+
+        with patch("sqlspec.loader.StorageRegistry.get", return_value=mock_backend):
+            # Should not raise an exception
+            loader.load_sql("unknown_dialect.sql")
+
+        stmt = loader._queries["test_unknown"]
+        assert stmt.dialect == "unknown_dialect"  # Kept as-is for unknown dialects
+
+        # Should be able to get the SQL object (might fail at SQLGlot level later)
+        try:
+            loader.get_sql("test_unknown")
+            # If it doesn't fail, the dialect was handled gracefully
+        except ValueError as e:
+            # Expected if SQLGlot doesn't recognize the dialect
+            assert "Unknown dialect" in str(e)
+
+    def test_dialect_aliases(self) -> None:
+        """Test dialect aliases work correctly."""
+        content = """
+-- name: test_postgresql_alias
+-- dialect: postgresql
+SELECT 1;
+
+-- name: test_tsql_alias
+-- dialect: tsql
+SELECT 2;
+"""
+
+        loader = SQLFileLoader()
+        mock_backend = MagicMock()
+        mock_backend.read_text.return_value = content.strip()
+
+        with patch("sqlspec.loader.StorageRegistry.get", return_value=mock_backend):
+            loader.load_sql("alias_test.sql")
+
+        postgresql_stmt = loader._queries["test_postgresql_alias"]
+        tsql_stmt = loader._queries["test_tsql_alias"]
+
+        # Should be normalized to SQLGlot-compatible names
+        assert postgresql_stmt.dialect == "postgres"
+        assert tsql_stmt.dialect == "mssql"
+
+    def test_get_sql_with_dialect_parameter(self) -> None:
+        """Test get_sql() method with dialect override parameter."""
+        content = """
+-- name: test_query
+-- dialect: postgresql
+SELECT id FROM users WHERE id = :user_id;
+
+-- name: generic_query
+SELECT id FROM users WHERE id = :user_id;
+"""
+
+        loader = SQLFileLoader()
+        mock_backend = MagicMock()
+        mock_backend.read_text.return_value = content.strip()
+
+        with patch("sqlspec.loader.StorageRegistry.get", return_value=mock_backend):
+            loader.load_sql("override_test.sql")
+
+        # Test dialect override takes precedence
+        sql_with_override = loader.get_sql("test_query", dialect="mysql")
+        assert sql_with_override._dialect == "mysql"
+
+        # Test adding dialect to generic query
+        generic_with_dialect = loader.get_sql("generic_query", dialect="oracle")
+        assert generic_with_dialect._dialect == "oracle"
+
+        # Test original dialect preserved when no override
+        original_sql = loader.get_sql("test_query")
+        assert original_sql._dialect == "postgres"
+
+    def test_add_named_sql_with_dialect(self) -> None:
+        """Test adding named SQL queries with dialect specification."""
+        loader = SQLFileLoader()
+
+        # Add query with dialect
+        loader.add_named_sql("postgres_query", "SELECT 1", dialect="postgresql")
+        loader.add_named_sql("mysql_query", "SELECT 2", dialect="mysql")
+        loader.add_named_sql("generic_query", "SELECT 3")  # No dialect
+
+        # Check dialects are stored correctly
+        postgres_stmt = loader._queries["postgres_query"]
+        mysql_stmt = loader._queries["mysql_query"]
+        generic_stmt = loader._queries["generic_query"]
+
+        assert postgres_stmt.dialect == "postgres"  # Normalized
+        assert mysql_stmt.dialect == "mysql"
+        assert generic_stmt.dialect is None
+
+        # Test SQL objects have correct dialects
+        postgres_sql = loader.get_sql("postgres_query")
+        mysql_sql = loader.get_sql("mysql_query")
+        generic_sql = loader.get_sql("generic_query")
+
+        assert postgres_sql._dialect == "postgres"
+        assert mysql_sql._dialect == "mysql"
+        assert generic_sql._dialect is None
+
+    def test_named_statement_structure(self) -> None:
+        """Test NamedStatement data structure creation and properties."""
+        from sqlspec.loader import NamedStatement
+
+        # Test basic creation
+        stmt = NamedStatement("test_query", "SELECT 1", dialect="mysql", start_line=5)
+
+        assert stmt.name == "test_query"
+        assert stmt.sql == "SELECT 1"
+        assert stmt.dialect == "mysql"
+        assert stmt.start_line == 5
+
+        # Test creation without optional parameters
+        simple_stmt = NamedStatement("simple", "SELECT 2")
+
+        assert simple_stmt.name == "simple"
+        assert simple_stmt.sql == "SELECT 2"
+        assert simple_stmt.dialect is None
+        assert simple_stmt.start_line == 0
+
+    def test_backward_compatibility_no_dialects(self) -> None:
+        """Test existing SQL files without dialects continue to work."""
+        content = """
+-- name: get_user_by_id
+-- Get a single user by their ID
+SELECT id, name, email FROM users WHERE id = :user_id;
+
+-- name: list_users
+-- List users with limit
+SELECT id, name, email FROM users ORDER BY name LIMIT :limit;
+"""
+
+        loader = SQLFileLoader()
+        mock_backend = MagicMock()
+        mock_backend.read_text.return_value = content.strip()
+
+        with patch("sqlspec.loader.StorageRegistry.get", return_value=mock_backend):
+            loader.load_sql("legacy_test.sql")
+
+        # Should load both queries without dialects
+        assert len(loader.list_queries()) == 2
+        assert loader.has_query("get_user_by_id")
+        assert loader.has_query("list_users")
+
+        # Check no dialects were assigned
+        user_stmt = loader._queries["get_user_by_id"]
+        list_stmt = loader._queries["list_users"]
+
+        assert user_stmt.dialect is None
+        assert list_stmt.dialect is None
+
+        # SQL objects should work normally
+        user_sql = loader.get_sql("get_user_by_id", user_id=123)
+        list_sql = loader.get_sql("list_users", limit=10)
+
+        assert user_sql._dialect is None
+        assert list_sql._dialect is None
+        assert user_sql.parameters == {"user_id": 123}
+        assert list_sql.parameters == {"limit": 10}

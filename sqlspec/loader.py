@@ -9,6 +9,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from difflib import get_close_matches
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -20,7 +21,7 @@ from sqlspec.storage.registry import StorageRegistry
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
 
-__all__ = ("CachedSQLFile", "SQLFile", "SQLFileLoader")
+__all__ = ("CachedSQLFile", "NamedStatement", "SQLFile", "SQLFileLoader")
 
 logger = get_logger("loader")
 
@@ -28,6 +29,60 @@ logger = get_logger("loader")
 # We capture the name plus any trailing special characters
 QUERY_NAME_PATTERN = re.compile(r"^\s*--\s*name\s*:\s*([\w-]+[^\w\s]*)\s*$", re.MULTILINE | re.IGNORECASE)
 TRIM_TRAILING_SPECIAL_CHARS = re.compile(r"[^\w-]+$")
+
+# Matches: -- dialect: dialect_name (optional dialect specification)
+DIALECT_PATTERN = re.compile(r"^\s*--\s*dialect\s*:\s*(?P<dialect>[a-zA-Z0-9_]+)\s*$", re.IGNORECASE | re.MULTILINE)
+
+# Supported SQL dialects (based on SQLGlot's available dialects)
+SUPPORTED_DIALECTS = {
+    # Core databases
+    "sqlite",
+    "postgresql",
+    "postgres",
+    "mysql",
+    "oracle",
+    "mssql",
+    "tsql",
+    # Cloud platforms
+    "bigquery",
+    "snowflake",
+    "redshift",
+    "athena",
+    "fabric",
+    # Analytics engines
+    "clickhouse",
+    "duckdb",
+    "databricks",
+    "spark",
+    "spark2",
+    "trino",
+    "presto",
+    # Specialized
+    "hive",
+    "drill",
+    "druid",
+    "materialize",
+    "teradata",
+    "dremio",
+    "doris",
+    "risingwave",
+    "singlestore",
+    "starrocks",
+    "tableau",
+    "exasol",
+    "dune",
+}
+
+# Dialect aliases for common variants
+DIALECT_ALIASES = {
+    "postgresql": "postgres",
+    "pg": "postgres",
+    "pgplsql": "postgres",
+    "plsql": "oracle",
+    "oracledb": "oracle",
+    "tsql": "mssql",
+}
+
 MIN_QUERY_PARTS = 3
 
 
@@ -45,6 +100,68 @@ def _normalize_query_name(name: str) -> str:
     """
     # Strip trailing non-alphanumeric characters (excluding underscore) and replace hyphens
     return TRIM_TRAILING_SPECIAL_CHARS.sub("", name).replace("-", "_")
+
+
+def _normalize_dialect(dialect: str) -> str:
+    """Normalize dialect name with aliases.
+
+    Args:
+        dialect: Raw dialect name from SQL file
+
+    Returns:
+        Normalized dialect name
+    """
+    normalized = dialect.lower().strip()
+    return DIALECT_ALIASES.get(normalized, normalized)
+
+
+def _normalize_dialect_for_sqlglot(dialect: str) -> str:
+    """Normalize dialect name for SQLGlot compatibility.
+
+    This handles the mapping from user-friendly dialect names to
+    the specific names that SQLGlot expects.
+
+    Args:
+        dialect: Dialect name from SQL file or parameter
+
+    Returns:
+        SQLGlot-compatible dialect name
+    """
+    normalized = dialect.lower().strip()
+    return DIALECT_ALIASES.get(normalized, normalized)
+
+
+def _get_dialect_suggestions(invalid_dialect: str) -> "list[str]":
+    """Get dialect suggestions using fuzzy matching.
+
+    Args:
+        invalid_dialect: Invalid dialect name that was provided
+
+    Returns:
+        List of suggested dialect names (up to 3 suggestions)
+    """
+
+    return get_close_matches(invalid_dialect, SUPPORTED_DIALECTS, n=3, cutoff=0.6)
+
+
+class NamedStatement:
+    """Represents a parsed SQL statement with metadata.
+
+    This class holds information about individual SQL statements extracted from files,
+    including their normalized names, SQL content, optional dialect specifications,
+    and line position for error reporting.
+
+    Uses regular class with __slots__ instead of @dataclass for MyPyC compilation
+    compatibility and optimal performance.
+    """
+
+    __slots__ = ("dialect", "name", "sql", "start_line")
+
+    def __init__(self, name: str, sql: str, dialect: "Optional[str]" = None, start_line: int = 0) -> None:
+        self.name = name
+        self.sql = sql
+        self.dialect = dialect
+        self.start_line = start_line
 
 
 @dataclass
@@ -76,24 +193,25 @@ class SQLFile:
 
 
 class CachedSQLFile:
-    """Cached SQL file with parsed queries for efficient reloading.
+    """Cached SQL file with parsed statements for efficient reloading.
 
     This structure is stored in the file cache to avoid re-parsing
-    SQL files when their content hasn't changed.
+    SQL files when their content hasn't changed. Includes support
+    for per-statement dialect specifications.
     """
 
-    __slots__ = ("parsed_queries", "query_names", "sql_file")
+    __slots__ = ("parsed_statements", "sql_file", "statement_names")
 
-    def __init__(self, sql_file: SQLFile, parsed_queries: "dict[str, str]") -> None:
+    def __init__(self, sql_file: SQLFile, parsed_statements: "dict[str, NamedStatement]") -> None:
         """Initialize cached SQL file.
 
         Args:
             sql_file: The original SQLFile with content and metadata.
-            parsed_queries: Pre-parsed named queries from the file.
+            parsed_statements: Pre-parsed named statements from the file.
         """
         self.sql_file = sql_file
-        self.parsed_queries = parsed_queries
-        self.query_names = list(parsed_queries.keys())
+        self.parsed_statements = parsed_statements
+        self.statement_names = list(parsed_statements.keys())
 
 
 class SQLFileLoader:
@@ -128,7 +246,7 @@ class SQLFileLoader:
         self.encoding = encoding
         self.storage_registry = storage_registry
         # Instance-level storage for loaded queries and files
-        self._queries: dict[str, str] = {}
+        self._queries: dict[str, NamedStatement] = {}
         self._files: dict[str, SQLFile] = {}
         self._query_to_file: dict[str, str] = {}  # Maps query name to file path
 
@@ -218,35 +336,92 @@ class SQLFileLoader:
         return "\n".join(lines[first_sql_line_index:]).strip()
 
     @staticmethod
-    def _parse_sql_content(content: str, file_path: str) -> dict[str, str]:
-        """Parse SQL content and extract named queries."""
-        queries: dict[str, str] = {}
-        matches = list(QUERY_NAME_PATTERN.finditer(content))
-        if not matches:
+    def _parse_sql_content(content: str, file_path: str) -> "dict[str, NamedStatement]":
+        """Parse SQL content and extract named statements with optional dialect specifications.
+
+        Processes aiosql-style named statements, detecting optional dialect declarations
+        immediately following name declarations. Validates dialect names against
+        supported dialects and provides helpful error messages for invalid dialects.
+
+        Args:
+            content: Raw SQL file content to parse
+            file_path: File path for error reporting
+
+        Returns:
+            Dictionary mapping normalized statement names to NamedStatement objects
+
+        Raises:
+            SQLFileParseError: If no named statements found, duplicate names exist,
+                              or invalid dialect names are specified
+        """
+        statements: dict[str, NamedStatement] = {}
+        content.splitlines()
+
+        # Find all name declarations
+        name_matches = list(QUERY_NAME_PATTERN.finditer(content))
+        if not name_matches:
             raise SQLFileParseError(
-                file_path, file_path, ValueError("No named SQL statements found (-- name: query_name)")
+                file_path, file_path, ValueError("No named SQL statements found (-- name: statement_name)")
             )
 
-        for i, match in enumerate(matches):
-            raw_query_name = match.group(1).strip()
-            start_pos = match.end()
-            end_pos = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+        for i, match in enumerate(name_matches):
+            raw_statement_name = match.group(1).strip()
+            statement_start_line = content[: match.start()].count("\n")
 
-            sql_text = content[start_pos:end_pos].strip()
-            if not raw_query_name or not sql_text:
+            # Extract SQL content boundaries
+            start_pos = match.end()
+            end_pos = name_matches[i + 1].start() if i + 1 < len(name_matches) else len(content)
+
+            statement_section = content[start_pos:end_pos].strip()
+            if not raw_statement_name or not statement_section:
                 continue
 
-            clean_sql = SQLFileLoader._strip_leading_comments(sql_text)
+            dialect = None
+            statement_sql = statement_section
+
+            section_lines = [line.strip() for line in statement_section.split("\n") if line.strip()]
+            if section_lines:
+                first_line = section_lines[0]
+                dialect_match = DIALECT_PATTERN.match(first_line)
+                if dialect_match:
+                    declared_dialect = dialect_match.group("dialect").lower()
+
+                    # Normalize dialect (handle aliases)
+                    normalized_dialect = _normalize_dialect(declared_dialect)
+
+                    # Validate dialect - warn but don't fail for invalid dialects
+                    if normalized_dialect not in SUPPORTED_DIALECTS:
+                        suggestions = _get_dialect_suggestions(normalized_dialect)
+                        warning_msg = f"Unknown dialect '{declared_dialect}' at line {statement_start_line + 1}"
+                        if suggestions:
+                            warning_msg += f". Did you mean: {', '.join(suggestions)}?"
+                        warning_msg += (
+                            f". Supported dialects: {', '.join(sorted(SUPPORTED_DIALECTS))}. Using dialect as-is."
+                        )
+                        logger.warning(warning_msg)
+                        dialect = declared_dialect.lower()  # Use original dialect name
+                    else:
+                        dialect = normalized_dialect
+                    remaining_lines = section_lines[1:]
+                    statement_sql = "\n".join(remaining_lines)
+
+            # Clean SQL content
+            clean_sql = SQLFileLoader._strip_leading_comments(statement_sql)
             if clean_sql:
-                query_name = _normalize_query_name(raw_query_name)
-                if query_name in queries:
-                    raise SQLFileParseError(file_path, file_path, ValueError(f"Duplicate query name: {raw_query_name}"))
-                queries[query_name] = clean_sql
+                normalized_name = _normalize_query_name(raw_statement_name)
+                if normalized_name in statements:
+                    raise SQLFileParseError(
+                        file_path, file_path, ValueError(f"Duplicate statement name: {raw_statement_name}")
+                    )
 
-        if not queries:
-            raise SQLFileParseError(file_path, file_path, ValueError("No valid SQL queries found after parsing"))
+                statements[normalized_name] = NamedStatement(
+                    name=normalized_name, sql=clean_sql, dialect=dialect, start_line=statement_start_line
+                )
 
-        return queries
+        if not statements:
+            raise SQLFileParseError(file_path, file_path, ValueError("No valid SQL statements found after parsing"))
+
+        return statements
 
     def load_sql(self, *paths: Union[str, Path]) -> None:
         """Load SQL files and parse named queries.
@@ -351,9 +526,9 @@ class SQLFileLoader:
         ):
             # Cache hit - use cached data
 
-            # Restore file and queries from cache
+            # Restore file and statements from cache
             self._files[path_str] = cached_file.sql_file
-            for name, sql in cached_file.parsed_queries.items():
+            for name, statement in cached_file.parsed_statements.items():
                 namespaced_name = f"{namespace}.{name}" if namespace else name
                 if namespaced_name in self._queries:
                     existing_file = self._query_to_file.get(namespaced_name, "unknown")
@@ -363,7 +538,7 @@ class SQLFileLoader:
                             path_str,
                             ValueError(f"Query name '{namespaced_name}' already exists in file: {existing_file}"),
                         )
-                self._queries[namespaced_name] = sql
+                self._queries[namespaced_name] = statement
                 self._query_to_file[namespaced_name] = path_str
             return
 
@@ -374,17 +549,17 @@ class SQLFileLoader:
         # Cache the loaded file
         if path_str in self._files:
             sql_file = self._files[path_str]
-            # Extract queries for this file
-            file_queries: dict[str, str] = {}
+            # Extract statements for this file
+            file_statements: dict[str, NamedStatement] = {}
             for query_name, query_path in self._query_to_file.items():
                 if query_path == path_str:
                     # Remove namespace prefix for storage
                     stored_name = query_name
                     if namespace and query_name.startswith(f"{namespace}."):
                         stored_name = query_name[len(namespace) + 1 :]
-                    file_queries[stored_name] = self._queries[query_name]
+                    file_statements[stored_name] = self._queries[query_name]
 
-            cached_file_data = CachedSQLFile(sql_file=sql_file, parsed_queries=file_queries)
+            cached_file_data = CachedSQLFile(sql_file=sql_file, parsed_statements=file_statements)
             file_cache.set(cache_key, cached_file_data)
 
     def _load_file_without_cache(self, file_path: Union[str, Path], namespace: Optional[str]) -> None:
@@ -400,8 +575,8 @@ class SQLFileLoader:
         sql_file = SQLFile(content=content, path=path_str)
         self._files[path_str] = sql_file
 
-        queries = self._parse_sql_content(content, path_str)
-        for name, sql in queries.items():
+        statements = self._parse_sql_content(content, path_str)
+        for name, statement in statements.items():
             namespaced_name = f"{namespace}.{name}" if namespace else name
             if namespaced_name in self._queries:
                 existing_file = self._query_to_file.get(namespaced_name, "unknown")
@@ -411,15 +586,16 @@ class SQLFileLoader:
                         path_str,
                         ValueError(f"Query name '{namespaced_name}' already exists in file: {existing_file}"),
                     )
-            self._queries[namespaced_name] = sql
+            self._queries[namespaced_name] = statement
             self._query_to_file[namespaced_name] = path_str
 
-    def add_named_sql(self, name: str, sql: str) -> None:
+    def add_named_sql(self, name: str, sql: str, dialect: "Optional[str]" = None) -> None:
         """Add a named SQL query directly without loading from a file.
 
         Args:
             name: Name for the SQL query.
             sql: Raw SQL content.
+            dialect: Optional dialect for the SQL statement.
 
         Raises:
             ValueError: If query name already exists.
@@ -429,23 +605,45 @@ class SQLFileLoader:
             msg = f"Query name '{name}' already exists (source: {existing_source})"
             raise ValueError(msg)
 
-        self._queries[name] = sql.strip()
+        # Validate dialect if provided - warn but don't fail for invalid dialects
+        if dialect is not None:
+            normalized_dialect = _normalize_dialect(dialect)
+            if normalized_dialect not in SUPPORTED_DIALECTS:
+                suggestions = _get_dialect_suggestions(normalized_dialect)
+                warning_msg = f"Unknown dialect '{dialect}'"
+                if suggestions:
+                    warning_msg += f". Did you mean: {', '.join(suggestions)}?"
+                warning_msg += f". Supported dialects: {', '.join(sorted(SUPPORTED_DIALECTS))}. Using dialect as-is."
+                logger.warning(warning_msg)
+                dialect = dialect.lower()  # Use original dialect name
+            else:
+                dialect = normalized_dialect
+
+        statement = NamedStatement(name=name, sql=sql.strip(), dialect=dialect, start_line=0)
+        self._queries[name] = statement
         self._query_to_file[name] = "<directly added>"
 
-    def get_sql(self, name: str, parameters: "Optional[Any]" = None, **kwargs: "Any") -> "SQL":
-        """Get a SQL object by query name.
+    def get_sql(
+        self,
+        name: str,
+        parameters: "Optional[Any]" = None,
+        dialect: "Optional[str]" = None,  # NEW: Override dialect
+        **kwargs: "Any",
+    ) -> "SQL":
+        """Get a SQL object by statement name with dialect support.
 
         Args:
-            name: Name of the query (from -- name: in SQL file).
+            name: Name of the statement (from -- name: in SQL file).
                   Hyphens in names are automatically converted to underscores.
-            parameters: Parameters for the SQL query (aiosql-compatible).
+            parameters: Parameters for the SQL statement (aiosql-compatible).
+            dialect: Optional dialect override (takes precedence over file dialect).
             **kwargs: Additional parameters to pass to the SQL object.
 
         Returns:
-            SQL object ready for execution.
+            SQL object ready for execution with appropriate dialect set.
 
         Raises:
-            SQLFileNotFoundError: If query name not found.
+            SQLFileNotFoundError: If statement name not found.
         """
         correlation_id = CorrelationContext.get()
 
@@ -455,22 +653,47 @@ class SQLFileLoader:
         if safe_name not in self._queries:
             available = ", ".join(sorted(self._queries.keys())) if self._queries else "none"
             logger.error(
-                "Query not found: %s",
+                "Statement not found: %s",
                 name,
                 extra={
-                    "query_name": name,
+                    "statement_name": name,
                     "safe_name": safe_name,
-                    "available_queries": len(self._queries),
+                    "available_statements": len(self._queries),
                     "correlation_id": correlation_id,
                 },
             )
-            raise SQLFileNotFoundError(name, path=f"Query '{name}' not found. Available queries: {available}")
+            raise SQLFileNotFoundError(name, path=f"Statement '{name}' not found. Available statements: {available}")
+
+        # Get parsed statement with dialect information
+        parsed_statement = self._queries[safe_name]  # Now returns NamedStatement object
+
+        # Determine effective dialect (override > file > default)
+        effective_dialect = dialect or parsed_statement.dialect
+
+        # Validate dialect override if provided - warn but don't fail for invalid dialects
+        if dialect is not None:
+            normalized_dialect = _normalize_dialect(dialect)
+            if normalized_dialect not in SUPPORTED_DIALECTS:
+                suggestions = _get_dialect_suggestions(normalized_dialect)
+                warning_msg = f"Unknown dialect '{dialect}'"
+                if suggestions:
+                    warning_msg += f". Did you mean: {', '.join(suggestions)}?"
+                warning_msg += f". Supported dialects: {', '.join(sorted(SUPPORTED_DIALECTS))}. Using dialect as-is."
+                logger.warning(warning_msg)
+                effective_dialect = dialect.lower()  # Use original dialect name
+            else:
+                effective_dialect = normalized_dialect
 
         sql_kwargs = dict(kwargs)
         if parameters is not None:
             sql_kwargs["parameters"] = parameters
 
-        return SQL(self._queries[safe_name], **sql_kwargs)
+        # Set dialect if specified, normalizing for SQLGlot compatibility
+        if effective_dialect:
+            sqlglot_dialect = _normalize_dialect_for_sqlglot(effective_dialect)
+            sql_kwargs["_dialect"] = sqlglot_dialect
+
+        return SQL(parsed_statement.sql, **sql_kwargs)
 
     def get_file(self, path: Union[str, Path]) -> "Optional[SQLFile]":
         """Get a loaded SQLFile object by path.
@@ -558,4 +781,4 @@ class SQLFileLoader:
         safe_name = _normalize_query_name(name)
         if safe_name not in self._queries:
             raise SQLFileNotFoundError(name)
-        return self._queries[safe_name]
+        return self._queries[safe_name].sql

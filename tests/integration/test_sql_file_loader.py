@@ -322,7 +322,7 @@ def test_query_not_found_error(temp_sql_files: Path) -> None:
     with pytest.raises(SQLFileNotFoundError) as exc_info:
         loader.get_sql("nonexistent_query")
 
-    assert "Query 'nonexistent_query' not found" in str(exc_info.value)
+    assert "Statement 'nonexistent_query' not found" in str(exc_info.value)
 
 
 def test_add_named_sql_directly(temp_sql_files: Path) -> None:
@@ -625,3 +625,146 @@ def test_sql_loader_query_organization(complex_sql_files: Path) -> None:
 
         sql_obj = loader.get_sql(query_name)
         assert isinstance(sql_obj, SQL)
+
+
+# Dialect-specific integration tests
+def test_multi_dialect_sql_file_loading(temp_sql_files: Path) -> None:
+    """Test loading SQL files with multiple dialect specifications."""
+    # Create a multi-dialect SQL file
+    multi_dialect_sql = temp_sql_files / "multi_dialect.sql"
+    multi_dialect_sql.write_text(
+        """
+-- name: get_user_postgres
+-- dialect: postgresql
+SELECT id, name, email,
+       ARRAY_AGG(roles.name) as user_roles
+FROM users
+LEFT JOIN user_roles ON users.id = user_roles.user_id
+LEFT JOIN roles ON user_roles.role_id = roles.id
+WHERE id = :user_id
+GROUP BY users.id;
+
+-- name: get_user_mysql
+-- dialect: mysql
+SELECT id, name, email,
+       GROUP_CONCAT(roles.name) as user_roles
+FROM users
+LEFT JOIN user_roles ON users.id = user_roles.user_id
+LEFT JOIN roles ON user_roles.role_id = roles.id
+WHERE id = :user_id
+GROUP BY users.id;
+
+-- name: get_user_generic
+SELECT id, name, email FROM users WHERE id = :user_id;
+""".strip()
+    )
+
+    loader = SQLFileLoader()
+    loader.load_sql(multi_dialect_sql)
+
+    # Verify all queries loaded
+    queries = loader.list_queries()
+    assert "get_user_postgres" in queries
+    assert "get_user_mysql" in queries
+    assert "get_user_generic" in queries
+
+    # Test dialect information is preserved
+    postgres_stmt = loader._queries["get_user_postgres"]
+    mysql_stmt = loader._queries["get_user_mysql"]
+    generic_stmt = loader._queries["get_user_generic"]
+
+    assert postgres_stmt.dialect == "postgres"  # Normalized
+    assert mysql_stmt.dialect == "mysql"
+    assert generic_stmt.dialect is None
+
+    # Test SQL objects are created with correct dialects
+    postgres_sql = loader.get_sql("get_user_postgres", user_id=123)
+    mysql_sql = loader.get_sql("get_user_mysql", user_id=123)
+    generic_sql = loader.get_sql("get_user_generic", user_id=123)
+
+    assert postgres_sql._dialect == "postgres"
+    assert mysql_sql._dialect == "mysql"
+    assert generic_sql._dialect is None
+
+    # Test that SQL compilation works for known dialects
+    assert isinstance(postgres_sql, SQL)
+    assert isinstance(mysql_sql, SQL)
+    assert isinstance(generic_sql, SQL)
+
+
+def test_dialect_parameter_override_integration(temp_sql_files: Path) -> None:
+    """Test dialect parameter override functionality in integration context."""
+    # Use existing users.sql and add dialect override testing
+    loader = SQLFileLoader()
+    loader.load_sql(temp_sql_files / "users.sql")
+
+    # Test overriding with known dialects
+    postgres_sql = loader.get_sql("get_user_by_id", user_id=123, dialect="postgres")
+    mysql_sql = loader.get_sql("get_user_by_id", user_id=123, dialect="mysql")
+    oracle_sql = loader.get_sql("get_user_by_id", user_id=123, dialect="oracle")
+
+    # Verify dialect was applied
+    assert postgres_sql._dialect == "postgres"
+    assert mysql_sql._dialect == "mysql"
+    assert oracle_sql._dialect == "oracle"
+
+    # All should be valid SQL objects
+    assert isinstance(postgres_sql, SQL)
+    assert isinstance(mysql_sql, SQL)
+    assert isinstance(oracle_sql, SQL)
+
+    # Parameters should be preserved - handle potential format differences by dialect
+    assert postgres_sql.parameters == {"user_id": 123}
+    # MySQL may use different parameter format, check if it's dict or list
+    mysql_params = mysql_sql.parameters
+    if isinstance(mysql_params, dict):
+        assert mysql_params == {"user_id": 123}
+    elif isinstance(mysql_params, list):
+        assert mysql_params == [123]  # MySQL may convert to positional parameters
+    else:
+        assert mysql_params == {"user_id": 123}  # Default expectation
+    assert oracle_sql.parameters == {"user_id": 123}
+
+
+def test_dialect_caching_integration(temp_sql_files: Path) -> None:
+    """Test that dialect information is properly cached and retrieved."""
+    # Create SQL file with dialect
+    dialect_cache_sql = temp_sql_files / "dialect_cache.sql"
+    dialect_cache_sql.write_text(
+        """
+-- name: cached_postgres_query
+-- dialect: postgresql
+SELECT id, name FROM users WHERE active = true;
+
+-- name: cached_oracle_query
+-- dialect: oracle
+SELECT id, name FROM users WHERE active = 1;
+""".strip()
+    )
+
+    # First loader - should cache the dialect information
+    loader1 = SQLFileLoader()
+    loader1.load_sql(dialect_cache_sql)
+
+    postgres_stmt1 = loader1._queries["cached_postgres_query"]
+    oracle_stmt1 = loader1._queries["cached_oracle_query"]
+
+    assert postgres_stmt1.dialect == "postgres"
+    assert oracle_stmt1.dialect == "oracle"
+
+    # Second loader - should benefit from caching (if file hasn't changed)
+    loader2 = SQLFileLoader()
+    loader2.load_sql(dialect_cache_sql)
+
+    postgres_stmt2 = loader2._queries["cached_postgres_query"]
+    oracle_stmt2 = loader2._queries["cached_oracle_query"]
+
+    assert postgres_stmt2.dialect == "postgres"
+    assert oracle_stmt2.dialect == "oracle"
+
+    # SQL objects should work correctly from both loaders
+    sql1 = loader1.get_sql("cached_postgres_query")
+    sql2 = loader2.get_sql("cached_postgres_query")
+
+    assert sql1._dialect == "postgres"
+    assert sql2._dialect == "postgres"

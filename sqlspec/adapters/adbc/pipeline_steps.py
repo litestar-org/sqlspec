@@ -34,29 +34,14 @@ def adbc_null_parameter_pipeline_step(context: SQLTransformContext) -> SQLTransf
     Input:  SQL: "VALUES ($1, $2)", params: ["John", None]
     Output: SQL: "VALUES ($1, NULL)", params: ["John"]
     """
-    logger.debug("ADBC NULL step called with parameters: %s (type: %s)", context.parameters, type(context.parameters))
-
     if not context.parameters:
-        logger.debug("ADBC NULL step: No parameters, returning unchanged")
         return context
 
     # Detect NULL parameters and their positions
     null_analysis = _analyze_null_parameters(context.parameters)
-    logger.debug(
-        "ADBC NULL step: Analysis result - has_nulls: %s, null_positions: %s",
-        null_analysis.has_nulls,
-        null_analysis.null_positions,
-    )
 
     if not null_analysis.has_nulls:
-        logger.debug("ADBC NULL step: No NULLs found, returning unchanged")
         return context
-
-    logger.debug(
-        "ADBC NULL step: Found %d NULL parameters at positions %s",
-        len(null_analysis.null_positions),
-        list(null_analysis.null_positions.keys()),
-    )
 
     # Transform SQL AST to replace NULL placeholders with NULL literals
     modified_expression = _replace_null_placeholders_in_ast(context.current_expression, null_analysis)
@@ -96,7 +81,7 @@ class _NullParameterAnalysis:
             self.original_count = len(parameters)
             for i, param in enumerate(parameters):
                 if param is None:
-                    self.null_positions[i] = param
+                    self.null_positions[i] = None
             self.has_nulls = len(self.null_positions) > 0
         elif isinstance(parameters, dict):
             # Handle dict parameters with string keys (e.g., {'1': None, '2': 'value'})
@@ -108,9 +93,9 @@ class _NullParameterAnalysis:
                         if isinstance(key, str) and key.lstrip("$").isdigit():
                             param_num = int(key.lstrip("$"))
                             param_index = param_num - 1  # Convert to 0-based
-                            self.null_positions[param_index] = param
+                            self.null_positions[param_index] = None
                         elif isinstance(key, int):
-                            self.null_positions[key] = param
+                            self.null_positions[key] = None
                     except ValueError:
                         # Skip non-numeric keys
                         pass
