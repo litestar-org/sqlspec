@@ -246,5 +246,48 @@ docs-linkcheck-full:                               ## Run full documentation lin
 	@echo "${OK} Full link check complete"
 
 # =============================================================================
+# Development Infrastructure
+# =============================================================================
+
+.PHONY: infra-up
+infra-up:                                              ## Start development infrastructure (databases, storage)
+	@echo "${INFO} Starting development infrastructure..."
+	@./tools/local-infra.sh up
+	@echo "${OK} Development infrastructure ready ✨"
+
+.PHONY: infra-down
+infra-down:                                            ## Stop development infrastructure
+	@echo "${INFO} Stopping development infrastructure..."
+	@./tools/local-infra.sh down --quiet
+	@echo "${OK} Development infrastructure stopped"
+
+.PHONY: infra-status
+infra-status:                                          ## Show development infrastructure status
+	@./tools/local-infra.sh status
+
+.PHONY: infra-cleanup
+infra-cleanup:                                         ## Clean up development infrastructure
+	@echo "${WARN} This will remove all development containers and volumes"
+	@./tools/local-infra.sh cleanup
+
+.PHONY: infra-postgres
+infra-postgres:                                        ## Start only PostgreSQL
+	@echo "${INFO} Starting PostgreSQL..."
+	@./tools/local-infra.sh up postgres --quiet
+	@echo "${OK} PostgreSQL ready on port 5433"
+
+.PHONY: infra-oracle
+infra-oracle:                                          ## Start only Oracle
+	@echo "${INFO} Starting Oracle..."
+	@./tools/local-infra.sh up oracle --quiet
+	@echo "${OK} Oracle ready on port 1522"
+
+.PHONY: infra-mysql
+infra-mysql:                                           ## Start only MySQL
+	@echo "${INFO} Starting MySQL..."
+	@./tools/local-infra.sh up mysql --quiet
+	@echo "${OK} MySQL ready on port 3307"
+
+# =============================================================================
 # End of Makefile
 # =============================================================================
