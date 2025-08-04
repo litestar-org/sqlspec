@@ -97,7 +97,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             migration_config: Migration configuration
 
         """
-        # Store the pool config as a dict and extract/merge extras
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
         if "extra" in processed_pool_config:
             extras = processed_pool_config.pop("extra")
@@ -117,7 +116,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         try:
             all_config = dict(self.pool_config)
 
-            # Separate pool-specific parameters that ConnectionPool accepts directly
             pool_params = {
                 "min_size": all_config.pop("min_size", 4),
                 "max_size": all_config.pop("max_size", None),
@@ -130,12 +128,10 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 "num_workers": all_config.pop("num_workers", 3),
             }
 
-            # Capture autocommit setting before configuring the pool
             autocommit_setting = all_config.get("autocommit")
 
             def configure_connection(conn: "PsycopgSyncConnection") -> None:
                 conn.row_factory = dict_row
-                # Apply autocommit setting if specified
                 if autocommit_setting is not None:
                     conn.autocommit = autocommit_setting
 
@@ -155,11 +151,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
             conninfo = all_config.pop("conninfo", None)
             if conninfo:
-                # If conninfo is provided, use it directly
-                # Don't pass kwargs when using conninfo string
                 pool = ConnectionPool(conninfo, open=True, **pool_params)
             else:
-                # Extract and handle kwargs if present
                 kwargs = all_config.pop("kwargs", {})
                 all_config.update(kwargs)
                 pool = ConnectionPool("", kwargs=all_config, open=True, **pool_params)
@@ -178,7 +171,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         logger.info("Closing Psycopg connection pool", extra={"adapter": "psycopg"})
 
         try:
-            # This avoids the "cannot join current thread" error during garbage collection
             if hasattr(self.pool_instance, "_closed"):
                 self.pool_instance._closed = True
 
@@ -236,7 +228,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             A PsycopgSyncDriver instance.
         """
         with self.provide_connection(*args, **kwargs) as conn:
-            # Use shared config or user-provided config
             final_statement_config = statement_config or self.statement_config
             yield self.driver_type(connection=conn, statement_config=final_statement_config)
 
@@ -286,7 +277,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             statement_config: Default SQL statement configuration
             migration_config: Migration configuration
         """
-        # Store the pool config as a dict and extract/merge extras
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
         if "extra" in processed_pool_config:
             extras = processed_pool_config.pop("extra")
@@ -304,7 +294,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
         all_config = dict(self.pool_config)
 
-        # Separate pool-specific parameters that AsyncConnectionPool accepts directly
         pool_params = {
             "min_size": all_config.pop("min_size", 4),
             "max_size": all_config.pop("max_size", None),
@@ -322,7 +311,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
         async def configure_connection(conn: "PsycopgAsyncConnection") -> None:
             conn.row_factory = dict_row
-            # Apply autocommit setting if specified (async version requires await)
             if autocommit_setting is not None:
                 await conn.set_autocommit(autocommit_setting)
 
@@ -334,7 +322,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             except ImportError:
                 pass
             except Exception as e:
-                # pgvector setup failed - log warning but continue
                 logger.debug("Failed to register pgvector for psycopg async: %s", e)
 
         pool_params["configure"] = all_config.pop("configure", configure_connection)
@@ -343,11 +330,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
         conninfo = all_config.pop("conninfo", None)
         if conninfo:
-            # If conninfo is provided, use it directly
-            # Don't pass kwargs when using conninfo string
             pool = AsyncConnectionPool(conninfo, open=False, **pool_params)
         else:
-            # Extract and handle kwargs if present
             kwargs = all_config.pop("kwargs", {})
             all_config.update(kwargs)
             pool = AsyncConnectionPool("", kwargs=all_config, open=False, **pool_params)
@@ -362,7 +346,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             return
 
         try:
-            # This avoids the "cannot join current thread" error during garbage collection
             if hasattr(self.pool_instance, "_closed"):
                 self.pool_instance._closed = True
 
@@ -416,7 +399,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             A PsycopgAsyncDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as conn:
-            # Use shared config or user-provided config
             final_statement_config = statement_config or psycopg_statement_config
             yield self.driver_type(connection=conn, statement_config=final_statement_config)
 

@@ -90,7 +90,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             migration_config: Migration configuration
 
         """
-        # Handle both TypedDict and dict inputs
         if connection_config is None:
             connection_config = {}
         extras = connection_config.pop("extra", {})
@@ -100,9 +99,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         self.connection_config: dict[str, Any] = dict(connection_config)
         self.connection_config.update(extras)
 
-        # Create dialect-specific statement config if none provided
         if statement_config is None:
-            # Detect dialect and create appropriate config
             detected_dialect = str(self._get_dialect() or "sqlite")
             statement_config = get_adbc_statement_config(detected_dialect)
 
@@ -125,7 +122,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         driver_name = self.connection_config.get("driver_name")
         uri = self.connection_config.get("uri")
 
-        # If explicit driver path is provided, normalize it
         if isinstance(driver_name, str):
             driver_aliases = {
                 "sqlite": "adbc_driver_sqlite.dbapi.connect",
@@ -155,9 +151,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
 
             return resolved_driver
 
-        # Auto-detect from URI if no explicit driver
         if isinstance(uri, str):
-            # URI scheme detection
             if uri.startswith(("postgresql://", "postgres://")):
                 return "adbc_driver_postgresql.dbapi.connect"
             if uri.startswith("sqlite://"):
@@ -306,7 +300,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         @contextmanager
         def session_manager() -> "Generator[AdbcDriver, None, None]":
             with self.provide_connection(*args, **kwargs) as connection:
-                # Use shared config or user-provided config or instance default
                 final_statement_config = (
                     statement_config
                     or self.statement_config
@@ -322,7 +315,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         Returns:
             The connection configuration dictionary.
         """
-        # Return a copy of the connection config
         config = dict(self.connection_config)
 
         if "driver_name" in config:
@@ -331,16 +323,13 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             if "uri" in config:
                 uri = config["uri"]
 
-                # SQLite: strip sqlite:// prefix
                 if driver_name in {"sqlite", "sqlite3", "adbc_driver_sqlite"} and uri.startswith("sqlite://"):  # pyright: ignore
-                    config["uri"] = uri[9:]  # Remove "sqlite://" # pyright: ignore
+                    config["uri"] = uri[9:]  # pyright: ignore
 
-                # DuckDB: convert uri to path
                 elif driver_name in {"duckdb", "adbc_driver_duckdb"} and uri.startswith("duckdb://"):  # pyright: ignore
-                    config["path"] = uri[9:]  # Remove "duckdb://" # pyright: ignore
+                    config["path"] = uri[9:]  # pyright: ignore
                     config.pop("uri", None)
 
-            # BigQuery: wrap certain parameters in db_kwargs
             if driver_name in {"bigquery", "bq", "adbc_driver_bigquery"}:
                 bigquery_params = ["project_id", "dataset_id", "token"]
                 db_kwargs = config.get("db_kwargs", {})
@@ -352,7 +341,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                 if db_kwargs:
                     config["db_kwargs"] = db_kwargs
 
-            # For other drivers (like PostgreSQL), merge db_kwargs into top level
             elif "db_kwargs" in config and driver_name not in {"bigquery", "bq", "adbc_driver_bigquery"}:
                 db_kwargs = config.pop("db_kwargs")
                 if isinstance(db_kwargs, dict):

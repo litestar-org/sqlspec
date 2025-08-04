@@ -17,43 +17,31 @@ __all__ = ("adbc_null_parameter_pipeline_step",)
 
 
 def adbc_null_parameter_pipeline_step(context: SQLTransformContext) -> SQLTransformContext:
-    """Handle NULL parameters for ADBC drivers to prevent Arrow 'na' type issues.
+    """Handle NULL parameters for ADBC drivers to prevent Arrow type inference issues.
 
-    This POST-PROCESSING pipeline step prevents Arrow from inferring 'na' type by:
-    1. Detecting None parameters created by parameterize_literals_step
-    2. Removing None parameters from the parameter list
-    3. Replacing corresponding SQL placeholders with NULL literals
-    4. Preserving parameter ordering for remaining non-NULL parameters
+    Converts None parameters back to NULL literals in the SQL to prevent Arrow
+    from inferring 'na' types. Must run after parameterize_literals_step.
 
-    CRITICAL: This step must run AFTER parameterize_literals_step because:
-    - parameterize_literals_step converts: "NULL" literal -> None parameter
-    - This step converts back: None parameter -> "NULL" literal (but in AST)
-    - This prevents Arrow from seeing None values entirely
+    Args:
+        context: SQL transformation context with parameters and expression
 
-    Example Transformation:
-    Input:  SQL: "VALUES ($1, $2)", params: ["John", None]
-    Output: SQL: "VALUES ($1, NULL)", params: ["John"]
+    Returns:
+        Modified context with NULL literals replacing None parameters
     """
     if not context.parameters:
         return context
 
-    # Detect NULL parameters and their positions
     null_analysis = _analyze_null_parameters(context.parameters)
 
     if not null_analysis.has_nulls:
         return context
 
-    # Transform SQL AST to replace NULL placeholders with NULL literals
     modified_expression = _replace_null_placeholders_in_ast(context.current_expression, null_analysis)
 
-    # Remove NULL parameters from parameter list and renumber remaining
     cleaned_parameters = _remove_null_parameters(context.parameters, null_analysis)
 
-    # Update context with modifications
     context.current_expression = modified_expression
     context.parameters = cleaned_parameters
-
-    # Store metadata for debugging and validation
     context.metadata["adbc_null_parameters_removed"] = len(null_analysis.null_positions)
     context.metadata["adbc_null_positions"] = list(null_analysis.null_positions.keys())
     context.metadata["adbc_original_param_count"] = null_analysis.original_count
@@ -84,20 +72,17 @@ class _NullParameterAnalysis:
                     self.null_positions[i] = None
             self.has_nulls = len(self.null_positions) > 0
         elif isinstance(parameters, dict):
-            # Handle dict parameters with string keys (e.g., {'1': None, '2': 'value'})
             self.original_count = len(parameters)
             for key, param in parameters.items():
                 if param is None:
                     try:
-                        # Convert string key to 0-based index (e.g., '1' -> 0, '2' -> 1)
                         if isinstance(key, str) and key.lstrip("$").isdigit():
                             param_num = int(key.lstrip("$"))
-                            param_index = param_num - 1  # Convert to 0-based
+                            param_index = param_num - 1
                             self.null_positions[param_index] = None
                         elif isinstance(key, int):
                             self.null_positions[key] = None
                     except ValueError:
-                        # Skip non-numeric keys
                         pass
             self.has_nulls = len(self.null_positions) > 0
 
@@ -131,11 +116,9 @@ def _replace_null_placeholders_in_ast(
     """
 
     def transform_node(node: exp.Expression) -> exp.Expression:
-        # Handle PostgreSQL/ADBC $1, $2, etc. style placeholders
         if isinstance(node, exp.Placeholder):
             return _transform_postgres_placeholder(node, null_analysis)
 
-        # Handle other parameter styles if needed in the future
         if isinstance(node, exp.Parameter):
             return _transform_parameter_node(node, null_analysis)
 
@@ -158,15 +141,12 @@ def _transform_postgres_placeholder(node: exp.Placeholder, null_analysis: _NullP
         return node
 
     try:
-        # Extract parameter number (1-based) and convert to 0-based index
         param_str = node.this.lstrip("$")
         param_num = int(param_str)
         param_index = param_num - 1
 
         if param_index in null_analysis.null_positions:
-            # Replace with NULL literal
             return exp.Null()
-        # Renumber remaining parameters after NULL removal
         nulls_before = sum(1 for idx in null_analysis.null_positions if idx < param_index)
         new_param_num = param_num - nulls_before
         return exp.Placeholder(this=f"${new_param_num}")
@@ -186,21 +166,16 @@ def _transform_parameter_node(node: exp.Parameter, null_analysis: _NullParameter
     Returns:
         Either NULL literal or renumbered parameter
     """
-    # Handle Parameter nodes (e.g., @1, @2, etc. in AST representation)
     if not hasattr(node, "this"):
         return node
 
     try:
-        # Extract parameter number from Parameter node
         param_str = str(node.this)
         param_num = int(param_str)
-        param_index = param_num - 1  # Convert to 0-based index
+        param_index = param_num - 1
 
         if param_index in null_analysis.null_positions:
-            # Replace with NULL literal
             return exp.Null()
-
-        # Renumber remaining parameters after NULL removal
         nulls_before = sum(1 for idx in null_analysis.null_positions if idx < param_index)
         new_param_num = param_num - nulls_before
         return exp.Parameter(this=str(new_param_num))
@@ -220,10 +195,8 @@ def _remove_null_parameters(parameters: Any, null_analysis: _NullParameterAnalys
         Cleaned parameter list with NULLs removed
     """
     if isinstance(parameters, (list, tuple)):
-        # Create new list without NULL parameters, preserving order
         return [param for i, param in enumerate(parameters) if i not in null_analysis.null_positions]
     if isinstance(parameters, dict):
-        # Handle dict parameters by removing NULL entries and renumbering remaining parameters
         cleaned_dict = {}
         param_keys = sorted(
             parameters.keys(), key=lambda k: int(k.lstrip("$")) if isinstance(k, str) and k.lstrip("$").isdigit() else 0
@@ -232,7 +205,6 @@ def _remove_null_parameters(parameters: Any, null_analysis: _NullParameterAnalys
         new_param_num = 1
         for key in param_keys:
             if parameters[key] is not None:
-                # Keep non-NULL parameters and renumber them
                 cleaned_dict[str(new_param_num)] = parameters[key]
                 new_param_num += 1
 

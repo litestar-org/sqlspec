@@ -22,24 +22,18 @@ def postgres_copy_pipeline_step(context: SQLTransformContext) -> SQLTransformCon
     Follows the process-once design principle by handling all transformations
     in a single pass through the pipeline.
     """
-    # Check if this is a COPY operation using comprehensive detection
     if not _is_copy_expression(context.current_expression):
         return context
 
-    # Preserve original SQL text to handle SQLGlot transformation issues
     copy_sql = str(context.current_expression)
     if "COPY INTO" in copy_sql.upper():
-        # Remove the incorrect "INTO" keyword that SQLGlot adds
         copy_sql = copy_sql.replace("COPY INTO", "COPY").replace("copy into", "copy")
 
-    # Store consistent metadata for both drivers with postgres prefix
     context.metadata["postgres_copy_operation"] = True
     context.metadata["postgres_copy_original_sql"] = copy_sql
 
-    # Process parameters in single pass - move all to metadata
     if context.parameters:
         context.metadata["postgres_copy_data"] = context.parameters
-        # Clear parameters to prevent SQL parameter processing
         context.parameters = {}
 
     logger.debug("PostgreSQL COPY pipeline step: Detected COPY operation, preserved original SQL")
@@ -58,7 +52,6 @@ def _is_copy_expression(expression: exp.Expression) -> bool:
     if isinstance(expression, exp.Copy):
         return True
 
-    # Check for COPY statements parsed as Command or Anonymous expressions
     if isinstance(expression, (exp.Command, exp.Anonymous)):
         sql_text = str(expression).strip().upper()
         return sql_text.startswith("COPY ")

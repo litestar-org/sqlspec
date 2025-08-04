@@ -20,7 +20,6 @@ if TYPE_CHECKING:
 
 __all__ = ("SqliteCursor", "SqliteDriver", "sqlite_statement_config")
 
-# Shared SQLite statement configuration
 sqlite_statement_config = StatementConfig(
     dialect="sqlite",
     parameter_config=ParameterStyleConfig(
@@ -68,10 +67,11 @@ class SqliteDriver(SyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        if statement_config is None:
-            statement_config = sqlite_statement_config
-
-        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
+        super().__init__(
+            connection=connection,
+            statement_config=statement_config or sqlite_statement_config,
+            driver_features=driver_features,
+        )
 
     def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
         return SqliteCursor(connection)
@@ -102,12 +102,11 @@ class SqliteDriver(SyncDriverAdapterBase):
         """Execute SQL script using SQLite's native executescript (parameters embedded as static values)."""
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
 
-        last_result = None
         for stmt in statements:
-            last_result = cursor.execute(stmt, prepared_params or ())
+            cursor.execute(stmt, prepared_params or ())
 
         return self.create_execution_result(
-            last_result, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
+            cursor, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
         )
 
     def _execute_many(
@@ -115,8 +114,7 @@ class SqliteDriver(SyncDriverAdapterBase):
     ) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using SQLite executemany."""
         cursor.executemany(sql, prepared_params)
-        row_count = cursor.rowcount or 0
-        return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
+        return self.create_execution_result(cursor, rowcount_override=cursor.rowcount or 0, is_many_result=True)
 
     def _execute_statement(
         self, cursor: "sqlite3.Cursor", sql: str, prepared_params: Any, statement: "SQL"
@@ -132,9 +130,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
-        # For non-SELECT operations, get row count
-        row_count = cursor.rowcount or 0
-        return self.create_execution_result(cursor, rowcount_override=row_count)
+        return self.create_execution_result(cursor, rowcount_override=cursor.rowcount or 0)
 
     def begin(self) -> None:
         """Begin a database transaction."""

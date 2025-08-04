@@ -26,10 +26,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MIN_POOL: Final[int] = 1  # DuckDB works best with fewer connections
-DEFAULT_MAX_POOL: Final[int] = 4  # DuckDB is optimized for single connection use
+DEFAULT_MIN_POOL: Final[int] = 1
+DEFAULT_MAX_POOL: Final[int] = 4
 POOL_TIMEOUT: Final[float] = 30.0
-POOL_RECYCLE: Final[int] = 86400  # 24 hours - DuckDB connections should be long-lived
+POOL_RECYCLE: Final[int] = 86400
 
 __all__ = (
     "DuckDBConfig",
@@ -90,7 +90,6 @@ class DuckDBConnectionPool:
         self._checked_out = 0
         self._connection_times: "dict[int, float]" = {}  # noqa: UP037
 
-        # Pre-populate pool
         for _ in range(pool_min_size):
             if self._pool.full():
                 break
@@ -102,7 +101,6 @@ class DuckDBConnectionPool:
 
     def _create_connection(self) -> DuckDBConnection:
         """Create a new DuckDB connection with extensions and secrets."""
-        # Separate DuckDB connect parameters from config parameters
         connect_params = {}
         config_dict = {}
 
@@ -117,7 +115,6 @@ class DuckDBConnectionPool:
 
         connection = duckdb.connect(**connect_params)
 
-        # Install and load extensions
         for ext_config in self._extensions:
             ext_name = ext_config.get("name")
             if not ext_name:
@@ -138,7 +135,6 @@ class DuckDBConnectionPool:
             except Exception:  # noqa: BLE001, S110
                 pass
 
-        # Configure secrets
         for secret_config in self._secrets:
             secret_type = secret_config.get("secret_type")
             secret_name = secret_config.get("name")
@@ -165,12 +161,10 @@ class DuckDBConnectionPool:
             with suppress(Exception):
                 connection.execute(sql)
 
-        # Run custom initialization
         if self._on_connection_create:
             with suppress(Exception):
                 self._on_connection_create(connection)
 
-        # Track creation time
         conn_id = id(connection)
         with self._lock:
             self._created_connections += 1
@@ -185,13 +179,11 @@ class DuckDBConnectionPool:
         to maintain cache and performance benefits.
         """
         if self._recycle <= 0:
-            # Recycling disabled - keep connections indefinitely
             return False
 
         conn_id = id(connection)
         created_at = self._connection_times.get(conn_id)
         if created_at is None:
-            # Missing timestamp, recycle to be safe
             return True
         return (time.time() - created_at) > self._recycle
 
@@ -208,7 +200,6 @@ class DuckDBConnectionPool:
             True if connection is alive, False otherwise
         """
         try:
-            # Quick check using cursor creation instead of query execution
             cursor = connection.cursor()
             cursor.close()
         except Exception:
@@ -224,11 +215,9 @@ class DuckDBConnectionPool:
         """
         connection = None
         try:
-            # Try to get existing connection
             try:
                 connection = self._pool.get(timeout=self._timeout)
 
-                # Check if connection should be recycled
                 if self._should_recycle(connection) or not self._is_connection_alive(connection):
                     conn_id = id(connection)
                     with suppress(Exception):  # noqa: BLE001
@@ -238,19 +227,16 @@ class DuckDBConnectionPool:
                     connection = None
 
             except QueueEmpty:
-                # Pool is empty, check if we can create new connection
                 with self._lock:
                     if self._checked_out < self._max_pool:
-                        connection = None  # Will create new one below
+                        connection = None
                     else:
-                        # Wait for a connection to become available
                         try:
                             connection = self._pool.get(timeout=self._timeout)
                         except QueueEmpty:
                             msg = f"Connection pool limit of {self._max_pool} reached, timeout {self._timeout}"
                             raise RuntimeError(msg) from None
 
-            # Create new connection if needed
             if connection is None:
                 connection = self._create_connection()
 
@@ -264,17 +250,13 @@ class DuckDBConnectionPool:
                 with self._lock:
                     self._checked_out -= 1
 
-                # Validate connection before returning to pool
                 if self._is_connection_alive(connection):
-                    # Return to pool if space available
                     try:
                         self._pool.put_nowait(connection)
                     except Full:
-                        # Pool is full, close overflow connection
                         with suppress(Exception):  # noqa: BLE001
                             connection.close()
                 else:
-                    # Connection is dead, close it
                     with suppress(Exception):  # noqa: BLE001
                         connection.close()
 
@@ -288,7 +270,6 @@ class DuckDBConnectionPool:
             with suppress(Exception):  # noqa: BLE001
                 connection.close()
 
-        # Clear connection time tracking
         with self._lock:
             self._connection_times.clear()
 
@@ -314,11 +295,9 @@ class DuckDBConnectionPool:
         """
         connection = None
         try:
-            # Try to get existing connection
             try:
                 connection = self._pool.get(timeout=self._timeout)
 
-                # Check if connection should be recycled
                 if self._should_recycle(connection) or not self._is_connection_alive(connection):
                     conn_id = id(connection)
                     with suppress(Exception):
@@ -331,16 +310,14 @@ class DuckDBConnectionPool:
                 # Pool is empty, check if we can create new connection
                 with self._lock:
                     if self._checked_out < self._max_pool:
-                        connection = None  # Will create new one below
+                        connection = None
                     else:
-                        # Wait for a connection to become available
                         try:
                             connection = self._pool.get(timeout=self._timeout)
                         except QueueEmpty:
                             msg = f"Connection pool limit of {self._max_pool} reached, timeout {self._timeout}"
                             raise RuntimeError(msg) from None
 
-            # Create new connection if needed
             if connection is None:
                 connection = self._create_connection()
 
@@ -348,7 +325,6 @@ class DuckDBConnectionPool:
                 self._checked_out += 1
 
         except Exception:
-            # If we got a connection but failed somewhere, return it to pool
             if connection is not None:
                 with suppress(Full):
                     self._pool.put_nowait(connection)
@@ -361,25 +337,19 @@ class DuckDBConnectionPool:
         Args:
             connection: The connection to return to the pool
         """
-        if connection is None:
-            return
-
         with self._lock:
             self._checked_out = max(0, self._checked_out - 1)
 
-        # Validate connection before returning to pool
         if self._is_connection_alive(connection):
             try:
                 self._pool.put_nowait(connection)
             except Full:
-                # Pool is full, close the connection
                 with suppress(Exception):
                     connection.close()
                 conn_id = id(connection)
                 with self._lock:
                     self._connection_times.pop(conn_id, None)
         else:
-            # Connection is dead, close it
             with suppress(Exception):
                 connection.close()
             conn_id = id(connection)
@@ -556,11 +526,9 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         secrets = self.driver_features.get("secrets", None)
         on_connection_create = self.driver_features.get("on_connection_create", None)
 
-        # Convert extension and secret configs to plain dicts for pool compatibility
         extensions_dicts = [dict(ext) for ext in extensions] if extensions else None
         secrets_dicts = [dict(secret) for secret in secrets] if secrets else None
 
-        # Wrap callback to match expected signature (ignore return value)
         pool_callback = None
         if on_connection_create:
 
@@ -597,16 +565,9 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             The caller is responsible for returning the connection to the pool
             using pool.release(connection) when done.
         """
-        logger.info("Getting DuckDB connection from pool", extra={"adapter": "duckdb"})
-
-        # Ensure pool exists
         pool = self.provide_pool()
 
-        # Use the pool's acquire method
-        connection = pool.acquire()
-
-        logger.info("DuckDB connection acquired from pool", extra={"adapter": "duckdb"})
-        return connection
+        return pool.acquire()
 
     @contextmanager
     def provide_connection(self, *args: Any, **kwargs: Any) -> "Generator[DuckDBConnection, None, None]":
@@ -638,9 +599,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             A context manager that yields a DuckDBDriver instance.
         """
         with self.provide_connection(*args, **kwargs) as connection:
-            # Use shared config or user-provided config or instance default
-            final_statement_config = statement_config or self.statement_config
-            driver = self.driver_type(connection=connection, statement_config=final_statement_config)
+            driver = self.driver_type(connection=connection, statement_config=statement_config or self.statement_config)
             yield driver
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":

@@ -161,9 +161,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
             An OracleSyncDriver instance.
         """
         with self.provide_connection(*args, **kwargs) as conn:
-            # Use shared config or user-provided config or instance default
-            final_statement_config = statement_config or self.statement_config
-            yield self.driver_type(connection=conn, statement_config=final_statement_config)
+            yield self.driver_type(connection=conn, statement_config=statement_config or self.statement_config)
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
         """Provide pool instance.
@@ -228,7 +226,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
             pool_config=processed_pool_config,
             pool_instance=pool_instance,
             migration_config=migration_config,
-            statement_config=statement_config or oracledb_statement_config,  # Use default statement config
+            statement_config=statement_config or oracledb_statement_config,
         )
 
     async def _create_pool(self) -> "AsyncConnectionPool":
@@ -285,9 +283,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
             An OracleAsyncDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as conn:
-            # Use shared config or user-provided config or instance default
-            final_statement_config = statement_config or self.statement_config
-            yield self.driver_type(connection=conn, statement_config=final_statement_config)
+            yield self.driver_type(connection=conn, statement_config=statement_config or self.statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":
         """Provide async pool instance.

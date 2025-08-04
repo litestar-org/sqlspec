@@ -94,20 +94,17 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             statement_config: Statement configuration override
             driver_features: Driver features configuration (TypedDict or dict)
         """
-        # Build driver features dict
         features_dict: dict[str, Any] = dict(driver_features) if driver_features else {}
 
-        # Set defaults if not provided
         if "json_serializer" not in features_dict:
             features_dict["json_serializer"] = to_json
         if "json_deserializer" not in features_dict:
             features_dict["json_deserializer"] = from_json
-        statement_config = statement_config or asyncpg_statement_config
         super().__init__(
             pool_config=dict(pool_config) if pool_config else {},
             pool_instance=pool_instance,
             migration_config=migration_config,
-            statement_config=statement_config,
+            statement_config=statement_config or asyncpg_statement_config,
             driver_features=features_dict,
         )
 
@@ -117,18 +114,15 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Returns:
             Dictionary with pool parameters, filtering out None values.
         """
-        config: "dict[str, Any]" = dict(self.pool_config)  # noqa: UP037
-        # Extract extra parameters if they exist
+        config: dict[str, Any] = dict(self.pool_config)
         extras = config.pop("extra", {})
         config.update(extras)
-        # Filter out None values since external libraries may not handle them
         return {k: v for k, v in config.items() if v is not None}
 
     async def _create_pool(self) -> "Pool[Record]":
         """Create the actual async connection pool."""
         config = self._get_pool_config_dict()
 
-        # Auto-register pgvector if available and no custom init function provided
         if "init" not in config:
             config["init"] = self._init_pgvector_connection
 
@@ -196,7 +190,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             An AsyncpgDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as connection:
-            # Use shared config or user-provided config or instance default
             final_statement_config = statement_config or self.statement_config or asyncpg_statement_config
             yield self.driver_type(connection=connection, statement_config=final_statement_config)
 

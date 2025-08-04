@@ -245,12 +245,9 @@ class StatementConfig:
         self.enable_caching = enable_caching
         self.parameter_converter = parameter_converter or ParameterConverter()
         self.parameter_validator = parameter_validator or ParameterValidator()
-
-        if parameter_config is None:
-            parameter_config = ParameterStyleConfig(
-                default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
-            )
-        self.parameter_config = parameter_config
+        self.parameter_config = parameter_config or ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+        )
 
         self.dialect = dialect
         self.pre_process_steps = pre_process_steps
@@ -492,14 +489,14 @@ class SQL:
         """Process and categorize parameters."""
         if self._is_many:
             # Use batch parameter processing for execute_many
-            param_list = list(parameters)
+            params = list(parameters)
             if "parameters" in kwargs:
                 param_value = kwargs.pop("parameters")
                 if isinstance(param_value, list):
-                    param_list.extend(param_value)
+                    params.extend(param_value)
                 else:
-                    param_list.append(param_value)
-            self._process_batch_parameters(param_list)
+                    params.append(param_value)
+            self._process_batch_parameters(params)
         else:
             # Use single parameter processing for regular execute
             for param in parameters:

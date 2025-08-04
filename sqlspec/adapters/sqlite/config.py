@@ -22,11 +22,11 @@ if TYPE_CHECKING:
 DEFAULT_MIN_POOL: Final[int] = 5
 DEFAULT_MAX_POOL: Final[int] = 20
 POOL_TIMEOUT: Final[float] = 30.0
-POOL_RECYCLE: Final[int] = 3600  # 1 hour
+POOL_RECYCLE: Final[int] = 3600
 WAL_PRAGMA_SQL: Final[str] = "PRAGMA journal_mode = WAL"
 FOREIGN_KEYS_SQL: Final[str] = "PRAGMA foreign_keys = ON"
 SYNC_NORMAL_SQL: Final[str] = "PRAGMA synchronous = NORMAL"
-CACHE_SIZE_SQL: Final[str] = "PRAGMA cache_size = -64000"  # 64MB cache
+CACHE_SIZE_SQL: Final[str] = "PRAGMA cache_size = -64000"
 
 
 class SqliteConnectionParams(TypedDict, total=False):
@@ -49,7 +49,6 @@ class SqlitePoolParams(SqliteConnectionParams, total=False):
     Combines standardized pool parameters with SQLite-specific connection parameters.
     """
 
-    # Standardized pool parameters (consistent across ALL adapters)
     pool_min_size: NotRequired[int]
     pool_max_size: NotRequired[int]
     pool_timeout: NotRequired[float]
@@ -104,28 +103,25 @@ class SqliteConnectionPool:
         self._checked_out = 0
         self._connection_times: "dict[int, float]" = {}  # noqa: UP037
 
-        # Pre-populate core pool
         try:
             for _ in range(pool_min_size):
                 conn = self._create_connection()
                 self._pool.put_nowait(conn)
         except Full:
-            pass  # Pool is full, stop creating connections
+            pass
 
     def _create_connection(self) -> SqliteConnection:
         """Create a new SQLite connection with performance optimizations."""
         connection = sqlite3.connect(**self._connection_params)
         connection.row_factory = sqlite3.Row
 
-        # Apply SQLAlchemy-style performance optimizations
-        connection.execute(WAL_PRAGMA_SQL)  # WAL mode for concurrent reads
-        connection.execute(FOREIGN_KEYS_SQL)  # Enable foreign keys
-        connection.execute(SYNC_NORMAL_SQL)  # Faster than FULL sync
-        connection.execute(CACHE_SIZE_SQL)  # 64MB cache
-        connection.execute("PRAGMA temp_store = MEMORY")  # In-memory temp tables
-        connection.execute("PRAGMA mmap_size = 268435456")  # 256MB mmap
+        connection.execute(WAL_PRAGMA_SQL)
+        connection.execute(FOREIGN_KEYS_SQL)
+        connection.execute(SYNC_NORMAL_SQL)
+        connection.execute(CACHE_SIZE_SQL)
+        connection.execute("PRAGMA temp_store = MEMORY")
+        connection.execute("PRAGMA mmap_size = 268435456")
 
-        # Track creation time for recycling using connection id
         conn_id = id(connection)
         with self._lock:
             self._created_connections += 1
@@ -138,7 +134,7 @@ class SqliteConnectionPool:
         conn_id = id(connection)
         created_at = self._connection_times.get(conn_id)
         if created_at is None:
-            return True  # Recycle if no creation time tracked
+            return True
 
         return (time.time() - created_at) > self._recycle
 
@@ -168,22 +164,18 @@ class SqliteConnectionPool:
         """
         connection = None
         try:
-            # Try to get existing connection
             try:
                 connection = self._pool.get(timeout=self._timeout)
 
-                # Check if connection should be recycled
                 if self._should_recycle(connection):
                     conn_id = id(connection)
                     with suppress(Exception):
                         connection.close()
-                    # Clean up connection time tracking
                     with self._lock:
                         self._connection_times.pop(conn_id, None)
                     connection = None
 
             except Empty:
-                # Pool is empty, check if we can create new connection
                 with self._lock:
                     if self._checked_out < self._max_pool_size:
                         connection = None  # Will create new one below
@@ -194,7 +186,6 @@ class SqliteConnectionPool:
                             msg = f"Connection pool limit of {self._max_pool_size} reached, timeout {self._timeout}"
                             raise RuntimeError(msg) from None
 
-            # Create new connection if needed
             if connection is None:
                 connection = self._create_connection()
 
@@ -205,11 +196,9 @@ class SqliteConnectionPool:
 
         finally:
             if connection is not None:
-                # Return connection to pool
                 with self._lock:
                     self._checked_out -= 1
 
-                # Validate connection before returning to pool
                 if self._is_connection_alive(connection):
                     try:
                         self._pool.put_nowait(connection)
@@ -217,7 +206,6 @@ class SqliteConnectionPool:
                         with suppress(Exception):
                             connection.close()
                 else:
-                    # Connection is dead, close it
                     with suppress(Exception):
                         connection.close()
 
@@ -229,9 +217,8 @@ class SqliteConnectionPool:
                 with suppress(Exception):
                     connection.close()
         except Empty:
-            pass  # Pool is empty
+            pass
 
-        # Clear connection time tracking
         with self._lock:
             self._connection_times.clear()
 
@@ -257,11 +244,9 @@ class SqliteConnectionPool:
         """
         connection = None
         try:
-            # Try to get existing connection from pool
             try:
                 connection = self._pool.get(timeout=self._timeout)
 
-                # Check if connection should be recycled based on age
                 if self._should_recycle(connection) or not self._is_connection_alive(connection):
                     conn_id = id(connection)
                     with suppress(Exception):
@@ -271,20 +256,17 @@ class SqliteConnectionPool:
                     connection = None
 
             except Empty:
-                # Pool is empty, check if we can create new connection
                 with self._lock:
                     total_connections = self._checked_out + self._pool.qsize()
                     if total_connections < self._max_pool_size:
                         connection = None  # Will create new one below
                     else:
-                        # Wait for a connection to become available
                         try:
                             connection = self._pool.get(timeout=self._timeout)
                         except Empty:
                             msg = f"Pool limit of {self._max_pool_size} connections reached"
                             raise RuntimeError(msg) from None
 
-            # Create new connection if needed
             if connection is None:
                 connection = self._create_connection()
 
@@ -292,7 +274,6 @@ class SqliteConnectionPool:
                 self._checked_out += 1
 
         except Exception:
-            # If we got a connection but failed somewhere, return it to pool
             if connection is not None:
                 with suppress(Full):
                     self._pool.put_nowait(connection)
@@ -311,19 +292,16 @@ class SqliteConnectionPool:
         with self._lock:
             self._checked_out = max(0, self._checked_out - 1)
 
-        # Validate connection before returning to pool
         if self._is_connection_alive(connection):
             try:
                 self._pool.put_nowait(connection)
             except Full:
-                # Pool is full, close the connection
                 with suppress(Exception):
                     connection.close()
                 conn_id = id(connection)
                 with self._lock:
                     self._connection_times.pop(conn_id, None)
         else:
-            # Connection is dead, close it
             with suppress(Exception):
                 connection.close()
             conn_id = id(connection)
@@ -357,7 +335,6 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             statement_config: Default SQL statement configuration
             migration_config: Migration configuration
         """
-        # Store and parse the unified pool configuration
         if pool_config is None:
             pool_config = {}
         if "database" not in pool_config or pool_config["database"] == ":memory:":
@@ -416,10 +393,8 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             The caller is responsible for returning the connection to the pool
             using pool.release(connection) when done.
         """
-        # Ensure pool exists
         pool = self.provide_pool()
 
-        # Use the pool's acquire method
         return pool.acquire()
 
     @contextmanager
@@ -435,7 +410,6 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
     ) -> "Generator[SqliteDriver, None, None]":
         """Provide a SQLite driver session using pooled connections."""
         with self.provide_connection(*args, **kwargs) as connection:
-            # Use shared config or user-provided config
             yield self.driver_type(connection=connection, statement_config=statement_config or self.statement_config)
 
     def get_signature_namespace(self) -> "dict[str, type[Any]]":

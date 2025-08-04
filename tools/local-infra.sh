@@ -3,7 +3,7 @@
 # =============================================================================
 # SQLSpec Development Infrastructure Setup
 # =============================================================================
-# 
+#
 # A comprehensive script to start and manage development database containers
 # with automatic Docker/Podman detection and non-standard ports.
 #
@@ -172,7 +172,7 @@ show_version() {
 
 detect_container_engine() {
     log_info "Detecting container engine..."
-    
+
     if command -v podman >/dev/null 2>&1; then
         CONTAINER_ENGINE="podman"
         log_success "Found Podman container engine"
@@ -183,7 +183,7 @@ detect_container_engine() {
         log_error "Neither Docker nor Podman found. Please install one of them."
         exit 1
     fi
-    
+
     # Test if engine is actually working
     if ! $CONTAINER_ENGINE info >/dev/null 2>&1; then
         log_error "${CONTAINER_ENGINE} is installed but not running or accessible"
@@ -210,9 +210,9 @@ wait_for_port() {
     local port=$2
     local service=$3
     local timeout=${4:-30}
-    
+
     log_info "Waiting for ${service} to be ready on port ${port}..."
-    
+
     for ((i=1; i<=timeout; i++)); do
         if nc -z "$host" "$port" 2>/dev/null; then
             log_success "${service} is ready!"
@@ -220,7 +220,7 @@ wait_for_port() {
         fi
         sleep 1
     done
-    
+
     log_warn "${service} is not responding after ${timeout} seconds"
     return 1
 }
@@ -265,19 +265,19 @@ remove_container() {
 start_postgres() {
     local container_name="$POSTGRES_CONTAINER"
     log_database "Starting PostgreSQL..."
-    
+
     if container_running "$container_name"; then
         log_success "PostgreSQL is already running"
         return 0
     fi
-    
+
     if ! check_port $DEV_POSTGRES_PORT; then
         log_error "Port $DEV_POSTGRES_PORT is already in use"
         return 1
     fi
-    
+
     [[ "$FORCE_RECREATE" == "true" ]] && remove_container "$container_name"
-    
+
     if ! container_exists "$container_name"; then
         log_info "Creating PostgreSQL container..."
         $CONTAINER_ENGINE run -d \
@@ -293,7 +293,7 @@ start_postgres() {
         log_info "Starting existing PostgreSQL container..."
         $CONTAINER_ENGINE start "$container_name" >/dev/null
     fi
-    
+
     wait_for_port localhost $DEV_POSTGRES_PORT "PostgreSQL"
     log_success "PostgreSQL ready on port $DEV_POSTGRES_PORT"
     echo -e "  ${BOLD}Connection:${NC} postgresql://postgres:postgres@localhost:${DEV_POSTGRES_PORT}/postgres"
@@ -302,19 +302,19 @@ start_postgres() {
 start_oracle() {
     local container_name="$ORACLE_CONTAINER"
     log_database "Starting Oracle..."
-    
+
     if container_running "$container_name"; then
         log_success "Oracle is already running"
         return 0
     fi
-    
+
     if ! check_port $DEV_ORACLE_PORT; then
         log_error "Port $DEV_ORACLE_PORT is already in use"
         return 1
     fi
-    
+
     [[ "$FORCE_RECREATE" == "true" ]] && remove_container "$container_name"
-    
+
     if ! container_exists "$container_name"; then
         log_info "Creating Oracle container (this may take a while)..."
         $CONTAINER_ENGINE run -d \
@@ -328,7 +328,7 @@ start_oracle() {
         log_info "Starting existing Oracle container..."
         $CONTAINER_ENGINE start "$container_name" >/dev/null
     fi
-    
+
     wait_for_port localhost $DEV_ORACLE_PORT "Oracle" 60
     log_success "Oracle ready on port $DEV_ORACLE_PORT"
     echo -e "  ${BOLD}Connection:${NC} oracle://system:oracle@localhost:${DEV_ORACLE_PORT}/FREEPDB1"
@@ -337,19 +337,19 @@ start_oracle() {
 start_mysql() {
     local container_name="$MYSQL_CONTAINER"
     log_database "Starting MySQL..."
-    
+
     if container_running "$container_name"; then
         log_success "MySQL is already running"
         return 0
     fi
-    
+
     if ! check_port $DEV_MYSQL_PORT; then
         log_error "Port $DEV_MYSQL_PORT is already in use"
         return 1
     fi
-    
+
     [[ "$FORCE_RECREATE" == "true" ]] && remove_container "$container_name"
-    
+
     if ! container_exists "$container_name"; then
         log_info "Creating MySQL container..."
         $CONTAINER_ENGINE run -d \
@@ -365,7 +365,7 @@ start_mysql() {
         log_info "Starting existing MySQL container..."
         $CONTAINER_ENGINE start "$container_name" >/dev/null
     fi
-    
+
     wait_for_port localhost $DEV_MYSQL_PORT "MySQL"
     log_success "MySQL ready on port $DEV_MYSQL_PORT"
     echo -e "  ${BOLD}Connection:${NC} mysql://root:mysql@localhost:${DEV_MYSQL_PORT}/test"
@@ -374,19 +374,19 @@ start_mysql() {
 start_bigquery() {
     local container_name="$BIGQUERY_CONTAINER"
     log_database "Starting BigQuery Emulator..."
-    
+
     if container_running "$container_name"; then
         log_success "BigQuery Emulator is already running"
         return 0
     fi
-    
+
     if ! check_port $DEV_BIGQUERY_PORT; then
         log_error "Port $DEV_BIGQUERY_PORT is already in use"
         return 1
     fi
-    
+
     [[ "$FORCE_RECREATE" == "true" ]] && remove_container "$container_name"
-    
+
     if ! container_exists "$container_name"; then
         log_info "Creating BigQuery Emulator container..."
         $CONTAINER_ENGINE run -d \
@@ -398,7 +398,7 @@ start_bigquery() {
         log_info "Starting existing BigQuery Emulator container..."
         $CONTAINER_ENGINE start "$container_name" >/dev/null
     fi
-    
+
     wait_for_port localhost $DEV_BIGQUERY_PORT "BigQuery Emulator"
     log_success "BigQuery Emulator ready on port $DEV_BIGQUERY_PORT"
     echo -e "  ${BOLD}Endpoint:${NC} http://localhost:${DEV_BIGQUERY_PORT}"
@@ -407,19 +407,19 @@ start_bigquery() {
 start_minio() {
     local container_name="$MINIO_CONTAINER"
     log_database "Starting MinIO..."
-    
+
     if container_running "$container_name"; then
         log_success "MinIO is already running"
         return 0
     fi
-    
+
     if ! check_port $DEV_MINIO_PORT || ! check_port $DEV_MINIO_CONSOLE_PORT; then
         log_error "MinIO ports ($DEV_MINIO_PORT, $DEV_MINIO_CONSOLE_PORT) are in use"
         return 1
     fi
-    
+
     [[ "$FORCE_RECREATE" == "true" ]] && remove_container "$container_name"
-    
+
     if ! container_exists "$container_name"; then
         log_info "Creating MinIO container..."
         $CONTAINER_ENGINE run -d \
@@ -434,7 +434,7 @@ start_minio() {
         log_info "Starting existing MinIO container..."
         $CONTAINER_ENGINE start "$container_name" >/dev/null
     fi
-    
+
     wait_for_port localhost $DEV_MINIO_PORT "MinIO"
     log_success "MinIO ready on ports $DEV_MINIO_PORT (API) and $DEV_MINIO_CONSOLE_PORT (Console)"
     echo -e "  ${BOLD}API:${NC}     http://localhost:$DEV_MINIO_PORT"
@@ -447,16 +447,16 @@ start_minio() {
 
 show_status() {
     print_banner "Container Status"
-    
+
     local containers=("$POSTGRES_CONTAINER" "$ORACLE_CONTAINER" "$MYSQL_CONTAINER" "$BIGQUERY_CONTAINER" "$MINIO_CONTAINER")
     local services=("PostgreSQL" "Oracle" "MySQL" "BigQuery" "MinIO")
     local ports=("$DEV_POSTGRES_PORT" "$DEV_ORACLE_PORT" "$DEV_MYSQL_PORT" "$DEV_BIGQUERY_PORT" "$DEV_MINIO_PORT")
-    
+
     for i in "${!containers[@]}"; do
         local container="${containers[$i]}"
         local service="${services[$i]}"
         local port="${ports[$i]}"
-        
+
         if container_running "$container"; then
             log_success "${service} is running on port ${port}"
         elif container_exists "$container"; then
@@ -469,26 +469,26 @@ show_status() {
 
 stop_all() {
     print_banner "Stopping Development Infrastructure"
-    
+
     local containers=("$POSTGRES_CONTAINER" "$ORACLE_CONTAINER" "$MYSQL_CONTAINER" "$BIGQUERY_CONTAINER" "$MINIO_CONTAINER")
-    
+
     for container in "${containers[@]}"; do
         stop_container "$container"
     done
-    
+
     log_success "All development containers stopped"
 }
 
 stop_services() {
     local services=("$@")
-    
+
     if [[ ${#services[@]} -eq 0 ]] || [[ "${services[0]}" == "all" ]]; then
         stop_all
         return
     fi
-    
+
     print_banner "Stopping Selected Services"
-    
+
     for service in "${services[@]}"; do
         case $service in
             postgres) stop_container "$POSTGRES_CONTAINER" ;;
@@ -503,22 +503,22 @@ stop_services() {
 
 cleanup_all() {
     print_banner "Cleaning Up All Development Containers"
-    
+
     local containers=("$POSTGRES_CONTAINER" "$ORACLE_CONTAINER" "$MYSQL_CONTAINER" "$BIGQUERY_CONTAINER" "$MINIO_CONTAINER")
-    
+
     for container in "${containers[@]}"; do
         remove_container "$container"
     done
-    
+
     log_info "Removing unused volumes..."
     $CONTAINER_ENGINE volume prune -f >/dev/null 2>&1 || true
-    
+
     log_success "Cleanup complete"
 }
 
 list_services() {
     print_banner "Available Services"
-    
+
     echo -e "${BOLD}Database Services:${NC}"
     echo -e "  postgres    PostgreSQL 16 (port ${DEV_POSTGRES_PORT})"
     echo -e "  oracle      Oracle Free 23c (port ${DEV_ORACLE_PORT})"
@@ -538,15 +538,15 @@ list_services() {
 
 start_services() {
     local services=("$@")
-    
+
     # Default to all services if none specified
     if [[ ${#services[@]} -eq 0 ]]; then
         services=("all")
     fi
-    
+
     # Start services
     print_banner "Starting Development Infrastructure"
-    
+
     local start_all=false
     for service in "${services[@]}"; do
         if [[ "$service" == "all" ]]; then
@@ -554,11 +554,11 @@ start_services() {
             break
         fi
     done
-    
+
     if [[ "$start_all" == "true" ]]; then
         log_rocket "Starting all development services..."
         start_postgres
-        start_oracle  
+        start_oracle
         start_mysql
         start_bigquery
         start_minio
@@ -574,7 +574,7 @@ start_services() {
             esac
         done
     fi
-    
+
     # Show final status
     echo ""
     log_rocket "Development infrastructure is ready!"
@@ -592,11 +592,11 @@ main() {
         log_error "Missing command. Use --help for usage information."
         exit 1
     fi
-    
+
     local command=""
     local options=()
     local services=()
-    
+
     # Parse command line arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -635,23 +635,23 @@ main() {
                 ;;
         esac
     done
-    
+
     # Validate command
     if [[ -z "$command" ]]; then
         log_error "No command specified. Use --help for usage information."
         exit 1
     fi
-    
+
     # Show header for interactive commands
     if [[ "$command" != "status" && "$command" != "list" && "$QUIET_MODE" != "true" ]]; then
         print_header
     fi
-    
+
     # Detect container engine for commands that need it
     if [[ "$command" != "list" ]]; then
         detect_container_engine
     fi
-    
+
     # Execute command
     case $command in
         up)

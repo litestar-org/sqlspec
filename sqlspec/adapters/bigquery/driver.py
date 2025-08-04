@@ -32,16 +32,15 @@ class BigQueryParameterMapper:
     def substitute(self, node: Any) -> Any:
         if isinstance(node, exp.Placeholder):
             value = None
-            if node.this is None:  # Positional placeholder ?
+            if node.this is None:
                 param_key = f"param_{self.placeholder_counter}"
                 self.placeholder_counter += 1
                 if param_key in self.param_mapping:
                     value = self.param_mapping[param_key]
-            elif node.this in self.param_mapping:  # Named placeholder @name
+            elif node.this in self.param_mapping:
                 value = self.param_mapping[node.this]
 
             if value is not None:
-                # Convert value to appropriate SQLGlot literal
                 if isinstance(value, (int, float)):
                     return exp.Literal.number(str(value))
                 if isinstance(value, bool):
@@ -97,17 +96,13 @@ def _bigquery_output_transformer(
         return sql, []
 
     if not isinstance(params, dict):
-        # This shouldn't happen with NAMED_AT style, but handle gracefully
         return sql, []
 
     bq_params: list[Union[ArrayQueryParameter, ScalarQueryParameter]] = []
 
     for name, value in params.items():
         param_name_for_bq = name.lstrip("@")
-
-        # Handle TypedParameter wrapper
         actual_value = getattr(value, "value", value)
-
         param_type, array_element_type = _get_bq_param_type(actual_value)
 
         if param_type == "ARRAY" and array_element_type:
@@ -124,9 +119,7 @@ def _bigquery_output_transformer(
     return sql, bq_params
 
 
-# BigQuery type coercion for the built-in pipeline
 bigquery_type_coercion_map = {
-    # Keep most types as-is since BigQuery handles them well
     bool: lambda x: x,
     int: lambda x: x,
     float: lambda x: x,
@@ -136,23 +129,19 @@ bigquery_type_coercion_map = {
     datetime.date: lambda x: x,
     datetime.time: lambda x: x,
     Decimal: lambda x: x,
-    # Convert dicts to JSON strings for BigQuery
     dict: to_json,
-    # Keep lists as-is for BigQuery arrays
     list: lambda x: x,
-    tuple: list,  # Convert tuples to lists for BigQuery arrays
+    tuple: list,
     type(None): lambda _: None,
 }
 
 
 bigquery_statement_config = StatementConfig(
     dialect="bigquery",
-    # Core pipeline configuration
     enable_parsing=True,
     enable_transformations=True,
     enable_validation=True,
     enable_caching=True,
-    # Parameter processing configuration
     parameter_config=ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NAMED_AT,
         supported_parameter_styles={ParameterStyle.NAMED_AT},
@@ -187,7 +176,6 @@ class BigQueryCursor:
         return self.cursor
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        # BigQuery doesn't need cleanup for cursors
         pass
 
 
@@ -204,16 +192,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
         """Initialize BigQuery driver."""
-        # Set default BigQuery-specific configuration
-        if statement_config is None:
-            statement_config = bigquery_statement_config
-
-        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-
-        # Get default query job config from driver_features
-        features = driver_features or {}
-        default_query_job_config = features.get("default_query_job_config")
-        self._default_query_job_config = default_query_job_config
+        super().__init__(
+            connection=connection,
+            statement_config=statement_config or bigquery_statement_config,
+            driver_features=driver_features,
+        )
+        self._default_query_job_config = (driver_features or {}).get("default_query_job_config")
 
     def with_cursor(self, connection: "BigQueryConnection") -> "BigQueryCursor":
         """Create and return a context manager for cursor acquisition and cleanup."""
@@ -275,34 +259,26 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if not prepared_params:
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
-        # Generate individual SQL statements for each parameter set
-
         script_statements = []
 
         for param_set in prepared_params:
-            # Use the statement's already-parsed expression if available
             parsed_expr = statement.expression
             if parsed_expr is None:
-                # If no parsed expression, fall back to string replacement
                 script_statements.append(sql)
                 continue
 
             parsed_expr = parsed_expr.copy()
 
-            # Create parameter mapping for substitution
             param_dict = {}
             if isinstance(param_set, dict):
                 for name, value in param_set.items():
-                    # Handle TypedParameter wrapper
                     actual_value = getattr(value, "value", value)
                     param_dict[name.lstrip("@")] = actual_value
             elif isinstance(param_set, (list, tuple)):
-                # Handle positional parameters converted to named parameters
                 for i, value in enumerate(param_set):
                     actual_value = getattr(value, "value", value)
                     param_dict[f"param_{i}"] = actual_value
             else:
-                # Single parameter
                 actual_value = getattr(param_set, "value", param_set)
                 param_dict["param_0"] = actual_value
 
@@ -312,26 +288,20 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 stmt_sql = substituted_expr.sql(dialect="bigquery")
                 script_statements.append(stmt_sql)
             except Exception:
-                # If substitution fails, use the original statement
                 script_statements.append(sql)
 
-        # Execute as a script
         script_sql = ";\n".join(script_statements) + ";"
 
-        # Execute the script using base class script execution
         return self._execute_script(cursor, script_sql, None, self.statement_config, statement)
 
     def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any, statement: SQL) -> ExecutionResult:
         """BigQuery single statement execution."""
-        # Trust the pipeline - prepared_params comes from output_transformer as BigQuery QueryParameter objects
         cursor.job = self._run_query_job(sql, prepared_params, connection=cursor.connection)
 
         if statement.returns_rows():
-            # Extract data immediately for SELECT operations
-            query_job = cursor.job
-            job_result = query_job.result()
+            job_result = cursor.job.result()
             rows_list = self._rows_to_results(iter(job_result))
-            column_names = [field.name for field in query_job.schema] if query_job.schema else []
+            column_names = [field.name for field in cursor.job.schema] if cursor.job.schema else []
 
             return self.create_execution_result(
                 cursor,
@@ -341,8 +311,5 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        # For non-SELECT operations, get row count
-        query_job = cursor.job
-        query_job.result()
-        row_count = query_job.num_dml_affected_rows or 0
-        return self.create_execution_result(cursor, rowcount_override=row_count)
+        cursor.job.result()
+        return self.create_execution_result(cursor, rowcount_override=cursor.job.num_dml_affected_rows or 0)

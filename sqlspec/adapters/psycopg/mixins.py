@@ -31,26 +31,20 @@ class PsycopgCopyMixin:
             cursor: Database cursor (sync or async)
             statement: SQL statement with COPY metadata from pipeline
         """
-        # Get the original SQL from pipeline metadata
         metadata = statement._processing_context.metadata if statement._processing_context else {}
         sql_text = metadata.get("postgres_copy_original_sql")
         if not sql_text:
-            # Fallback to expression
             sql_text = str(statement.expression)
 
-        # Get the raw COPY data from pipeline metadata
         copy_data = metadata.get("postgres_copy_data")
 
         if copy_data:
-            # Handle different parameter formats (positional or keyword)
             if isinstance(copy_data, dict):
-                # For named parameters, assume single data value or concatenate all values
                 if len(copy_data) == 1:
                     data_str = str(next(iter(copy_data.values())))
                 else:
                     data_str = "\n".join(str(value) for value in copy_data.values())
             elif isinstance(copy_data, (list, tuple)):
-                # For positional parameters, if single item, use as is, otherwise join
                 data_str = str(copy_data[0]) if len(copy_data) == 1 else "\n".join(str(value) for value in copy_data)
             else:
                 data_str = str(copy_data)

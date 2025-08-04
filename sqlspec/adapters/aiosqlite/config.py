@@ -23,15 +23,14 @@ __all__ = ("AiosqliteConfig", "AiosqliteConnectionParams", "AiosqliteConnectionP
 
 logger = logging.getLogger(__name__)
 
-# Performance constants for Aiosqlite pooling optimization
 DEFAULT_MIN_POOL: Final[int] = 5
 DEFAULT_MAX_POOL: Final[int] = 20
 POOL_TIMEOUT: Final[float] = 30.0
-POOL_RECYCLE: Final[int] = 3600  # 1 hour
+POOL_RECYCLE: Final[int] = 3600
 WAL_PRAGMA_SQL: Final[str] = "PRAGMA journal_mode = WAL"
 FOREIGN_KEYS_SQL: Final[str] = "PRAGMA foreign_keys = ON"
 SYNC_NORMAL_SQL: Final[str] = "PRAGMA synchronous = NORMAL"
-CACHE_SIZE_SQL: Final[str] = "PRAGMA cache_size = -64000"  # 64MB cache
+CACHE_SIZE_SQL: Final[str] = "PRAGMA cache_size = -64000"
 
 
 class AiosqliteConnectionPool:
@@ -79,7 +78,6 @@ class AiosqliteConnectionPool:
         """Create a new Aiosqlite connection with performance optimizations."""
         connection = await aiosqlite.connect(**self._connection_params)
 
-        # Apply SQLite performance optimizations
         await connection.execute(WAL_PRAGMA_SQL)
         await connection.execute(FOREIGN_KEYS_SQL)
         await connection.execute(SYNC_NORMAL_SQL)
@@ -88,7 +86,6 @@ class AiosqliteConnectionPool:
         await connection.execute("PRAGMA mmap_size = 268435456")
         await connection.commit()
 
-        # Track creation time
         conn_id = id(connection)
         async with self._lock:
             self._created_connections += 1
@@ -261,9 +258,6 @@ class AiosqliteConnectionPool:
         Args:
             connection: The connection to return to the pool
         """
-        if connection is None:
-            return
-
         try:
             async with self._lock:
                 self._checked_out = max(0, self._checked_out - 1)

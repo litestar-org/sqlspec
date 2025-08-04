@@ -48,7 +48,7 @@ This document outlines specific improvements needed before moving the benchmark 
    ```python
    # REMOVE these options:
    --show-all, --max-items, --table-width, --display-mode, --no-truncate
-   
+
    # KEEP only:
    --suite, --adapter, --iterations, --quick
    ```
@@ -72,7 +72,7 @@ This document outlines specific improvements needed before moving the benchmark 
    ```python
    {
        "name": "Oracle Sync",
-       "type": "sync", 
+       "type": "sync",
        "get_sqlspec_config": lambda: self._get_oracle_sync_configs(host, port),
        "get_sqlalchemy_engine": lambda: create_engine(
            f"oracle+oracledb://{user}:{password}@{host}:{port}/{service}",
@@ -115,7 +115,7 @@ This document outlines specific improvements needed before moving the benchmark 
    ```python
    def _get_oracle_sync_configs(self, host: str, port: int) -> tuple[OracleConfig, OracleConfig]:
        """Get Oracle sync configs with and without caching."""
-       
+
    def _get_oracle_async_configs(self, host: str, port: int) -> tuple[OracleAsyncConfig, OracleAsyncConfig]:
        """Get Oracle async configs with and without caching."""
    ```
@@ -129,7 +129,7 @@ This document outlines specific improvements needed before moving the benchmark 
    ```python
    # REPLACE static values with:
    import random
-   
+
    def get_random_test_params():
        return {
            "single_row_id": random.randint(100, 900),
@@ -143,10 +143,10 @@ This document outlines specific improvements needed before moving the benchmark 
    # NEW benchmark methods:
    def _benchmark_complex_join(self, ...):
        """Test multi-table joins with WHERE clauses."""
-       
-   def _benchmark_aggregation(self, ...):  
+
+   def _benchmark_aggregation(self, ...):
        """Test GROUP BY, COUNT, SUM operations."""
-       
+
    def _benchmark_mixed_workload(self, ...):
        """Test realistic mixed read/write operations."""
    ```
@@ -157,7 +157,7 @@ This document outlines specific improvements needed before moving the benchmark 
    operations = {
        "select_single": self._benchmark_sync_select_single,
        "select_small_batch": lambda *args: self._benchmark_sync_select_bulk(*args, limit=10),
-       "select_medium_batch": lambda *args: self._benchmark_sync_select_bulk(*args, limit=100), 
+       "select_medium_batch": lambda *args: self._benchmark_sync_select_bulk(*args, limit=100),
        "select_large_batch": lambda *args: self._benchmark_sync_select_bulk(*args, limit=1000),
        # ... similar for insert/update operations
    }
@@ -174,7 +174,7 @@ This document outlines specific improvements needed before moving the benchmark 
        """Display results grouped by driver, focusing on write operations."""
        # Group results by database driver first
        driver_results = self._group_by_driver(results)
-       
+
        # Show only write operation performance by driver
        self._display_driver_comparison_table(driver_results)
    ```
@@ -191,7 +191,7 @@ This document outlines specific improvements needed before moving the benchmark 
    def _filter_write_operations(self, results: dict) -> dict:
        """Filter to show only insert/update/delete operations."""
        write_ops = ['insert_bulk', 'update_bulk', 'delete_bulk']
-       return {k: v for k, v in results.items() 
+       return {k: v for k, v in results.items()
                if any(op in k for op in write_ops)}
    ```
 
@@ -199,7 +199,7 @@ This document outlines specific improvements needed before moving the benchmark 
 
 ### Immediate (Before Project Move)
 1. ✅ **CLI Simplification**: Remove unnecessary display options
-2. ✅ **Oracle Integration**: Add sync/async Oracle benchmarks  
+2. ✅ **Oracle Integration**: Add sync/async Oracle benchmarks
 3. ✅ **Driver Grouping**: Default display to group by driver
 
 ### Near-term (After Project Move)
@@ -232,7 +232,7 @@ This document outlines specific improvements needed before moving the benchmark 
 ## Files Requiring Changes
 
 1. `cli.py` - Remove display complexity
-2. `suites/orm_comparison.py` - Add Oracle, improve scenarios  
+2. `suites/orm_comparison.py` - Add Oracle, improve scenarios
 3. `visualization/reports.py` - Simplify reporting
 4. `infrastructure/containers.py` - Oracle container support
 5. `config.py` - Remove unnecessary config options

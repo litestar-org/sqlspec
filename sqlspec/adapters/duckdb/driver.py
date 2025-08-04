@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from sqlspec.statement.result import SQLResult
     from sqlspec.statement.sql import SQL
 
-# Shared DuckDB statement configuration
 duckdb_statement_config = StatementConfig(
     dialect="duckdb",
     parameter_config=ParameterStyleConfig(
@@ -57,17 +56,11 @@ class DuckDBDriver(SyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        if statement_config is None:
-            # Use DuckDB defaults
-            statement_config = duckdb_statement_config
-        else:
-            # Ensure provided config uses DuckDB-compatible parameter configuration
-            # Preserve other settings but replace parameter_config with DuckDB requirements
-            statement_config = statement_config.replace(
-                dialect=statement_config.dialect or "duckdb", parameter_config=duckdb_statement_config.parameter_config
-            )
-
-        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
+        super().__init__(
+            connection=connection,
+            statement_config=statement_config or duckdb_statement_config,
+            driver_features=driver_features,
+        )
 
     def with_cursor(self, connection: "DuckDBConnection") -> "DuckDBCursor":
         return DuckDBCursor(connection)
@@ -100,12 +93,10 @@ class DuckDBDriver(SyncDriverAdapterBase):
     def _is_modifying_operation(self, statement: "SQL") -> bool:
         """Check if the SQL statement is a modifying operation (INSERT/UPDATE/DELETE)."""
 
-        # Try to get the expression from the statement
         expression = statement.expression
         if expression and isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):
             return True
 
-        # Fallback: check the raw SQL text for INSERT/UPDATE/DELETE keywords
         sql_upper = statement._raw_sql.strip().upper()
         return sql_upper.startswith(("INSERT", "UPDATE", "DELETE"))
 
@@ -113,19 +104,15 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """DuckDB executemany with accurate row counting."""
         if prepared_params:
             cursor.executemany(sql, prepared_params)
-            # DuckDB's cursor.rowcount is unreliable for executemany
-            # Use explicit count for INSERT/UPDATE/DELETE operations
             if self._is_modifying_operation(statement):
-                row_count = len(prepared_params)  # Explicit accurate count
+                row_count = len(prepared_params)
             else:
-                # For non-modifying operations, try to get row count from cursor
                 try:
                     result = cursor.fetchone()
                     row_count = int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0
                 except Exception:
                     row_count = max(cursor.rowcount, 0) or 0
         else:
-            # Empty parameter set - no operation performed
             row_count = 0
 
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
@@ -135,7 +122,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
         cursor.execute(sql, prepared_params or ())
 
         if statement.returns_rows():
-            # Extract data immediately for SELECT operations
             fetched_data = cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
             if fetched_data and isinstance(fetched_data[0], tuple):
@@ -151,7 +137,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        # For non-SELECT operations, get row count
         try:
             result = cursor.fetchone()
             row_count = int(result[0]) if result and isinstance(result, tuple) and len(result) == 1 else 0

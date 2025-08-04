@@ -16,7 +16,6 @@ if TYPE_CHECKING:
     from sqlspec.statement.result import SQLResult
     from sqlspec.statement.sql import SQL
 
-# Shared AIOSQLite statement configuration
 aiosqlite_statement_config = StatementConfig(
     dialect="sqlite",
     parameter_config=ParameterStyleConfig(
@@ -64,27 +63,26 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Set default aiosqlite-specific configuration
-        if statement_config is None:
-            statement_config = aiosqlite_statement_config
-
-        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
+        super().__init__(
+            connection=connection,
+            statement_config=statement_config or aiosqlite_statement_config,
+            driver_features=driver_features,
+        )
 
     def with_cursor(self, connection: "AiosqliteConnection") -> "AiosqliteCursor":
         return AiosqliteCursor(connection)
 
     async def _try_special_handling(self, cursor: "aiosqlite.Cursor", statement: "Any") -> "Optional[SQLResult]":
-        """Hook for AioSQLite-specific special operations.
+        """Handle AioSQLite-specific operations.
 
-        AioSQLite doesn't have special operations like PostgreSQL COPY,
-        so this always returns None to proceed with standard execution.
+        AioSQLite doesn't have special operations, so this always returns None.
 
         Args:
             cursor: AioSQLite cursor object
             statement: SQL statement to analyze
 
         Returns:
-            None - always proceeds with standard execution
+            None - proceeds with standard execution
         """
         return None
 
@@ -109,10 +107,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         statement_config: "StatementConfig",
         statement: "SQL",
     ) -> "ExecutionResult":
-        """Execute SQL script by splitting and executing statements individually.
-
-        AioSQLite doesn't have executescript but supports parameters in execute() calls.
-        """
+        """Execute SQL script by splitting and executing statements individually."""
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
 
         last_result = None
@@ -128,8 +123,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     ) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using aiosqlite executemany."""
         result = await cursor.executemany(sql, prepared_params)
-        row_count = cursor.rowcount or 0
-        return self.create_execution_result(result, rowcount_override=row_count, is_many_result=True)
+        return self.create_execution_result(result, rowcount_override=cursor.rowcount or 0, is_many_result=True)
 
     async def _execute_statement(
         self, cursor: "aiosqlite.Cursor", sql: str, prepared_params: Any, statement: "SQL"
@@ -138,7 +132,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         result = await cursor.execute(sql, prepared_params or ())
 
         if statement.returns_rows():
-            # Extract data immediately for SELECT operations
             fetched_data = await cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
             data = [dict(row) for row in fetched_data]
@@ -147,6 +140,4 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 result, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
-        # For non-SELECT operations, get row count
-        row_count = cursor.rowcount or 0
-        return self.create_execution_result(result, rowcount_override=row_count)
+        return self.create_execution_result(result, rowcount_override=cursor.rowcount or 0)

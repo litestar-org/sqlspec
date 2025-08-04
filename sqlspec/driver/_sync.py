@@ -121,16 +121,13 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
             ExecutionResult with script execution data including statement counts
         """
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
-        statement_count = len(statements)  # Script splitter already filters empty statements
 
-        last_result = None
         for stmt in statements:
-            last_result = self._execute_statement(cursor, stmt, prepared_params, statement)
+            self._execute_statement(cursor, stmt, prepared_params, statement)
 
         # Row count will be provided by individual drivers in ExecutionResult
-
         return self.create_execution_result(
-            last_result, statement_count=statement_count, successful_statements=statement_count, is_script_result=True
+            cursor, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
         )
 
     @abstractmethod

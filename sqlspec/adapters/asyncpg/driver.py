@@ -14,21 +14,16 @@ if TYPE_CHECKING:
     from sqlspec.statement.result import SQLResult
     from sqlspec.statement.sql import SQL, StatementConfig
 
-# Import StatementConfig at runtime for the shared config
 from sqlspec.statement.sql import StatementConfig
 
-# Shared AsyncPG statement configuration
 asyncpg_statement_config = StatementConfig(
     dialect="postgres",
-    # Enhanced pipeline steps with precise execution control
-    pre_process_steps=[postgres_copy_pipeline_step],  # COPY detection before parameterization
-    post_process_steps=None,  # No post-processing needed for asyncpg
-    # Core pipeline configuration
+    pre_process_steps=[postgres_copy_pipeline_step],
+    post_process_steps=None,
     enable_parsing=True,
     enable_transformations=True,
     enable_validation=True,
     enable_caching=True,
-    # Parameter processing configuration
     parameter_config=ParameterStyleConfig(
         default_parameter_style=ParameterStyle.NUMERIC,
         supported_parameter_styles={ParameterStyle.NUMERIC},
@@ -43,16 +38,10 @@ __all__ = ("AsyncpgCursor", "AsyncpgDriver", "asyncpg_statement_config")
 logger = get_logger("adapters.asyncpg")
 
 
-# Compiled regex to parse asyncpg status messages like "INSERT 0 1" or "UPDATE 1"
-# Group 1: Command Tag (e.g., INSERT, UPDATE)
-# Group 2: (Optional) OID count for INSERT (we ignore this)
-# Group 3: Rows affected
 ASYNC_PG_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 
-# Expected number of groups in the regex match for row count extraction
 EXPECTED_REGEX_GROUPS: Final[int] = 3
 
-# Operation mapping for fast lookup
 OPERATION_MAP: Final[dict[str, str]] = {
     "INSERT": "INSERT",
     "UPDATE": "UPDATE",
@@ -74,7 +63,7 @@ class AsyncpgCursor:
 
 
 class AsyncpgDriver(AsyncDriverAdapterBase):
-    """AsyncPG PostgreSQL Driver Adapter. Clean hook-based implementation with no state management."""
+    """AsyncPG PostgreSQL driver adapter with hook-based implementation."""
 
     dialect = "postgres"
 
@@ -84,105 +73,85 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        if statement_config is None:
-            statement_config = asyncpg_statement_config
-
-        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
+        super().__init__(
+            connection=connection,
+            statement_config=statement_config or asyncpg_statement_config,
+            driver_features=driver_features,
+        )
 
     def with_cursor(self, connection: "AsyncpgConnection") -> "AsyncpgCursor":
         return AsyncpgCursor(connection)
 
     async def _try_special_handling(self, cursor: "AsyncpgConnection", statement: "SQL") -> "Optional[SQLResult]":
-        """Hook for PostgreSQL COPY operations only."""
-        # Handle COPY operations
+        """Handle PostgreSQL COPY operations."""
         if statement._processing_context and statement._processing_context.metadata.get("postgres_copy_operation"):
             await self._handle_copy_operation_from_pipeline(cursor, statement)
+            return self.build_statement_result(statement, self.create_execution_result(cursor))
 
-            # Create ExecutionResult and build SQLResult directly
-            execution_result = self.create_execution_result(cursor)
-            return self.build_statement_result(statement, execution_result)
-
-        # Return None to let standard execution flow handle all other queries
         return None
 
     async def _execute_many(
         self, cursor: "AsyncpgConnection", sql: str, prepared_params: Any, statement: "SQL"
     ) -> "ExecutionResult":
-        """AsyncPG executemany with row count approximation."""
+        """Execute multiple statements with AsyncPG."""
         await cursor.executemany(sql, prepared_params)
 
-        # AsyncPG doesn't provide exact row count for executemany, approximate using parameter count
-        row_count = len(prepared_params) if prepared_params else 0
-
-        return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
+        return self.create_execution_result(
+            cursor, rowcount_override=len(prepared_params) if prepared_params else 0, is_many_result=True
+        )
 
     async def _execute_statement(
         self, cursor: "AsyncpgConnection", sql: str, prepared_params: Any, statement: "SQL"
     ) -> "ExecutionResult":
-        """AsyncPG single execution using AsyncPG-optimized approach."""
+        """Execute single statement with AsyncPG."""
         if statement.returns_rows():
-            # Use fetch() for row-returning queries
             records = await cursor.fetch(sql, *prepared_params)
             data = [dict(record) for record in records]
-            column_names = list(records[0].keys()) if records else []
             return self.create_execution_result(
                 cursor,
                 selected_data=data,
-                column_names=column_names,
+                column_names=list(records[0].keys()) if records else [],
                 data_row_count=len(records),
                 is_select_result=True,
             )
 
-        # Use execute() for non-row-returning queries
         result = await cursor.execute(sql, *prepared_params)
-        row_count = self._parse_asyncpg_status(result) if isinstance(result, str) else 0
-        return self.create_execution_result(result, rowcount_override=row_count)
+        return self.create_execution_result(
+            result, rowcount_override=self._parse_asyncpg_status(result) if isinstance(result, str) else 0
+        )
 
     async def _handle_copy_operation_from_pipeline(self, cursor: "AsyncpgConnection", statement: "SQL") -> None:
         """Handle PostgreSQL COPY operations using pipeline metadata.
 
         Args:
-            cursor: Database connection (AsyncPG doesn't use cursors)
+            cursor: Database connection
             statement: SQL statement with COPY metadata from pipeline
         """
-        # Get the original SQL from pipeline metadata
         metadata = statement._processing_context.metadata if statement._processing_context else {}
-        sql_text = metadata.get("postgres_copy_original_sql")
-        if not sql_text:
-            # Fallback to expression
-            sql_text = str(statement.expression)
+        sql_text = metadata.get("postgres_copy_original_sql") or str(statement.expression)
 
-        # Get the raw COPY data from pipeline metadata
         copy_data = metadata.get("postgres_copy_data")
 
-        # For COPY operations, parameters contain the data to be copied, not SQL parameters
         if copy_data:
-            # Handle different parameter formats (positional or keyword)
             if isinstance(copy_data, dict):
-                # For named parameters, assume single data value or concatenate all values
-                if len(copy_data) == 1:
-                    data_str = str(next(iter(copy_data.values())))
-                else:
-                    data_str = "\n".join(str(value) for value in copy_data.values())
+                data_str = (
+                    str(next(iter(copy_data.values())))
+                    if len(copy_data) == 1
+                    else "\n".join(str(value) for value in copy_data.values())
+                )
             elif isinstance(copy_data, (list, tuple)):
-                # For positional parameters, if single item, use as is, otherwise join
                 data_str = str(copy_data[0]) if len(copy_data) == 1 else "\n".join(str(value) for value in copy_data)
             else:
                 data_str = str(copy_data)
 
-            # Use AsyncPG's COPY FROM STDIN for data input operations
-            # Parse the COPY statement to determine if it's FROM STDIN
             if "FROM STDIN" in sql_text.upper():
-                # Use copy_from_query for COPY FROM STDIN operations
                 from io import BytesIO
 
                 data_io = BytesIO(data_str.encode("utf-8"))
                 await cursor.copy_from_query(sql_text, output=data_io)
             else:
-                # For other COPY operations, use execute() with the raw SQL
                 await cursor.execute(sql_text)
         else:
-            # COPY without data (e.g., COPY TO STDOUT)
             await cursor.execute(sql_text)
 
     @staticmethod

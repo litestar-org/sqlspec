@@ -40,8 +40,7 @@ class ParameterConverter:
         Returns:
             SQL string with converted placeholders
         """
-        if parameter_info is None:
-            parameter_info = self.validator.extract_parameters(sql)
+        parameter_info = parameter_info or self.validator.extract_parameters(sql)
 
         if not parameter_info:
             return sql

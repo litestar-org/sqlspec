@@ -79,19 +79,16 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             migration_config: Migration configuration
             statement_config: Statement configuration override
         """
-        # Store the pool config as a dict and extract/merge extras
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
         if "extra" in processed_pool_config:
             extras = processed_pool_config.pop("extra")
             processed_pool_config.update(extras)
 
-        # Set defaults for MySQL connection
         if "host" not in processed_pool_config:
             processed_pool_config["host"] = "localhost"
         if "port" not in processed_pool_config:
             processed_pool_config["port"] = 3306
 
-        # Use asyncmy default statement config if none provided
         if statement_config is None:
             statement_config = asyncmy_statement_config
 
@@ -153,7 +150,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
             An AsyncmyDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as connection:
-            # Use shared config or user-provided config
             final_statement_config = statement_config or asyncmy_statement_config
             yield self.driver_type(connection=connection, statement_config=final_statement_config)
 

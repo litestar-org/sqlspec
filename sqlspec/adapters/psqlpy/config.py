@@ -107,7 +107,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             statement_config: Default SQL statement configuration
             migration_config: Migration configuration
         """
-        # Store pool config as dict and extract/merge extras
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
         if "extra" in processed_pool_config:
             extras = processed_pool_config.pop("extra")
@@ -126,7 +125,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         Returns:
             Dictionary with pool parameters, filtering out None values.
         """
-        # Filter out None values since external libraries may not handle them
         return {k: v for k, v in self.pool_config.items() if v is not None}
 
     async def _create_pool(self) -> "ConnectionPool":
@@ -134,7 +132,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         logger.info("Creating psqlpy connection pool", extra={"adapter": "psqlpy"})
 
         try:
-            # Get properly typed configuration dictionary
             config = self._get_pool_config_dict()
 
             pool = ConnectionPool(**config)
@@ -201,7 +198,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             A PsqlpyDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as conn:
-            # Use shared config or user-provided config or instance default
             yield self.driver_type(connection=conn, statement_config=statement_config or self.statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> ConnectionPool:
