@@ -1,4 +1,3 @@
-# pyright: ignore=reportUnknownVariableType
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
@@ -30,7 +29,6 @@ class _ArrowStreamer:
         self.batch_iterator: Optional[Iterator[ArrowRecordBatch]] = None
 
     def __aiter__(self) -> "_ArrowStreamer":
-        # __aiter__ should not be async
         return self
 
     async def _initialize(self) -> None:
@@ -40,7 +38,6 @@ class _ArrowStreamer:
             self.paths_iterator = iter(paths)
 
     async def __anext__(self) -> "ArrowRecordBatch":
-        # Ensure initialization
         await self._initialize()
 
         if self.batch_iterator:
@@ -67,7 +64,6 @@ class FSSpecBackend(ObjectStoreBase):
     and offering fallback capabilities.
     """
 
-    # FSSpec supports most operations but varies by underlying filesystem
     _default_capabilities: ClassVar[StorageCapabilities] = StorageCapabilities(
         supports_arrow=PYARROW_INSTALLED,
         supports_streaming=PYARROW_INSTALLED,
@@ -94,7 +90,6 @@ class FSSpecBackend(ObjectStoreBase):
             self.protocol = getattr(fs, "protocol", "unknown")
             self._fs_uri = f"{self.protocol}://"
 
-        # Set instance-level capabilities based on detected protocol
         self._instance_capabilities = self._detect_capabilities()
 
         super().__init__()
@@ -164,7 +159,6 @@ class FSSpecBackend(ObjectStoreBase):
     def base_uri(self) -> str:
         return self._fs_uri
 
-    # Core Operations (sync)
     def read_bytes(self, path: Union[str, Path], **kwargs: Any) -> bytes:
         """Read bytes from an object."""
         try:
@@ -193,7 +187,6 @@ class FSSpecBackend(ObjectStoreBase):
         """Write text to an object."""
         self.write_bytes(path, data.encode(encoding), **kwargs)
 
-    # Object Operations
     def exists(self, path: Union[str, Path], **kwargs: Any) -> bool:
         """Check if an object exists."""
         resolved_path = self._resolve_path(path)
@@ -228,7 +221,6 @@ class FSSpecBackend(ObjectStoreBase):
             msg = f"Failed to move {source} to {destination}"
             raise StorageOperationFailedError(msg) from exc
 
-    # Arrow Operations
     def read_arrow(self, path: Union[str, Path], **kwargs: Any) -> "ArrowTable":
         """Read an Arrow table from storage."""
         if not PYARROW_INSTALLED:
@@ -257,7 +249,6 @@ class FSSpecBackend(ObjectStoreBase):
             msg = f"Failed to write Arrow table to {path}"
             raise StorageOperationFailedError(msg) from exc
 
-    # Listing Operations
     def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
         """List objects with optional prefix."""
         try:
@@ -278,7 +269,6 @@ class FSSpecBackend(ObjectStoreBase):
             msg = f"Failed to glob with pattern '{pattern}'"
             raise StorageOperationFailedError(msg) from exc
 
-    # Path Operations
     def is_object(self, path: str) -> bool:
         """Check if path points to an object."""
         resolved_path = self._resolve_path(path)
@@ -329,7 +319,6 @@ class FSSpecBackend(ObjectStoreBase):
         if not PYARROW_INSTALLED:
             raise MissingDependencyError(package="pyarrow", install_package="pyarrow")
 
-        # Stream each file as record batches
         for obj_path in self.glob(pattern, **kwargs):
             yield from self._stream_file_batches(obj_path)
 

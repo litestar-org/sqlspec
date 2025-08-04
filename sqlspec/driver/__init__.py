@@ -16,5 +16,4 @@ __all__ = (
     "mixins",
 )
 
-# Type alias for convenience
 DriverAdapterProtocol = Union[SyncDriverAdapterBase, AsyncDriverAdapterBase]

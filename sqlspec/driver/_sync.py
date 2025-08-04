@@ -44,7 +44,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
             The result of the SQL execution.
         """
 
-        # Ensure statement is processed before special handling to make metadata available
         statement._ensure_processed()
 
         with self.with_cursor(connection) as cursor:
@@ -54,11 +53,9 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
 
             sql, params = self._get_compiled_sql(statement, self.statement_config)
 
-            # Single execution path - data handled in _execute_statement
             if statement.is_script:
                 execution_result = self._execute_script(cursor, sql, params, self.statement_config, statement)
             elif statement.is_many:
-                # For execute_many, use param_list directly - parameters are ready to execute
                 execution_result = self._execute_many(cursor, sql, statement.param_list, statement)
             else:
                 execution_result = self._execute_statement(cursor, sql, params, statement)
@@ -125,7 +122,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         for stmt in statements:
             self._execute_statement(cursor, stmt, prepared_params, statement)
 
-        # Row count will be provided by individual drivers in ExecutionResult
         return self.create_execution_result(
             cursor, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
         )
@@ -170,9 +166,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "SQLResult":
-        # Parameter handling is delegated to SQL class constructor
-        # which properly handles tuple expansion and parameter processing
-
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )
@@ -216,7 +209,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
 
         return self.dispatch_statement_execution(statement=sql_statement.as_script(), connection=self.connection)
 
-    # Syntax Sugar Methods for Selecting Data Below:
     @overload
     def select_one(
         self,
@@ -411,11 +403,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
             return next(iter(row.values()))
         if isinstance(row, (tuple, list)):
             return row[0]
-        try:
-            return row[0]
-        except (TypeError, IndexError) as e:
-            msg = f"Cannot extract value from row type {type(row).__name__}: {e}"
-            raise TypeError(msg) from e
+        msg = f"Cannot extract value from row type {type(row).__name__}"
+        raise TypeError(msg)
 
     @overload
     def select_with_total(
@@ -472,12 +461,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
             ... )
             >>> print(f"Page data: {len(data)} rows, Total: {total} rows")
         """
-        # 1. Prepare original SQL statement
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )
         count_result = self.dispatch_statement_execution(self._create_count_query(sql_statement), self.connection)
         select_result = self.execute(sql_statement)
-        data = self.to_schema(select_result.get_data(), schema_type=schema_type)
 
-        return (data, count_result.scalar())
+        return (self.to_schema(select_result.get_data(), schema_type=schema_type), count_result.scalar())

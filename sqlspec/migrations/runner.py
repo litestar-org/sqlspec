@@ -8,11 +8,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from sqlspec.migrations.base import BaseMigrationRunner
+from sqlspec.migrations.loaders import get_migration_loader
+from sqlspec.statement.sql import SQL
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.sync_tools import run_
 
 if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
-    from sqlspec.statement.sql import SQL
 
 __all__ = ("AsyncMigrationRunner", "SyncMigrationRunner")
 
@@ -96,9 +98,6 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase"]):
         Returns:
             Dictionary mapping query names to SQL objects.
         """
-        from sqlspec.migrations.loaders import get_migration_loader
-        from sqlspec.statement.sql import SQL
-
         all_queries = {}
         migrations = self.get_migration_files()
 
@@ -111,8 +110,6 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase"]):
                 loader = get_migration_loader(file_path, self.migrations_path, self.project_root)
 
                 try:
-                    from sqlspec.utils.sync_tools import run_
-
                     up_sql = run_(loader.get_up_sql)(file_path)
                     down_sql = run_(loader.get_down_sql)(file_path)
 
@@ -204,9 +201,6 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase"]):
         Returns:
             Dictionary mapping query names to SQL objects.
         """
-        from sqlspec.migrations.loaders import get_migration_loader
-        from sqlspec.statement.sql import SQL
-
         all_queries = {}
         migrations = await self.get_migration_files()
 

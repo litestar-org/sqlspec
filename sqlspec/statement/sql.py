@@ -58,11 +58,6 @@ logger = get_logger("sqlspec.statement")
 
 Statement: TypeAlias = Union[str, exp.Expression, "SQL"]
 
-# Parameter naming constants (moved to ParameterConverter)
-
-# Cache and limit constants
-
-# Row-returning token types for SQL analysis
 ROW_RETURNING_TOKENS = {
     TokenType.SELECT,
     TokenType.WITH,
@@ -73,7 +68,6 @@ ROW_RETURNING_TOKENS = {
     TokenType.PRAGMA,
 }
 
-# Oracle/Colon style parameter constants (moved to ParameterConverter)
 PROCESSED_STATE_SLOTS = (
     "analysis_results",
     "merged_parameters",
@@ -82,7 +76,6 @@ PROCESSED_STATE_SLOTS = (
     "transformation_results",
     "validation_errors",
 )
-# StatementConfig slots definition for mypyc compatibility
 SQL_CONFIG_SLOTS = (
     "pre_process_steps",
     "post_process_steps",
@@ -134,14 +127,11 @@ class _ProcessedState:
 
     def replace(self, **changes: Any) -> "_ProcessedState":
         """Create a new _ProcessedState with specified changes."""
-        # Validate that all changes correspond to valid slots
-
         for key in changes:
             if key not in PROCESSED_STATE_SLOTS:
                 msg = f"{key!r} is not a field in {type(self).__name__}"
                 raise TypeError(msg)
 
-        # Build the keyword arguments for the new instance
         kwargs = {slot: getattr(self, slot) for slot in PROCESSED_STATE_SLOTS}
         kwargs.update(changes)
 
@@ -159,7 +149,6 @@ class _ProcessedState:
         """Equality comparison compatible with dataclass.__eq__."""
         if not isinstance(other, type(self)):
             return False
-        # mypyc removes __slots__ at runtime, so we hardcode the comparison
         return (
             self.processed_expression == other.processed_expression
             and self.processed_sql == other.processed_sql
@@ -255,11 +244,7 @@ class StatementConfig:
         self.output_transformer = output_transformer
 
     def replace(self, **changes: Any) -> "StatementConfig":
-        """Create a new StatementConfig with specified changes.
-
-        This replaces the dataclass replace() functionality.
-        """
-        # Validate that all changes correspond to valid slots
+        """Create a new StatementConfig with specified changes."""
         for key in changes:
             if key not in SQL_CONFIG_SLOTS:
                 msg = f"{key!r} is not a field in {type(self).__name__}"
@@ -283,40 +268,27 @@ class StatementConfig:
         return all(getattr(self, slot) == getattr(other, slot) for slot in SQL_CONFIG_SLOTS)
 
     def get_pipeline_steps(self) -> list:
-        """Get the configured pipeline steps with enhanced execution control.
-
-        Pipeline Execution Order:
-        1. pre_process_steps    - Before literal parameterization (e.g., COPY detection)
-        2. parameterize_literals_step - Convert literals to parameters (NULL -> None)
-        3. post_process_steps   - After parameterization (e.g., ADBC NULL handling)
-        4. Parameter processing with output_transformer - Final formatting
+        """Get configured pipeline steps in execution order.
 
         Returns:
-            List of pipeline steps in precise execution order
+            List of pipeline steps in execution order
         """
         steps = []
 
-        # Phase 1: Pre-processing (before parameterization)
-        # Use case: psycopg COPY detection, BigQuery preprocessing
         if self.pre_process_steps:
             steps.extend(self.pre_process_steps)
 
-        # Phase 2: Core transformations
         if self.enable_transformations:
-            steps.append(parameterize_literals_step)  # NULL -> None conversion happens here
+            steps.append(parameterize_literals_step)
             if self.enable_expression_simplification:
                 steps.append(optimize_step)
 
-        # Phase 3: Post-processing (after parameterization)
-        # Use case: ADBC NULL handling, parameter-dependent transformations
         if self.post_process_steps:
             steps.extend(self.post_process_steps)
 
-        # Phase 4: Validation
         if self.enable_validation:
             steps.extend([validate_dml_safety_step, validate_step])
 
-        # Phase 5: Analysis (after validation)
         if self.enable_analysis:
             steps.extend(self._get_analysis_steps())
 
@@ -325,16 +297,11 @@ class StatementConfig:
     def _get_analysis_steps(self) -> list:
         """Get configured analysis steps.
 
-        Returns the analysis pipeline steps in order:
-        1. metadata_extraction_step - Extract table/column metadata
-        2. returns_rows_analysis_step - Determine if query returns rows
-        3. parameter_analysis_step - Analyze parameter usage patterns
-
-        Steps are wrapped with caching when caching is enabled.
+        Returns:
+            List of analysis pipeline steps
         """
         from sqlspec.statement.pipeline import with_analysis_caching
 
-        # Wrap analysis steps with caching if enabled
         if self.enable_caching:
             return [
                 with_analysis_caching(metadata_extraction_step, "metadata"),
@@ -342,11 +309,7 @@ class StatementConfig:
                 with_analysis_caching(parameter_analysis_step, "parameters"),
             ]
 
-        return [
-            metadata_extraction_step,  # Extract table/column metadata
-            returns_rows_analysis_step,  # Determine if query returns rows
-            parameter_analysis_step,  # Analyze parameter usage patterns
-        ]
+        return [metadata_extraction_step, returns_rows_analysis_step, parameter_analysis_step]
 
 
 def default_analysis_handler(analysis: Any) -> None:
@@ -409,7 +372,7 @@ class SQL:
             self.statement_config = statement_config
         self._dialect = self._normalize_dialect(_dialect or self.statement_config.dialect)
         self._builder_result_type = _builder_result_type
-        self._processed_state: Any = Empty  # Use Any to avoid mypyc Optional issues
+        self._processed_state: Any = Empty
         self._processing_context: Optional[SQLTransformContext] = None
         self._positional_params: list[Any] = []
         self._named_params: dict[str, Any] = {}
@@ -488,17 +451,12 @@ class SQL:
     def _process_parameters(self, *parameters: Any, **kwargs: Any) -> None:
         """Process and categorize parameters."""
         if self._is_many:
-            # Use batch parameter processing for execute_many
             params = list(parameters)
             if "parameters" in kwargs:
                 param_value = kwargs.pop("parameters")
-                if isinstance(param_value, list):
-                    params.extend(param_value)
-                else:
-                    params.append(param_value)
+                params.extend(param_value) if isinstance(param_value, list) else params.append(param_value)
             self._process_batch_parameters(params)
         else:
-            # Use single parameter processing for regular execute
             for param in parameters:
                 self._process_parameter_item(param)
 
@@ -539,21 +497,12 @@ class SQL:
         for item in parameters:
             if is_statement_filter(item):
                 self._filters.append(item)
-                # For batch execution, filters should apply to all parameter sets
                 pos_params, named_params = self._extract_filter_parameters(item)
                 self._positional_params.extend(pos_params)
                 self._named_params.update(named_params)
-            elif isinstance(item, tuple):
-                # In batch mode, preserve tuples as parameter sets
-                self._positional_params.append(item)
-            elif isinstance(item, list):
-                # Nested lists in batch mode - could be parameter sets or complex values
-                self._positional_params.append(item)
-            elif is_dict(item):
-                # Dictionary parameters in batch mode
+            elif isinstance(item, (tuple, list)) or is_dict(item):
                 self._positional_params.append(item)
             else:
-                # Single values in batch mode
                 self._positional_params.append(item)
 
     def _ensure_processed(self) -> None:
@@ -562,7 +511,6 @@ class SQL:
         This method implements the facade pattern with lazy processing.
         It's called by public methods that need processed state.
         """
-        # Check if already processed
         if self._processed_state is not Empty:
             return
 
@@ -571,7 +519,7 @@ class SQL:
         initial_sql_for_context, final_params = self._prepare_context_sql(final_expr, final_params)
 
         context = self._create_processing_context(initial_sql_for_context, final_expr, final_params, has_placeholders)
-        original_context = context  # Keep a reference to the original context
+        original_context = context
         result_context = self._run_pipeline(context)
 
         processed_sql, merged_params = self._process_pipeline_result(result_context, final_params, original_context)
@@ -595,7 +543,6 @@ class SQL:
         if is_expression(final_expr) and self._placeholder_mapping:
             initial_sql_for_context = final_expr.sql(dialect=self._dialect or self.statement_config.dialect)
             if self._placeholder_mapping:
-                # Delegate parameter conversion to ParameterConverter
                 converter = self.statement_config.parameter_converter
                 converted_result = converter.convert_parameters(
                     initial_sql_for_context, final_params, None, None, validate=False
@@ -604,17 +551,10 @@ class SQL:
 
         return initial_sql_for_context, final_params
 
-    # _convert_parameters removed - functionality moved to ParameterConverter
-
-    # _convert_dict_with_mapping removed - functionality moved to ParameterConverter
-
-    # _convert_list_with_info removed - functionality moved to ParameterConverter
-
     def _create_processing_context(
         self, initial_sql_for_context: str, final_expr: exp.Expression, final_params: Any, has_placeholders: bool
     ) -> SQLTransformContext:
         """Create SQL processing context."""
-        # Use ParameterConverter for parameter dict conversion
         param_dict: dict[str, Any] = {}
         param_info = None
 
@@ -625,21 +565,16 @@ class SQL:
             if is_dict(final_params):
                 param_dict = final_params
             elif isinstance(final_params, (list, tuple)):
-                # Check if we have numeric placeholders for Oracle-style conversion
                 has_numeric_placeholders = (
                     any(p.style == ParameterStyle.NUMERIC for p in param_info) if param_info else False
                 )
-
-                # Check for mixed parameter styles
                 has_mixed_styles = len({p.style for p in param_info}) > 1
 
-                if has_mixed_styles or has_numeric_placeholders:
-                    # Use ParameterConverter for mixed parameter style handling
-                    param_dict = converter.convert_mixed_parameters_to_dict(final_params, param_info)
-                else:
-                    # Regular parameter mapping
-                    for i, param in enumerate(final_params):
-                        param_dict[f"param_{i}"] = param
+                param_dict = (
+                    converter.convert_mixed_parameters_to_dict(final_params, param_info)
+                    if has_mixed_styles or has_numeric_placeholders
+                    else {f"param_{i}": param for i, param in enumerate(final_params)}
+                )
             else:
                 param_dict = {"param_0": final_params}
 
@@ -671,7 +606,6 @@ class SQL:
         if self._parameter_conversion_state:
             context.metadata["parameter_conversion"] = self._parameter_conversion_state
 
-        # Store parameter info
         if final_params and isinstance(final_params, (list, tuple)) and param_info is not None:
             context.metadata["parameter_info"] = param_info
         else:
@@ -686,7 +620,6 @@ class SQL:
             pipeline = compose_pipeline(steps)
             context = pipeline(context)
 
-        # Store the context for later reference
         self._processing_context = context
         return context
 
@@ -699,16 +632,12 @@ class SQL:
         if isinstance(processed_expr, exp.Anonymous):
             processed_sql = self._raw_sql or context.metadata.get("initial_sql", "")
         else:
-            # Use the initial expression that includes filters, not the processed one
-            # The processed expression may have lost LIMIT/OFFSET during pipeline processing
             initial_expr = original_context.original_expression
             if initial_expr and initial_expr != processed_expr:
-                # Check if LIMIT/OFFSET was stripped during processing
                 has_limit_in_initial = expression_has_limit(initial_expr)
                 has_limit_in_processed = expression_has_limit(processed_expr)
 
                 if has_limit_in_initial and not has_limit_in_processed:
-                    # Restore LIMIT/OFFSET from initial expression
                     processed_expr = initial_expr
 
             processed_sql = (
@@ -730,7 +659,6 @@ class SQL:
         if not self._original_sql:
             return processed_sql, context
 
-        # Extract param info from the ORIGINAL SQL to get the target styles
         original_param_info = self.statement_config.parameter_validator.extract_parameters(self._original_sql)
         target_styles = {p.style for p in original_param_info}
 
@@ -743,7 +671,6 @@ class SQL:
                 processed_sql, ParameterStyle.NAMED_PYFORMAT
             )
             if self._placeholder_mapping and context.parameters and is_dict(context.parameters):
-                # Convert parameters using ParameterConverter
                 context.parameters = self.statement_config.parameter_converter._convert_to_named_pyformat_format(
                     context.parameters, original_param_info
                 )
@@ -752,72 +679,50 @@ class SQL:
                 processed_sql, ParameterStyle.POSITIONAL_COLON
             )
             if self._placeholder_mapping and context.parameters and is_dict(context.parameters):
-                # Convert parameters using ParameterConverter
                 context.parameters = self.statement_config.parameter_converter._convert_to_positional_colon_format(
                     context.parameters, original_param_info
                 )
 
         return processed_sql, context
 
-    # _handle_colon_params removed - functionality moved to ParameterConverter
-
-    # _handle_pyformat_params removed - functionality moved to ParameterConverter
-
     def _merge_pipeline_parameters(self, context: SQLTransformContext, final_params: Any) -> Any:
         """Merge parameters from the pipeline processing."""
-        # Get parameters from context in appropriate format
         merged_params = context.merged_parameters
 
-        # Check if we have extracted literals from parameterize_literals_step
         if context.metadata.get("literals_parameterized") and context.parameters:
-            # Count how many parameters were there before literal extraction
             original_param_count = 0
             for key in context.parameters:
                 if not key.startswith("param_") or not key[6:].isdigit():
                     original_param_count += 1
 
-            # If we started with no parameters, use the extracted ones
             if final_params is None and original_param_count < len(context.parameters):
-                # We have extracted literals, return them in the appropriate format
                 if self.statement_config.dialect in {"mysql", "sqlite"}:
-                    # Return as list for positional parameter styles
                     if isinstance(context.parameters, dict):
                         return list(context.parameters.values())
                     if isinstance(context.parameters, (list, tuple)):
                         return list(context.parameters)
                     return []
-                # Return as dict for named parameter styles
                 if isinstance(context.parameters, dict):
                     return dict(context.parameters)
                 return {}
 
-        # If we had original parameters, they should already be in the context
         return merged_params
 
     def _finalize_processed_state(self, context: SQLTransformContext, processed_sql: str, merged_params: Any) -> None:
         """Finalize the processed state."""
-        # Wrap parameters with type information if enabled
         if self.statement_config.enable_parameter_type_wrapping and merged_params is not None:
-            # Get parameter info from the processed SQL
             validator = self.statement_config.parameter_validator
             param_info = validator.extract_parameters(processed_sql)
 
-            # Check if literals were parameterized - if so, force wrapping
             literals_parameterized = (
                 context.metadata.get("literals_parameterized", False) if context.metadata else False
             )
 
-            # Wrap parameters with type information
             converter = self.statement_config.parameter_converter
             merged_params = converter.wrap_parameters_with_types(merged_params, param_info, literals_parameterized)
 
-        # Extract analyzer results from context metadata
         analysis_results = context.metadata.copy() if context.metadata else {}
 
-        # Analysis results are available in the metadata but no handler is configured
-        # Analysis results can be accessed through the context metadata if needed
-
-        # Get validation errors from metadata
         validation_errors = []
         if context.metadata.get("validation_issues"):
             validation_errors.extend(context.metadata["validation_issues"])
@@ -833,8 +738,6 @@ class SQL:
             transformation_results={},
         )
 
-        # Default behavior: validation errors are logged but don't raise exceptions
-        # This provides graceful handling while maintaining visibility of issues
         if self._processed_state.validation_errors:
             for error in self._processed_state.validation_errors:
                 logger.warning("SQL validation issue: %s", str(error))
@@ -855,7 +758,6 @@ class SQL:
         validator = self.statement_config.parameter_validator
         param_info = validator.extract_parameters(statement)
 
-        # Check if conversion is needed
         needs_conversion = any(p.style in SQLGLOT_INCOMPATIBLE_STYLES for p in param_info)
 
         converted_sql = statement
@@ -866,12 +768,10 @@ class SQL:
             self._original_sql = statement
             self._placeholder_mapping = param_info_mapping
 
-            # Create placeholder map for conversion state (map param names to indices)
             placeholder_map: dict[str, Union[str, int]] = {}
             for param_name, p_info in param_info_mapping.items():
                 placeholder_map[param_name] = p_info.ordinal
 
-            # Create conversion state
             self._parameter_conversion_state = ParameterStyleConversionState(
                 was_transformed=True,
                 original_styles=list({p.style for p in param_info}),
@@ -882,21 +782,15 @@ class SQL:
         else:
             self._parameter_conversion_state = None
 
-        # Check if this is a base statement without parameters
-        # Only use base_statement_cache for raw SQL without any parameters
         use_base_cache = not needs_conversion and not param_info and isinstance(statement, str)
 
         if use_base_cache:
-            # Set the base statement key for later caching operations
             self._base_statement_key = (statement.strip(), str(self._dialect) if self._dialect else "default")
             try:
-                # Use base_statement_cache for huge performance boost
                 return base_statement_cache.get_or_parse(statement, str(self._dialect) if self._dialect else None)
             except ParseError:
-                # Let the error handling below take care of this
                 pass
         else:
-            # Try to get from AST cache first
             cached_expr = ast_fragment_cache.parse_with_cache(
                 converted_sql, fragment_type="QUERY", dialect=self._dialect
             )
@@ -904,7 +798,6 @@ class SQL:
             if cached_expr:
                 return cached_expr
 
-        # Fall back to regular parsing if not cached
         try:
             expressions = sqlglot.parse(converted_sql, dialect=self._dialect)  # pyright: ignore
             if not expressions:
@@ -913,9 +806,7 @@ class SQL:
             if first_expr is None:
                 return exp.Anonymous(this=statement)
 
-            # Only cache in ast_fragment_cache if not using base_statement_cache
             if not use_base_cache:
-                # Cache the successfully parsed expression
                 ast_fragment_cache.set_fragment(
                     sql=converted_sql,
                     expression=first_expr,
@@ -925,7 +816,6 @@ class SQL:
                 )
 
         except ParseError as e:
-            # Default behavior: handle parse errors gracefully by returning Anonymous expression
             logger.warning(
                 "Failed to parse SQL, returning Anonymous expression.", extra={"sql": statement, "error": str(e)}
             )
@@ -944,10 +834,8 @@ class SQL:
 
         This is an internal method used to maintain immutability.
         """
-        # Create new instance bypassing __init__
         new_sql = SQL.__new__(SQL)
 
-        # Hardcode all attributes for mypyc compatibility (__slots__ not available at runtime)
         attrs_to_copy = [
             "_base_statement_key",
             "_builder_result_type",
@@ -968,15 +856,11 @@ class SQL:
             "statement_config",
         ]
 
-        # Copy all attributes
         for attr in attrs_to_copy:
             if attr in overrides:
-                # Use override value
                 value = overrides[attr]
             else:
-                # Copy from self
                 value = getattr(self, attr)
-                # Deep copy mutable attributes
                 if attr == "_positional_params" and isinstance(value, list):
                     value = list(value)
                 elif attr == "_named_params" and isinstance(value, dict):
@@ -1019,12 +903,10 @@ class SQL:
         if statement_config is not None:
             overrides["_config"] = statement_config
 
-        # Handle parameters if provided
         if parameters is not None:
             overrides["_positional_params"] = []
             overrides["_named_params"] = {}
             overrides["_original_parameters"] = parameters
-            # Process the new parameters
             if isinstance(parameters, (list, tuple)):
                 overrides["_positional_params"] = list(parameters)
             elif isinstance(parameters, dict):
@@ -1032,7 +914,6 @@ class SQL:
             else:
                 overrides["_positional_params"] = [parameters]
 
-        # Apply any additional keyword arguments as overrides
         overrides.update({key: value for key, value in kwargs.items() if key.startswith("_") and hasattr(self, key)})
 
         return self._copy_with(**overrides)
@@ -1086,10 +967,8 @@ class SQL:
 
     def filter(self, filter_obj: StatementFilter) -> "SQL":
         """Apply a filter and return a new SQL instance."""
-        # Extract filter parameters
         pos_params, named_params = self._extract_filter_parameters(filter_obj)
 
-        # Create new collections with updates
         new_filters = list(self._filters)
         new_filters.append(filter_obj)
 
@@ -1110,16 +989,11 @@ class SQL:
         overrides: dict[str, Any] = {"_is_many": True}
 
         if parameters is not None:
-            # Explicit parameters provided - use them
             overrides["_positional_params"] = []
             overrides["_named_params"] = {}
             overrides["_original_parameters"] = parameters
-        # No parameters provided - use existing positional params as the sequence
-        # This allows: sql.as_many() to use whatever parameters are already there
-        # But preserve None if there were no original parameters
-        elif self._positional_params:  # If we have positional params, use them
+        elif self._positional_params:
             overrides["_original_parameters"] = self._positional_params
-            # Otherwise keep _original_parameters as None (don't override)
 
         return self._copy_with(**overrides)
 
@@ -1130,8 +1004,6 @@ class SQL:
     def _build_final_state(self) -> tuple[exp.Expression, Any]:
         """Build final expression and parameters after applying filters."""
         final_expr = self._statement
-
-        # Accumulate parameters from both the original SQL and filters
         accumulated_positional = list(self._positional_params)
         accumulated_named = dict(self._named_params)
 
@@ -1143,30 +1015,25 @@ class SQL:
                 result = filter_obj.append_to_statement(temp_sql)
 
                 if isinstance(result, SQL):
-                    # Extract the modified expression
                     final_expr = result._statement
-                    # Also preserve any parameters added by the filter
                     accumulated_positional = list(result._positional_params)
                     accumulated_named = dict(result._named_params)
                 else:
                     final_expr = result
 
-        final_params: Any
         if accumulated_named and not accumulated_positional:
-            final_params = dict(accumulated_named)
-        elif accumulated_positional and not accumulated_named:
-            final_params = list(accumulated_positional)
-        elif accumulated_positional and accumulated_named:
+            return final_expr, dict(accumulated_named)
+        if accumulated_positional and not accumulated_named:
+            return final_expr, list(accumulated_positional)
+        if accumulated_positional and accumulated_named:
             final_params = dict(accumulated_named)
             for i, param in enumerate(accumulated_positional):
                 param_name = f"arg_{i}"
                 while param_name in final_params:
                     param_name = f"arg_{i}_{id(param)}"
                 final_params[param_name] = param
-        else:
-            final_params = None
-
-        return final_expr, final_params
+            return final_expr, final_params
+        return final_expr, None
 
     @property
     def sql(self) -> str:
@@ -1178,14 +1045,12 @@ class SQL:
             return self._raw_sql
         if not self.statement_config.enable_parsing and self._raw_sql:
             return self._raw_sql
+        self._ensure_processed()
+        if self._processed_state is Empty:
+            msg = "Failed to process SQL statement"
+            raise RuntimeError(msg)
 
-        # For execute_many, avoid recursion by using processed SQL directly
         if self._is_many:
-            self._ensure_processed()
-            if self._processed_state is Empty:
-                msg = "Failed to process SQL statement"
-                raise RuntimeError(msg)
-            # Apply QMARK style conversion to the processed SQL
             processed_sql = cast("_ProcessedState", self._processed_state).processed_sql
             processed_params = cast("_ProcessedState", self._processed_state).merged_parameters
             if processed_params:
@@ -1193,14 +1058,6 @@ class SQL:
                 return sql
             return processed_sql
 
-        # Check if literals were parameterized - if so, use QMARK style for consistency
-        self._ensure_processed()
-        if self._processed_state is Empty:
-            msg = "Failed to process SQL statement"
-            raise RuntimeError(msg)
-
-        # If literals were parameterized AND new parameters were actually extracted,
-        # convert to QMARK style for test compatibility
         if (
             self._processing_context
             and self._processing_context.metadata
@@ -1210,7 +1067,6 @@ class SQL:
             sql, _ = self.compile(placeholder_style="qmark")
             return sql
 
-        # Otherwise, return processed SQL as-is to preserve original parameter style
         return cast("_ProcessedState", self._processed_state).processed_sql
 
     @property
@@ -1255,10 +1111,6 @@ class SQL:
         if params is None:
             return {}
 
-        # Convert dict params to list format in two cases:
-        # 1. When literals were parameterized AND SQL was converted to QMARK style
-        # 2. When original SQL used positional placeholders (?) - preserve list format
-
         should_convert_to_list = False
 
         if (
@@ -1283,7 +1135,6 @@ class SQL:
             should_convert_to_list = True
 
         if should_convert_to_list:
-            # Convert param_0, param_1, etc. to list format
             sorted_params = []
             for i in range(len(params)):
                 key = f"param_{i}"
@@ -1319,7 +1170,6 @@ class SQL:
             INSERT/UPDATE/DELETE with RETURNING, or certain command types.
         """
         if expression is None:
-            # Check for empty SQL strings - they should not return rows
             if not self._raw_sql or not self._raw_sql.strip():
                 return False
             expression = self.expression
@@ -1340,7 +1190,6 @@ class SQL:
             sql_text = str(expression.this) if expression.this else ""
             if not sql_text.strip():
                 return False
-            # Direct cache usage removed - will use analysis pipeline when implemented
             return self._check_anonymous_returns_rows(sql_text)
 
         return False
@@ -1389,45 +1238,34 @@ class SQL:
         """
         self._ensure_processed()
 
-        # Get the processed SQL (which may have been transformed for SQLGlot compatibility)
         sql = self._processed_state.processed_sql if self._processed_state is not Empty else self.sql
 
-        # Get the original parameter sets
         param_sets = self._original_parameters or []
 
-        # Get any literals extracted during pipeline processing
         if self._processed_state is not Empty and self._processing_context:
-            # Get extracted literals from metadata if available
             extracted_literals = self._processing_context.metadata.get("extracted_literals", [])
 
             if extracted_literals:
-                # Apply extracted literals to each parameter set
                 enhanced_params: list[Any] = []
                 for param_set in param_sets:
                     if isinstance(param_set, (list, tuple)):
-                        # Add extracted literals to the parameter tuple
                         literal_values = [get_value_attribute(p) for p in extracted_literals]
                         enhanced_set = list(param_set) + literal_values
                         enhanced_params.append(tuple(enhanced_set))
                     elif isinstance(param_set, dict):
-                        # For dict params, add extracted literals with generated names
                         enhanced_dict = dict(param_set)
                         for i, literal in enumerate(extracted_literals):
                             param_name = f"_literal_{i}"
                             enhanced_dict[param_name] = get_value_attribute(literal)
                         enhanced_params.append(enhanced_dict)
                     else:
-                        # Single parameter - convert to tuple with literals
                         literals = [get_value_attribute(p) for p in extracted_literals]
                         enhanced_params.append((param_set, *literals))
                 param_sets = enhanced_params
 
-        # Handle conversion if needed (same logic as in compile())
         if self._processing_context and self._processing_context.metadata.get("parameter_conversion"):
             norm_state = self._processing_context.metadata["parameter_conversion"]
 
-            # If original SQL had incompatible styles, denormalize back to the original style
-            # when no specific style requested OR when the requested style matches the original
             if norm_state.was_transformed and norm_state.original_styles:
                 original_style = norm_state.original_styles[0]
                 should_denormalize = placeholder_style is None or (
@@ -1435,8 +1273,6 @@ class SQL:
                 )
 
                 if should_denormalize and original_style in SQLGLOT_INCOMPATIBLE_STYLES:
-                    # Denormalize SQL back to original style
-                    # Need to extract current parameter info from the processed SQL instead of using original positions
                     current_param_info = self.statement_config.parameter_validator.extract_parameters(sql)
                     sql = self.statement_config.parameter_converter._convert_sql_placeholders(
                         sql, original_style, current_param_info
@@ -1468,7 +1304,6 @@ class SQL:
             placeholder_style: Target parameter placeholder style
             flatten_single_params: If True, flatten single-element lists for scalar parameters
         """
-        # Handle special cases first
         if self._is_script:
             return self.sql, None
 
@@ -1478,38 +1313,30 @@ class SQL:
         if not self.statement_config.enable_parsing and self._raw_sql:
             return self._raw_sql, self._original_parameters
 
-        # Get processed state
         sql, params = self._get_processed_sql_and_params()
 
-        # Apply parameter transformations first to handle denormalization
         if params is not None and self._processing_context:
             sql, params = self._apply_parameter_transformations(sql, params, placeholder_style)
 
-        # When no placeholder style is specified and no transformations applied, preserve original parameter format
         if (
             placeholder_style is None
             and self._original_parameters is not None
             and not (self._processing_context and self._processing_context.metadata.get("parameter_conversion"))
         ):
             if isinstance(self._original_parameters, tuple) and not self._named_params:
-                # Preserve tuple parameters for positional styles
                 params = self._original_parameters
             elif (
                 isinstance(self._original_parameters, (tuple, list))
                 and len(self._original_parameters) == 1
                 and isinstance(self._original_parameters[0], dict)
             ):
-                # Preserve dict parameters for named styles
                 params = self._original_parameters[0]
 
-        # Unwrap typed parameters
         params = self._unwrap_typed_parameters(params)
 
-        # Apply placeholder style if requested
         if placeholder_style:
             sql, params = self._apply_placeholder_style(sql, params, placeholder_style)
 
-        # Flatten single params if requested (for ADBC compatibility)
         if flatten_single_params and params is not None:
             params = self._flatten_single_params(sql, params)
 
@@ -1531,11 +1358,8 @@ class SQL:
         if not isinstance(params, list) or len(params) != 1:
             return params
 
-        # Count parameter placeholders in SQL
         param_count = sql.count("$1") + sql.count("$2") + sql.count("?") + sql.count("%s")
 
-        # If we have exactly one parameter placeholder and one parameter that is a list
-        # containing exactly one non-list element, extract it
         single_param = params[0]
         if (
             param_count == 1
@@ -1564,12 +1388,10 @@ class SQL:
         if self._processing_context is None:
             return sql, params
 
-        # Apply parameter reordering if needed
         parameter_mapping = self._processing_context.metadata.get("parameter_position_mapping")
         if parameter_mapping:
             params = self._reorder_parameters(params, parameter_mapping)
 
-        # Apply parameter conversion if needed
         conversion_state = self._processing_context.metadata.get("parameter_conversion")
         if conversion_state:
             sql, params = self._apply_parameter_conversion(sql, params, conversion_state, placeholder_style)
@@ -1580,8 +1402,6 @@ class SQL:
         self, sql: str, params: Any, norm_state: Any, placeholder_style: "Optional[str]"
     ) -> "tuple[str, Any]":
         """Apply parameter conversion based on normalization state."""
-        # If original SQL had incompatible styles, denormalize back to the original style
-        # when no specific style requested OR when the requested style matches the original
         if not (norm_state.was_transformed and norm_state.original_styles):
             return sql, params
 
@@ -1591,14 +1411,11 @@ class SQL:
         )
 
         if should_denormalize and original_style in SQLGLOT_INCOMPATIBLE_STYLES:
-            # Denormalize SQL back to original style
-            # Need to extract current parameter info from the processed SQL instead of using original positions
             current_param_info = self.statement_config.parameter_validator.extract_parameters(sql)
             sql = self.statement_config.parameter_converter._convert_sql_placeholders(
                 sql, original_style, current_param_info
             )
 
-            # Convert parameters to match original style
             if original_style == ParameterStyle.POSITIONAL_COLON and is_dict(params):
                 params = self._convert_colon_parameters(params, norm_state)
             elif original_style == ParameterStyle.POSITIONAL_PYFORMAT and is_dict(params):
@@ -1610,35 +1427,25 @@ class SQL:
 
     def _convert_colon_parameters(self, params: dict[str, Any], norm_state: Any) -> dict[str, Any]:
         """Convert parameters for Oracle POSITIONAL_COLON style."""
-        # Map the parameter keys back to original parameter names
-        # For Oracle numeric parameters, map by parameter name, not appearance order
+        if all(p.name in params for p in norm_state.original_param_info if p.name):
+            return params
+
         original_params = {}
+        all_numeric = all(p.name and p.name.isdigit() for p in norm_state.original_param_info)
 
-        # Check if parameters are already in original format (no normalization happened)
-        already_original = all(p.name in params for p in norm_state.original_param_info if p.name)
+        if all_numeric:
+            for original_param in norm_state.original_param_info:
+                param_num = int(original_param.name)
+                normalized_key = "param_0" if param_num == 0 else f"param_{param_num - 1}"
+                if normalized_key in params:
+                    original_params[original_param.name] = params[normalized_key]
+        else:
+            for i, original_param in enumerate(norm_state.original_param_info):
+                normalized_key = f"param_{i}"
+                if normalized_key in params:
+                    original_params[original_param.name] = params[normalized_key]
 
-        if not already_original:
-            # Check if all parameters have numeric names (Oracle style)
-            all_numeric = all(p.name and p.name.isdigit() for p in norm_state.original_param_info)
-
-            if all_numeric:
-                # Oracle numeric parameters: map by parameter name
-                for original_param in norm_state.original_param_info:
-                    param_num = int(original_param.name)
-                    # Handle zero-based (:0) and one-based (:1) parameters
-                    normalized_key = "param_0" if param_num == 0 else f"param_{param_num - 1}"
-                    if normalized_key in params:
-                        original_params[original_param.name] = params[normalized_key]
-            else:
-                # Regular parameters: map by appearance order
-                for i, original_param in enumerate(norm_state.original_param_info):
-                    normalized_key = f"param_{i}"
-                    if normalized_key in params:
-                        original_params[original_param.name] = params[normalized_key]
-
-            return original_params
-
-        return params
+        return original_params
 
     def _convert_positional_pyformat_parameters(self, params: dict[str, Any], norm_state: Any) -> "tuple[Any, ...]":
         """Convert parameters for POSITIONAL_PYFORMAT style (%s placeholders).
@@ -1649,7 +1456,6 @@ class SQL:
         if not isinstance(params, dict):
             return params
 
-        # Map parameters back to tuple in order of appearance
         ordered_params = []
         for i, _ in enumerate(norm_state.original_param_info):
             normalized_key = f"param_{i}"
@@ -1668,18 +1474,14 @@ class SQL:
         if not isinstance(params, dict):
             return params
 
-        # Check if parameters already use param_0, param_1 format (no conversion needed)
         param_keys = {f"param_{i}" for i in range(len(norm_state.original_param_info))}
         current_keys = set(params.keys())
 
-        # If we already have param_0, param_1 keys, no conversion needed
         if param_keys.issubset(current_keys):
             return params
 
-        # Check if we have original parameter names - convert them to param_0, param_1 format
         original_names = {p.name for p in norm_state.original_param_info if p.name}
         if original_names.issubset(current_keys):
-            # Convert from original names to param_0, param_1 format to match SQL placeholders
             converted_params = {}
             for i, original_param in enumerate(norm_state.original_param_info):
                 if original_param.name and original_param.name in params:
@@ -1705,7 +1507,6 @@ class SQL:
 
         effective_config = config or self.statement_config
 
-        # Create hash of configuration values that affect processing
         config_hash = hash(
             (
                 effective_config.enable_parsing,
@@ -1722,7 +1523,6 @@ class SQL:
             )
         )
 
-        # Include filter context in the cache key
         filter_hash = hash(tuple(str(f) for f in self._filters)) if self._filters else 0
 
         base_hash = hash_sql_statement(self)

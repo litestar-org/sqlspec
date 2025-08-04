@@ -11,6 +11,7 @@ from typing import Any, Generic, Optional, TypeVar
 from sqlspec import sql
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.loaders import get_migration_loader
+from sqlspec.statement.builder._ddl import CreateTable
 from sqlspec.statement.sql import SQL
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import run_
@@ -20,7 +21,6 @@ __all__ = ("BaseMigrationCommands", "BaseMigrationRunner", "BaseMigrationTracker
 
 logger = get_logger("migrations.base")
 
-# Type variables for generic driver and config types
 DriverT = TypeVar("DriverT")
 ConfigT = TypeVar("ConfigT")
 
@@ -42,10 +42,7 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         Returns:
             SQL object for table creation.
         """
-        from sqlspec.statement.builder._ddl import CreateTable
-
         builder = CreateTable(self.version_table)
-        # Initialize the fields that aren't properly initialized by __init__
         if not hasattr(builder, "_columns"):
             builder._columns = []
         if not hasattr(builder, "_constraints"):
@@ -168,9 +165,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             The extracted version string or None.
         """
         parts = filename.split("_", 1)
-        if parts and parts[0].isdigit():
-            return parts[0].zfill(4)
-        return None
+        return parts[0].zfill(4) if parts and parts[0].isdigit() else None
 
     def _calculate_checksum(self, content: str) -> str:
         """Calculate MD5 checksum of migration content.
@@ -215,39 +210,23 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             Dictionary containing migration metadata.
         """
 
-        # Get appropriate loader for file type
         loader = get_migration_loader(file_path, self.migrations_path, self.project_root)
-
-        # Validate migration file
         loader.validate_migration_file(file_path)
-
-        # Read raw content for checksum
         content = file_path.read_text(encoding="utf-8")
         checksum = self._calculate_checksum(content)
-
-        # Extract metadata
         version = self._extract_version(file_path.name)
         description = file_path.stem.split("_", 1)[1] if "_" in file_path.stem else ""
 
-        # For SQL files, check if queries exist
-        has_upgrade = True
-        has_downgrade = False
+        has_upgrade, has_downgrade = True, False
 
         if file_path.suffix == ".sql":
-            # Query names use versioned pattern
-            up_query = f"migrate-{version}-up"
-            down_query = f"migrate-{version}-down"
-
+            up_query, down_query = f"migrate-{version}-up", f"migrate-{version}-down"
             self.loader.clear_cache()
             self.loader.load_sql(file_path)
-            has_upgrade = self.loader.has_query(up_query)
-            has_downgrade = self.loader.has_query(down_query)
+            has_upgrade, has_downgrade = self.loader.has_query(up_query), self.loader.has_query(down_query)
         else:
-            # For Python files, loader validation ensures migrate_up exists
-            # Check for migrate_down by attempting to load
             try:
-                down_sql = run_(loader.get_down_sql)(file_path)
-                has_downgrade = bool(down_sql)
+                has_downgrade = bool(run_(loader.get_down_sql)(file_path))
             except Exception:
                 has_downgrade = False
 
@@ -271,25 +250,17 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         Returns:
             SQL object for the migration.
         """
-        has_key = f"has_{direction}grade"
-
-        if not migration.get(has_key):
+        if not migration.get(f"has_{direction}grade"):
             if direction == "down":
                 logger.warning("Migration %s has no downgrade query", migration["version"])
                 return None
             msg = f"Migration {migration['version']} has no upgrade query"
             raise ValueError(msg)
 
-        file_path = migration["file_path"]
-        loader = migration["loader"]
-
-        # Get SQL statements from appropriate loader
+        file_path, loader = migration["file_path"], migration["loader"]
 
         try:
-            if direction == "up":
-                sql_statements = run_(loader.get_up_sql)(file_path)
-            else:
-                sql_statements = run_(loader.get_down_sql)(file_path)
+            sql_statements = run_(loader.get_up_sql if direction == "up" else loader.get_down_sql)(file_path)
 
         except Exception as e:
             if direction == "down":
@@ -299,8 +270,6 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             raise ValueError(msg) from e
         else:
             if sql_statements:
-                from sqlspec.statement.sql import SQL
-
                 return SQL(sql_statements[0])
             return None
 
@@ -340,9 +309,7 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
             config: The SQLSpec configuration.
         """
         self.config = config
-        migration_config = getattr(self.config, "migration_config", {})
-        if migration_config is None:
-            migration_config = {}
+        migration_config = getattr(self.config, "migration_config", {}) or {}
 
         self.version_table = migration_config.get("version_table_name", "sqlspec_migrations")
         self.migrations_path = Path(migration_config.get("script_location", "migrations"))

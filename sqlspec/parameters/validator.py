@@ -16,7 +16,6 @@ if TYPE_CHECKING:
 __all__ = ("ParameterValidator",)
 
 
-# Single comprehensive regex that captures all parameter types in one pass
 _PARAMETER_REGEX: Final = re.compile(
     r"""
     # Literals and Comments (these should be matched first and skipped)
@@ -53,7 +52,6 @@ class ParameterValidator:
 
     def __init__(self) -> None:
         """Initialize validator with caching support."""
-        # Use a simple dict cache to ensure same object identity for same SQL
         self._parameter_cache: dict[str, list[ParameterInfo]] = {}
 
     def extract_parameters(self, sql: str) -> list[ParameterInfo]:
@@ -68,7 +66,6 @@ class ParameterValidator:
         Returns:
             List of ParameterInfo objects, sorted by position
         """
-        # Check cache first
         if sql in self._parameter_cache:
             return self._parameter_cache[sql]
 
@@ -76,16 +73,12 @@ class ParameterValidator:
         ordinal = 0
 
         for match in _PARAMETER_REGEX.finditer(sql):
-            # Skip literals and comments
             if match.group("dquote") or match.group("squote") or match.group("dollar_quoted_string"):
                 continue
             if match.group("line_comment") or match.group("block_comment"):
                 continue
-            # Skip PostgreSQL-specific operators and casts
             if match.group("pg_q_operator") or match.group("pg_cast"):
                 continue
-
-            # Match parameter placeholders
             if match.group("qmark"):
                 parameters.append(
                     ParameterInfo(
@@ -146,7 +139,6 @@ class ParameterValidator:
                 ordinal += 1
             elif match.group("named_dollar_param"):
                 name = match.group("dollar_param_name")
-                # PostgreSQL positional: $1, $2, etc. or named: $name
                 style = ParameterStyle.NUMERIC if name.isdigit() else ParameterStyle.NAMED_DOLLAR
                 parameters.append(
                     ParameterInfo(
@@ -171,7 +163,6 @@ class ParameterValidator:
                 )
                 ordinal += 1
 
-        # Cache the result before returning
         self._parameter_cache[sql] = parameters
         return parameters
 
@@ -223,13 +214,10 @@ class ParameterValidator:
         if not parameters:
             return ParameterStyle.NONE
 
-        # Count occurrences of each style
         style_counts: dict[ParameterStyle, int] = {}
         for param in parameters:
             style_counts[param.style] = style_counts.get(param.style, 0) + 1
 
-        # Define precedence order (higher number = higher precedence)
-        # Named styles take precedence over positional styles in ties
         precedence = {
             ParameterStyle.QMARK: 1,
             ParameterStyle.NUMERIC: 2,
@@ -242,8 +230,6 @@ class ParameterValidator:
             ParameterStyle.NONE: 0,
             ParameterStyle.STATIC: 0,
         }
-
-        # Return the style with highest count, with precedence as tiebreaker
         return max(style_counts.items(), key=lambda x: (x[1], precedence.get(x[0], 0)))[0]
 
     def determine_parameter_input_type(self, parameters: list[ParameterInfo]) -> Optional[type]:
@@ -258,24 +244,15 @@ class ParameterValidator:
         if not parameters:
             return None
 
-        # Get all unique styles
         styles = {p.style for p in parameters}
 
-        # Named parameters expect dict
-        if any(
-            style
-            in {
-                ParameterStyle.NAMED_COLON,
-                ParameterStyle.NAMED_PYFORMAT,
-                ParameterStyle.NAMED_AT,
-                ParameterStyle.NAMED_DOLLAR,
-            }
-            for style in styles
-        ):
-            return dict
-
-        # Positional parameters expect list
-        return list
+        named_styles = {
+            ParameterStyle.NAMED_COLON,
+            ParameterStyle.NAMED_PYFORMAT,
+            ParameterStyle.NAMED_AT,
+            ParameterStyle.NAMED_DOLLAR,
+        }
+        return dict if any(style in named_styles for style in styles) else list
 
     def validate_parameters(
         self, param_info: list[ParameterInfo], provided_params: "StatementParameters", sql: str
@@ -296,16 +273,13 @@ class ParameterValidator:
         from sqlspec.utils.type_guards import is_iterable_parameters
 
         if not param_info:
-            # No parameters expected
             if provided_params and provided_params not in ([], {}):
                 msg = f"SQL has no parameters but {type(provided_params).__name__} was provided"
                 raise ExtraParameterError(msg)
             return
 
-        # Determine expected type
         expected_type = self.determine_parameter_input_type(param_info)
 
-        # Check type mismatch
         if expected_type is dict:
             if not isinstance(provided_params, (dict, Mapping)):
                 msg = f"SQL expects named parameters (dict) but got {type(provided_params).__name__}"
@@ -314,25 +288,19 @@ class ParameterValidator:
             msg = f"SQL expects positional parameters (list/tuple) but got {type(provided_params).__name__}"
             raise ParameterStyleMismatchError(msg)
 
-        # Check parameter count and names
         if expected_type is dict and isinstance(provided_params, (dict, Mapping)):
-            # Check for missing named parameters
             required_names = {p.name for p in param_info if p.name}
             provided_names = set(provided_params.keys())
 
-            missing = required_names - provided_names
-            if missing:
+            if missing := required_names - provided_names:
                 msg = f"Missing required parameters: {', '.join(sorted(missing))}"
                 raise MissingParameterError(msg)
 
-            # Check for extra parameters
-            extra = provided_names - required_names
-            if extra:
+            if extra := provided_names - required_names:
                 msg = f"Extra parameters provided: {', '.join(sorted(extra))}"
                 raise ExtraParameterError(msg)
 
         elif is_iterable_parameters(provided_params) and not isinstance(provided_params, (str, bytes)):
-            # Check positional parameter count
             param_count = len(param_info)
             provided_count = len(list(provided_params))
 
@@ -344,7 +312,6 @@ class ParameterValidator:
                 raise ExtraParameterError(msg)
 
         elif provided_params is not None:
-            # Single scalar parameter
             if len(param_info) != 1:
                 msg = f"SQL expects {len(param_info)} parameters but a scalar value was provided"
                 raise MissingParameterError(msg)

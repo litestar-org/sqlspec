@@ -12,7 +12,6 @@ if TYPE_CHECKING:
     from sqlspec.typing import StatementParameters
 
 
-# Test ParameterStyle enum
 @pytest.mark.parametrize(
     "style,expected_value",
     [
@@ -34,7 +33,6 @@ def test_parameter_style_values(style: ParameterStyle, expected_value: str) -> N
     assert str(style) == expected_value
 
 
-# Test ParameterInfo dataclass
 @pytest.mark.parametrize(
     "name,style,position,ordinal,placeholder_text",
     [
@@ -73,7 +71,6 @@ def test_parameter_info_equality() -> None:
     assert param1 != param3
 
 
-# Test ParameterValidator
 @pytest.fixture
 def validator() -> ParameterValidator:
     """Create a ParameterValidator instance."""
@@ -158,7 +155,6 @@ def test_extract_parameters_ignores_special_cases(
     if should_be_ignored:
         assert len(params) == 0
     else:
-        # PostgreSQL cast should not create a parameter
         assert all(p.placeholder_text != "::int" for p in params)
 
 
@@ -255,17 +251,12 @@ def test_parameter_extraction_caching(validator: ParameterValidator) -> None:
     """Test that parameter extraction results are cached."""
     sql = "SELECT * FROM users WHERE id = ? AND name = :name"
 
-    # First extraction
     params1 = validator.extract_parameters(sql)
-
-    # Second extraction - should use cache
     params2 = validator.extract_parameters(sql)
 
-    # Should be the same object (cached)
     assert params1 is params2
 
 
-# Test ParameterConverter
 @pytest.fixture
 def converter() -> ParameterConverter:
     """Create a ParameterConverter instance."""
@@ -337,7 +328,6 @@ def test_convert_parameters(
     """Test parameter conversion process."""
     if should_succeed:
         result = converter.convert_parameters(sql, parameters, [args], kwargs, validate)
-
         assert isinstance(result.transformed_sql, str)
         assert isinstance(result.parameter_info, list)
     else:
@@ -352,11 +342,9 @@ def test_transform_sql_for_parsing(converter: ParameterConverter) -> None:
 
     transformed_sql, placeholder_map = converter._transform_sql_for_parsing(sql, param_info)
 
-    # Should have unique placeholder names
     assert ":param_0" in transformed_sql
     assert ":param_1" in transformed_sql
 
-    # Should have mapping
     assert "param_0" in placeholder_map
     assert "param_1" in placeholder_map
 
@@ -396,12 +384,9 @@ def test_parameter_conversion_error_handling(converter: ParameterConverter) -> N
     """Test parameter conversion error handling with validation disabled."""
     sql = "SELECT * FROM users WHERE id = ?"
 
-    # Since validate=False, validation should be skipped anyway
     result = converter.convert_parameters(sql, {"id": 123}, None, None, validate=False)
     assert result.merged_parameters == {"id": 123}
 
-    # Test that validation errors are properly raised when validate=True
-    # by using SQL with missing parameters
     sql_missing = "SELECT * FROM users WHERE id = ? AND name = ?"
     with pytest.raises(MissingParameterError):
         converter.convert_parameters(sql_missing, [1], None, None, validate=True)
@@ -495,7 +480,6 @@ def test_parameter_info_repr() -> None:
     param = ParameterInfo("test_param", ParameterStyle.NAMED_COLON, 10, 0, ":test_param")
     repr_str = repr(param)
 
-    # Should contain key information
     assert "ParameterInfo" in repr_str
     assert "test_param" in repr_str
     assert "named_colon" in repr_str

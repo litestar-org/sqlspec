@@ -48,7 +48,6 @@ class SQLSpec:
     @staticmethod
     def _get_config_name(obj: Any) -> str:
         """Get display name for configuration object."""
-        # Try to get __name__ attribute if it exists, otherwise use str()
         return getattr(obj, "__name__", str(obj))
 
     def _cleanup_pools(self) -> None:
@@ -68,7 +67,7 @@ class SQLSpec:
 
                                 else:
                                     asyncio.run(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
-                            except RuntimeError:  # No running event loop
+                            except RuntimeError:
                                 asyncio.run(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
                     else:
                         config.close_pool()
@@ -585,26 +584,23 @@ class SQLSpec:
             >>> SQLSpec.configure_cache(fragment_cache_enabled=False)
         """
         current_config = get_cache_config()
-        kwargs = {}
-        if sql_cache_size is not None:
-            kwargs["sql_cache_size"] = sql_cache_size
-        if fragment_cache_size is not None:
-            kwargs["fragment_cache_size"] = fragment_cache_size
-        if optimized_cache_size is not None:
-            kwargs["optimized_cache_size"] = optimized_cache_size
-        if sql_cache_enabled is not None:
-            kwargs["sql_cache_enabled"] = sql_cache_enabled
-        if fragment_cache_enabled is not None:
-            kwargs["fragment_cache_enabled"] = fragment_cache_enabled
-        if optimized_cache_enabled is not None:
-            kwargs["optimized_cache_enabled"] = optimized_cache_enabled
-        new_config = CacheConfig(
-            sql_cache_size=kwargs.get("sql_cache_size", current_config.sql_cache_size),
-            fragment_cache_size=kwargs.get("fragment_cache_size", current_config.fragment_cache_size),
-            optimized_cache_size=kwargs.get("optimized_cache_size", current_config.optimized_cache_size),
-            sql_cache_enabled=bool(kwargs.get("sql_cache_enabled", current_config.sql_cache_enabled)),
-            fragment_cache_enabled=bool(kwargs.get("fragment_cache_enabled", current_config.fragment_cache_enabled)),
-            optimized_cache_enabled=bool(kwargs.get("optimized_cache_enabled", current_config.optimized_cache_enabled)),
+        update_cache_config(
+            CacheConfig(
+                sql_cache_size=sql_cache_size if sql_cache_size is not None else current_config.sql_cache_size,
+                fragment_cache_size=fragment_cache_size
+                if fragment_cache_size is not None
+                else current_config.fragment_cache_size,
+                optimized_cache_size=optimized_cache_size
+                if optimized_cache_size is not None
+                else current_config.optimized_cache_size,
+                sql_cache_enabled=sql_cache_enabled
+                if sql_cache_enabled is not None
+                else current_config.sql_cache_enabled,
+                fragment_cache_enabled=fragment_cache_enabled
+                if fragment_cache_enabled is not None
+                else current_config.fragment_cache_enabled,
+                optimized_cache_enabled=optimized_cache_enabled
+                if optimized_cache_enabled is not None
+                else current_config.optimized_cache_enabled,
+            )
         )
-
-        update_cache_config(new_config)

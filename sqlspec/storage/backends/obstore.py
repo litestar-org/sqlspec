@@ -56,18 +56,13 @@ DEFAULT_OPTIONS: Final[dict[str, Any]] = {"connect_timeout": "30s", "request_tim
 class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
     """High-performance object storage backend using obstore.
 
-    This backend leverages obstore's Rust-based implementation for maximum
-    performance, providing native support for:
-    - AWS S3 and S3-compatible stores
-    - Google Cloud Storage
-    - Azure Blob Storage
-    - Local filesystem
-    - HTTP endpoints
+    Leverages obstore's Rust-based implementation for maximum performance,
+    providing native support for AWS S3, Google Cloud Storage, Azure Blob Storage,
+    local filesystem, and HTTP endpoints.
 
     Features native Arrow support and ~9x better performance than fsspec.
     """
 
-    # ObStore has excellent native capabilities
     capabilities: ClassVar[StorageCapabilities] = StorageCapabilities(
         supports_arrow=True,
         supports_streaming=True,
@@ -97,28 +92,23 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
             self.store_uri = store_uri
             self.base_path = base_path.rstrip("/") if base_path else ""
             self.store_options = store_options
-            self.store: Any  # Will be set based on store_uri
-            self._path_cache: dict[str, str] = {}  # Add path caching
+            self.store: Any
+            self._path_cache: dict[str, str] = {}
             self.protocol = store_uri.split("://", 1)[0] if "://" in store_uri else "file"
 
             if store_uri.startswith("memory://"):
-                # MemoryStore doesn't use from_url - create directly
                 from obstore.store import MemoryStore
 
                 self.store = MemoryStore()
             elif store_uri.startswith("file://"):
                 from obstore.store import LocalStore
 
-                # LocalStore works with directory paths, so we use root
                 self.store = LocalStore("/")
-                # The full path will be handled in _resolve_path
             else:
-                # Use obstore's from_url for automatic URI parsing
                 from obstore.store import from_url
 
                 self.store = from_url(store_uri, **store_options)  # pyright: ignore[reportAttributeAccessIssue]
 
-            # Log successful initialization
             logger.debug("ObStore backend initialized for %s", store_uri)
 
         except Exception as exc:
@@ -128,15 +118,10 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
     def _resolve_path(self, path: str | Path) -> str:
         """Resolve path relative to base_path."""
         path_str = str(path)
-
-        # Handle file:// URIs - strip the prefix to get the actual path
         if path_str.startswith("file://"):
             path_str = path_str.removeprefix("file://")
-
-        # For file:// store URIs, paths are already absolute
         if self.store_uri.startswith("file://") and path_str.startswith("/"):
             return path_str.lstrip("/")
-
         if self.base_path:
             clean_base = self.base_path.rstrip("/")
             clean_path = path_str.lstrip("/")
@@ -148,14 +133,10 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
         """Return backend type identifier."""
         return "obstore"
 
-    # Implementation of abstract methods from ObjectStoreBase
-
     def read_bytes(self, path: str | Path, **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
         """Read bytes using obstore."""
         try:
-            resolved_path = self._resolve_path(path)
-            result = self.store.get(resolved_path)
-            # obstore returns a GetResult, call bytes() to get Bytes object, then to_bytes() for actual bytes
+            result = self.store.get(self._resolve_path(path))
             return cast("bytes", result.bytes().to_bytes())
         except Exception as exc:
             msg = f"Failed to read bytes from {path}"
@@ -164,39 +145,27 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
     def write_bytes(self, path: str | Path, data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Write bytes using obstore."""
         try:
-            resolved_path = self._resolve_path(path)
-            self.store.put(resolved_path, data)
+            self.store.put(self._resolve_path(path), data)
         except Exception as exc:
             msg = f"Failed to write bytes to {path}"
             raise StorageOperationFailedError(msg) from exc
 
     def read_text(self, path: str | Path, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text using obstore."""
-        data = self.read_bytes(path, **kwargs)
-        return data.decode(encoding)
+        return self.read_bytes(path, **kwargs).decode(encoding)
 
     def write_text(self, path: str | Path, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Write text using obstore."""
-        encoded_data = data.encode(encoding)
-        self.write_bytes(path, encoded_data, **kwargs)
+        self.write_bytes(path, data.encode(encoding), **kwargs)
 
     def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:  # pyright: ignore[reportUnusedParameter]
         """List objects using obstore."""
         try:
             resolved_prefix = self._resolve_path(prefix) if prefix else self.base_path or ""
-            if not recursive:
-                return sorted(
-                    [
-                        str(getattr(item, "path", getattr(item, "key", str(item))))
-                        for item in self.store.list_with_delimiter(resolved_prefix)  # pyright: ignore
-                    ]
-                )
-            return sorted(
-                [
-                    str(getattr(item, "path", getattr(item, "key", str(item))))
-                    for item in self.store.list(resolved_prefix)
-                ]
+            items = (
+                self.store.list_with_delimiter(resolved_prefix) if not recursive else self.store.list(resolved_prefix)
             )
+            return sorted(str(getattr(item, "path", getattr(item, "key", str(item)))) for item in items)
         except Exception as exc:
             msg = f"Failed to list objects with prefix '{prefix}'"
             raise StorageOperationFailedError(msg) from exc

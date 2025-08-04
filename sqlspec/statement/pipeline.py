@@ -72,32 +72,23 @@ class SQLTransformContext:
         conversion logic for consistency.
         """
         if self.driver_adapter and hasattr(self.driver_adapter, "_convert_parameters_to_driver_format"):
-            # Use driver's parameter conversion logic
             sql_str = self.current_expression.sql(dialect=self.dialect)
             return self.driver_adapter._convert_parameters_to_driver_format(sql_str, self.parameters)
 
-        # Fallback to original logic if no driver adapter
         if isinstance(self.parameters, dict) and self.dialect in {"mysql", "sqlite", "duckdb"}:
-            # Convert to positional list ordered by parameter position in SQL
-            # This ensures parameters are ordered as they appear in the SQL query
-
-            # Parse SQL to get parameter order
             validator = ParameterValidator()
             param_info = validator.extract_parameters(self.current_expression.sql(dialect=self.dialect))
 
             if param_info:
-                # Order parameters by their position in the SQL
                 ordered_keys = [
                     p.name for p in sorted(param_info, key=lambda x: x.position) if p.name and p.name in self.parameters
                 ]
 
-                # Add any remaining parameters not found in param_info
                 for key in self.parameters:
                     if key not in ordered_keys:
                         ordered_keys.append(key)
 
                 return [self.parameters[k] for k in ordered_keys]
-            # Fallback to alphabetical if no param info (preserves old behavior for edge cases)
             return [self.parameters[k] for k in sorted(self.parameters.keys())]
         return self.parameters
 
@@ -118,10 +109,8 @@ def generate_analysis_cache_key(sql: str, statement_config: "StatementConfig") -
     """
     import hashlib
 
-    # Create hash of the SQL statement
     sql_hash = hashlib.sha256(sql.encode()).hexdigest()[:16]
 
-    # Create configuration signature for analysis-affecting settings
     config_parts = [
         f"analysis:{statement_config.enable_analysis}",
         f"dialect:{statement_config.dialect or 'default'}",
@@ -149,29 +138,21 @@ def with_analysis_caching(step_func: PipelineStep, step_name: str) -> PipelineSt
     def cached_step(context: SQLTransformContext) -> SQLTransformContext:
         import hashlib
 
-        # Skip caching if no config available or caching disabled
         cache_config = get_cache_config()
         if not cache_config.analysis_cache_enabled:
             return step_func(context)
 
-        # Generate cache key for this specific analysis step
         sql_text = context.current_expression.sql(dialect=context.dialect)
         step_cache_key = f"{step_name}:{hashlib.sha256(sql_text.encode()).hexdigest()[:16]}"
 
-        # Check cache first
         cached_result = analysis_cache.get(step_cache_key)
         if cached_result is not None:
-            # Merge cached results into context metadata
             context.metadata.update(cached_result)
             return context
 
-        # Take a snapshot of metadata before executing the step
         metadata_before = dict(context.metadata)
-
-        # Execute the actual analysis step
         result_context = step_func(context)
 
-        # Cache the analysis results - only metadata that was added by this step
         step_results = {
             key: value
             for key, value in result_context.metadata.items()
@@ -217,8 +198,6 @@ def create_pipeline_from_config(config: "StatementConfig", driver_adapter: "Any"
     Returns:
         Composed pipeline function
     """
-    # Use the StatementConfig's get_pipeline_steps method which handles
-    # the enhanced pipeline architecture with pre/post processing steps
     steps = config.get_pipeline_steps()
     return compose_pipeline(steps)
 
@@ -229,8 +208,6 @@ def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformCont
     Extracts literal values and replaces them with parameter placeholders,
     storing the values in the context for later binding.
     """
-    # If parameters already exist, skip literal parameterization to avoid conflicts
-    # This preserves existing parameter styles (named, positional, etc.)
     if context.parameters:
         context.metadata["literals_parameterized"] = False
         context.metadata["parameter_count"] = (
@@ -238,28 +215,20 @@ def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformCont
         )
         return context
 
-    # First, collect all literals in SQL order
     literals_in_order: list[tuple[exp.Literal, str]] = []
     sql_before = context.current_expression.sql(dialect=context.dialect)
 
-    # First pass: collect literals
     for node in context.current_expression.walk():
-        # Skip literals that shouldn't be parameterized
         if isinstance(node, exp.Literal) and not isinstance(
             node.parent, (exp.Placeholder, exp.Parameter, exp.Limit, exp.Offset, exp.Fetch, exp.WindowSpec)
         ):
-            # Skip literals that are direct aliases (like 'processed' as status)
             if isinstance(node.parent, exp.Alias) and node.parent.this == node:
                 continue
-            # Skip literals that are direct SELECT expressions (like SELECT 1, SELECT 'test')
-            # These are typically used for testing connectivity and should not be parameterized
             if isinstance(node.parent, exp.Select) and node in node.parent.expressions:
                 continue
-            # Get the SQL position by finding the literal in the SQL string
             literal_sql = node.sql(dialect=context.dialect)
             literals_in_order.append((node, literal_sql))
 
-    # Sort by position in SQL string
     literal_positions = []
     remaining_sql = sql_before
     for literal, literal_sql in literals_in_order:
@@ -270,42 +239,33 @@ def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformCont
 
     literal_positions.sort(key=operator.itemgetter(0))
 
-    # Ensure parameters is a dict for parameterization
     if not isinstance(context.parameters, dict):
         context.parameters = {}
 
-    # Create parameter mapping
     param_index = len(context.parameters)
     literal_to_param: dict[tuple[str, str], str] = {}
 
     for _, literal, literal_sql in literal_positions:
         param_name = f"param_{param_index}"
-        # Create TypedParameter with proper Python type for driver compatibility
-        # This provides proper types to asyncpg while maintaining backward compatibility
         python_value = literal.to_py()
         python_type = type(python_value).__name__
 
-        # Determine SQLGlot data type based on literal type
-        if literal.is_number:
-            data_type = exp.DataType.build("FLOAT") if "." in str(literal.this) else exp.DataType.build("INTEGER")
-        elif literal.is_string:
-            data_type = exp.DataType.build("VARCHAR")
-        else:
-            # Handle other types (boolean, null, etc.)
-            data_type = exp.DataType.build("VARCHAR")
+        data_type = (
+            exp.DataType.build("FLOAT")
+            if literal.is_number and "." in str(literal.this)
+            else exp.DataType.build("INTEGER")
+            if literal.is_number
+            else exp.DataType.build("VARCHAR")
+        )
 
         context.parameters[param_name] = TypedParameter(value=python_value, data_type=data_type, type_hint=python_type)
-        # Use literal value and SQL representation as key for more reliable lookup
-        literal_key = (str(literal.this), literal_sql)
-        literal_to_param[literal_key] = param_name
+        literal_to_param[str(literal.this), literal_sql] = param_name
         param_index += 1
 
-    # Second pass: replace literals with placeholders
     def replace_literal(node: exp.Expression) -> exp.Expression:
         if isinstance(node, exp.Literal) and not isinstance(
             node.parent, (exp.Placeholder, exp.Parameter, exp.Limit, exp.Offset, exp.Fetch, exp.WindowSpec)
         ):
-            # Skip literals that are direct aliases (like 'processed' as status)
             if isinstance(node.parent, exp.Alias) and node.parent.this == node:
                 return node
             literal_key = (str(node.this), node.sql(dialect=context.dialect))
@@ -313,10 +273,8 @@ def parameterize_literals_step(context: SQLTransformContext) -> SQLTransformCont
                 return exp.Placeholder(this=literal_to_param[literal_key])
         return node
 
-    # Transform the expression tree
     context.current_expression = context.current_expression.transform(replace_literal)
 
-    # Record in metadata
     context.metadata["literals_parameterized"] = True
     context.metadata["parameter_count"] = param_index
 
@@ -351,7 +309,6 @@ def validate_step(context: SQLTransformContext) -> SQLTransformContext:
     issues = []
     warnings = []
 
-    # Define suspicious functions that might indicate security issues
     suspicious_functions = {
         "sleep",
         "benchmark",
@@ -367,29 +324,24 @@ def validate_step(context: SQLTransformContext) -> SQLTransformContext:
         suspicious_functions.update(context.driver_adapter.suspicious_functions)
 
     for node in context.current_expression.walk():
-        # Check for suspicious functions
         if isinstance(node, exp.Func):
             func_name = node.name.lower() if node.name else ""
             if func_name in suspicious_functions:
                 issues.append(f"Suspicious function detected: {func_name}")
 
-        # Check for UNION injection patterns
         if isinstance(node, exp.Union) and isinstance(node.expression, exp.Select):
             select_expr = node.expression
             if hasattr(select_expr, "expressions"):
                 null_count = sum(1 for expr in select_expr.expressions if isinstance(expr, exp.Null))
-                # Suspicious NULL padding (UNION injection often uses multiple NULLs)
                 suspicious_null_count = 3
                 if null_count > suspicious_null_count:
                     warnings.append("Potential UNION injection pattern detected")
 
-        # Check for tautologies (1=1, 'a'='a', etc.)
         if isinstance(node, exp.EQ):
             left, right = node.this, node.expression
             if isinstance(left, exp.Literal) and isinstance(right, exp.Literal) and left.this == right.this:
                 warnings.append(f"Tautology condition detected: {node.sql()}")
 
-        # Check for comment injection
         if isinstance(node, exp.Comment):
             warnings.append("SQL comment detected - potential injection vector")
 
@@ -397,7 +349,6 @@ def validate_step(context: SQLTransformContext) -> SQLTransformContext:
     context.metadata["validation_warnings"] = warnings
     context.metadata["validated"] = True
 
-    # Log critical issues
     if issues:
         logger.warning("Security validation issues: %s", issues)
 
@@ -452,7 +403,6 @@ def metadata_extraction_step(context: SQLTransformContext) -> SQLTransformContex
     metadata = context.metadata.setdefault("analysis_metadata", {})
 
     try:
-        # Extract table information
         tables = set()
         for node in context.current_expression.walk():
             if isinstance(node, exp.Table):
@@ -462,14 +412,12 @@ def metadata_extraction_step(context: SQLTransformContext) -> SQLTransformContex
 
         metadata["tables"] = list(tables)
 
-        # Extract column information
         columns = set()
         for node in context.current_expression.walk():
             if isinstance(node, exp.Column):
                 column_name = str(node.this) if node.this else ""
                 if column_name and column_name != "*":
                     columns.add(column_name)
-            # For INSERT statements, column names appear as Identifiers in Schema nodes
             elif isinstance(node, exp.Identifier) and isinstance(node.parent, exp.Schema):
                 column_name = str(node.this) if node.this else ""
                 if column_name:
@@ -477,7 +425,6 @@ def metadata_extraction_step(context: SQLTransformContext) -> SQLTransformContex
 
         metadata["columns"] = list(columns)
 
-        # Determine operation type
         if isinstance(context.current_expression, exp.Select):
             metadata["operation_type"] = "SELECT"
         elif isinstance(context.current_expression, exp.Insert):
@@ -491,11 +438,9 @@ def metadata_extraction_step(context: SQLTransformContext) -> SQLTransformContex
         else:
             metadata["operation_type"] = "OTHER"
 
-        # Extract JOIN information
         joins = []
         for node in context.current_expression.walk():
             if isinstance(node, exp.Join):
-                # Get join type from the 'side' attribute (LEFT, RIGHT, etc.) or default to INNER
                 join_side = getattr(node, "side", None)
                 if join_side:
                     joins.append(join_side.upper())
@@ -524,29 +469,17 @@ def returns_rows_analysis_step(context: SQLTransformContext) -> SQLTransformCont
     try:
         returns_rows = False
 
-        # Analyze the expression type using AST traversal
         if isinstance(context.current_expression, exp.Select):
             returns_rows = True
-        elif isinstance(context.current_expression, exp.Insert):
-            # INSERT with RETURNING clause returns rows
-            returns_rows = bool(context.current_expression.find(exp.Returning))
-        elif isinstance(context.current_expression, exp.Update):
-            # UPDATE with RETURNING clause returns rows
-            returns_rows = bool(context.current_expression.find(exp.Returning))
-        elif isinstance(context.current_expression, exp.Delete):
-            # DELETE with RETURNING clause returns rows
+        elif isinstance(context.current_expression, (exp.Insert, exp.Update, exp.Delete)):
             returns_rows = bool(context.current_expression.find(exp.Returning))
         elif isinstance(context.current_expression, exp.Anonymous):
-            # For anonymous expressions, try to analyze the SQL structure more intelligently
             returns_rows = _analyze_anonymous_returns_rows(context.current_expression)
         elif isinstance(context.current_expression, (exp.Show, exp.Describe, exp.Pragma)):
-            # These statement types typically return rows
             returns_rows = True
         elif isinstance(context.current_expression, exp.With):
-            # WITH (CTE) statements - check if they contain SELECT
             returns_rows = bool(context.current_expression.find(exp.Select))
         else:
-            # Other statement types (CREATE, DROP, ALTER, etc.) typically don't return rows
             returns_rows = False
 
         context.metadata["returns_rows"] = returns_rows
@@ -556,7 +489,6 @@ def returns_rows_analysis_step(context: SQLTransformContext) -> SQLTransformCont
         logger.warning("Returns rows analysis failed: %s", e)
         context.metadata["returns_rows_analyzed"] = False
         context.metadata["returns_rows_analysis_error"] = str(e)
-        # Default to False for safety
         context.metadata["returns_rows"] = False
 
     return context
@@ -578,13 +510,12 @@ def parameter_analysis_step(context: SQLTransformContext) -> SQLTransformContext
             "parameter_positions": [],
         }
 
-        # Analyze parameters from context
         if context.parameters:
             if isinstance(context.parameters, dict):
                 analysis["parameter_count"] = len(context.parameters)
                 analysis["has_named_parameters"] = True
                 for value in context.parameters.values():
-                    if hasattr(value, "value"):  # TypedParameter
+                    if hasattr(value, "value"):
                         analysis["parameter_types"].add(type(value.value).__name__)
                     else:
                         analysis["parameter_types"].add(type(value).__name__)
@@ -592,12 +523,11 @@ def parameter_analysis_step(context: SQLTransformContext) -> SQLTransformContext
                 analysis["parameter_count"] = len(context.parameters)
                 analysis["has_positional_parameters"] = True
                 for value in context.parameters:
-                    if hasattr(value, "value"):  # TypedParameter
+                    if hasattr(value, "value"):
                         analysis["parameter_types"].add(type(value.value).__name__)
                     else:
                         analysis["parameter_types"].add(type(value).__name__)
 
-        # Analyze placeholders in expression
         placeholder_count = 0
         for node in context.current_expression.walk():
             if isinstance(node, (exp.Placeholder, exp.Parameter)):
@@ -628,19 +558,12 @@ def _analyze_anonymous_returns_rows(anonymous_expr: exp.Anonymous) -> bool:
     if not anonymous_expr or not anonymous_expr.this:
         return False
 
-    # Try to analyze the structure first by checking for known expression types within
-    # the anonymous expression - sometimes subexpressions are parsed correctly even
-    # if the overall statement is anonymous
-
-    # Check if the anonymous expression contains SELECT statements
     if anonymous_expr.find(exp.Select):
         return True
 
-    # Check if it contains RETURNING clauses (for DML with RETURNING)
     if anonymous_expr.find(exp.Returning):
         return True
 
-    # Check for other row-returning expression types
     if (
         anonymous_expr.find(exp.Show)
         or anonymous_expr.find(exp.Describe)
@@ -649,15 +572,12 @@ def _analyze_anonymous_returns_rows(anonymous_expr: exp.Anonymous) -> bool:
     ):
         return True
 
-    # Fallback to text analysis for statements that couldn't be parsed
     sql_text = str(anonymous_expr.this).strip().upper() if anonymous_expr.this else ""
     if not sql_text:
         return False
 
-    # Common patterns that return rows
     returns_patterns = ["SELECT", "SHOW", "DESCRIBE", "DESC", "EXPLAIN", "PRAGMA", "WITH", "VALUES"]
 
-    # Common patterns that don't return rows
     no_returns_patterns = [
         "INSERT",
         "UPDATE",
@@ -677,10 +597,8 @@ def _analyze_anonymous_returns_rows(anonymous_expr: exp.Anonymous) -> bool:
     if first_word in returns_patterns:
         return True
     if first_word in no_returns_patterns:
-        # Check for RETURNING clause using AST first, fallback to text
         if anonymous_expr.find(exp.Returning):
             return True
         return "RETURNING" in sql_text
 
-    # Default to False for unknown patterns
     return False

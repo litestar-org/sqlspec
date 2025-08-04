@@ -273,11 +273,9 @@ def is_dataclass_instance(obj: Any) -> "TypeGuard[DataclassProtocol]":
     Returns:
         True if the object is a dataclass instance.
     """
-    # and that its type is a dataclass.
     if isinstance(obj, type):
         return False
     try:
-        # Check if type has __dataclass_fields__
         _ = type(obj).__dataclass_fields__
     except AttributeError:
         return False

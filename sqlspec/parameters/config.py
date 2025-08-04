@@ -34,12 +34,21 @@ class ParameterStyleConfig:
         needs_static_script_compilation: bool = True,
         allow_mixed_parameter_styles: bool = False,
     ) -> None:
-        """Initialize driver parameter configuration."""
+        """Initialize driver parameter configuration.
 
-        if supported_parameter_styles is None:
-            supported_parameter_styles = {default_parameter_style}
+        Args:
+            default_parameter_style: The default parameter style for the driver
+            supported_parameter_styles: Set of parameter styles supported by the driver
+            supported_execution_parameter_styles: Set of execution parameter styles supported
+            default_execution_parameter_style: Default execution parameter style
+            type_coercion_map: Mapping of types to their coercion functions
+            has_native_list_expansion: Whether the driver supports native list expansion
+            output_transformer: Function to transform output parameters
+            needs_static_script_compilation: Whether scripts need static compilation
+            allow_mixed_parameter_styles: Whether mixed parameter styles are allowed
+        """
 
-        self.supported_parameter_styles = supported_parameter_styles
+        self.supported_parameter_styles = supported_parameter_styles or {default_parameter_style}
         self.default_parameter_style = default_parameter_style
         self.supported_execution_parameter_styles = supported_execution_parameter_styles
         self.default_execution_parameter_style = default_execution_parameter_style
@@ -56,18 +65,20 @@ class ParameterStyleConfig:
         for use in cache keys, ensuring different parameter configurations
         don't share cache entries.
         """
-        # Create tuple of all configuration values that affect compilation
-        config_tuple = (
-            self.default_parameter_style.value if self.default_parameter_style else None,
-            tuple(sorted(s.value for s in self.supported_parameter_styles)) if self.supported_parameter_styles else (),
-            tuple(sorted(s.value for s in self.supported_execution_parameter_styles))
-            if self.supported_execution_parameter_styles
-            else (),
-            self.default_execution_parameter_style.value if self.default_execution_parameter_style else None,
-            self.has_native_list_expansion,
-            bool(self.output_transformer),  # Don't hash the function object itself
-            self.needs_static_script_compilation,
-            self.allow_mixed_parameter_styles,
-            tuple(sorted(str(k) for k in self.type_coercion_map)) if self.type_coercion_map else (),
+        return hash(
+            (
+                self.default_parameter_style.value if self.default_parameter_style else None,
+                tuple(sorted(s.value for s in self.supported_parameter_styles))
+                if self.supported_parameter_styles
+                else (),
+                tuple(sorted(s.value for s in self.supported_execution_parameter_styles))
+                if self.supported_execution_parameter_styles
+                else (),
+                self.default_execution_parameter_style.value if self.default_execution_parameter_style else None,
+                self.has_native_list_expansion,
+                bool(self.output_transformer),
+                self.needs_static_script_compilation,
+                self.allow_mixed_parameter_styles,
+                tuple(sorted(str(k) for k in self.type_coercion_map)) if self.type_coercion_map else (),
+            )
         )
-        return hash(config_tuple)

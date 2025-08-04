@@ -106,7 +106,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
             console.print(f"[yellow]Found {len(pending)} pending migrations[/]")
 
-            # Execute migrations
             for version, file_path in pending:
                 migration = self.runner.load_migration(file_path)
 
@@ -189,11 +188,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             file_type: Type of migration file to create ('sql' or 'py').
         """
         existing = self.runner.get_migration_files()
-        if existing:
-            last_version = existing[-1][0]
-            next_num = int(last_version) + 1
-        else:
-            next_num = 1
+        next_num = int(existing[-1][0]) + 1 if existing else 1
         next_version = str(next_num).zfill(4)
         file_path = create_migration_file(self.migrations_path, next_version, message, file_type)
         console.print(f"[green]Created migration:[/] {file_path}")
@@ -356,11 +351,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             file_type: Type of migration file to create ('sql' or 'py').
         """
         existing = await self.runner.get_migration_files()
-        if existing:
-            last_version = existing[-1][0]
-            next_num = int(last_version) + 1
-        else:
-            next_num = 1
+        next_num = int(existing[-1][0]) + 1 if existing else 1
         next_version = str(next_num).zfill(4)
         file_path = create_migration_file(self.migrations_path, next_version, message, file_type)
         console.print(f"[green]Created migration:[/] {file_path}")

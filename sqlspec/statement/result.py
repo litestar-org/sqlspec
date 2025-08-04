@@ -142,10 +142,9 @@ class SQLResult(StatementResult):
         total_statements: int = 0,
         successful_statements: int = 0,
     ) -> None:
-        # Call parent constructor with base parameters
         super().__init__(
             statement=statement,
-            data=data,  # Don't convert None to [] here, let parent handle it
+            data=data,
             rows_affected=rows_affected,
             last_inserted_id=last_inserted_id,
             execution_time=execution_time,
@@ -321,11 +320,12 @@ class SQLResult(StatementResult):
         Raises:
             ValueError: If no results or more than one result
         """
-        if len(self.data) == 0:
+        data_len = len(self.data)
+        if data_len == 0:
             msg = "No result found, exactly one row expected"
             raise ValueError(msg)
-        if len(self.data) > 1:
-            msg = f"Multiple results found ({len(self.data)}), exactly one row expected"
+        if data_len > 1:
+            msg = f"Multiple results found ({data_len}), exactly one row expected"
             raise ValueError(msg)
         return cast("dict[str, Any]", self.data[0])
 
@@ -338,10 +338,11 @@ class SQLResult(StatementResult):
         Raises:
             ValueError: If more than one result
         """
-        if not self.data or len(self.data) == 0:
+        if not self.data:
             return None
-        if len(self.data) > 1:
-            msg = f"Multiple results found ({len(self.data)}), at most one row expected"
+        data_len = len(self.data)
+        if data_len > 1:
+            msg = f"Multiple results found ({data_len}), at most one row expected"
             raise ValueError(msg)
         return cast("dict[str, Any]", self.data[0])
 
@@ -392,7 +393,6 @@ class ArrowResult(StatementResult):
         metadata: Optional["dict[str, Any]"] = None,
         schema: Optional["dict[str, Any]"] = None,
     ) -> None:
-        # Initialize parent
         super().__init__(
             statement=statement,
             data=data,
@@ -402,7 +402,6 @@ class ArrowResult(StatementResult):
             metadata=metadata,
         )
 
-        # Initialize ArrowResult-specific attributes
         self.schema = schema
         """Optional Arrow schema information."""
 

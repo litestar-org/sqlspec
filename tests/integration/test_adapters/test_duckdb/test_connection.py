@@ -9,17 +9,14 @@ from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import StatementConfig
 
 
-# Helper function to create permissive config
 def create_permissive_config(**kwargs: Any) -> DuckDBConfig:
     """Create a DuckDB config with permissive SQL settings."""
     statement_config = StatementConfig(enable_validation=False)
     if "statement_config" not in kwargs:
         kwargs["statement_config"] = statement_config
 
-    # Extract connection config parameters
     connection_config = kwargs.pop("connection_config", {})
 
-    # Move individual connection parameters to connection_config
     for param in [
         "database",
         "read_only",
@@ -36,7 +33,6 @@ def create_permissive_config(**kwargs: Any) -> DuckDBConfig:
         if param in kwargs:
             connection_config[param] = kwargs.pop(param)
 
-    # Set default database if not provided
     if "database" not in connection_config:
         connection_config["database"] = ":memory:"
 
@@ -51,7 +47,6 @@ def test_basic_connection() -> None:
 
     with config.provide_connection() as conn:
         assert conn is not None
-        # Test basic query
         cur = conn.cursor()
         cur.execute("SELECT 1")
         result = cur.fetchone()  # pyright: ignore
@@ -59,17 +54,14 @@ def test_basic_connection() -> None:
         assert result[0] == 1
         cur.close()
 
-    # Test session management
     with config.provide_session() as session:
         assert session is not None
-        # Test basic query through session
         select_result = session.execute("SELECT 1")
         assert isinstance(select_result, SQLResult)
         assert select_result.data is not None
         assert len(select_result.data) == 1
         assert select_result.column_names is not None
         result = select_result.data[0][select_result.column_names[0]]
-        # DuckDB may return strings for numeric literals
         assert result in (1, "1")
 
 
@@ -79,15 +71,11 @@ def test_memory_database_connection() -> None:
     config = create_permissive_config()
 
     with config.provide_session() as session:
-        # Create a test table
         session.execute_script("CREATE TABLE test_memory (id INTEGER, name TEXT)")
 
-        # Insert data - use tuple for positional parameters
         insert_result = session.execute("INSERT INTO test_memory VALUES (?, ?)", (1, "test"))
-        # Note: DuckDB doesn't support rowcount properly, so we can't check rows_affected
         assert insert_result is not None
 
-        # Query data
         select_result = session.execute("SELECT id, name FROM test_memory")
         assert len(select_result.data) == 1
         assert select_result.data[0]["id"] == 1
@@ -100,10 +88,8 @@ def test_connection_with_performance_settings() -> None:
     config = create_permissive_config(memory_limit="512MB", threads=2, enable_object_cache=True)
 
     with config.provide_session() as session:
-        # Test that performance settings don't interfere with basic operations
         result = session.execute("SELECT 42 as test_value")
         assert result.data is not None
-        # DuckDB may return strings for numeric literals
         assert result.data[0]["test_value"] in (42, "42")
 
 
@@ -115,18 +101,15 @@ def test_connection_with_data_processing_settings() -> None:
     )
 
     with config.provide_session() as session:
-        # Create test data with NULLs to test ordering
         session.execute_script("""
             CREATE TABLE test_ordering (id INTEGER, value INTEGER);
             INSERT INTO test_ordering VALUES (1, 10), (2, NULL), (3, 5);
         """)
 
-        # Test ordering with NULL handling
         result = session.execute("SELECT id, value FROM test_ordering ORDER BY value")
         assert len(result.data) == 3
 
-        # With NULLS_FIRST, NULL should come first, then 5, then 10
-        assert result.data[0]["value"] is None  # NULL comes first
+        assert result.data[0]["value"] is None
         assert result.data[1]["value"] == 5
         assert result.data[2]["value"] == 10
 
@@ -138,7 +121,6 @@ def test_connection_with_instrumentation() -> None:
     config = DuckDBConfig(pool_config={"database": ":memory:"}, statement_config=statement_config)
 
     with config.provide_session() as session:
-        # Test that instrumentation doesn't interfere with operations
         result = session.execute("SELECT ? as test_value", (42))
         assert result.data is not None
         assert result.data[0]["test_value"] == 42
@@ -152,7 +134,6 @@ def test_connection_with_hook() -> None:
     def connection_hook(conn: DuckDBConnection) -> None:
         nonlocal hook_executed
         hook_executed = True
-        # Set a custom setting via the hook
         conn.execute("SET threads = 1")
 
     statement_config = StatementConfig(enable_validation=False)
@@ -165,30 +146,24 @@ def test_connection_with_hook() -> None:
     with config.provide_session() as session:
         assert hook_executed is True
 
-        # Verify the hook setting was applied
         result = session.execute("SELECT current_setting('threads')")
         assert result.data is not None
         setting_value = result.data[0][result.column_names[0]]
-        # DuckDB returns integer values for numeric settings
         assert setting_value == 1 or setting_value == "1"
 
 
 @pytest.mark.xdist_group("duckdb")
 def test_connection_read_only_mode() -> None:
     """Test DuckDB connection in read-only mode."""
-    # Note: Read-only mode requires an existing database file
-    # For testing, we'll create a temporary database first
     import os
     import tempfile
     import time
 
-    # Create a temporary file path but don't create the file yet - let DuckDB create it
     temp_fd, temp_db_path = tempfile.mkstemp(suffix=".duckdb")
-    os.close(temp_fd)  # Close the file descriptor
-    os.unlink(temp_db_path)  # Remove the empty file so DuckDB can create it fresh
+    os.close(temp_fd)
+    os.unlink(temp_db_path)
 
     try:
-        # First, create a database with some data
         setup_config = create_permissive_config(database=temp_db_path)
 
         with setup_config.provide_session() as session:
@@ -197,34 +172,25 @@ def test_connection_read_only_mode() -> None:
                 INSERT INTO test_readonly VALUES (1, 'test_data');
             """)
 
-        # Explicitly close any remaining connections and clear pool
         if hasattr(setup_config, "pool_instance") and setup_config.pool_instance:
             setup_config.pool_instance.close()
             setup_config.pool_instance = None  # type: ignore[assignment]
 
-        # Give DuckDB time to release the file lock
         time.sleep(0.1)
 
-        # Now test read-only access
         readonly_config = create_permissive_config(database=temp_db_path, read_only=True)
 
         with readonly_config.provide_session() as session:
-            # Should be able to read data
             result = session.execute("SELECT id, value FROM test_readonly")
             assert len(result.data) == 1
             assert result.data[0]["id"] == 1
             assert result.data[0]["value"] == "test_data"
 
-            # Should not be able to write (this would raise an exception in real read-only mode)
-            # For now, we'll just verify the read operation worked
-
-        # Clean up readonly config connections
         if hasattr(readonly_config, "pool_instance") and readonly_config.pool_instance:
             readonly_config.pool_instance.close()
             readonly_config.pool_instance = None  # type: ignore[assignment]
 
     finally:
-        # Clean up the temporary file
         if os.path.exists(temp_db_path):
             os.unlink(temp_db_path)
 
@@ -232,12 +198,9 @@ def test_connection_read_only_mode() -> None:
 @pytest.mark.xdist_group("duckdb")
 def test_connection_with_logging_settings() -> None:
     """Test DuckDB connection with logging configuration."""
-    # Note: DuckDB logging configuration parameters might not be supported
-    # or might cause segfaults with certain values. Using basic config for now.
     config = create_permissive_config()
 
     with config.provide_session() as session:
-        # Test that logging settings don't interfere with operations
         result = session.execute("SELECT 'logging_test' as message")
         assert result.data is not None
         assert result.data[0]["message"] == "logging_test"
@@ -247,13 +210,10 @@ def test_connection_with_logging_settings() -> None:
 def test_connection_with_extension_settings() -> None:
     """Test DuckDB connection with extension-related settings."""
     config = create_permissive_config(
-        autoload_known_extensions=True,
-        autoinstall_known_extensions=False,  # Don't auto-install to avoid network dependencies
-        allow_community_extensions=False,
+        autoload_known_extensions=True, autoinstall_known_extensions=False, allow_community_extensions=False
     )
 
     with config.provide_session() as session:
-        # Test that extension settings don't interfere with basic operations
         result = session.execute("SELECT 'extension_test' as message")
         assert result.data is not None
         assert result.data[0]["message"] == "extension_test"
@@ -265,32 +225,27 @@ def test_multiple_concurrent_connections() -> None:
     config1 = DuckDBConfig()
     config2 = DuckDBConfig()
 
-    # Test that multiple connections can work independently
     with config1.provide_session() as session1, config2.provide_session() as session2:
-        # Create different tables in each session
         session1.execute_script("CREATE TABLE session1_table (id INTEGER)")
         session2.execute_script("CREATE TABLE session2_table (id INTEGER)")
 
-        # Insert data in each session - use tuples for positional parameters
         session1.execute("INSERT INTO session1_table VALUES (?)", (1))
         session2.execute("INSERT INTO session2_table VALUES (?)", (2))
 
-        # Verify data isolation
         result1 = session1.execute("SELECT id FROM session1_table")
         result2 = session2.execute("SELECT id FROM session2_table")
 
         assert result1.data[0]["id"] == 1
         assert result2.data[0]["id"] == 2
 
-        # Verify tables don't exist in the other session
         try:
             session1.execute("SELECT id FROM session2_table")
             assert False, "Should not be able to access other session's table"
         except Exception:
-            pass  # Expected
+            pass
 
         try:
             session2.execute("SELECT id FROM session1_table")
             assert False, "Should not be able to access other session's table"
         except Exception:
-            pass  # Expected
+            pass

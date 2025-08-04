@@ -10,7 +10,15 @@ from typing import TYPE_CHECKING, Any, Final, Optional, Union
 if TYPE_CHECKING:
     from sqlglot import exp
 
-__all__ = ("ConvertedParameters", "ParameterInfo", "ParameterStyle", "ParameterStyleConversionState", "TypedParameter")
+__all__ = (
+    "MAX_32BIT_INT",
+    "SQLGLOT_INCOMPATIBLE_STYLES",
+    "ConvertedParameters",
+    "ParameterInfo",
+    "ParameterStyle",
+    "ParameterStyleConversionState",
+    "TypedParameter",
+)
 
 
 class ParameterStyle(str, Enum):
@@ -51,28 +59,20 @@ class ParameterInfo:
         self.placeholder_text = placeholder_text
 
     def __eq__(self, other: object) -> bool:
-        """Equality comparison (excludes ordinal and placeholder_text like dataclass compare=False)."""
+        """Equality comparison for ParameterInfo objects."""
         if not isinstance(other, type(self)):
             return False
         return self.name == other.name and self.style == other.style and self.position == other.position
 
     def __repr__(self) -> str:
         """String representation compatible with dataclass.__repr__."""
-        # mypyc removes __slots__ at runtime, so we hardcode the fields
-        field_strs = [
-            f"name={self.name!r}",
-            f"ordinal={self.ordinal!r}",
-            f"placeholder_text={self.placeholder_text!r}",
-            f"position={self.position!r}",
-            f"style={self.style!r}",
-        ]
-        return f"{type(self).__name__}({', '.join(field_strs)})"
+        return f"{type(self).__name__}({', '.join([f'name={self.name!r}', f'ordinal={self.ordinal!r}', f'placeholder_text={self.placeholder_text!r}', f'position={self.position!r}', f'style={self.style!r}'])})"
 
     def __hash__(self) -> int:
         """Make ParameterInfo hashable for use in cache keys.
 
-        We hash based on the name, style, and position, which are the key attributes
-        that affect SQL compilation and parameter handling.
+        Returns:
+            Hash value based on name, style, and position attributes.
         """
         return hash((self.name, self.style, self.position))
 
@@ -101,17 +101,13 @@ class TypedParameter:
     def __hash__(self) -> int:
         """Make TypedParameter hashable for use in cache keys.
 
-        We hash based on the value and type_hint, which are the key attributes
-        that affect SQL compilation and parameter handling.
+        Returns:
+            Hash value based on value, type_hint, and semantic_name attributes.
         """
-        if isinstance(self.value, (list, dict)):
+        try:
+            value_hash = hash(self.value) if not isinstance(self.value, (list, dict)) else hash(repr(self.value))
+        except TypeError:
             value_hash = hash(repr(self.value))
-        else:
-            try:
-                value_hash = hash(self.value)
-            except TypeError:
-                value_hash = hash(repr(self.value))
-
         return hash((value_hash, self.type_hint, self.semantic_name))
 
     def __eq__(self, other: object) -> bool:
@@ -127,19 +123,10 @@ class TypedParameter:
 
     def __repr__(self) -> str:
         """String representation compatible with dataclass.__repr__."""
-        field_strs = [
-            f"semantic_name={self.semantic_name!r}",
-            f"data_type={self.data_type!r}",
-            f"type_hint={self.type_hint!r}",
-            f"value={self.value!r}",
-        ]
-        return f"{type(self).__name__}({', '.join(field_strs)})"
+        return f"{type(self).__name__}({', '.join([f'semantic_name={self.semantic_name!r}', f'data_type={self.data_type!r}', f'type_hint={self.type_hint!r}', f'value={self.value!r}'])})"
 
 
-# Constants
 MAX_32BIT_INT: Final[int] = 2147483647
-
-# Define SQLGlot incompatible styles after ParameterStyle enum
 SQLGLOT_INCOMPATIBLE_STYLES: Final = {
     ParameterStyle.POSITIONAL_PYFORMAT,
     ParameterStyle.NAMED_PYFORMAT,
@@ -190,7 +177,6 @@ class ParameterStyleConversionState:
         self.reverse_map = reverse_map or {}
         self.original_param_info = original_param_info or []
 
-        # Build reverse map if not provided
         if self.placeholder_map and not self.reverse_map:
             self.reverse_map = {v: k for k, v in self.placeholder_map.items()}
 
@@ -209,15 +195,7 @@ class ParameterStyleConversionState:
 
     def __repr__(self) -> str:
         """String representation compatible with dataclass.__repr__."""
-        field_strs = [
-            f"original_param_info={self.original_param_info!r}",
-            f"original_styles={self.original_styles!r}",
-            f"placeholder_map={self.placeholder_map!r}",
-            f"reverse_map={self.reverse_map!r}",
-            f"transformation_style={self.transformation_style!r}",
-            f"was_transformed={self.was_transformed!r}",
-        ]
-        return f"{type(self).__name__}({', '.join(field_strs)})"
+        return f"{type(self).__name__}({', '.join([f'original_param_info={self.original_param_info!r}', f'original_styles={self.original_styles!r}', f'placeholder_map={self.placeholder_map!r}', f'reverse_map={self.reverse_map!r}', f'transformation_style={self.transformation_style!r}', f'was_transformed={self.was_transformed!r}'])})"
 
 
 class ConvertedParameters:
@@ -239,7 +217,7 @@ class ConvertedParameters:
         self,
         transformed_sql: str,
         parameter_info: list[ParameterInfo],
-        merged_parameters: Any,  # SQLParameterType
+        merged_parameters: Any,
         conversion_state: ParameterStyleConversionState,
     ) -> None:
         self.transformed_sql = transformed_sql
@@ -260,10 +238,4 @@ class ConvertedParameters:
 
     def __repr__(self) -> str:
         """String representation compatible with dataclass.__repr__."""
-        field_strs = [
-            f"conversion_state={self.conversion_state!r}",
-            f"merged_parameters={self.merged_parameters!r}",
-            f"parameter_info={self.parameter_info!r}",
-            f"transformed_sql={self.transformed_sql!r}",
-        ]
-        return f"{type(self).__name__}({', '.join(field_strs)})"
+        return f"{type(self).__name__}({', '.join([f'conversion_state={self.conversion_state!r}', f'merged_parameters={self.merged_parameters!r}', f'parameter_info={self.parameter_info!r}', f'transformed_sql={self.transformed_sql!r}'])})"

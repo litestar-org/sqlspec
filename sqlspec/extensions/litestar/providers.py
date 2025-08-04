@@ -148,9 +148,7 @@ def create_filter_dependencies(
     Returns:
         A dependency provider function for the combined filter function.
     """
-    cache_key = hash(_make_hashable(config))
-    deps = dep_cache.get_dependencies(cache_key)
-    if deps is not None:
+    if (deps := dep_cache.get_dependencies(cache_key := hash(_make_hashable(config)))) is not None:
         return deps
     deps = _create_statement_filters(config, dep_defaults)
     dep_cache.add_dependencies(cache_key, deps)
@@ -175,12 +173,12 @@ def _make_hashable(value: Any) -> HashableType:
     if isinstance(value, dict):
         items = []
         for k in sorted(value.keys()):  # pyright: ignore
-            v = value[k]  # pyright: ignore
-            items.append((str(k), _make_hashable(v)))  # pyright: ignore
-        return tuple(items)  # pyright: ignore
+            v = value[k]
+            items.append((str(k), _make_hashable(v)))
+        return tuple(items)
     if isinstance(value, (list, set)):
-        hashable_items = [_make_hashable(item) for item in value]  # pyright: ignore
-        filtered_items = [item for item in hashable_items if item is not None]  # pyright: ignore
+        hashable_items = [_make_hashable(item) for item in value]
+        filtered_items = [item for item in hashable_items if item is not None]
         return tuple(sorted(filtered_items, key=str))
     if isinstance(value, (str, int, float, bool, type(None))):
         return value

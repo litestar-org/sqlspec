@@ -106,9 +106,6 @@ class CommonDriverAttributesMixin:
     statement_config: "StatementConfig"
     driver_features: "dict[str, Any]"
 
-    # ================================================================================
-    # Initialization
-    # ================================================================================
     def __init__(
         self, connection: "Any", statement_config: "StatementConfig", driver_features: "Optional[dict[str, Any]]" = None
     ) -> None:
@@ -123,25 +120,17 @@ class CommonDriverAttributesMixin:
         self.statement_config = statement_config
         self.driver_features = driver_features or {}
 
-    # ================================================================================
-    # Execution Result Utilities
-    # ================================================================================
-
     def create_execution_result(
         self,
         cursor_result: Any,
         *,
-        # For all operations
         rowcount_override: Optional[int] = None,
         special_data: Any = None,
-        # For SELECT operations
         selected_data: Optional["list[dict[str, Any]]"] = None,
         column_names: Optional["list[str]"] = None,
         data_row_count: Optional[int] = None,
-        # For script operations
         statement_count: Optional[int] = None,
         successful_statements: Optional[int] = None,
-        # Operation type flags
         is_script_result: bool = False,
         is_select_result: bool = False,
         is_many_result: bool = False,
@@ -211,16 +200,10 @@ class CommonDriverAttributesMixin:
             SQLResult with complete execution data
         """
         if execution_result.is_script_result:
-            # Script execution - use pre-calculated statement counts
-            row_count = (
-                execution_result.rowcount_override
-                if execution_result.rowcount_override is not None
-                else 0  # Default for scripts when no rowcount provided
-            )
             return SQLResult(
                 statement=statement,
                 data=[],
-                rows_affected=row_count,
+                rows_affected=execution_result.rowcount_override or 0,
                 operation_type="SCRIPT",
                 total_statements=execution_result.statement_count or 0,
                 successful_statements=execution_result.successful_statements or 0,
@@ -228,7 +211,6 @@ class CommonDriverAttributesMixin:
             )
 
         if execution_result.is_select_result:
-            # SELECT operation - use pre-extracted data
             return SQLResult(
                 statement=statement,
                 data=execution_result.selected_data or [],
@@ -238,19 +220,13 @@ class CommonDriverAttributesMixin:
                 metadata=execution_result.special_data or {},
             )
 
-        # Non-SELECT operation (INSERT/UPDATE/DELETE)
-        row_count = execution_result.rowcount_override if execution_result.rowcount_override is not None else 0
         return SQLResult(
             statement=statement,
             data=[],
-            rows_affected=row_count,
+            rows_affected=execution_result.rowcount_override or 0,
             operation_type=self._determine_operation_type(statement),
             metadata=execution_result.special_data or {"status_message": "OK"},
         )
-
-    # ================================================================================
-    # SQL Analysis & Detection Methods
-    # ================================================================================
 
     def _determine_operation_type(self, statement: "Any") -> OperationType:
         """Determine operation type from SQL statement expression.
@@ -304,8 +280,6 @@ class CommonDriverAttributesMixin:
             return statement.to_statement(statement_config)
         if isinstance(statement, SQL):
             if parameters or kwargs:
-                # Create a brand new SQL object instead of copying to avoid parameter type conversion issues
-                # This ensures clean parameter handling especially for ADBC drivers
                 merged_params = (
                     (*statement._positional_params, *parameters) if parameters else statement._positional_params
                 )
@@ -315,8 +289,6 @@ class CommonDriverAttributesMixin:
                 or statement.statement_config.dialect != self.statement_config.dialect
             ):
                 new_config = statement.statement_config.replace(dialect=self.statement_config.dialect)
-                if statement.parameters:
-                    return statement.copy(statement_config=new_config, dialect=self.statement_config.dialect)
                 return statement.copy(statement_config=new_config, dialect=self.statement_config.dialect)
             return statement
         return SQL(statement, *parameters, statement_config=statement_config, **kwargs)
@@ -366,11 +338,11 @@ class CommonDriverAttributesMixin:
         """
         if not parameters:
             return []
-
-        if is_many:
-            return [self._format_parameter_set(param_set, statement_config) for param_set in parameters]
-
-        return self._format_parameter_set(parameters, statement_config)
+        return (
+            [self._format_parameter_set(params, statement_config) for params in parameters]
+            if is_many
+            else self._format_parameter_set(parameters, statement_config)
+        )
 
     def _format_parameter_set(self, parameters: Any, statement_config: "StatementConfig") -> Any:
         """Prepare a single parameter set for database driver consumption.
@@ -385,13 +357,10 @@ class CommonDriverAttributesMixin:
         if not parameters:
             return []
 
-        # Apply type coercion map if available
         def apply_type_coercion(value: Any) -> Any:
             """Apply type coercion to a single value."""
-            # Unwrap TypedParameter first
             unwrapped_value = value.value if isinstance(value, TypedParameter) else value
 
-            # Apply type coercion map if available
             if statement_config.parameter_config.type_coercion_map:
                 for type_check, converter in statement_config.parameter_config.type_coercion_map.items():
                     if isinstance(unwrapped_value, type_check):
@@ -402,23 +371,18 @@ class CommonDriverAttributesMixin:
         if isinstance(parameters, dict):
             if not parameters:
                 return []
-            # Check if we should convert dict to list based on supported execution styles
-            # If the driver supports named parameters natively, keep dicts as dicts
             if (
                 statement_config.parameter_config.supported_execution_parameter_styles
                 and ParameterStyle.NAMED_PYFORMAT
                 in statement_config.parameter_config.supported_execution_parameter_styles
             ):
-                # Driver supports named parameters, keep as dict
                 return {k: apply_type_coercion(v) for k, v in parameters.items()}
             if statement_config.parameter_config.default_parameter_style in {
                 ParameterStyle.NUMERIC,
                 ParameterStyle.QMARK,
                 ParameterStyle.POSITIONAL_PYFORMAT,
             }:
-                # Convert dict to ordered list based on numeric or param_ keys
                 ordered_params = []
-                # Sort by numeric key or param_0, param_1 pattern to maintain parameter order
                 sorted_items = sorted(
                     parameters.items(),
                     key=lambda item: int(item[0])
@@ -429,7 +393,6 @@ class CommonDriverAttributesMixin:
                     ordered_params.append(apply_type_coercion(value))
                 return ordered_params
 
-            # For named parameter styles, keep as dict
             return {k: apply_type_coercion(v) for k, v in parameters.items()}
 
         if isinstance(parameters, (list, tuple)):
@@ -467,10 +430,6 @@ class CommonDriverAttributesMixin:
         result_context = pipeline(context)
         return result_context.current_expression, result_context.merged_parameters
 
-    # ================================================================================
-    # SQL Compilation Methods
-    # ================================================================================
-
     def _get_compiled_sql(
         self, statement: "SQL", statement_config: "StatementConfig", flatten_single_params: bool = False
     ) -> tuple[str, Any]:
@@ -484,55 +443,38 @@ class CommonDriverAttributesMixin:
         Returns:
             Tuple of (compiled_sql, parameters)
         """
-
-        # Check if caching is enabled
         cache_config = get_cache_config()
         cache_key = None
         if cache_config.compiled_cache_enabled and statement_config.enable_caching:
-            # Generate cache key that includes parameter style context
             cache_key = self._generate_compilation_cache_key(statement, statement_config, flatten_single_params)
-
-            # Try cache first
             cached_result = sql_cache.get(cache_key)
             if cached_result is not None:
                 sql, params = cached_result
-                # Apply driver parameter preparation to cached params
                 prepared_params = self.prepare_driver_parameters(params, statement_config, is_many=statement.is_many)
-                # Apply output_transformer if configured
                 if statement_config.parameter_config.output_transformer:
                     sql, prepared_params = statement_config.parameter_config.output_transformer(sql, prepared_params)
                 return sql, prepared_params
-
-        # Determine target parameter style (existing logic)
         if statement.is_script and not statement_config.parameter_config.needs_static_script_compilation:
             target_style = ParameterStyle.STATIC
         elif statement_config.parameter_config.supported_execution_parameter_styles is not None:
-            # New system: check if current style is supported, otherwise use default
             current_style = statement.detect_parameter_style()
             if (
                 current_style
                 and current_style in statement_config.parameter_config.supported_execution_parameter_styles
             ):
-                # Current style is supported, preserve original (don't convert)
                 target_style = None
             else:
-                # Current style not supported, convert to default execution style
                 target_style = statement_config.parameter_config.default_execution_parameter_style
         else:
-            # No execution style configuration, use default parameter style for explicit compilation
             target_style = statement_config.parameter_config.default_parameter_style
 
-        # Compile the SQL
         sql, params = statement.compile(placeholder_style=target_style, flatten_single_params=flatten_single_params)
 
-        # Cache the compilation result if caching is enabled (before driver preparation)
         if cache_key is not None:
             sql_cache.set(cache_key, (sql, params))
 
-        # Prepare parameters for driver
         prepared_params = self.prepare_driver_parameters(params, statement_config, is_many=statement.is_many)
 
-        # Apply output_transformer if configured
         if statement_config.parameter_config.output_transformer:
             sql, prepared_params = statement_config.parameter_config.output_transformer(sql, prepared_params)
 
@@ -547,8 +489,6 @@ class CommonDriverAttributesMixin:
         that affect SQL compilation, preventing cache contamination between
         different compilation contexts.
         """
-
-        # Include all factors that affect compilation
         context_hash = hash(
             (
                 config.parameter_config.hash(),
@@ -578,14 +518,10 @@ class CommonDriverAttributesMixin:
         expr = original_sql.expression.copy()
 
         if isinstance(expr, exp.Select):
-            # Check if query has GROUP BY clause
             if expr.args.get("group"):
-                # For GROUP BY queries, wrap in subquery and count rows
-                # This counts the number of groups, not the total rows
                 subquery = expr.subquery(alias="grouped_data")
                 count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
             else:
-                # Simple case: replace SELECT list with COUNT(*)
                 count_expr = exp.select(exp.Count(this=exp.Star())).from_(
                     cast("exp.Expression", expr.args.get("from")), copy=False
                 )
@@ -594,16 +530,12 @@ class CommonDriverAttributesMixin:
                 if expr.args.get("having"):
                     count_expr = count_expr.having(cast("exp.Expression", expr.args.get("having")), copy=False)
 
-            # Remove ORDER BY, LIMIT, OFFSET - preserve WHERE, HAVING, GROUP BY
             count_expr.set("order", None)
             count_expr.set("limit", None)
             count_expr.set("offset", None)
 
-            # Create new SQL with same parameters and config as original
             return SQL(count_expr, *original_sql._positional_params, statement_config=original_sql.statement_config)
 
-        # Handle other query types (UNION, etc.) - wrap in subquery
         subquery = cast("exp.Select", expr).subquery(alias="total_query")
         count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
-        # Create new SQL with same parameters and config as original
         return SQL(count_expr, *original_sql._positional_params, statement_config=original_sql.statement_config)

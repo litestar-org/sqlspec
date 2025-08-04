@@ -69,7 +69,6 @@ class QueryBuilder(ABC):
     def __post_init__(self) -> None:
         self._expression = self._create_base_expression()
         if not self._expression:
-            # This path should be unreachable if _raise_sql_builder_error has NoReturn
             self._raise_sql_builder_error(
                 "QueryBuilder._create_base_expression must return a valid sqlglot expression."
             )
@@ -120,7 +119,6 @@ class QueryBuilder(ABC):
         """
         self._parameter_counter += 1
 
-        # Use context-aware naming if provided
         param_name = f"{context}_param_{self._parameter_counter}" if context else f"param_{self._parameter_counter}"
 
         self._parameters[param_name] = value
@@ -142,10 +140,8 @@ class QueryBuilder(ABC):
 
         def replacer(node: exp.Expression) -> exp.Expression:
             if isinstance(node, exp.Literal):
-                # Skip boolean literals (TRUE/FALSE) and NULL
                 if node.this in {True, False, None}:
                     return node
-                # Convert other literals to parameters
                 param_name = self._add_parameter(node.this, context="where")
                 return exp.Placeholder(this=param_name)
             return node
@@ -207,7 +203,6 @@ class QueryBuilder(ABC):
         """
         import hashlib
 
-        # Collect all builder state that affects the final SQL
         state_components = [
             f"expression:{self._expression.sql() if self._expression else 'None'}",
             f"parameters:{sorted(self._parameters.items())}",
@@ -220,7 +215,6 @@ class QueryBuilder(ABC):
             f"simplify_expressions:{self.simplify_expressions}",
         ]
 
-        # Include StatementConfig if provided
         if config:
             config_components = [
                 f"config_dialect:{config.dialect or 'default'}",
@@ -233,7 +227,6 @@ class QueryBuilder(ABC):
             ]
             state_components.extend(config_components)
 
-        # Create a hash of all state components
         state_string = "|".join(state_components)
         cache_key = hashlib.sha256(state_string.encode()).hexdigest()[:16]
 
@@ -263,7 +256,6 @@ class QueryBuilder(ABC):
                 self._raise_sql_builder_error(msg)
             cte_select_expression = query._expression.copy()
             for p_name, p_value in query.parameters.items():
-                # Try to preserve original parameter name, only rename if collision
                 unique_name = self._generate_unique_parameter_name(p_name)
                 self.add_parameter(p_value, unique_name)
 
@@ -273,7 +265,6 @@ class QueryBuilder(ABC):
                 if not isinstance(parsed_expression, exp.Select):
                     msg = f"CTE query string must parse to a SELECT statement, got {type(parsed_expression).__name__}."
                     self._raise_sql_builder_error(msg)
-                # parsed_expression is now known to be exp.Select
                 cte_select_expression = parsed_expression
             except SQLGlotParseError as e:
                 self._raise_sql_builder_error(f"Failed to parse CTE query string: {e!s}", e)
@@ -285,7 +276,7 @@ class QueryBuilder(ABC):
         else:
             msg = f"Invalid query type for CTE: {type(query).__name__}"
             self._raise_sql_builder_error(msg)
-            return self  # This line won't be reached but satisfies type checkers
+            return self
 
         self._with_ctes[alias] = exp.CTE(this=cte_select_expression, alias=exp.to_table(alias))
         return self
@@ -299,22 +290,22 @@ class QueryBuilder(ABC):
         if self._expression is None:
             self._raise_sql_builder_error("QueryBuilder expression not initialized.")
 
-        final_expression = self._expression.copy()
-
         if self._with_ctes:
+            final_expression = self._expression.copy()
             if has_with_method(final_expression):
-                # Type checker now knows final_expression has with_ method
                 for alias, cte_node in self._with_ctes.items():
                     final_expression = cast("Any", final_expression).with_(cte_node.args["this"], as_=alias, copy=False)
             elif isinstance(final_expression, (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union)):
                 final_expression = exp.With(expressions=list(self._with_ctes.values()), this=final_expression)
+        else:
+            final_expression = self._expression.copy() if self.enable_optimization else self._expression
 
         if self.enable_optimization and isinstance(final_expression, exp.Expression):
             final_expression = self._optimize_expression(final_expression)
 
         try:
             if has_sql_method(final_expression):
-                sql_string = final_expression.sql(dialect=self.dialect_name, pretty=True)  # pyright: ignore[reportAttributeAccessIssue]
+                sql_string = final_expression.sql(dialect=self.dialect_name, pretty=True)
             else:
                 sql_string = str(final_expression)
         except Exception as e:
@@ -336,7 +327,6 @@ class QueryBuilder(ABC):
         if not self.enable_optimization:
             return expression
 
-        # Generate cache key based on expression structure and optimization settings
         optimizer_settings = {
             "optimize_joins": self.optimize_joins,
             "pushdown_predicates": self.optimize_predicates,
@@ -348,22 +338,18 @@ class QueryBuilder(ABC):
             expression, dialect=dialect_name, schema=self.schema, optimizer_settings=optimizer_settings
         )
 
-        # Check cache first
         cached_optimized = optimized_expression_cache.get(cache_key)
         if cached_optimized:
             return cast("exp.Expression", cached_optimized.copy())
 
         try:
-            # Use SQLGlot's comprehensive optimizer
             optimized = optimize(
                 expression.copy(), schema=self.schema, dialect=self.dialect_name, optimizer_settings=optimizer_settings
             )
 
-            # Cache the optimized expression
             optimized_expression_cache.set(cache_key, optimized.copy())
 
         except Exception:
-            # Continue with unoptimized query on failure
             return expression
         else:
             return optimized
@@ -377,21 +363,16 @@ class QueryBuilder(ABC):
         Returns:
             SQL: A SQL statement object.
         """
-        # Check cache configuration first
         cache_config = get_cache_config()
         if not cache_config.builder_cache_enabled:
             return self._to_statement_without_cache(config)
 
-        # Generate cache key including the StatementConfig context
         cache_key = self._generate_builder_cache_key(config)
 
-        # Check cache first
         cached_sql = builder_cache.get(cache_key)
         if cached_sql is not None:
-            # Return a copy to prevent modifications to cached object
             return cast("SQL", cached_sql.copy())
 
-        # Build SQL statement and cache result
         sql_statement = self._to_statement_without_cache(config)
         builder_cache.set(cache_key, sql_statement)
 
@@ -426,13 +407,11 @@ class QueryBuilder(ABC):
             from sqlspec.parameters.config import ParameterStyleConfig
             from sqlspec.statement.sql import StatementConfig
 
-            # Create a basic parameter config for the query builder
             parameter_config = ParameterStyleConfig(
                 default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
             )
             config = StatementConfig(parameter_config=parameter_config, dialect=safe_query.dialect)
 
-        # SQL expects parameters as variadic args, not as a keyword
         if kwargs:
             return SQL(safe_query.sql, statement_config=config, **kwargs)
         if parameters:

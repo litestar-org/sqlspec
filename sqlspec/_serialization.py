@@ -15,10 +15,9 @@ def _type_to_string(value: Any) -> str:  # pragma: no cover
     if PYDANTIC_INSTALLED and isinstance(value, BaseModel):
         return value.model_dump_json()
     try:
-        val = str(value)
+        return str(value)
     except Exception as exc:
         raise TypeError from exc
-    return val
 
 
 try:

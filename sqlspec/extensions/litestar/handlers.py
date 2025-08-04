@@ -156,7 +156,7 @@ def lifespan_handler_maker(
             try:
                 await ensure_async_(config.close_pool)()
             except Exception as e:
-                if app.logger:  # pragma: no cover
+                if app.logger:
                     app.logger.warning("Error closing database pool for %s. Error: %s", pool_key, e)
 
     return lifespan_handler
@@ -189,11 +189,7 @@ def pool_provider_maker(
         Raises:
             ImproperConfigurationError: If the pool is not found in `app.state`.
         """
-        # The pool is stored in app.state by the lifespan handler.
-        # state.get(key) accesses app.state[key]
-        db_pool = state.get(pool_key)
-        if db_pool is None:
-            # This case should ideally not happen if the lifespan handler ran correctly.
+        if (db_pool := state.get(pool_key)) is None:
             msg = (
                 f"Database pool with key '{pool_key}' not found in application state. "
                 "Ensure the SQLSpec lifespan handler is correctly configured and has run."
@@ -208,8 +204,7 @@ def connection_provider_maker(
     config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", pool_key: str, connection_key: str
 ) -> "Callable[[State, Scope], AsyncGenerator[ConnectionT, None]]":
     async def provide_connection(state: "State", scope: "Scope") -> "AsyncGenerator[ConnectionT, None]":
-        db_pool = state.get(pool_key)
-        if db_pool is None:
+        if (db_pool := state.get(pool_key)) is None:
             msg = f"Database pool with key '{pool_key}' not found. Cannot create a connection."
             raise ImproperConfigurationError(msg)
 
@@ -225,15 +220,13 @@ def connection_provider_maker(
             yield conn_instance
             return
 
-        entered_connection: Optional[ConnectionT] = None
+        entered_connection = await connection_cm.__aenter__()
         try:
-            entered_connection = await connection_cm.__aenter__()
             set_sqlspec_scope_state(scope, connection_key, entered_connection)
             yield entered_connection
         finally:
-            if entered_connection is not None:
-                await connection_cm.__aexit__(None, None, None)
-                delete_sqlspec_scope_state(scope, connection_key)  # Clear from scope
+            await connection_cm.__aexit__(None, None, None)
+            delete_sqlspec_scope_state(scope, connection_key)
 
     return provide_connection
 

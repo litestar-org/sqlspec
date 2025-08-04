@@ -54,7 +54,7 @@ class Token:
         self.value = value
         self.line = line
         self.column = column
-        self.position = position  # Absolute position in the script
+        self.position = position
 
 
 TokenHandler: TypeAlias = Callable[[str, int, int, int], Optional[Token]]
@@ -102,30 +102,24 @@ class DialectConfig(ABC):
 
     def get_all_token_patterns(self) -> list[tuple[TokenType, TokenPattern]]:
         """Assembles the complete, ordered list of token regex patterns."""
-        # 1. Start with high-precedence patterns
         patterns: list[tuple[TokenType, TokenPattern]] = [
             (TokenType.COMMENT_LINE, r"--[^\n]*"),
             (TokenType.COMMENT_BLOCK, r"/\*[\s\S]*?\*/"),
             (TokenType.STRING_LITERAL, r"'(?:[^']|'')*'"),
-            (TokenType.QUOTED_IDENTIFIER, r'"[^"]*"|\[[^\]]*\]'),  # Standard and T-SQL
+            (TokenType.QUOTED_IDENTIFIER, r'"[^"]*"|\[[^\]]*\]'),
         ]
 
-        # 2. Add dialect-specific patterns (can be overridden)
         patterns.extend(self._get_dialect_specific_patterns())
 
-        # 3. Dynamically build and insert keyword/separator patterns
         all_keywords = self.block_starters | self.block_enders | self.batch_separators
         if all_keywords:
             sorted_keywords = sorted(all_keywords, key=len, reverse=True)
             patterns.append((TokenType.KEYWORD, r"\b(" + "|".join(re.escape(kw) for kw in sorted_keywords) + r")\b"))
 
-        # 4. Add terminators
         all_terminators = self.statement_terminators | set(self.special_terminators.keys())
         if all_terminators:
-            # Escape special regex characters
             patterns.append((TokenType.TERMINATOR, "|".join(re.escape(t) for t in all_terminators)))
 
-        # 5. Add low-precedence patterns
         patterns.extend([(TokenType.WHITESPACE, r"\s+"), (TokenType.OTHER, r".")])
 
         return patterns
@@ -141,7 +135,7 @@ class DialectConfig(ABC):
         Override in dialect configs to handle cases like END IF, END LOOP, etc.
         that are not true block enders.
         """
-        _ = tokens, current_pos  # Default implementation doesn't use these
+        _ = tokens, current_pos
         return True
 
     def should_delay_semicolon_termination(self, tokens: list[Token], current_pos: int) -> bool:
@@ -149,7 +143,7 @@ class DialectConfig(ABC):
 
         Override in dialect configs to handle special cases like Oracle END; /
         """
-        _ = tokens, current_pos  # Default implementation doesn't use these
+        _ = tokens, current_pos
         return False
 
 
@@ -181,7 +175,6 @@ class OracleDialectConfig(DialectConfig):
 
         In Oracle, after END; we should check if there's a / coming up on its own line.
         """
-        # Look backwards to see if we just processed an END token
         pos = current_pos - 1
         while pos >= 0:
             token = tokens[pos]
@@ -189,10 +182,7 @@ class OracleDialectConfig(DialectConfig):
                 pos -= 1
                 continue
             if token.type == TokenType.KEYWORD and token.value.upper() == "END":
-                # We found END just before this semicolon
-                # Now look ahead to see if there's a / on its own line
                 return self._has_upcoming_slash(tokens, current_pos)
-            # Found something else, not an END
             break
 
         return False
@@ -210,13 +200,10 @@ class OracleDialectConfig(DialectConfig):
                 pos += 1
                 continue
             if token.type == TokenType.TERMINATOR and token.value == "/":
-                # Found a /, check if it's valid (on its own line)
                 return found_newline and self._handle_slash_terminator(tokens, pos)
             if token.type in {TokenType.COMMENT_LINE, TokenType.COMMENT_BLOCK}:
-                # Skip comments
                 pos += 1
                 continue
-            # Found non-whitespace, non-comment content
             break
 
         return False
@@ -228,7 +215,6 @@ class OracleDialectConfig(DialectConfig):
         In Oracle PL/SQL, END followed by IF, LOOP, CASE etc. are not block enders
         for BEGIN blocks - they terminate control structures.
         """
-        # Look ahead for the next non-whitespace token(s)
         pos = current_pos + 1
         while pos < len(tokens):
             next_token = tokens[pos]
@@ -237,7 +223,6 @@ class OracleDialectConfig(DialectConfig):
                 pos += 1
                 continue
             if next_token.type == TokenType.OTHER:
-                # Collect consecutive OTHER tokens to form a word
                 word_chars = []
                 word_pos = pos
                 while word_pos < len(tokens) and tokens[word_pos].type == TokenType.OTHER:
@@ -246,26 +231,23 @@ class OracleDialectConfig(DialectConfig):
 
                 word = "".join(word_chars).upper()
                 if word in {"IF", "LOOP", "CASE", "WHILE"}:
-                    return False  # This is not a block ender
-            # Found a non-whitespace token that's not one of our special cases
+                    return False
             break
-        return True  # This is a real block ender
+        return True
 
     @staticmethod
     def _handle_slash_terminator(tokens: list[Token], current_pos: int) -> bool:
         """Oracle / must be on its own line after whitespace only."""
         if current_pos == 0:
-            return True  # / at start is valid
+            return True
 
-        # Look backwards to find the start of the line
         pos = current_pos - 1
         while pos >= 0:
             token = tokens[pos]
             if "\n" in token.value:
-                # Found newline, check if only whitespace between newline and /
                 break
             if token.type not in {TokenType.WHITESPACE, TokenType.COMMENT_LINE}:
-                return False  # Non-whitespace before / on same line
+                return False
             pos -= 1
 
         return True
@@ -297,10 +279,8 @@ class TSQLDialectConfig(DialectConfig):
     @staticmethod
     def validate_batch_separator(tokens: list[Token], current_pos: int) -> bool:
         """GO must be the only keyword on its line."""
-        # Look for non-whitespace tokens on the same line
-        # Implementation similar to Oracle slash handler
-        _ = tokens, current_pos  # Simplified implementation
-        return True  # Simplified for now
+        _ = tokens, current_pos
+        return True
 
 
 class PostgreSQLDialectConfig(DialectConfig):
@@ -329,12 +309,11 @@ class PostgreSQLDialectConfig(DialectConfig):
     @staticmethod
     def _handle_dollar_quoted_string(text: str, position: int, line: int, column: int) -> Optional[Token]:
         """Handle PostgreSQL dollar-quoted strings like $tag$...$tag$."""
-        # Match opening tag
         start_match = re.match(r"\$([a-zA-Z_][a-zA-Z0-9_]*)?\$", text[position:])
         if not start_match:
             return None
 
-        tag = start_match.group(0)  # The full opening tag, e.g., "$tag$"
+        tag = start_match.group(0)
         content_start = position + len(tag)
 
         try:
@@ -343,7 +322,6 @@ class PostgreSQLDialectConfig(DialectConfig):
 
             return Token(type=TokenType.STRING_LITERAL, value=full_value, line=line, column=column, position=position)
         except ValueError:
-            # Closing tag not found
             return None
 
 
@@ -401,7 +379,6 @@ class SQLiteDialectConfig(DialectConfig):
 
     @property
     def block_starters(self) -> set[str]:
-        # SQLite has limited block support
         return {"BEGIN", "CASE"}
 
     @property
@@ -475,7 +452,6 @@ class StatementSplitter:
             if isinstance(pattern, str):
                 compiled.append((token_type, re.compile(pattern, re.IGNORECASE | re.DOTALL)))
             else:
-                # It's a callable
                 compiled.append((token_type, pattern))
         return compiled
 
@@ -497,7 +473,6 @@ class StatementSplitter:
 
             for token_type, pattern in self._compiled_patterns:
                 if callable(pattern):
-                    # Call the handler function
                     column = pos - line_start + 1
                     token = pattern(sql, pos, line, column)
                     if token:
@@ -512,7 +487,6 @@ class StatementSplitter:
                         matched = True
                         break
                 else:
-                    # Use regex
                     match = pattern.match(sql, pos)
                     if match:
                         value = match.group(0)
@@ -530,9 +504,8 @@ class StatementSplitter:
                         break
 
             if not matched:
-                # This should never happen with our catch-all OTHER pattern
                 logger.error("Failed to tokenize at position %d: %s", pos, sql[pos : pos + 20])
-                pos += 1  # Skip the problematic character
+                pos += 1
 
     def split(self, sql: str) -> list[str]:
         """Split the SQL script into individual statements."""
@@ -544,10 +517,8 @@ class StatementSplitter:
         all_tokens = list(self._tokenize(sql))
 
         for token_idx, token in enumerate(all_tokens):
-            # Always accumulate the original text
             current_statement_chars.append(token.value)
 
-            # Skip whitespace and comments for logic (but keep in output)
             if token.type in {TokenType.WHITESPACE, TokenType.COMMENT_LINE, TokenType.COMMENT_BLOCK}:
                 current_statement_tokens.append(token)
                 continue
@@ -565,39 +536,30 @@ class StatementSplitter:
                     if block_stack and self.dialect.is_real_block_ender(all_tokens, token_idx):
                         block_stack.pop()
 
-            # Check for statement termination
             is_terminator = False
-            if not block_stack:  # Only terminate when not inside a block
+            if not block_stack:
                 if token.type == TokenType.TERMINATOR:
                     if token.value in self.dialect.statement_terminators:
                         should_delay = self.dialect.should_delay_semicolon_termination(all_tokens, token_idx)
 
-                        # Also check if there's a batch separator coming up (for T-SQL GO)
                         if not should_delay and token.value == ";" and self.dialect.batch_separators:
-                            # In dialects with batch separators, semicolons don't terminate
-                            # statements - only batch separators do
                             should_delay = True
 
                         if not should_delay:
                             is_terminator = True
                     elif token.value in self.dialect.special_terminators:
-                        # Call the handler to validate
                         handler = self.dialect.special_terminators[token.value]
                         if handler(all_tokens, token_idx):
                             is_terminator = True
 
                 elif token.type == TokenType.KEYWORD and token_upper in self.dialect.batch_separators:
-                    # Batch separators like GO should be included with the preceding statement
                     is_terminator = True
 
             if is_terminator:
-                # Save the statement
                 statement = "".join(current_statement_chars).strip()
 
                 is_plsql_block = self._is_plsql_block(current_statement_tokens)
 
-                # Optionally strip the trailing terminator
-                # For PL/SQL blocks, never strip the semicolon as it's syntactically required
                 if (
                     self.strip_trailing_semicolon
                     and token.type == TokenType.TERMINATOR
@@ -642,7 +604,6 @@ class StatementSplitter:
         Returns:
             True if the statement contains executable SQL, False if it's only comments/whitespace
         """
-        # Tokenize the statement to check its content
         tokens = list(self._tokenize(statement))
 
         for token in tokens:
@@ -681,7 +642,6 @@ def split_sql_script(script: str, dialect: Optional[str] = None, strip_trailing_
 
     config = dialect_configs.get(dialect.lower())
     if not config:
-        # Fall back to generic config for unknown dialects
         logger.warning("Unknown dialect '%s', using generic SQL splitter", dialect)
         config = GenericDialectConfig()
 

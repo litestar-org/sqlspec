@@ -93,8 +93,8 @@ class SQLFileLoader(BaseMigrationLoader):
         self.sql_loader.clear_cache()
         self.sql_loader.load_sql(path)
 
-        version: str = self._extract_version(path.name)
-        up_query: str = f"migrate-{version}-up"
+        version = self._extract_version(path.name)
+        up_query = f"migrate-{version}-up"
 
         if not self.sql_loader.has_query(up_query):
             msg = f"Migration {path} missing 'up' query: {up_query}"
@@ -115,8 +115,8 @@ class SQLFileLoader(BaseMigrationLoader):
         self.sql_loader.clear_cache()
         self.sql_loader.load_sql(path)
 
-        version: str = self._extract_version(path.name)
-        down_query: str = f"migrate-{version}-down"
+        version = self._extract_version(path.name)
+        down_query = f"migrate-{version}-down"
 
         if not self.sql_loader.has_query(down_query):
             return []
@@ -133,15 +133,14 @@ class SQLFileLoader(BaseMigrationLoader):
         Raises:
             MigrationLoadError: If file is invalid or missing required query.
         """
-        version: str = self._extract_version(path.name)
+        version = self._extract_version(path.name)
         if not version:
             msg = f"Invalid migration filename: {path.name}"
             raise MigrationLoadError(msg)
 
         self.sql_loader.clear_cache()
         self.sql_loader.load_sql(path)
-
-        up_query: str = f"migrate-{version}-up"
+        up_query = f"migrate-{version}-up"
         if not self.sql_loader.has_query(up_query):
             msg = f"Migration {path} missing required 'up' query: {up_query}"
             raise MigrationLoadError(msg)
@@ -155,10 +154,8 @@ class SQLFileLoader(BaseMigrationLoader):
         Returns:
             Zero-padded version string or empty string if invalid.
         """
-        parts: list[str] = filename.split("_", 1)
-        if parts and parts[0].isdigit():
-            return parts[0].zfill(4)
-        return ""
+        parts = filename.split("_", 1)
+        return parts[0].zfill(4) if parts and parts[0].isdigit() else ""
 
 
 class PythonFileLoader(BaseMigrationLoader):
@@ -174,8 +171,8 @@ class PythonFileLoader(BaseMigrationLoader):
             project_root: Optional project root directory for imports.
                          If not provided, will search upward for project markers.
         """
-        self.migrations_dir: Path = migrations_dir
-        self.project_root: Path = project_root if project_root is not None else self._find_project_root(migrations_dir)
+        self.migrations_dir = migrations_dir
+        self.project_root = project_root if project_root is not None else self._find_project_root(migrations_dir)
 
     async def get_up_sql(self, path: Path) -> list[str]:
         """Load Python migration and execute 'migrate_up' function.
@@ -264,22 +261,20 @@ class PythonFileLoader(BaseMigrationLoader):
         Returns:
             Path to project root or fallback to parent directory.
         """
-        current_path: Path = start_path.resolve()
+        current_path = start_path.resolve()
 
         while current_path != current_path.parent:
             for marker in PROJECT_ROOT_MARKERS:
-                marker_path: Path = current_path / marker
-                if marker_path.exists():
+                if (current_path / marker).exists():
                     return current_path
             current_path = current_path.parent
 
-        # If no marker found, return the parent of the start path
         return start_path.resolve().parent
 
     @contextmanager
     def _temporary_project_path(self) -> Iterator[None]:
         """Temporarily add project root to sys.path for imports."""
-        path_to_add: str = str(self.project_root)
+        path_to_add = str(self.project_root)
         if path_to_add in sys.path:
             yield
             return
@@ -302,26 +297,20 @@ class PythonFileLoader(BaseMigrationLoader):
         Raises:
             MigrationLoadError: If module loading fails.
         """
-        module_name: str = f"sqlspec_migration_{path.stem}"
+        module_name = f"sqlspec_migration_{path.stem}"
 
         if module_name in sys.modules:
             sys.modules.pop(module_name, None)
 
         try:
-            # Read and compile the module code
             source_code = path.read_text(encoding="utf-8")
             compiled_code = compile(source_code, str(path), "exec")
-
-            # Create new module and execute the compiled code
 
             module = types.ModuleType(module_name)
             module.__file__ = str(path)
 
-            # Add to sys.modules before execution to handle circular imports
             sys.modules[module_name] = module
 
-            # Execute the module code in the module's namespace
-            # This is necessary for dynamic module loading from migration files
             exec(compiled_code, module.__dict__)  # noqa: S102
 
         except Exception as e:
@@ -345,26 +334,25 @@ class PythonFileLoader(BaseMigrationLoader):
             MigrationLoadError: If return type is invalid.
         """
         if isinstance(sql, str):
-            stripped: str = sql.strip()
+            stripped = sql.strip()
             return [stripped] if stripped else []
-        type_name: str
         if isinstance(sql, list):
-            result: list[str] = []
+            result = []
             for i, item in enumerate(sql):
                 if not isinstance(item, str):
-                    type_name = type(item).__name__
                     msg = (
                         f"Migration {migration_path} returned a list containing a non-string "
-                        f"element at index {i} (type: {type_name})."
+                        f"element at index {i} (type: {type(item).__name__})."
                     )
                     raise MigrationLoadError(msg)
-                stripped_item: str = item.strip()
+                stripped_item = item.strip()
                 if stripped_item:
                     result.append(stripped_item)
             return result
 
-        type_name = type(sql).__name__
-        msg = f"Migration {migration_path} must return a 'str' or 'List[str]', but returned type '{type_name}'."
+        msg = (
+            f"Migration {migration_path} must return a 'str' or 'List[str]', but returned type '{type(sql).__name__}'."
+        )
         raise MigrationLoadError(msg)
 
 
@@ -384,7 +372,7 @@ def get_migration_loader(
     Raises:
         MigrationLoadError: If file type is not supported.
     """
-    suffix: str = file_path.suffix
+    suffix = file_path.suffix
 
     if suffix == ".py":
         return PythonFileLoader(migrations_dir, project_root)

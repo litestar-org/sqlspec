@@ -57,7 +57,7 @@ def import_string(dotted_path: str) -> "Any":
     try:
         parts = dotted_path.split(".")
         module = None
-        i = len(parts)  # Initialize to full length
+        i = len(parts)
 
         for i in range(len(parts), 0, -1):
             module_path = ".".join(parts[:i])
@@ -83,6 +83,7 @@ def import_string(dotted_path: str) -> "Any":
                 return obj
             if not hasattr(parent_module, attr):
                 _raise_import_error(f"Module '{parent_module_path}' has no attribute '{attr}' in '{dotted_path}'")
+
         for attr in attrs:
             if not hasattr(obj, attr):
                 _raise_import_error(

@@ -1,8 +1,5 @@
 # ruff: noqa: RUF100, PLR0913, A002, DOC201, PLR6301, PLR0917, ARG004
-"""This is a simple wrapper around a few important classes in each library.
-
-This is used to ensure compatibility when one or more of the libraries are installed.
-"""
+"""Wrapper around library classes for compatibility when libraries are installed."""
 
 from collections.abc import Iterable, Mapping
 from enum import Enum
@@ -14,11 +11,7 @@ from typing_extensions import Literal, TypeVar, dataclass_transform
 
 @runtime_checkable
 class DataclassProtocol(Protocol):
-    """Protocol for instance checking dataclasses.
-
-    This protocol only requires the presence of `__dataclass_fields__`, which is the
-    standard attribute that Python's dataclasses module adds to all dataclass instances.
-    """
+    """Protocol for instance checking dataclasses."""
 
     __dataclass_fields__: "ClassVar[dict[str, Any]]"
 
@@ -38,7 +31,7 @@ except ImportError:
     from dataclasses import dataclass
 
     class BaseModel(Protocol):  # type: ignore[no-redef]
-        """Placeholder Implementation"""
+        """Placeholder implementation."""
 
         model_fields: "ClassVar[dict[str, Any]]"
 
@@ -57,7 +50,7 @@ except ImportError:
             warnings: "Union[bool, Literal['none', 'warn', 'error']]" = True,
             serialize_as_any: bool = False,
         ) -> "dict[str, Any]":
-            """Placeholder"""
+            """Placeholder implementation."""
             return {}
 
         def model_dump_json(
@@ -75,12 +68,12 @@ except ImportError:
             warnings: "Union[bool, Literal['none', 'warn', 'error']]" = True,
             serialize_as_any: bool = False,
         ) -> str:
-            """Placeholder"""
+            """Placeholder implementation."""
             return ""
 
     @runtime_checkable
     class TypeAdapter(Protocol[T_co]):  # type: ignore[no-redef]
-        """Placeholder Implementation"""
+        """Placeholder implementation."""
 
         def __init__(
             self,
@@ -90,7 +83,7 @@ except ImportError:
             _parent_depth: int = 2,
             module: "Optional[str]" = None,
         ) -> None:
-            """Init"""
+            """Initialize."""
 
         def validate_python(
             self,
@@ -102,12 +95,12 @@ except ImportError:
             context: "Optional[dict[str, Any]]" = None,
             experimental_allow_partial: "Union[bool, Literal['off', 'on', 'trailing-strings']]" = False,
         ) -> "T_co":
-            """Stub"""
+            """Validate Python object."""
             return cast("T_co", object)
 
     @dataclass
     class FailFast:  # type: ignore[no-redef]
-        """Placeholder Implementation for FailFast"""
+        """Placeholder implementation for FailFast."""
 
         fail_fast: bool = True
 
@@ -130,7 +123,7 @@ except ImportError:
     @dataclass_transform()
     @runtime_checkable
     class Struct(Protocol):  # type: ignore[no-redef]
-        """Placeholder Implementation"""
+        """Placeholder implementation."""
 
         __struct_fields__: "ClassVar[tuple[str, ...]]"
 
@@ -144,7 +137,7 @@ except ImportError:
         builtin_types: "Optional[Iterable[type]]" = None,
         str_keys: bool = False,
     ) -> "Union[T, Any]":
-        """Placeholder implementation"""
+        """Placeholder implementation."""
         return {}
 
     class UnsetType(enum.Enum):  # type: ignore[no-redef]
@@ -161,22 +154,22 @@ except ImportError:
 
     @runtime_checkable
     class DTOData(Protocol[T]):  # type: ignore[no-redef]
-        """Placeholder implementation"""
+        """Placeholder implementation."""
 
         __slots__ = ("_backend", "_data_as_builtins")
 
         def __init__(self, backend: Any, data_as_builtins: Any) -> None:
-            """Placeholder init"""
+            """Initialize."""
 
         def create_instance(self, **kwargs: Any) -> T:
             return cast("T", kwargs)
 
         def update_instance(self, instance: T, **kwargs: Any) -> T:
-            """Placeholder implementation"""
+            """Update instance."""
             return cast("T", kwargs)
 
         def as_builtins(self) -> Any:
-            """Placeholder implementation"""
+            """Convert to builtins."""
             return {}
 
     LITESTAR_INSTALLED = False  # pyright: ignore[reportConstantRedefinition]

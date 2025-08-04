@@ -111,27 +111,17 @@ def await_(
                 raise RuntimeError(msg) from None
             return asyncio.run(partial_f())
         else:
-            # Running in an existing event loop.
             if loop.is_running():
                 try:
                     current_task = asyncio.current_task(loop=loop)
                 except RuntimeError:
-                    # Not running inside a task managed by this loop
                     current_task = None
 
                 if current_task is not None:
-                    # Called from within the event loop's execution context (a task).
-                    # Blocking here would deadlock the loop.
                     msg = "await_ cannot be called from within an async task running on the same event loop. Use 'await' instead."
                     raise RuntimeError(msg)
-                # Called from a different thread than the loop's thread.
-                # It's safe to block this thread and wait for the loop.
                 future = asyncio.run_coroutine_threadsafe(partial_f(), loop)
-                # This blocks the *calling* thread, not the loop thread.
                 return future.result()
-            # This case should ideally not happen if get_running_loop() succeeded
-            # but the loop isn't running, but handle defensively.
-            # loop is not running
             if raise_sync_error:
                 msg = "Cannot run async function"
                 raise RuntimeError(msg)

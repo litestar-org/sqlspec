@@ -44,7 +44,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
             The result of the SQL execution.
         """
 
-        # Ensure statement is processed before special handling to make metadata available
         statement._ensure_processed()
 
         async with self.with_cursor(connection) as cursor:
@@ -54,11 +53,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
 
             sql, params = self._get_compiled_sql(statement, self.statement_config)
 
-            # Single execution path - data handled in _execute_statement
             if statement.is_script:
                 execution_result = await self._execute_script(cursor, sql, params, self.statement_config, statement)
             elif statement.is_many:
-                # For execute_many, use param_list directly - parameters are ready to execute
                 execution_result = await self._execute_many(cursor, sql, statement.param_list, statement)
             else:
                 execution_result = await self._execute_statement(cursor, sql, params, statement)
@@ -121,19 +118,13 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
             ExecutionResult with script execution data including statement counts
         """
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
-        statement_count = len(statements)  # Script splitter already filters empty statements
 
         last_result = None
         for stmt in statements:
             last_result = await self._execute_statement(cursor, stmt, prepared_params, statement)
 
-        # Row count will be provided by individual drivers in ExecutionResult
-
         return self.create_execution_result(
-            last_result,
-            statement_count=statement_count,
-            successful_statements=statement_count,  # Assume all successful if no exception
-            is_script_result=True,
+            last_result, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
         )
 
     @abstractmethod
@@ -184,9 +175,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "SQLResult":
-        # Parameter handling is delegated to SQL class constructor
-        # which properly handles tuple expansion and parameter processing
-
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )
@@ -230,7 +218,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
 
         return await self.dispatch_statement_execution(statement=sql_statement.as_script(), connection=self.connection)
 
-    # Syntax Sugar Methods for Selecting Data Below:
     @overload
     async def select_one(
         self,
@@ -418,17 +405,14 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
             msg = f"Expected at most one row, found {len(data)}"
             raise ValueError(msg)
         row = data[0]
-        if isinstance(row, dict):
+        if is_dict_row(row):
             if not row:
                 return None
             return next(iter(row.values()))
-        if isinstance(row, (tuple, list)):
+        if is_indexable_row(row):
             return row[0]
-        try:
-            return row[0]
-        except (TypeError, IndexError) as e:
-            msg = f"Cannot extract value from row type {type(row).__name__}: {e}"
-            raise TypeError(msg) from e
+        msg = f"Cannot extract value from row type {type(row).__name__}"
+        raise TypeError(msg)
 
     @overload
     async def select_with_total(
@@ -485,12 +469,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
             ... )
             >>> print(f"Page data: {len(data)} rows, Total: {total} rows")
         """
-        # 1. Prepare original SQL statement
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )
         count_result = await self.dispatch_statement_execution(self._create_count_query(sql_statement), self.connection)
         select_result = await self.execute(sql_statement)
-        data = self.to_schema(select_result.get_data(), schema_type=schema_type)
 
-        return (data, count_result.scalar())
+        return (self.to_schema(select_result.get_data(), schema_type=schema_type), count_result.scalar())

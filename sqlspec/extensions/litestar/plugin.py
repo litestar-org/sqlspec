@@ -81,8 +81,7 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
             app_config.signature_types.append(c.config.driver_type)  # type: ignore[union-attr]
 
             if hasattr(c.config, "get_signature_namespace"):
-                config_namespace = c.config.get_signature_namespace()  # type: ignore[attr-defined]
-                signature_namespace.update(config_namespace)
+                signature_namespace.update(c.config.get_signature_namespace())  # type: ignore[attr-defined]
 
             app_config.before_send.append(c.before_send_handler)
             app_config.lifespan.append(c.lifespan_handler)  # pyright: ignore[reportUnknownMemberType]

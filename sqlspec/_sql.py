@@ -1,7 +1,6 @@
 """Unified SQL factory for creating SQL builders and column expressions with a clean API.
 
-This module provides the `sql` factory object for easy SQL construction:
-- `sql` provides both statement builders (select, insert, update, etc.) and column expressions
+Provides both statement builders (select, insert, update, etc.) and column expressions.
 """
 
 import logging
@@ -55,17 +54,13 @@ class SQLFactory:
     @classmethod
     def detect_sql_type(cls, sql: str, dialect: DialectType = None) -> str:
         try:
-            # Minimal parsing just to get the command type
             parsed_expr = sqlglot.parse_one(sql, read=dialect)
             if parsed_expr and parsed_expr.key:
                 return parsed_expr.key.upper()
-            # Fallback for expressions that might not have a direct 'key'
-            # or where key is None (e.g. some DDL without explicit command like SET)
             if parsed_expr:
-                # Attempt to get the class name as a fallback, e.g., "Set", "Command"
                 command_type = type(parsed_expr).__name__.upper()
                 if command_type == "COMMAND" and parsed_expr.this:
-                    return str(parsed_expr.this).upper()  # e.g. "SET", "ALTER"
+                    return str(parsed_expr.this).upper()
                 return command_type
         except SQLGlotParseError:
             logger.debug("Failed to parse SQL for type detection: %s", sql[:100])
@@ -108,7 +103,6 @@ class SQLFactory:
             msg = f"Failed to parse SQL: {e}"
             raise SQLBuilderError(msg) from e
         actual_type = type(parsed_expr).__name__.upper()
-        # Map sqlglot expression class to type string
         expr_type_map = {
             "SELECT": "SELECT",
             "INSERT": "INSERT",
@@ -920,11 +914,14 @@ class SQLFactory:
             # Creates: INSERT INTO "my_table" VALUES (:1, :2, :3)
             ```
         """
-        table_expr = exp.Table(this=exp.to_identifier(table_name))
-        placeholder_expressions = [exp.Placeholder(this=placeholder_style) for _ in range(column_count)]
-        values_expr = exp.Values(expressions=[exp.Tuple(expressions=placeholder_expressions)])
-
-        return exp.Insert(this=table_expr, expression=values_expr)
+        return exp.Insert(
+            this=exp.Table(this=exp.to_identifier(table_name)),
+            expression=exp.Values(
+                expressions=[
+                    exp.Tuple(expressions=[exp.Placeholder(this=placeholder_style) for _ in range(column_count)])
+                ]
+            ),
+        )
 
     def truncate(self, table_name: str) -> "Truncate":
         """Create a TRUNCATE TABLE builder.

@@ -1,5 +1,6 @@
 """Collection filter datastructures."""
 
+import uuid
 from abc import ABC, abstractmethod
 from collections import abc
 from collections.abc import Sequence
@@ -88,7 +89,6 @@ class BeforeAfterFilter(StatementFilter):
 
     __slots__ = ("_param_name_after", "_param_name_before", "after", "before", "field_name")
 
-    # Explicit property declarations for better IDE/linter support
     field_name: str
     before: Optional[datetime]
     after: Optional[datetime]
@@ -105,7 +105,6 @@ class BeforeAfterFilter(StatementFilter):
         self.before = before
         self.after = after
 
-        # Initialize parameter names
         self._param_name_before: Optional[str] = None
         self._param_name_after: Optional[str] = None
 
@@ -133,20 +132,20 @@ class BeforeAfterFilter(StatementFilter):
         if self.after and self._param_name_after:
             conditions.append(exp.GT(this=col_expr, expression=exp.Placeholder(this=self._param_name_after)))
 
-        if conditions:
-            final_condition = conditions[0]
-            for cond in conditions[1:]:
-                final_condition = exp.And(this=final_condition, expression=cond)
-            result = statement.where(final_condition)
-            _, named_params = self.extract_parameters()
-            for name, value in named_params.items():
-                result = result.add_named_parameter(name, value)
-            return result
-        return statement
+        if not conditions:
+            return statement
+
+        final_condition = conditions[0]
+        for cond in conditions[1:]:
+            final_condition = exp.And(this=final_condition, expression=cond)
+        result = statement.where(final_condition)
+        _, named_params = self.extract_parameters()
+        for name, value in named_params.items():
+            result = result.add_named_parameter(name, value)
+        return result
 
     def get_cache_key(self) -> tuple[Any, ...]:
         """Return cache key for this filter configuration."""
-        # Include field name and datetime values (or None) to uniquely identify this filter
         return ("BeforeAfterFilter", self.field_name, self.before, self.after)
 
 
@@ -155,7 +154,6 @@ class OnBeforeAfterFilter(StatementFilter):
 
     __slots__ = ("_param_name_on_or_after", "_param_name_on_or_before", "field_name", "on_or_after", "on_or_before")
 
-    # Explicit property declarations for better IDE/linter support
     field_name: str
     on_or_before: Optional[datetime]
     on_or_after: Optional[datetime]
@@ -174,7 +172,6 @@ class OnBeforeAfterFilter(StatementFilter):
         self.on_or_before = on_or_before
         self.on_or_after = on_or_after
 
-        # Initialize parameter names
         self._param_name_on_or_before: Optional[str] = None
         self._param_name_on_or_after: Optional[str] = None
 
@@ -206,20 +203,20 @@ class OnBeforeAfterFilter(StatementFilter):
                 exp.GTE(this=exp.column(self.field_name), expression=exp.Placeholder(this=self._param_name_on_or_after))
             )
 
-        if conditions:
-            final_condition = conditions[0]
-            for cond in conditions[1:]:
-                final_condition = exp.And(this=final_condition, expression=cond)
-            result = statement.where(final_condition)
-            _, named_params = self.extract_parameters()
-            for name, value in named_params.items():
-                result = result.add_named_parameter(name, value)
-            return result
-        return statement
+        if not conditions:
+            return statement
+
+        final_condition = conditions[0]
+        for cond in conditions[1:]:
+            final_condition = exp.And(this=final_condition, expression=cond)
+        result = statement.where(final_condition)
+        _, named_params = self.extract_parameters()
+        for name, value in named_params.items():
+            result = result.add_named_parameter(name, value)
+        return result
 
     def get_cache_key(self) -> tuple[Any, ...]:
         """Return cache key for this filter configuration."""
-        # Include field name and datetime values (or None) to uniquely identify this filter
         return ("OnBeforeAfterFilter", self.field_name, self.on_or_before, self.on_or_after)
 
 
@@ -241,7 +238,6 @@ class InCollectionFilter(InAnyFilter[T]):
 
     __slots__ = ("_param_names", "field_name", "values")
 
-    # Explicit property declarations for better IDE/linter support
     field_name: str
     values: Optional[abc.Collection[T]]
 
@@ -256,7 +252,6 @@ class InCollectionFilter(InAnyFilter[T]):
         self.field_name = field_name
         self.values = values
 
-        # Initialize parameter names
         self._param_names: list[str] = []
         if self.values:
             for i, _ in enumerate(self.values):
@@ -289,7 +284,6 @@ class InCollectionFilter(InAnyFilter[T]):
 
     def get_cache_key(self) -> tuple[Any, ...]:
         """Return cache key for this filter configuration."""
-        # Include field name and values (converted to tuple for hashability)
         values_tuple = tuple(self.values) if self.values is not None else None
         return ("InCollectionFilter", self.field_name, values_tuple)
 
@@ -299,7 +293,6 @@ class NotInCollectionFilter(InAnyFilter[T]):
 
     __slots__ = ("_param_names", "field_name", "values")
 
-    # Explicit property declarations for better IDE/linter support
     field_name: str
     values: Optional[abc.Collection[T]]
 
@@ -313,7 +306,6 @@ class NotInCollectionFilter(InAnyFilter[T]):
         self.field_name = field_name
         self.values = values
 
-        # Initialize parameter names
         self._param_names: list[str] = []
         if self.values:
             for i, _ in enumerate(self.values):
@@ -345,7 +337,6 @@ class NotInCollectionFilter(InAnyFilter[T]):
 
     def get_cache_key(self) -> tuple[Any, ...]:
         """Return cache key for this filter configuration."""
-        # Include field name and values (converted to tuple for hashability)
         values_tuple = tuple(self.values) if self.values is not None else None
         return ("NotInCollectionFilter", self.field_name, values_tuple)
 
@@ -355,7 +346,6 @@ class AnyCollectionFilter(InAnyFilter[T]):
 
     __slots__ = ("_param_names", "field_name", "values")
 
-    # Explicit property declarations for better IDE/linter support
     field_name: str
     values: Optional[abc.Collection[T]]
 
@@ -371,7 +361,6 @@ class AnyCollectionFilter(InAnyFilter[T]):
         self.field_name = field_name
         self.values = values
 
-        # Initialize parameter names
         self._param_names: list[str] = []
         if self.values:
             for i, _ in enumerate(self.values):
@@ -390,7 +379,6 @@ class AnyCollectionFilter(InAnyFilter[T]):
             return statement
 
         if not self.values:
-            # column = ANY (empty_array) is generally false
             return statement.where(exp.false())
 
         placeholder_expressions: list[exp.Expression] = [
@@ -398,7 +386,6 @@ class AnyCollectionFilter(InAnyFilter[T]):
         ]
 
         array_expr = exp.Array(expressions=placeholder_expressions)
-        # Generates SQL like: self.field_name = ANY(ARRAY[?, ?, ...])
         result = statement.where(exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr)))
         _, named_params = self.extract_parameters()
         for name, value in named_params.items():
@@ -407,7 +394,6 @@ class AnyCollectionFilter(InAnyFilter[T]):
 
     def get_cache_key(self) -> tuple[Any, ...]:
         """Return cache key for this filter configuration."""
-        # Include field name and values (converted to tuple for hashability)
         values_tuple = tuple(self.values) if self.values is not None else None
         return ("AnyCollectionFilter", self.field_name, values_tuple)
 
@@ -429,7 +415,6 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
         self.field_name = field_name
         self.values = values
 
-        # Initialize parameter names
         self._param_names: list[str] = []
         if self.values:
             for i, _ in enumerate(self.values):
@@ -445,8 +430,6 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         if self.values is None or not self.values:
-            # NOT (column = ANY (empty_array)) is generally true
-            # So, if values is empty or None, this filter should not restrict results.
             return statement
 
         placeholder_expressions: list[exp.Expression] = [
@@ -454,7 +437,6 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
         ]
 
         array_expr = exp.Array(expressions=placeholder_expressions)
-        # Generates SQL like: NOT (self.field_name = ANY(ARRAY[?, ?, ...]))
         condition = exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr))
         result = statement.where(exp.Not(this=condition))
         _, named_params = self.extract_parameters()
@@ -464,7 +446,6 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
 
     def get_cache_key(self) -> tuple[Any, ...]:
         """Return cache key for this filter configuration."""
-        # Include field name and values (converted to tuple for hashability)
         values_tuple = tuple(self.values) if self.values is not None else None
         return ("NotAnyCollectionFilter", self.field_name, values_tuple)
 
@@ -484,7 +465,6 @@ class LimitOffsetFilter(PaginationFilter):
 
     __slots__ = ("_limit_param_name", "_offset_param_name", "limit", "offset")
 
-    # Explicit property declarations for better IDE/linter support
     limit: int
     offset: int
 
@@ -498,10 +478,6 @@ class LimitOffsetFilter(PaginationFilter):
         self.limit = limit
         self.offset = offset
 
-        # Initialize parameter names
-        # Generate unique parameter names to avoid conflicts
-        import uuid
-
         unique_suffix = str(uuid.uuid4()).replace("-", "")[:8]
         self._limit_param_name = f"limit_{unique_suffix}"
         self._offset_param_name = f"offset_{unique_suffix}"
@@ -511,29 +487,22 @@ class LimitOffsetFilter(PaginationFilter):
         return [], {self._limit_param_name: self.limit, self._offset_param_name: self.offset}
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
-        # Create limit and offset expressions using our pre-generated parameter names
         from sqlglot import exp
 
         limit_placeholder = exp.Placeholder(this=self._limit_param_name)
         offset_placeholder = exp.Placeholder(this=self._offset_param_name)
 
-        # Apply LIMIT and OFFSET to the statement
-        result = statement
+        new_statement = (
+            statement._statement.limit(limit_placeholder)
+            if isinstance(statement._statement, exp.Select)
+            else exp.Select().from_(statement._statement).limit(limit_placeholder)
+        )
 
-        # Check if the statement supports LIMIT directly
-        if isinstance(result._statement, exp.Select):
-            new_statement = result._statement.limit(limit_placeholder)
-        else:
-            # Wrap in a SELECT if the statement doesn't support LIMIT directly
-            new_statement = exp.Select().from_(result._statement).limit(limit_placeholder)
-
-        # Add OFFSET
         if isinstance(new_statement, exp.Select):
             new_statement = new_statement.offset(offset_placeholder)
 
-        result = result.copy(statement=new_statement)
+        result = statement.copy(statement=new_statement)
 
-        # Add the parameters to the result
         _, named_params = self.extract_parameters()
         for name, value in named_params.items():
             result = result.add_named_parameter(name, value)
@@ -541,7 +510,6 @@ class LimitOffsetFilter(PaginationFilter):
 
     def get_cache_key(self) -> tuple[Any, ...]:
         """Return cache key for this filter configuration."""
-        # Include limit and offset values
         return ("LimitOffsetFilter", self.limit, self.offset)
 
 
@@ -550,7 +518,6 @@ class OrderByFilter(StatementFilter):
 
     __slots__ = ("field_name", "sort_order")
 
-    # Explicit property declarations for better IDE/linter support
     field_name: str
     sort_order: Literal["asc", "desc"]
 
@@ -566,7 +533,6 @@ class OrderByFilter(StatementFilter):
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
-        # ORDER BY doesn't use parameters, only column names and sort direction
         return [], {}
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
@@ -577,18 +543,15 @@ class OrderByFilter(StatementFilter):
         col_expr = exp.column(self.field_name)
         order_expr = col_expr.desc() if converted_sort_order == "desc" else col_expr.asc()
 
-        # Check if the statement supports ORDER BY directly
         if isinstance(statement._statement, exp.Select):
             new_statement = statement._statement.order_by(order_expr)
         else:
-            # Wrap in a SELECT if the statement doesn't support ORDER BY directly
             new_statement = exp.Select().from_(statement._statement).order_by(order_expr)
 
         return statement.copy(statement=new_statement)
 
     def get_cache_key(self) -> tuple[Any, ...]:
         """Return cache key for this filter configuration."""
-        # Include field name and sort order
         return ("OrderByFilter", self.field_name, self.sort_order)
 
 
@@ -601,7 +564,6 @@ class SearchFilter(StatementFilter):
 
     __slots__ = ("_param_name", "field_name", "ignore_case", "value")
 
-    # Explicit property declarations for better IDE/linter support
     field_name: Union[str, set[str]]
     value: str
     ignore_case: Optional[bool]
@@ -618,7 +580,6 @@ class SearchFilter(StatementFilter):
         self.value = value
         self.ignore_case = ignore_case
 
-        # Initialize parameter names
         self._param_name: Optional[str] = None
         if self.value:
             if isinstance(self.field_name, str):
@@ -641,7 +602,6 @@ class SearchFilter(StatementFilter):
         pattern_expr = exp.Placeholder(this=self._param_name)
         like_op = exp.ILike if self.ignore_case else exp.Like
 
-        result = statement
         if isinstance(self.field_name, str):
             result = statement.where(like_op(this=exp.column(self.field_name), expression=pattern_expr))
         elif isinstance(self.field_name, set) and self.field_name:
@@ -652,10 +612,11 @@ class SearchFilter(StatementFilter):
                 return statement
 
             final_condition: Condition = field_conditions[0]
-            if len(field_conditions) > 1:
-                for cond in field_conditions[1:]:
-                    final_condition = exp.Or(this=final_condition, expression=cond)
+            for cond in field_conditions[1:]:
+                final_condition = exp.Or(this=final_condition, expression=cond)
             result = statement.where(final_condition)
+        else:
+            result = statement
 
         _, named_params = self.extract_parameters()
         for name, value in named_params.items():
@@ -664,7 +625,6 @@ class SearchFilter(StatementFilter):
 
     def get_cache_key(self) -> tuple[Any, ...]:
         """Return cache key for this filter configuration."""
-        # Include field name(s), value, and ignore_case flag
         field_names = tuple(sorted(self.field_name)) if isinstance(self.field_name, set) else self.field_name
         return ("SearchFilter", field_names, self.value, self.ignore_case)
 
@@ -682,10 +642,8 @@ class NotInSearchFilter(SearchFilter):
             value: Search value.
             ignore_case: Should the search be case insensitive.
         """
-        # Call parent __init__ first
         super().__init__(field_name, value, ignore_case)
 
-        # Override parameter names for NOT search
         self._param_name: Optional[str] = None
         if self.value:
             if isinstance(self.field_name, str):
@@ -731,7 +689,6 @@ class NotInSearchFilter(SearchFilter):
 
     def get_cache_key(self) -> tuple[Any, ...]:
         """Return cache key for this filter configuration."""
-        # Include field name(s), value, and ignore_case flag
         field_names = tuple(sorted(self.field_name)) if isinstance(self.field_name, set) else self.field_name
         return ("NotInSearchFilter", field_names, self.value, self.ignore_case)
 
@@ -741,7 +698,6 @@ class OffsetPagination(Generic[T]):
 
     __slots__ = ("items", "limit", "offset", "total")
 
-    # Explicit property declarations for better IDE/linter support
     items: Sequence[T]
     limit: int
     offset: int

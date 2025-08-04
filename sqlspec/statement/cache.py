@@ -64,15 +64,12 @@ class CacheConfig:
     compiled_cache_size: int = DEFAULT_COMPILED_STATEMENT_CACHE_SIZE
     compiled_cache_enabled: bool = True
 
-    # Analysis caching configuration
     analysis_cache_size: int = DEFAULT_CACHE_MAX_SIZE
     analysis_cache_enabled: bool = True
 
-    # QueryBuilder caching configuration
     builder_cache_size: int = DEFAULT_BUILDER_CACHE_SIZE
     builder_cache_enabled: bool = True
 
-    # SQLFileLoader caching configuration
     file_cache_size: int = DEFAULT_FILE_CACHE_SIZE
     file_cache_enabled: bool = True
 
@@ -108,55 +105,46 @@ class CacheConfig:
 class CacheStats:
     """Statistics for cache performance monitoring."""
 
-    # SQL cache stats
     sql_hits: int = 0
     sql_misses: int = 0
     sql_evictions: int = 0
     sql_size: int = 0
 
-    # Fragment cache stats
     fragment_hits: int = 0
     fragment_misses: int = 0
     fragment_evictions: int = 0
     fragment_size: int = 0
 
-    # Optimized cache stats
     optimized_hits: int = 0
     optimized_misses: int = 0
     optimized_evictions: int = 0
     optimized_size: int = 0
 
-    # Anonymous returns rows cache stats
     anonymous_returns_rows_hits: int = 0
     anonymous_returns_rows_misses: int = 0
     anonymous_returns_rows_evictions: int = 0
     anonymous_returns_rows_size: int = 0
 
-    # Compiled statement cache stats
     compiled_hits: int = 0
     compiled_misses: int = 0
     compiled_evictions: int = 0
     compiled_size: int = 0
 
-    # Analysis cache stats
     analysis_hits: int = 0
     analysis_misses: int = 0
     analysis_evictions: int = 0
     analysis_size: int = 0
 
-    # Builder cache stats
     builder_hits: int = 0
     builder_misses: int = 0
     builder_evictions: int = 0
     builder_size: int = 0
 
-    # File cache stats
     file_hits: int = 0
     file_misses: int = 0
     file_evictions: int = 0
     file_size: int = 0
 
-    # Timing stats (in seconds)
     avg_cache_lookup_time: float = 0.0
     avg_parse_time: float = 0.0
     avg_optimize_time: float = 0.0
@@ -338,7 +326,6 @@ class SQLCache:
         """Set maximum cache size."""
         with self.lock:
             self._max_size = value
-            # If cache is over new size limit, evict oldest entries
             while len(self.cache) > self._max_size:
                 self.cache.popitem(last=False)
                 self._eviction_count += 1
@@ -373,7 +360,6 @@ class SQLCache:
         with self.lock:
             if key in self.cache:
                 self.cache.move_to_end(key)
-            # Add new entry
             elif len(self.cache) >= self._max_size:
                 self.cache.popitem(last=False)
                 self._eviction_count += 1
@@ -394,22 +380,17 @@ class SQLCache:
         if value is None:
             return None
 
-        # Handle tuple of (sql_string, parameters) - common for compiled SQL cache
         sql_params_tuple_size = 2
         if isinstance(value, tuple) and len(value) == sql_params_tuple_size:
             sql_string, parameters = value
-            # SQL string is immutable, but parameters might be mutable
             return (sql_string, self._safe_copy(parameters))
 
         if isinstance(value, (list, dict)):
             return value.copy()
 
-        # For complex objects or when in doubt, use deep copy
-        # This handles nested structures safely
         if isinstance(value, (tuple, list, dict, set)):
             return copy.deepcopy(value)
 
-        # Immutable objects can be returned as-is
         return value
 
     def _record_hit(self) -> None:
@@ -508,11 +489,9 @@ class ASTFragmentCache:
         """Set maximum cache size."""
         with self.lock:
             self._max_size = value
-            # Evict from fragment cache if needed
             while len(self.fragment_cache) > self._max_size // 2:
                 self.fragment_cache.popitem(last=False)
                 _cache_stats.fragment_evictions += 1
-            # Evict from template cache if needed
             while len(self.template_cache) > self._max_size // 2:
                 self.template_cache.popitem(last=False)
                 _cache_stats.fragment_evictions += 1
@@ -583,7 +562,6 @@ class ASTFragmentCache:
                 self.fragment_cache.move_to_end(cache_key)
                 return
 
-            # Evict if needed
             if len(self.fragment_cache) >= self._max_size // 2:
                 self.fragment_cache.popitem(last=False)
                 _cache_stats.fragment_evictions += 1
@@ -613,21 +591,17 @@ class ASTFragmentCache:
         Returns:
             Parsed expression or None if parsing fails
         """
-        # Check cache first
         cached = self.get_fragment(sql, fragment_type, dialect)
         if cached:
             return cached.expression.copy()
 
-        # Parse the SQL
         try:
             expressions = sqlglot.parse(sql, dialect=dialect)
             if expressions and expressions[0]:
                 expression = expressions[0]
 
-                # Count parameters
                 param_count = self._count_parameters(expression)
 
-                # Cache the result
                 self.set_fragment(
                     sql=sql,
                     expression=expression,
@@ -666,7 +640,6 @@ class ASTFragmentCache:
     @staticmethod
     def _make_fragment_key(sql: str, fragment_type: str, dialect: "Optional[DialectType]") -> str:
         """Create cache key for a fragment."""
-        # Normalize SQL for better cache hits
         normalized_sql = sql.strip().lower()
         dialect_str = str(dialect) if dialect else "default"
         return f"fragment:{fragment_type}:{dialect_str}:{hash(normalized_sql)}"
@@ -723,15 +696,11 @@ class BaseStatementCache:
             if key in self._cache:
                 self._hit_count += 1
                 self._cache.move_to_end(key)
-                # CRITICAL: Always return a copy to prevent cache poisoning
                 return self._cache[key].copy()
 
-        # Parse outside the lock to avoid blocking other threads
-        # Let ParseError exceptions propagate to the caller
         ast = sqlglot.parse_one(sql, read=dialect)
 
         with self._lock:
-            # Double-check pattern to prevent cache stampede
             if key in self._cache:
                 self._hit_count += 1
                 self._cache.move_to_end(key)
@@ -858,7 +827,6 @@ def update_cache_config(config: CacheConfig) -> None:
     global _cache_config  # noqa: PLW0603
     _cache_config = config
 
-    # Apply new configuration to caches
     if config.sql_cache_enabled:
         sql_cache.max_size = config.sql_cache_size
     else:
@@ -897,7 +865,6 @@ def update_cache_config(config: CacheConfig) -> None:
 
 def get_cache_stats() -> CacheStats:
     """Get current cache statistics."""
-    # Update sizes
     _cache_stats.sql_size = sql_cache.size
     _cache_stats.fragment_size = ast_fragment_cache.size
     _cache_stats.optimized_size = optimized_expression_cache.size
@@ -906,7 +873,6 @@ def get_cache_stats() -> CacheStats:
     _cache_stats.analysis_size = analysis_cache.size
     _cache_stats.builder_size = builder_cache.size
     _cache_stats.file_size = file_cache.size
-    # Update fragment cache stats from internal counters
     _cache_stats.fragment_hits = ast_fragment_cache._hit_count
     _cache_stats.fragment_misses = ast_fragment_cache._miss_count
 
@@ -918,7 +884,6 @@ def reset_cache_stats() -> None:
     global _cache_stats  # noqa: PLW0603
     _cache_stats = CacheStats()
 
-    # Reset fragment cache internal counters
     ast_fragment_cache._hit_count = 0
     ast_fragment_cache._miss_count = 0
 
