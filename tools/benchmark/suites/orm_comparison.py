@@ -233,14 +233,12 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # Use separate database files to avoid locking issues
         return (
             SqliteConfig(
-                connection_config={"database": ".benchmark/test_sync_no_cache.db"},
+                pool_config={"database": ".benchmark/test_sync_no_cache.db", "pool_min_size": 1, "pool_max_size": 20},
                 statement_config=StatementConfig(enable_caching=False),
-                pool_config={"pool_min_size": 1, "pool_max_size": 1},  # Reduce pool size to avoid concurrent access
             ),
             SqliteConfig(
-                connection_config={"database": ".benchmark/test_sync_with_cache.db"},
+                pool_config={"database": ".benchmark/test_sync_with_cache.db", "pool_min_size": 1, "pool_max_size": 20},
                 statement_config=StatementConfig(enable_caching=True),
-                pool_config={"pool_min_size": 1, "pool_max_size": 1},  # Reduce pool size to avoid concurrent access
             ),
         )
 
@@ -249,19 +247,23 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # Use separate database files to avoid locking issues
         return (
             AiosqliteConfig(
-                connection_config={"database": ".benchmark/test_async_no_cache.db"},
+                pool_config={"database": ".benchmark/test_async_no_cache.db", "pool_min_size": 1, "pool_max_size": 20},
                 statement_config=StatementConfig(enable_caching=False),
-                pool_config={"pool_min_size": 1, "pool_max_size": 1},  # Reduce pool size to avoid concurrent access
             ),
             AiosqliteConfig(
-                connection_config={"database": ".benchmark/test_async_with_cache.db"},
+                pool_config={
+                    "database": ".benchmark/test_async_with_cache.db",
+                    "pool_min_size": 1,
+                    "pool_max_size": 20,
+                },
                 statement_config=StatementConfig(enable_caching=True),
-                pool_config={"pool_min_size": 1, "pool_max_size": 1},  # Reduce pool size to avoid concurrent access
             ),
         )
 
     def _get_psycopg_configs(self, host: str, port: int) -> tuple[PsycopgSyncConfig, PsycopgSyncConfig]:
         """Get Psycopg configs with and without caching."""
+        from sqlspec.adapters.psycopg.driver import psycopg_statement_config
+
         pool_params = {
             "host": host,
             "port": port,
@@ -272,13 +274,18 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             "max_size": 20,
         }
         return (
-            PsycopgSyncConfig(pool_config=pool_params, statement_config=StatementConfig(enable_caching=False)),
-            PsycopgSyncConfig(pool_config=pool_params, statement_config=StatementConfig(enable_caching=True)),
+            PsycopgSyncConfig(
+                pool_config=pool_params, statement_config=psycopg_statement_config.replace(enable_caching=False)
+            ),
+            PsycopgSyncConfig(
+                pool_config=pool_params, statement_config=psycopg_statement_config.replace(enable_caching=True)
+            ),
         )
 
     def _get_asyncpg_configs(self, host: str, port: int) -> tuple[Any, Any]:
         """Get Asyncpg configs with and without caching."""
         from sqlspec.adapters.asyncpg import AsyncpgConfig
+        from sqlspec.adapters.asyncpg.driver import asyncpg_statement_config
 
         pool_params = {
             "host": host,
@@ -290,12 +297,18 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             "max_size": 20,
         }
         return (
-            AsyncpgConfig(pool_config=pool_params, statement_config=StatementConfig(enable_caching=False)),
-            AsyncpgConfig(pool_config=pool_params, statement_config=StatementConfig(enable_caching=True)),
+            AsyncpgConfig(
+                pool_config=pool_params, statement_config=asyncpg_statement_config.replace(enable_caching=False)
+            ),
+            AsyncpgConfig(
+                pool_config=pool_params, statement_config=asyncpg_statement_config.replace(enable_caching=True)
+            ),
         )
 
     def _get_psqlpy_configs(self, host: str, port: int) -> tuple[PsqlpyConfig, PsqlpyConfig]:
         """Get Psqlpy configs with and without caching."""
+        from sqlspec.adapters.psqlpy.driver import psqlpy_statement_config
+
         pool_params = {
             "host": host,
             "port": port,
@@ -305,23 +318,37 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             "max_db_pool_size": 20,
         }
         return (
-            PsqlpyConfig(pool_config=pool_params, statement_config=StatementConfig(enable_caching=False)),
-            PsqlpyConfig(pool_config=pool_params, statement_config=StatementConfig(enable_caching=True)),
+            PsqlpyConfig(
+                pool_config=pool_params, statement_config=psqlpy_statement_config.replace(enable_caching=False)
+            ),
+            PsqlpyConfig(
+                pool_config=pool_params, statement_config=psqlpy_statement_config.replace(enable_caching=True)
+            ),
         )
 
     def _get_adbc_postgres_configs(self, host: str, port: int) -> tuple[AdbcConfig, AdbcConfig]:
         """Get ADBC PostgreSQL configs with and without caching."""
+        from sqlspec.adapters.adbc.driver import get_adbc_statement_config
+
         connection_params = {
             "uri": f"postgresql://postgres:postgres@{host}:{port}/postgres",
             "driver_name": "adbc_driver_postgresql",
         }
+        adbc_statement_config = get_adbc_statement_config("postgres")
         return (
-            AdbcConfig(connection_config=connection_params, statement_config=StatementConfig(enable_caching=False)),
-            AdbcConfig(connection_config=connection_params, statement_config=StatementConfig(enable_caching=True)),
+            AdbcConfig(
+                connection_config=connection_params,
+                statement_config=adbc_statement_config.replace(enable_caching=False),
+            ),
+            AdbcConfig(
+                connection_config=connection_params, statement_config=adbc_statement_config.replace(enable_caching=True)
+            ),
         )
 
     def _get_psycopg_async_configs(self, host: str, port: int) -> tuple[PsycopgAsyncConfig, PsycopgAsyncConfig]:
         """Get async psycopg configs with and without caching."""
+        from sqlspec.adapters.psycopg.driver import psycopg_statement_config
+
         pool_params = {
             "host": host,
             "port": port,
@@ -332,8 +359,12 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             "max_size": 20,
         }
         return (
-            PsycopgAsyncConfig(pool_config=pool_params, statement_config=StatementConfig(enable_caching=False)),
-            PsycopgAsyncConfig(pool_config=pool_params, statement_config=StatementConfig(enable_caching=True)),
+            PsycopgAsyncConfig(
+                pool_config=pool_params, statement_config=psycopg_statement_config.replace(enable_caching=False)
+            ),
+            PsycopgAsyncConfig(
+                pool_config=pool_params, statement_config=psycopg_statement_config.replace(enable_caching=True)
+            ),
         )
 
     def _run_sync_benchmarks(self, db_config: dict[str, Any]) -> dict[str, TimingResult]:
@@ -580,7 +611,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         with config_no_cache.provide_session() as session:
 
             def insert_and_cleanup() -> None:
-                session.execute_many(sql, *[list(d.values()) for d in insert_data])
+                session.execute_many(sql, [list(d.values()) for d in insert_data])
                 # Clean up inserted data
                 session.execute(SQL(f"DELETE FROM users WHERE id >= {base_id} AND id < {base_id + 100}"))
 
@@ -591,7 +622,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         with config_with_cache.provide_session() as session:
 
             def insert_and_cleanup() -> None:
-                session.execute_many(sql, *[list(d.values()) for d in insert_data])
+                session.execute_many(sql, [list(d.values()) for d in insert_data])
                 # Clean up inserted data
                 session.execute(SQL(f"DELETE FROM users WHERE id >= {base_id} AND id < {base_id + 100}"))
 
@@ -759,7 +790,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         async with config_no_cache.provide_session() as session:
 
             async def op() -> Any:
-                await session.execute_many(sql, *[list(d.values()) for d in insert_data])
+                await session.execute_many(sql, [list(d.values()) for d in insert_data])
                 # Clean up inserted data
                 await session.execute(SQL(f"DELETE FROM users WHERE id >= {base_id} AND id < {base_id + 100}"))
 
@@ -770,7 +801,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         async with config_with_cache.provide_session() as session:
 
             async def op() -> Any:
-                await session.execute_many(sql, *[list(d.values()) for d in insert_data])
+                await session.execute_many(sql, [list(d.values()) for d in insert_data])
                 # Clean up inserted data
                 await session.execute(SQL(f"DELETE FROM users WHERE id >= {base_id} AND id < {base_id + 100}"))
 

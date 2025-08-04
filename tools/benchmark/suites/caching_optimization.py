@@ -1,6 +1,6 @@
 """Benchmark suite for caching optimization testing.
 
-This suite measures the performance improvements from the enhanced
+This suite measures the performance improvements from the
 caching system including AST fragment caching and optimized expression caching.
 """
 

@@ -174,9 +174,6 @@ include = [
   # === CORE ADAPTERS ===
   "sqlspec/adapters/*/*.py",
 
-  # === MIGRATION ADAPTERS ===
-  "sqlspec/migrations/*.py",
-
   # === UTILITY MODULES ===
   "sqlspec/utils/statement_hashing.py",
   "sqlspec/utils/text.py",

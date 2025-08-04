@@ -87,13 +87,8 @@ class ToSchemaMixin:
     def to_schema(data: "dict[str, Any]", *, schema_type: "type[ModelDTOT]") -> "ModelDTOT": ...
     @overload
     @staticmethod
-    def to_schema(data: "DictLike", *, schema_type: "type[ModelDTOT]") -> "ModelDTOT": ...
-    @overload
-    @staticmethod
     def to_schema(
-        data: "Union[dict[str, Any], DictLike, Struct, BaseModel, DataclassProtocol, AttrsInstance]",
-        *,
-        schema_type: "type[ModelDTOT]",
+        data: "Union[DictLike, Struct, BaseModel, DataclassProtocol, AttrsInstance]", *, schema_type: "type[ModelDTOT]"
     ) -> "ModelDTOT": ...
     @overload
     @staticmethod
@@ -104,7 +99,7 @@ class ToSchemaMixin:
 
     @staticmethod
     def to_schema(
-        data: "Union[ModelT, dict[str, Any], DictLike, list[ModelT], list[dict[str, Any]], list[DictLike]]",
+        data: "Union[ModelT, dict[str, Any], DictLike, Struct, BaseModel, DataclassProtocol, AttrsInstance, list[ModelT], list[dict[str, Any]], list[DictLike]]",
         *,
         schema_type: "Optional[type[ModelDTOT]]" = None,
     ) -> "Union[ModelT, ModelDTOT, Sequence[ModelT], Sequence[ModelDTOT]]":

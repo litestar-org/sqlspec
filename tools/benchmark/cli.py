@@ -64,7 +64,7 @@ def cli(ctx: click.Context, config: Optional[Path], storage: Optional[Path], ver
 @click.option("--quick", is_flag=True, help="Run in quick mode with fewer iterations")
 @click.option("--keep-containers", is_flag=True, help="Don't cleanup containers after run")
 @click.option("--no-containers", is_flag=True, help="Skip container-based tests")
-# Enhanced display options
+# Display options
 @click.option("--show-all", is_flag=True, help="Show all results without limits")
 @click.option("--max-items", type=int, default=20, help="Maximum items to display in tables (default: 20)")
 @click.option("--table-width", type=int, help="Override table width (bypasses terminal detection)")
@@ -237,7 +237,7 @@ def compare(ctx: click.Context, days: int, suite: Optional[str], adapter: Option
 @click.option("--json-dir", type=click.Path(exists=True, path_type=Path), help="Directory with JSON results")
 @click.pass_context
 def import_json(ctx: click.Context, json_dir: Path) -> None:
-    """Import legacy JSON benchmark results."""
+    """Import JSON benchmark results."""
     runner: BenchmarkRunner = ctx.obj["runner"]
 
     if not json_dir:

@@ -57,7 +57,7 @@ class BenchmarkSummary:
         elif hasattr(self.console, "options") and hasattr(self.console.options, "max_width"):
             self.table_width = self.console.options.max_width or 200
         else:
-            self.table_width = 200  # Default enhanced width
+            self.table_width = 200  # Default width
 
     def display_suite_results(self, suite_name: str, results: dict[str, TimingResult]) -> None:
         """Display results for a single, specific benchmark suite."""

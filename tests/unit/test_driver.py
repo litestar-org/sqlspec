@@ -527,7 +527,9 @@ def test_sync_driver_build_statement_with_filters() -> None:
     test_filter.append_to_statement = Mock(side_effect=original_append)
 
     sql_string = "SELECT * FROM users"
-    statement = driver.prepare_statement(sql_string, test_filter, statement_config=_create_test_statement_config())
+    statement = driver.prepare_statement(
+        sql_string, (test_filter,), statement_config=_create_test_statement_config(), kwargs={}
+    )
 
     # Access a property to trigger processing
     _ = statement.to_sql()

@@ -289,14 +289,17 @@ class CommonDriverAttributesMixin:
     def prepare_statement(
         self,
         statement: "Union[Statement, QueryBuilder]",
-        *parameters: "Union[StatementParameters, StatementFilter]",
+        parameters: "tuple[Union[StatementParameters, StatementFilter], ...]" = (),
+        *,
         statement_config: "StatementConfig",
-        **kwargs: Any,
+        kwargs: "Optional[dict[str, Any]]" = None,
     ) -> "SQL":
         """Build SQL statement from various input types.
 
         Ensures dialect is set and preserves existing state when rebuilding SQL objects.
         """
+        kwargs = kwargs or {}
+
         if isinstance(statement, QueryBuilder):
             return statement.to_statement(statement_config)
         if isinstance(statement, SQL):

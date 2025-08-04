@@ -220,7 +220,7 @@ class BenchmarkStorage:
             return rows_to_delete
 
     def import_json_results(self, json_path: Path) -> None:
-        """Import legacy JSON results into DuckDB."""
+        """Import JSON results into DuckDB."""
         import uuid
 
         with json_path.open() as f:

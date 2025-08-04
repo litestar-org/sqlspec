@@ -148,4 +148,4 @@ The new modular tool is a complete replacement for `tools/benchmark_performance.
 4. **Rich Interface**: Beautiful terminal output vs basic print statements
 5. **Extensibility**: Easy to add new benchmark suites vs monolithic structure
 
-All existing benchmarks have been preserved and enhanced with the new framework.
+All existing benchmarks have been preserved with the framework.

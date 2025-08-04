@@ -188,7 +188,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         # which properly handles tuple expansion and parameter processing
 
         sql_statement = self.prepare_statement(
-            statement, *parameters, statement_config=statement_config or self.statement_config, **kwargs
+            statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )
         return await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
 
@@ -206,7 +206,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         Parameters passed will be used as the batch execution sequence.
         """
         sql_statement = self.prepare_statement(
-            statement, *filters, statement_config=statement_config or self.statement_config, **kwargs
+            statement, filters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )
         return await self.dispatch_statement_execution(
             statement=sql_statement.as_many(parameters), connection=self.connection
@@ -226,7 +226,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         operations. Use suppress_warnings=True for migrations and admin scripts.
         """
         script_config = statement_config or self.statement_config
-        sql_statement = self.prepare_statement(statement, *parameters, statement_config=script_config, **kwargs)
+        sql_statement = self.prepare_statement(statement, parameters, statement_config=script_config, kwargs=kwargs)
 
         return await self.dispatch_statement_execution(statement=sql_statement.as_script(), connection=self.connection)
 
@@ -487,7 +487,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         """
         # 1. Prepare original SQL statement
         sql_statement = self.prepare_statement(
-            statement, *parameters, statement_config=statement_config or self.statement_config, **kwargs
+            statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )
         count_result = await self.dispatch_statement_execution(self._create_count_query(sql_statement), self.connection)
         select_result = await self.execute(sql_statement)
