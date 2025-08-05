@@ -104,9 +104,9 @@ def test_bigquery_parameter_styles(bigquery_session: BigQueryDriver, bigquery_se
 
     # Test named parameter style (BigQuery's native parameter style)
     sql = f"SELECT name FROM {table_name} WHERE name = @name"
-    params = {"name": "test_value"}
+    parameters = {"name": "test_value"}
 
-    result = bigquery_session.execute(sql, params)
+    result = bigquery_session.execute(sql, parameters)
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
@@ -118,17 +118,19 @@ def test_bigquery_parameter_styles(bigquery_session: BigQueryDriver, bigquery_se
 def test_bigquery_execute_many(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test execute_many functionality."""
     table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
-    params_list = [(1, "name1", 1), (2, "name2", 2), (3, "name3", 3)]
+    parameters_list = [(1, "name1", 1), (2, "name2", 2), (3, "name3", 3)]
 
-    result = bigquery_session.execute_many(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", params_list)
+    result = bigquery_session.execute_many(
+        f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", parameters_list
+    )
     assert isinstance(result, SQLResult)
-    assert result.rows_affected == len(params_list)
+    assert result.rows_affected == len(parameters_list)
 
     # Verify all records were inserted
     select_result = bigquery_session.execute(f"SELECT COUNT(*) as count FROM {table_name}")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == len(params_list)
+    assert select_result.data[0]["count"] == len(parameters_list)
 
     # Verify data integrity
     ordered_result = bigquery_session.execute(f"SELECT name, value FROM {table_name} ORDER BY name")

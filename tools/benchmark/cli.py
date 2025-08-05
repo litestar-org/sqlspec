@@ -64,17 +64,7 @@ def cli(ctx: click.Context, config: Optional[Path], storage: Optional[Path], ver
 @click.option("--quick", is_flag=True, help="Run in quick mode with fewer iterations")
 @click.option("--keep-containers", is_flag=True, help="Don't cleanup containers after run")
 @click.option("--no-containers", is_flag=True, help="Skip container-based tests")
-# Display options
-@click.option("--show-all", is_flag=True, help="Show all results without limits")
-@click.option("--max-items", type=int, default=20, help="Maximum items to display in tables (default: 20)")
-@click.option("--table-width", type=int, help="Override table width (bypasses terminal detection)")
-@click.option(
-    "--display-mode",
-    type=click.Choice(["compact", "detailed", "matrix"]),
-    default="compact",
-    help="Display mode for results",
-)
-@click.option("--no-truncate", is_flag=True, default=True, help="Disable all result truncation")
+# Simplified display options - focus on essential functionality
 @click.pass_context
 def run(
     ctx: click.Context,
@@ -84,11 +74,6 @@ def run(
     quick: bool,
     keep_containers: bool,
     no_containers: bool,
-    show_all: bool,
-    max_items: int,
-    table_width: Optional[int],
-    display_mode: str,
-    no_truncate: bool,
 ) -> None:
     """Run benchmark suites."""
     config: BenchmarkConfig = ctx.obj["config"]
@@ -148,13 +133,12 @@ def run(
     improvements = []
 
     try:
-        # Create display options dictionary
+        # Simplified display options - focus on driver-grouped results
         display_options = {
-            "show_all": show_all,
-            "max_items": max_items,
-            "display_mode": display_mode,
-            "no_truncate": no_truncate,
-            "table_width": table_width,
+            "group_by": "driver",  # Always group by database driver
+            "show_write_operations": True,  # Focus on write performance
+            "hide_individual_metrics": False,  # Keep granular breakdowns for now
+            "display_mode": "detailed",  # Default to detailed view
         }
 
         summary = BenchmarkSummary(console, display_options)
@@ -203,9 +187,8 @@ def run(
         )
 
         console.print("\n")
-        # Use show_all to determine count, otherwise use max_items
-        top_count = len(all_results) if show_all else max_items
-        summary.display_top_performers(all_results, count=top_count)
+        # Show top performers with reasonable default
+        summary.display_top_performers(all_results, count=20)
 
         # Show insights if we have enough data
         insights = summary.generate_benchmark_insights(all_results)

@@ -588,7 +588,7 @@ def test_sql_loader_with_complex_parameter_types(complex_sql_files: Path) -> Non
     assert isinstance(analytics_sql, SQL)
     assert analytics_sql.parameters["start_period"] == "2024-01-01 00:00:00"
     # TypedParameter wraps None values with type information
-    from sqlspec.parameters.types import TypedParameter
+    from sqlspec.parameters import TypedParameter
 
     category_filter = analytics_sql.parameters["category_filter"]
     if isinstance(category_filter, TypedParameter):
@@ -716,13 +716,13 @@ def test_dialect_parameter_override_integration(temp_sql_files: Path) -> None:
     # Parameters should be preserved - handle potential format differences by dialect
     assert postgres_sql.parameters == {"user_id": 123}
     # MySQL may use different parameter format, check if it's dict or list
-    mysql_params = mysql_sql.parameters
-    if isinstance(mysql_params, dict):
-        assert mysql_params == {"user_id": 123}
-    elif isinstance(mysql_params, list):
-        assert mysql_params == [123]  # MySQL may convert to positional parameters
+    mysql_parameters = mysql_sql.parameters
+    if isinstance(mysql_parameters, dict):
+        assert mysql_parameters == {"user_id": 123}
+    elif isinstance(mysql_parameters, list):
+        assert mysql_parameters == [123]  # MySQL may convert to positional parameters
     else:
-        assert mysql_params == {"user_id": 123}  # Default expectation
+        assert mysql_parameters == {"user_id": 123}  # Default expectation
     assert oracle_sql.parameters == {"user_id": 123}
 
 

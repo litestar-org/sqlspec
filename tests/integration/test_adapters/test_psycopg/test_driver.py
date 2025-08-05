@@ -109,14 +109,14 @@ def test_psycopg_basic_crud(psycopg_session: PsycopgSyncDriver) -> None:
 
 
 @pytest.mark.parametrize(
-    ("params", "style"),
+    ("parameters", "style"),
     [
         pytest.param(("test_value",), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
     ],
 )
 @pytest.mark.xdist_group("postgres")
-def test_psycopg_parameter_styles(psycopg_session: PsycopgSyncDriver, params: Any, style: ParamStyle) -> None:
+def test_psycopg_parameter_styles(psycopg_session: PsycopgSyncDriver, parameters: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles."""
     # Insert test data
     psycopg_session.execute("INSERT INTO test_table (name) VALUES (%s)", "test_value")
@@ -127,7 +127,7 @@ def test_psycopg_parameter_styles(psycopg_session: PsycopgSyncDriver, params: An
     else:  # dict_binds
         sql = "SELECT name FROM test_table WHERE name = %(name)s"
 
-    result = psycopg_session.execute(sql, params)
+    result = psycopg_session.execute(sql, parameters)
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result) == 1
@@ -137,17 +137,17 @@ def test_psycopg_parameter_styles(psycopg_session: PsycopgSyncDriver, params: An
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many(psycopg_session: PsycopgSyncDriver) -> None:
     """Test execute_many functionality."""
-    params_list = [("name1", 1), ("name2", 2), ("name3", 3)]
+    parameters_list = [("name1", 1), ("name2", 2), ("name3", 3)]
 
-    result = psycopg_session.execute_many("INSERT INTO test_table (name, value) VALUES (%s, %s)", params_list)
+    result = psycopg_session.execute_many("INSERT INTO test_table (name, value) VALUES (%s, %s)", parameters_list)
     assert isinstance(result, SQLResult)
-    assert result.rows_affected == len(params_list)
+    assert result.rows_affected == len(parameters_list)
 
     # Verify all records were inserted
     select_result = psycopg_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == len(params_list)
+    assert select_result.data[0]["count"] == len(parameters_list)
 
     # Verify data integrity
     ordered_result = psycopg_session.execute("SELECT name, value FROM test_table ORDER BY name")

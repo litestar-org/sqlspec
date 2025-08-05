@@ -2,10 +2,9 @@
 
 import pytest
 
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
-from sqlspec.statement.builder._ddl import CreateTableAsSelect
-from sqlspec.statement.builder._select import Select
+from sqlspec.builder._ddl import CreateTableAsSelect
+from sqlspec.builder._select import Select
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
 
 
@@ -75,10 +74,10 @@ def test_mixed_parameter_style_normalization() -> None:
     sql = SQL("SELECT * FROM users WHERE id = ? AND status = :active", 123, active="enabled")
 
     # Parameters returns merged dict when both positional and named are present
-    params = sql.parameters
-    assert isinstance(params, dict)
-    assert params["active"] == "enabled"
-    assert params["arg_0"] == 123  # Positional param gets assigned a name
+    parameters = sql.parameters
+    assert isinstance(parameters, dict)
+    assert parameters["active"] == "enabled"
+    assert parameters["arg_0"] == 123  # Positional param gets assigned a name
 
     # Test just positional - returns tuple
     sql2 = SQL("SELECT * FROM users WHERE id = ?", 123)

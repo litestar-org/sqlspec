@@ -86,20 +86,20 @@ def test_parameter_conversion_principles() -> None:
         session.commit()
 
         # Test 1: Parameters should be passed through unchanged when no conversion needed
-        original_params = [1, "test_name", math.pi]
-        result = session.execute("INSERT INTO test VALUES (?, ?, ?)", original_params)
+        original_parameters = [1, "test_name", math.pi]
+        result = session.execute("INSERT INTO test VALUES (?, ?, ?)", original_parameters)
         assert isinstance(result, SQLResult)
         assert result.rows_affected == 1
 
         # Test 2: Different parameter types should be preserved
-        mixed_params = [2, "mixed", None]  # Include None
-        result = session.execute("INSERT INTO test VALUES (?, ?, ?)", mixed_params)
+        mixed_parameters = [2, "mixed", None]  # Include None
+        result = session.execute("INSERT INTO test VALUES (?, ?, ?)", mixed_parameters)
         assert isinstance(result, SQLResult)
         assert result.rows_affected == 1
 
         # Test 3: Named parameters should work correctly
-        named_params = {"id": 3, "name": "named_test", "value": math.e}
-        result = session.execute("INSERT INTO test VALUES (:id, :name, :value)", named_params)
+        named_parameters = {"id": 3, "name": "named_test", "value": math.e}
+        result = session.execute("INSERT INTO test VALUES (:id, :name, :value)", named_parameters)
         assert isinstance(result, SQLResult)
         assert result.rows_affected == 1
 
@@ -116,13 +116,13 @@ def test_parameter_style_detection() -> None:
         # Test various parameter styles in same session
         test_cases = [("?", [1]), ("$1", [2]), ("$value", {"value": 3})]
 
-        for sql_template, params in test_cases:
+        for sql_template, parameters in test_cases:
             sql = f"SELECT {sql_template} as result"
-            result = session.execute(sql, params)
+            result = session.execute(sql, parameters)
             assert isinstance(result, SQLResult)
             assert len(result.data) == 1
             # All should return their respective values
-            expected_value = params[0] if isinstance(params, list) else next(iter(params.values()))
+            expected_value = parameters[0] if isinstance(parameters, list) else next(iter(parameters.values()))
             assert result.data[0]["result"] == expected_value
 
 
@@ -159,8 +159,8 @@ def test_parameter_compilation_consistency() -> None:
         session.execute("INSERT INTO param_test VALUES ($id, $data)", {"id": 3, "data": "named_dollar"})
 
         # Test execute_many
-        many_params = [[4, "many1"], [5, "many2"]]
-        result = session.execute_many("INSERT INTO param_test VALUES (?, ?)", many_params)
+        many_parameters = [[4, "many1"], [5, "many2"]]
+        result = session.execute_many("INSERT INTO param_test VALUES (?, ?)", many_parameters)
         assert isinstance(result, SQLResult)
 
         # Verify all data was inserted

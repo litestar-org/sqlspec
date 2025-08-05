@@ -331,10 +331,10 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                     config.pop("uri", None)
 
             if driver_name in {"bigquery", "bq", "adbc_driver_bigquery"}:
-                bigquery_params = ["project_id", "dataset_id", "token"]
+                bigquery_parameters = ["project_id", "dataset_id", "token"]
                 db_kwargs = config.get("db_kwargs", {})
 
-                for param in bigquery_params:
+                for param in bigquery_parameters:
                     if param in config and param != "db_kwargs":
                         db_kwargs[param] = config.pop(param)  # pyright: ignore
 

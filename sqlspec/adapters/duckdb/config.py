@@ -6,8 +6,6 @@ import threading
 import time
 from collections.abc import Sequence
 from contextlib import contextmanager, suppress
-from queue import Empty as QueueEmpty
-from queue import Full, Queue
 from typing import TYPE_CHECKING, Any, Final, Optional, TypedDict, cast
 
 import duckdb
@@ -43,26 +41,26 @@ __all__ = (
 
 
 class DuckDBConnectionPool:
-    """Connection pool for DuckDB with performance optimizations.
+    """Thread-local connection manager for DuckDB with performance optimizations.
 
-    While DuckDB has internal connection management, this pool provides
-    external connection pooling for managing multiple concurrent connections.
+    Uses thread-local storage to ensure each thread gets its own DuckDB connection,
+    preventing the thread-safety issues that cause segmentation faults when
+    multiple cursors share the same connection concurrently.
+
+    This design trades traditional pooling for thread safety, which is essential
+    for DuckDB since connections and cursors are not thread-safe.
     """
 
     __slots__ = (
-        "_checked_out",
         "_connection_config",
         "_connection_times",
         "_created_connections",
         "_extensions",
         "_lock",
-        "_max_pool",
-        "_min_pool",
         "_on_connection_create",
-        "_pool",
         "_recycle",
         "_secrets",
-        "_timeout",
+        "_thread_local",
     )
 
     def __init__(  # noqa: PLR0913
@@ -76,44 +74,32 @@ class DuckDBConnectionPool:
         secrets: "Optional[list[dict[str, Any]]]" = None,  # noqa: FA100, UP037
         on_connection_create: "Optional[Callable[[DuckDBConnection], None]]" = None,  # noqa: FA100
     ) -> None:
-        self._pool: "Queue[DuckDBConnection]" = Queue(maxsize=pool_max_size)  # noqa: UP037
-        self._lock = threading.RLock()
-        self._min_pool = pool_min_size
-        self._max_pool = pool_max_size
-        self._timeout = pool_timeout
-        self._recycle = pool_recycle_seconds
+        """Initialize the thread-local connection manager."""
         self._connection_config = connection_config
+        self._recycle = pool_recycle_seconds
         self._extensions = extensions or []
         self._secrets = secrets or []
         self._on_connection_create = on_connection_create
+        self._thread_local = threading.local()
+        self._lock = threading.RLock()
         self._created_connections = 0
-        self._checked_out = 0
-        self._connection_times: "dict[int, float]" = {}  # noqa: UP037
-
-        for _ in range(pool_min_size):
-            if self._pool.full():
-                break
-            conn = self._create_connection()
-            try:
-                self._pool.put_nowait(conn)
-            except Full:
-                break
+        self._connection_times: "dict[int, float]" = {}
 
     def _create_connection(self) -> DuckDBConnection:
         """Create a new DuckDB connection with extensions and secrets."""
-        connect_params = {}
+        connect_parameters = {}
         config_dict = {}
 
         for key, value in self._connection_config.items():
             if key in {"database", "read_only"}:
-                connect_params[key] = value
+                connect_parameters[key] = value
             else:
                 config_dict[key] = value
 
         if config_dict:
-            connect_params["config"] = config_dict
+            connect_parameters["config"] = config_dict
 
-        connection = duckdb.connect(**connect_params)
+        connection = duckdb.connect(**connect_parameters)
 
         for ext_config in self._extensions:
             ext_name = ext_config.get("name")
@@ -172,26 +158,36 @@ class DuckDBConnectionPool:
 
         return connection
 
-    def _should_recycle(self, connection: DuckDBConnection) -> bool:
-        """Check if connection should be recycled based on age.
+    def _get_thread_connection(self) -> DuckDBConnection:
+        """Get or create a connection for the current thread.
 
-        For DuckDB, we want to keep connections alive as long as possible
-        to maintain cache and performance benefits.
+        Each thread gets its own dedicated DuckDB connection to prevent
+        thread-safety issues with concurrent cursor operations.
         """
-        if self._recycle <= 0:
-            return False
+        if not hasattr(self._thread_local, "connection"):
+            self._thread_local.connection = self._create_connection()
+            self._thread_local.created_at = time.time()
 
-        conn_id = id(connection)
-        created_at = self._connection_times.get(conn_id)
-        if created_at is None:
-            return True
-        return (time.time() - created_at) > self._recycle
+        # Check if connection needs recycling
+        if self._recycle > 0 and time.time() - self._thread_local.created_at > self._recycle:
+            with suppress(Exception):
+                self._thread_local.connection.close()
+            self._thread_local.connection = self._create_connection()
+            self._thread_local.created_at = time.time()
+
+        return self._thread_local.connection
+
+    def _close_thread_connection(self) -> None:
+        """Close the connection for the current thread."""
+        if hasattr(self._thread_local, "connection"):
+            with suppress(Exception):
+                self._thread_local.connection.close()
+            del self._thread_local.connection
+            if hasattr(self._thread_local, "created_at"):
+                del self._thread_local.created_at
 
     def _is_connection_alive(self, connection: DuckDBConnection) -> bool:
         """Check if a connection is still alive and usable.
-
-        For DuckDB, we minimize health checks since connections are
-        typically very stable and checks add overhead.
 
         Args:
             connection: Connection to check
@@ -208,153 +204,44 @@ class DuckDBConnectionPool:
 
     @contextmanager
     def get_connection(self) -> "Generator[DuckDBConnection, None, None]":
-        """Get a connection from the pool with automatic return.
+        """Get a thread-local connection.
+
+        Each thread gets its own dedicated DuckDB connection to prevent
+        thread-safety issues with concurrent cursor operations.
 
         Yields:
-            DuckDBConnection: A connection instance from the pool.
+            DuckDBConnection: A thread-local connection.
         """
-        connection = None
+        connection = self._get_thread_connection()
         try:
-            try:
-                connection = self._pool.get(timeout=self._timeout)
-
-                if self._should_recycle(connection) or not self._is_connection_alive(connection):
-                    conn_id = id(connection)
-                    with suppress(Exception):  # noqa: BLE001
-                        connection.close()
-                    with self._lock:
-                        self._connection_times.pop(conn_id, None)
-                    connection = None
-
-            except QueueEmpty:
-                with self._lock:
-                    if self._checked_out < self._max_pool:
-                        connection = None
-                    else:
-                        try:
-                            connection = self._pool.get(timeout=self._timeout)
-                        except QueueEmpty:
-                            msg = f"Connection pool limit of {self._max_pool} reached, timeout {self._timeout}"
-                            raise RuntimeError(msg) from None
-
-            if connection is None:
-                connection = self._create_connection()
-
-            with self._lock:
-                self._checked_out += 1
-
             yield connection
-
-        finally:
-            if connection is not None:
-                with self._lock:
-                    self._checked_out -= 1
-
-                if self._is_connection_alive(connection):
-                    try:
-                        self._pool.put_nowait(connection)
-                    except Full:
-                        with suppress(Exception):  # noqa: BLE001
-                            connection.close()
-                else:
-                    with suppress(Exception):  # noqa: BLE001
-                        connection.close()
+        except Exception:
+            # On error, close and recreate connection for this thread
+            self._close_thread_connection()
+            raise
 
     def close(self) -> None:
-        """Close all connections in the pool."""
-        while True:
-            try:
-                connection = self._pool.get_nowait()
-            except QueueEmpty:
-                break
-            with suppress(Exception):  # noqa: BLE001
-                connection.close()
-
-        with self._lock:
-            self._connection_times.clear()
+        """Close the thread-local connection if it exists."""
+        self._close_thread_connection()
 
     def size(self) -> int:
-        """Get current pool size."""
-        return self._pool.qsize()
+        """Get current pool size (always 1 for thread-local)."""
+        return 1 if hasattr(self._thread_local, "connection") else 0
 
     def checked_out(self) -> int:
-        """Get number of checked out connections."""
-        return self._checked_out
+        """Get number of checked out connections (always 0 for thread-local)."""
+        return 0
 
     def acquire(self) -> DuckDBConnection:
-        """Acquire a connection from the pool without a context manager.
+        """Acquire a thread-local connection.
 
-        This method gets a connection from the pool that must be manually
-        returned using the release() method.
+        Each thread gets its own dedicated DuckDB connection to prevent
+        thread-safety issues with concurrent cursor operations.
 
         Returns:
-            DuckDBConnection: A connection from the pool
-
-        Raises:
-            RuntimeError: If pool limit is reached and timeout expires
+            DuckDBConnection: A thread-local connection
         """
-        connection = None
-        try:
-            try:
-                connection = self._pool.get(timeout=self._timeout)
-
-                if self._should_recycle(connection) or not self._is_connection_alive(connection):
-                    conn_id = id(connection)
-                    with suppress(Exception):
-                        connection.close()
-                    with self._lock:
-                        self._connection_times.pop(conn_id, None)
-                    connection = None
-
-            except QueueEmpty:
-                # Pool is empty, check if we can create new connection
-                with self._lock:
-                    if self._checked_out < self._max_pool:
-                        connection = None
-                    else:
-                        try:
-                            connection = self._pool.get(timeout=self._timeout)
-                        except QueueEmpty:
-                            msg = f"Connection pool limit of {self._max_pool} reached, timeout {self._timeout}"
-                            raise RuntimeError(msg) from None
-
-            if connection is None:
-                connection = self._create_connection()
-
-            with self._lock:
-                self._checked_out += 1
-
-        except Exception:
-            if connection is not None:
-                with suppress(Full):
-                    self._pool.put_nowait(connection)
-            raise
-        return connection
-
-    def release(self, connection: DuckDBConnection) -> None:
-        """Return a connection to the pool.
-
-        Args:
-            connection: The connection to return to the pool
-        """
-        with self._lock:
-            self._checked_out = max(0, self._checked_out - 1)
-
-        if self._is_connection_alive(connection):
-            try:
-                self._pool.put_nowait(connection)
-            except Full:
-                with suppress(Exception):
-                    connection.close()
-                conn_id = id(connection)
-                with self._lock:
-                    self._connection_times.pop(conn_id, None)
-        else:
-            with suppress(Exception):
-                connection.close()
-            conn_id = id(connection)
-            with self._lock:
-                self._connection_times.pop(conn_id, None)
+        return self._get_thread_connection()
 
 
 class DuckDBConnectionParams(TypedDict, total=False):

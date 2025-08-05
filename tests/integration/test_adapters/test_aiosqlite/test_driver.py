@@ -98,14 +98,16 @@ async def test_aiosqlite_basic_crud(aiosqlite_session: AiosqliteDriver) -> None:
 
 
 @pytest.mark.parametrize(
-    ("params", "style"),
+    ("parameters", "style"),
     [
         pytest.param(("test_value"), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
     ],
 )
 @pytest.mark.xdist_group("aiosqlite")
-async def test_aiosqlite_parameter_styles(aiosqlite_session: AiosqliteDriver, params: Any, style: ParamStyle) -> None:
+async def test_aiosqlite_parameter_styles(
+    aiosqlite_session: AiosqliteDriver, parameters: Any, style: ParamStyle
+) -> None:
     """Test different parameter binding styles."""
     # Clear any existing data between parameterized test runs
     await aiosqlite_session.execute("DELETE FROM test_table")
@@ -120,7 +122,7 @@ async def test_aiosqlite_parameter_styles(aiosqlite_session: AiosqliteDriver, pa
     else:  # dict_binds
         sql = "SELECT name FROM test_table WHERE name = :name"
 
-    result = await aiosqlite_session.execute(sql, params)
+    result = await aiosqlite_session.execute(sql, parameters)
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
@@ -134,17 +136,17 @@ async def test_aiosqlite_execute_many(aiosqlite_session: AiosqliteDriver) -> Non
     await aiosqlite_session.execute("DELETE FROM test_table")
     await aiosqlite_session.commit()
 
-    params_list = [("name1", 1), ("name2", 2), ("name3", 3)]
+    parameters_list = [("name1", 1), ("name2", 2), ("name3", 3)]
 
-    result = await aiosqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", params_list)
+    result = await aiosqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", parameters_list)
     assert isinstance(result, SQLResult)
-    assert result.rows_affected == len(params_list)
+    assert result.rows_affected == len(parameters_list)
 
     # Verify all records were inserted
     select_result = await aiosqlite_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == len(params_list)
+    assert select_result.data[0]["count"] == len(parameters_list)
 
     # Verify data integrity
     ordered_result = await aiosqlite_session.execute("SELECT name, value FROM test_table ORDER BY name")

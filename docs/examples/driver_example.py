@@ -10,7 +10,7 @@ import asyncio
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.statement.builder import Select
+from sqlspec.builder import Select
 from sqlspec.statement.filters import LimitOffsetFilter
 from sqlspec.utils.correlation import correlation_context
 

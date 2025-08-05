@@ -12,7 +12,6 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
 from sqlspec.adapters.aiosqlite.driver import AiosqliteCursor, AiosqliteDriver, aiosqlite_statement_config
 from sqlspec.config import AsyncDatabaseConfig
-from sqlspec.exceptions import ImproperConfigurationError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -26,11 +25,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_MIN_POOL: Final[int] = 5
 DEFAULT_MAX_POOL: Final[int] = 20
 POOL_TIMEOUT: Final[float] = 30.0
-POOL_RECYCLE: Final[int] = 3600
+POOL_RECYCLE: Final[int] = 86400
 WAL_PRAGMA_SQL: Final[str] = "PRAGMA journal_mode = WAL"
 FOREIGN_KEYS_SQL: Final[str] = "PRAGMA foreign_keys = ON"
 SYNC_NORMAL_SQL: Final[str] = "PRAGMA synchronous = NORMAL"
 CACHE_SIZE_SQL: Final[str] = "PRAGMA cache_size = -64000"
+TEMP_STORE_SQL: Final[str] = "PRAGMA temp_store = MEMORY"
+MMAP_SIZE_SQL: Final[str] = "PRAGMA mmap_size = 268435456"
 
 
 class AiosqliteConnectionPool:
@@ -42,9 +43,10 @@ class AiosqliteConnectionPool:
 
     __slots__ = (
         "_checked_out",
-        "_connection_params",
+        "_connection_parameters",
         "_connection_times",
         "_created_connections",
+        "_initialized",
         "_lock",
         "_max_pool",
         "_min_pool",
@@ -56,7 +58,7 @@ class AiosqliteConnectionPool:
 
     def __init__(
         self,
-        connection_params: "dict[str, Any]",
+        connection_parameters: "dict[str, Any]",
         pool_min_size: int = DEFAULT_MIN_POOL,
         pool_max_size: int = DEFAULT_MAX_POOL,
         pool_timeout: float = POOL_TIMEOUT,
@@ -69,21 +71,22 @@ class AiosqliteConnectionPool:
         self._max_pool = pool_max_size
         self._timeout = pool_timeout
         self._recycle = pool_recycle_seconds
-        self._connection_params = connection_params
+        self._connection_parameters = connection_parameters
         self._created_connections = 0
         self._checked_out = 0
         self._connection_times: "dict[int, float]" = {}  # noqa: UP037
+        self._initialized = False
 
     async def _create_connection(self) -> "AiosqliteConnection":
         """Create a new Aiosqlite connection with performance optimizations."""
-        connection = await aiosqlite.connect(**self._connection_params)
+        connection = await aiosqlite.connect(**self._connection_parameters)
 
         await connection.execute(WAL_PRAGMA_SQL)
         await connection.execute(FOREIGN_KEYS_SQL)
         await connection.execute(SYNC_NORMAL_SQL)
         await connection.execute(CACHE_SIZE_SQL)
-        await connection.execute("PRAGMA temp_store = MEMORY")
-        await connection.execute("PRAGMA mmap_size = 268435456")
+        await connection.execute(TEMP_STORE_SQL)
+        await connection.execute(MMAP_SIZE_SQL)
         await connection.commit()
 
         conn_id = id(connection)
@@ -93,9 +96,26 @@ class AiosqliteConnectionPool:
 
         return connection
 
+    async def _ensure_initialized(self) -> None:
+        """Ensure the pool is initialized with minimum connections (async thread-safe).
+
+        This method is called lazily on first connection request to avoid
+        connecting to non-existent database files during pool creation.
+        """
+        if self._initialized:
+            return
+
+        async with self._lock:
+            # Double-check pattern for async thread safety
+            if self._initialized:
+                return
+
+            # No eager initialization - connections created on demand
+            self._initialized = True
+
     async def initialize(self) -> None:
         """Pre-populate the pool with minimum connections."""
-        # Skip pre-population for now to avoid initialization hangs
+        await self._ensure_initialized()
 
     def _should_recycle(self, connection: "AiosqliteConnection") -> bool:
         """Check if connection should be recycled based on age."""
@@ -128,6 +148,9 @@ class AiosqliteConnectionPool:
         Yields:
             An Aiosqlite connection instance.
         """
+        # Ensure pool is initialized on first request
+        await self._ensure_initialized()
+
         connection = None
         acquired = False
 
@@ -209,6 +232,9 @@ class AiosqliteConnectionPool:
         Raises:
             RuntimeError: If pool limit is reached and timeout expires
         """
+        # Ensure pool is initialized on first request
+        await self._ensure_initialized()
+
         connection = None
         acquired = False
 
@@ -251,38 +277,6 @@ class AiosqliteConnectionPool:
                 self._semaphore.release()
             raise
         return connection
-
-    async def release(self, connection: "AiosqliteConnection") -> None:
-        """Return a connection to the pool.
-
-        Args:
-            connection: The connection to return to the pool
-        """
-        try:
-            async with self._lock:
-                self._checked_out = max(0, self._checked_out - 1)
-
-            # Validate connection before returning to pool
-            if await self._is_connection_alive(connection):
-                try:
-                    self._pool.put_nowait(connection)
-                except asyncio.QueueFull:
-                    # Pool is full, close the connection
-                    with suppress(Exception):
-                        await connection.close()
-                    conn_id = id(connection)
-                    async with self._lock:
-                        self._connection_times.pop(conn_id, None)
-            else:
-                # Connection is dead, close it
-                with suppress(Exception):
-                    await connection.close()
-                conn_id = id(connection)
-                async with self._lock:
-                    self._connection_times.pop(conn_id, None)
-        finally:
-            # Always release the semaphore
-            self._semaphore.release()
 
 
 class AiosqliteConnectionParams(TypedDict, total=False):
@@ -331,7 +325,7 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
         """Initialize Aiosqlite configuration.
 
         Args:
-            pool_config: Pool configuration parameters (TypedDict or dict) including connection params
+            pool_config: Pool configuration parameters (TypedDict or dict) including connection parameters
             statement_config: Default SQL statement configuration
             migration_config: Migration configuration
             pool_instance: Pre-created pool instance
@@ -371,9 +365,7 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
         """Create the Aiosqlite connection pool."""
         config_dict = self._get_connection_config_dict()
         pool_config = self._get_pool_config_dict()
-        pool = AiosqliteConnectionPool(connection_params=config_dict, **pool_config)
-        await pool.initialize()
-        return pool
+        return AiosqliteConnectionPool(connection_parameters=config_dict, **pool_config)
 
     async def _close_pool(self) -> None:
         """Close the connection pool."""
@@ -396,16 +388,8 @@ class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, AiosqliteConnecti
             The caller is responsible for returning the connection to the pool
             using pool.release(connection) when done.
         """
-        try:
-            # Ensure pool exists
-            pool = await self.provide_pool()
-
-            # Use the pool's acquire method
-            return await pool.acquire()
-
-        except Exception as e:
-            msg = f"Could not acquire Aiosqlite connection from pool. Error: {e!s}"
-            raise ImproperConfigurationError(msg) from e
+        pool = await self.provide_pool()
+        return await pool.acquire()
 
     @asynccontextmanager
     async def provide_connection(self, *args: "Any", **kwargs: "Any") -> "AsyncGenerator[AiosqliteConnection, None]":

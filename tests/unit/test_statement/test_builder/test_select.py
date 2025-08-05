@@ -21,9 +21,9 @@ import pytest
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
+from sqlspec.builder import Select
+from sqlspec.builder.mixins import CaseBuilder
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder import Select
-from sqlspec.statement.builder.mixins import CaseBuilder
 
 if TYPE_CHECKING:
     pass

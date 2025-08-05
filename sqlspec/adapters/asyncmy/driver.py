@@ -1,11 +1,14 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
-from typing import TYPE_CHECKING, Any, Optional, Union
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING, Any, AsyncContextManager, Optional, Union
 
+import asyncmy
+import asyncmy.errors
 from asyncmy.cursors import Cursor, DictCursor
 
 from sqlspec.driver import AsyncDriverAdapterBase
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
+from sqlspec.exceptions import SQLParsingError, SQLSpecError
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
 
 if TYPE_CHECKING:
@@ -18,11 +21,13 @@ if TYPE_CHECKING:
 asyncmy_statement_config = StatementConfig(
     dialect="mysql",
     parameter_config=ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
-        supported_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT},
+        default_parameter_style=ParameterStyle.QMARK,
+        default_execution_parameter_style=ParameterStyle.QMARK,
+        supported_parameter_styles={ParameterStyle.QMARK},
         type_coercion_map={},
         has_native_list_expansion=False,
         needs_static_script_compilation=True,
+        preserve_parameter_format=True,  # AsyncMy needs exact tuple/list format preservation
     ),
 )
 
@@ -84,22 +89,22 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """
         return None
 
-    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
+    async def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """AsyncMy executemany implementation."""
-        await cursor.executemany(sql, prepared_params)
+        sql = statement.sql
+        prepared_parameters = statement.parameters
+        await cursor.executemany(sql, prepared_parameters)
 
         return self.create_execution_result(
-            cursor, rowcount_override=len(prepared_params) if prepared_params else 0, is_many_result=True
+            cursor, rowcount_override=len(prepared_parameters) if prepared_parameters else 0, is_many_result=True
         )
 
-    async def _execute_statement(
-        self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL"
-    ) -> "ExecutionResult":
+    async def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """AsyncMy single execution."""
-        if isinstance(prepared_params, list):
-            prepared_params = tuple(p for p in prepared_params if not isinstance(p, (list, dict)))
+        sql = statement.sql
+        prepared_parameters = statement.parameters
 
-        await cursor.execute(sql, prepared_params or None)
+        await cursor.execute(sql, prepared_parameters or None)
 
         if statement.returns_rows():
             data = await cursor.fetchall()
@@ -113,3 +118,23 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
         row_count = cursor.rowcount if cursor.rowcount is not None else -1
         return self.create_execution_result(cursor, rowcount_override=row_count)
+
+    def handle_database_exceptions(self) -> "AsyncContextManager[None]":
+        """Handle AsyncMy-specific exceptions and wrap them appropriately."""
+
+        @asynccontextmanager
+        async def _async_handle_database_exceptions() -> Any:
+            try:
+                yield
+            except asyncmy.errors.MySQLError as e:
+                msg = f"AsyncMy database error: {e}"
+                raise SQLSpecError(msg) from e
+            except Exception as e:
+                # Handle any other unexpected errors
+                if "parse" in str(e).lower() or "syntax" in str(e).lower():
+                    msg = f"SQL parsing failed: {e}"
+                    raise SQLParsingError(msg) from e
+                msg = f"Unexpected error: {e}"
+                raise SQLSpecError(msg) from e
+
+        return _async_handle_database_exceptions()

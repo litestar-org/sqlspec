@@ -61,9 +61,9 @@ class StatementFilter(ABC):
         """Extract parameters that this filter contributes.
 
         Returns:
-            Tuple of (positional_params, named_params) where:
-            - positional_params: List of positional parameter values
-            - named_params: Dict of parameter name to value
+            Tuple of (positional_parameters, named_parameters) where:
+            - positional_parameters: List of positional parameter values
+            - named_parameters: Dict of parameter name to value
         """
         return [], {}
 
@@ -115,12 +115,12 @@ class BeforeAfterFilter(StatementFilter):
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
-        named_params = {}
+        named_parameters = {}
         if self.before and self._param_name_before:
-            named_params[self._param_name_before] = self.before
+            named_parameters[self._param_name_before] = self.before
         if self.after and self._param_name_after:
-            named_params[self._param_name_after] = self.after
-        return [], named_params
+            named_parameters[self._param_name_after] = self.after
+        return [], named_parameters
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         """Apply filter to SQL expression only."""
@@ -139,8 +139,8 @@ class BeforeAfterFilter(StatementFilter):
         for cond in conditions[1:]:
             final_condition = exp.And(this=final_condition, expression=cond)
         result = statement.where(final_condition)
-        _, named_params = self.extract_parameters()
-        for name, value in named_params.items():
+        _, named_parameters = self.extract_parameters()
+        for name, value in named_parameters.items():
             result = result.add_named_parameter(name, value)
         return result
 
@@ -182,12 +182,12 @@ class OnBeforeAfterFilter(StatementFilter):
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
-        named_params = {}
+        named_parameters = {}
         if self.on_or_before and self._param_name_on_or_before:
-            named_params[self._param_name_on_or_before] = self.on_or_before
+            named_parameters[self._param_name_on_or_before] = self.on_or_before
         if self.on_or_after and self._param_name_on_or_after:
-            named_params[self._param_name_on_or_after] = self.on_or_after
-        return [], named_params
+            named_parameters[self._param_name_on_or_after] = self.on_or_after
+        return [], named_parameters
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         conditions: list[Condition] = []
@@ -210,8 +210,8 @@ class OnBeforeAfterFilter(StatementFilter):
         for cond in conditions[1:]:
             final_condition = exp.And(this=final_condition, expression=cond)
         result = statement.where(final_condition)
-        _, named_params = self.extract_parameters()
-        for name, value in named_params.items():
+        _, named_parameters = self.extract_parameters()
+        for name, value in named_parameters.items():
             result = result.add_named_parameter(name, value)
         return result
 
@@ -259,11 +259,11 @@ class InCollectionFilter(InAnyFilter[T]):
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
-        named_params = {}
+        named_parameters = {}
         if self.values:
             for i, value in enumerate(self.values):
-                named_params[self._param_names[i]] = value
-        return [], named_params
+                named_parameters[self._param_names[i]] = value
+        return [], named_parameters
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         if self.values is None:
@@ -277,8 +277,8 @@ class InCollectionFilter(InAnyFilter[T]):
         ]
 
         result = statement.where(exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions))
-        _, named_params = self.extract_parameters()
-        for name, value in named_params.items():
+        _, named_parameters = self.extract_parameters()
+        for name, value in named_parameters.items():
             result = result.add_named_parameter(name, value)
         return result
 
@@ -313,11 +313,11 @@ class NotInCollectionFilter(InAnyFilter[T]):
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
-        named_params = {}
+        named_parameters = {}
         if self.values:
             for i, value in enumerate(self.values):
-                named_params[self._param_names[i]] = value
-        return [], named_params
+                named_parameters[self._param_names[i]] = value
+        return [], named_parameters
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         if self.values is None or not self.values:
@@ -330,8 +330,8 @@ class NotInCollectionFilter(InAnyFilter[T]):
         result = statement.where(
             exp.Not(this=exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions))
         )
-        _, named_params = self.extract_parameters()
-        for name, value in named_params.items():
+        _, named_parameters = self.extract_parameters()
+        for name, value in named_parameters.items():
             result = result.add_named_parameter(name, value)
         return result
 
@@ -368,11 +368,11 @@ class AnyCollectionFilter(InAnyFilter[T]):
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
-        named_params = {}
+        named_parameters = {}
         if self.values:
             for i, value in enumerate(self.values):
-                named_params[self._param_names[i]] = value
-        return [], named_params
+                named_parameters[self._param_names[i]] = value
+        return [], named_parameters
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         if self.values is None:
@@ -387,8 +387,8 @@ class AnyCollectionFilter(InAnyFilter[T]):
 
         array_expr = exp.Array(expressions=placeholder_expressions)
         result = statement.where(exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr)))
-        _, named_params = self.extract_parameters()
-        for name, value in named_params.items():
+        _, named_parameters = self.extract_parameters()
+        for name, value in named_parameters.items():
             result = result.add_named_parameter(name, value)
         return result
 
@@ -422,11 +422,11 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
-        named_params = {}
+        named_parameters = {}
         if self.values:
             for i, value in enumerate(self.values):
-                named_params[self._param_names[i]] = value
-        return [], named_params
+                named_parameters[self._param_names[i]] = value
+        return [], named_parameters
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         if self.values is None or not self.values:
@@ -439,8 +439,8 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
         array_expr = exp.Array(expressions=placeholder_expressions)
         condition = exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr))
         result = statement.where(exp.Not(this=condition))
-        _, named_params = self.extract_parameters()
-        for name, value in named_params.items():
+        _, named_parameters = self.extract_parameters()
+        for name, value in named_parameters.items():
             result = result.add_named_parameter(name, value)
         return result
 
@@ -503,8 +503,8 @@ class LimitOffsetFilter(PaginationFilter):
 
         result = statement.copy(statement=new_statement)
 
-        _, named_params = self.extract_parameters()
-        for name, value in named_params.items():
+        _, named_parameters = self.extract_parameters()
+        for name, value in named_parameters.items():
             result = result.add_named_parameter(name, value)
         return result.filter(self)
 
@@ -589,11 +589,11 @@ class SearchFilter(StatementFilter):
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
-        named_params = {}
+        named_parameters = {}
         if self.value and self._param_name:
             search_value_with_wildcards = f"%{self.value}%"
-            named_params[self._param_name] = search_value_with_wildcards
-        return [], named_params
+            named_parameters[self._param_name] = search_value_with_wildcards
+        return [], named_parameters
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         if not self.value or not self._param_name:
@@ -618,8 +618,8 @@ class SearchFilter(StatementFilter):
         else:
             result = statement
 
-        _, named_params = self.extract_parameters()
-        for name, value in named_params.items():
+        _, named_parameters = self.extract_parameters()
+        for name, value in named_parameters.items():
             result = result.add_named_parameter(name, value)
         return result
 
@@ -653,11 +653,11 @@ class NotInSearchFilter(SearchFilter):
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
-        named_params = {}
+        named_parameters = {}
         if self.value and self._param_name:
             search_value_with_wildcards = f"%{self.value}%"
-            named_params[self._param_name] = search_value_with_wildcards
-        return [], named_params
+            named_parameters[self._param_name] = search_value_with_wildcards
+        return [], named_parameters
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         if not self.value or not self._param_name:
@@ -682,8 +682,8 @@ class NotInSearchFilter(SearchFilter):
                     final_condition = exp.And(this=final_condition, expression=cond)
             result = statement.where(final_condition)
 
-        _, named_params = self.extract_parameters()
-        for name, value in named_params.items():
+        _, named_parameters = self.extract_parameters()
+        for name, value in named_parameters.items():
             result = result.add_named_parameter(name, value)
         return result
 

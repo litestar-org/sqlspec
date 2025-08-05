@@ -13,6 +13,7 @@ from typing import Callable, Optional, Union
 
 from typing_extensions import TypeAlias
 
+from sqlspec.statement.cache import get_cache_config, splitter_pattern_cache, splitter_result_cache
 from sqlspec.utils.logging import get_logger
 
 __all__ = (
@@ -443,16 +444,35 @@ class StatementSplitter:
         self.dialect = dialect
         self.strip_trailing_semicolon = strip_trailing_semicolon
         self.token_patterns = dialect.get_all_token_patterns()
-        self._compiled_patterns = self._compile_patterns()
 
-    def _compile_patterns(self) -> list[tuple[TokenType, CompiledTokenPattern]]:
-        """Compile regex patterns for efficiency."""
+        # Cache key for compiled patterns based on dialect and patterns
+        self._pattern_cache_key = f"{dialect.name}:{hash(tuple(str(p) for _, p in self.token_patterns))}"
+
+        # Get or compile patterns with caching
+        self._compiled_patterns = self._get_or_compile_patterns()
+
+    def _get_or_compile_patterns(self) -> list[tuple[TokenType, CompiledTokenPattern]]:
+        """Get compiled patterns from cache or compile and cache them."""
+        cache_config = get_cache_config()
+
+        # Try to get from cache if enabled
+        if cache_config.splitter_pattern_cache_enabled:
+            cached_patterns = splitter_pattern_cache.get(self._pattern_cache_key)
+            if cached_patterns is not None:
+                return cached_patterns
+
+        # Compile patterns
         compiled: list[tuple[TokenType, CompiledTokenPattern]] = []
         for token_type, pattern in self.token_patterns:
             if isinstance(pattern, str):
                 compiled.append((token_type, re.compile(pattern, re.IGNORECASE | re.DOTALL)))
             else:
                 compiled.append((token_type, pattern))
+
+        # Cache compiled patterns if enabled
+        if cache_config.splitter_pattern_cache_enabled:
+            splitter_pattern_cache.set(self._pattern_cache_key, compiled)
+
         return compiled
 
     def _tokenize(self, sql: str) -> Generator[Token, None, None]:
@@ -509,6 +529,29 @@ class StatementSplitter:
 
     def split(self, sql: str) -> list[str]:
         """Split the SQL script into individual statements."""
+        cache_config = get_cache_config()
+
+        # Create cache key for this split operation
+        script_hash = hash(sql)
+        cache_key = f"{self.dialect.name}:{script_hash}:{self.strip_trailing_semicolon}"
+
+        # Try to get from cache if enabled
+        if cache_config.splitter_result_cache_enabled:
+            cached_result = splitter_result_cache.get(cache_key)
+            if cached_result is not None:
+                return cached_result
+
+        # Perform the actual splitting
+        statements = self._do_split(sql)
+
+        # Cache the result if enabled
+        if cache_config.splitter_result_cache_enabled:
+            splitter_result_cache.set(cache_key, statements)
+
+        return statements
+
+    def _do_split(self, sql: str) -> list[str]:
+        """Perform the actual SQL script splitting."""
         statements = []
         current_statement_tokens = []
         current_statement_chars = []
@@ -613,13 +656,13 @@ class StatementSplitter:
         return False
 
 
-def split_sql_script(script: str, dialect: Optional[str] = None, strip_trailing_semicolon: bool = False) -> list[str]:
+def split_sql_script(script: str, dialect: Optional[str] = None, strip_trailing_terminator: bool = False) -> list[str]:
     """Split a SQL script into statements using the appropriate dialect.
 
     Args:
         script: The SQL script to split
         dialect: The SQL dialect name ('oracle', 'tsql', 'postgresql', etc.)
-        strip_trailing_semicolon: If True, remove trailing terminators from statements
+        strip_trailing_terminator: If True, remove trailing terminators from statements
 
     Returns:
         List of individual SQL statements
@@ -645,5 +688,5 @@ def split_sql_script(script: str, dialect: Optional[str] = None, strip_trailing_
         logger.warning("Unknown dialect '%s', using generic SQL splitter", dialect)
         config = GenericDialectConfig()
 
-    splitter = StatementSplitter(config, strip_trailing_semicolon=strip_trailing_semicolon)
+    splitter = StatementSplitter(config, strip_trailing_semicolon=strip_trailing_terminator)
     return splitter.split(script)

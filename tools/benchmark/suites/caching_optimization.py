@@ -7,7 +7,7 @@ caching system including AST fragment caching and optimized expression caching.
 import time
 from typing import Any
 
-from sqlspec.statement.builder import Select
+from sqlspec.builder import Select
 from sqlspec.statement.cache import (
     ast_fragment_cache,
     get_cache_stats,

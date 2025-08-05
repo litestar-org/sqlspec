@@ -146,17 +146,17 @@ def test_multiple_parameters(adbc_sqlite_session: AdbcDriver) -> None:
 @pytest.mark.xdist_group("adbc_sqlite")
 def test_execute_many_basic(adbc_sqlite_session: AdbcDriver) -> None:
     """Test basic execute_many functionality with ADBC SQLite."""
-    params_list = [("name1", 1), ("name2", 2), ("name3", 3)]
+    parameters_list = [("name1", 1), ("name2", 2), ("name3", 3)]
 
-    result = adbc_sqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", params_list)
+    result = adbc_sqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", parameters_list)
     assert isinstance(result, SQLResult)
-    assert result.rows_affected == len(params_list)
+    assert result.rows_affected == len(parameters_list)
 
     # Verify all records were inserted
     select_result = adbc_sqlite_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == len(params_list)
+    assert select_result.data[0]["count"] == len(parameters_list)
 
     # Verify data integrity
     ordered_result = adbc_sqlite_session.execute("SELECT name, value FROM test_table ORDER BY name")

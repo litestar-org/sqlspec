@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from sqlglot import exp
     from typing_extensions import TypeGuard
 
-    from sqlspec.parameters.types import TypedParameter
+    from sqlspec.builder import Select
     from sqlspec.protocols import (
         AsyncCloseableConnectionProtocol,
         AsyncCopyCapableConnectionProtocol,
@@ -61,7 +61,6 @@ if TYPE_CHECKING:
         SyncTransactionStateConnectionProtocol,
         WithMethodProtocol,
     )
-    from sqlspec.statement.builder import Select
     from sqlspec.statement.filters import LimitOffsetFilter, StatementFilter
     from sqlspec.typing import SupportedSchemaModel
 
@@ -186,7 +185,7 @@ def is_select_builder(obj: Any) -> "TypeGuard[Select]":
     Returns:
         True if the object is a Select, False otherwise
     """
-    from sqlspec.statement.builder import Select
+    from sqlspec.builder import Select
 
     return isinstance(obj, Select)
 
@@ -217,16 +216,16 @@ def is_indexable_row(row: Any) -> "TypeGuard[IndexableRow]":
     return isinstance(row, IndexableRow)
 
 
-def is_iterable_parameters(params: Any) -> "TypeGuard[Sequence[Any]]":
+def is_iterable_parameters(parameters: Any) -> "TypeGuard[Sequence[Any]]":
     """Check if parameters are iterable (but not string or dict).
 
     Args:
-        params: The parameters to check
+        parameters: The parameters to check
 
     Returns:
         True if the parameters are iterable, False otherwise
     """
-    return isinstance(params, Sequence) and not isinstance(params, (str, bytes, dict))
+    return isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, dict))
 
 
 def has_with_method(obj: Any) -> "TypeGuard[WithMethodProtocol]":
@@ -1322,7 +1321,7 @@ def is_copy_statement(expression: Any) -> "TypeGuard[exp.Expression]":
     return False
 
 
-def is_typed_parameter(obj: Any) -> "TypeGuard[TypedParameter]":
+def is_typed_parameter(obj: Any) -> "TypeGuard[Any]":
     """Check if an object is a typed parameter.
 
     Args:
@@ -1331,6 +1330,6 @@ def is_typed_parameter(obj: Any) -> "TypeGuard[TypedParameter]":
     Returns:
         True if the object is a TypedParameter, False otherwise
     """
-    from sqlspec.parameters.types import TypedParameter
+    from sqlspec.parameters import TypedParameter
 
     return isinstance(obj, TypedParameter)

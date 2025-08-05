@@ -4,9 +4,7 @@ import math
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlspec.parameters import ParameterConverter, ParameterInfo, ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
-from sqlspec.parameters.types import TypedParameter
+from sqlspec.parameters import ParameterConverter, ParameterInfo, ParameterStyle, ParameterStyleConfig, TypedParameter
 from sqlspec.statement.sql import SQL, StatementConfig
 
 
@@ -31,7 +29,7 @@ def test_typed_parameter_hashable() -> None:
 
 def test_wrap_parameters_with_types_dict() -> None:
     """Test wrapping dict parameters with types."""
-    params = {
+    parameters = {
         "name": "John",
         "age": 30,
         "created": datetime(2024, 1, 1, 12, 0, 0),
@@ -41,9 +39,9 @@ def test_wrap_parameters_with_types_dict() -> None:
         "metadata": {"key": "value"},
     }
 
-    param_info: list[ParameterInfo] = []  # Not used for dict params
+    param_info: list[ParameterInfo] = []  # Not used for dict parameters
     converter = ParameterConverter()
-    wrapped = converter.wrap_parameters_with_types(params, param_info)
+    wrapped = converter.wrap_parameters_with_types(parameters, param_info)
     assert isinstance(wrapped, dict)
     # Simple types should not be wrapped
     assert wrapped["name"] == "John"
@@ -75,7 +73,7 @@ def test_wrap_parameters_with_types_dict() -> None:
 
 def test_wrap_parameters_with_types_list() -> None:
     """Test wrapping list parameters with types."""
-    params = [
+    parameters = [
         "John",
         30,
         datetime(2024, 1, 1),
@@ -94,7 +92,7 @@ def test_wrap_parameters_with_types_list() -> None:
     ]
 
     converter = ParameterConverter()
-    wrapped = converter.wrap_parameters_with_types(params, param_info)
+    wrapped = converter.wrap_parameters_with_types(parameters, param_info)
     assert isinstance(wrapped, list)
 
     # Simple types should not be wrapped
@@ -129,9 +127,9 @@ def test_wrap_parameters_with_types_already_wrapped() -> None:
         value="test", data_type=exp.DataType.build("VARCHAR"), type_hint="string", semantic_name="test_param"
     )
 
-    params = {"param": tp}
+    parameters = {"param": tp}
     converter = ParameterConverter()
-    wrapped = converter.wrap_parameters_with_types(params, [])
+    wrapped = converter.wrap_parameters_with_types(parameters, [])
     assert isinstance(wrapped, dict)
 
     # Should be the same object
@@ -154,27 +152,27 @@ def test_sql_with_typed_parameters() -> None:
     )
 
     # Process the SQL (this will wrap parameters internally)
-    _, params = sql.compile()
+    _, parameters = sql.compile()
 
     # The compile method unwraps TypedParameter for final output
     # So check the internal processed state instead
     assert sql._processed_state is not None
-    internal_params = sql._processed_state.merged_parameters
+    internal_parameters = sql._processed_state.merged_parameters
 
     # First param should be wrapped as TypedParameter internally
-    assert isinstance(internal_params["param_0"], TypedParameter)
-    assert internal_params["param_0"].value == datetime(2024, 1, 1)
-    assert internal_params["param_0"].type_hint == "timestamp"
+    assert isinstance(internal_parameters["param_0"], TypedParameter)
+    assert internal_parameters["param_0"].value == datetime(2024, 1, 1)
+    assert internal_parameters["param_0"].type_hint == "timestamp"
 
     # Second param (boolean) should be wrapped since it's a special type
-    assert isinstance(internal_params["param_1"], TypedParameter)
-    assert internal_params["param_1"].value is True
-    assert internal_params["param_1"].type_hint == "boolean"
+    assert isinstance(internal_parameters["param_1"], TypedParameter)
+    assert internal_parameters["param_1"].value is True
+    assert internal_parameters["param_1"].type_hint == "boolean"
 
-    # The final output params should be unwrapped and in QMARK format (tuple)
-    assert isinstance(params, tuple)
-    assert params[0] == datetime(2024, 1, 1)
-    assert params[1] is True
+    # The final output parameters should be unwrapped and in QMARK format (tuple)
+    assert isinstance(parameters, tuple)
+    assert parameters[0] == datetime(2024, 1, 1)
+    assert parameters[1] is True
 
 
 def test_typed_parameter_type_inference() -> None:
@@ -219,10 +217,10 @@ def test_typed_parameter_type_inference() -> None:
 
 def test_typed_parameter_performance_optimization() -> None:
     """Test that simple scalar types are not wrapped for performance."""
-    params = {"string": "hello", "small_int": 100, "float": math.pi, "big_int": 9999999999, "bool": True}
+    parameters = {"string": "hello", "small_int": 100, "float": math.pi, "big_int": 9999999999, "bool": True}
 
     converter = ParameterConverter()
-    wrapped = converter.wrap_parameters_with_types(params, [])
+    wrapped = converter.wrap_parameters_with_types(parameters, [])
     assert isinstance(wrapped, dict)
 
     # Simple scalars should not be wrapped (except bigint and bool)

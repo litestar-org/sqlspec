@@ -1,14 +1,16 @@
 """Psqlpy Driver Implementation."""
-# pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 
 import logging
 import re
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Final, Optional
+
+import psqlpy
 
 from sqlspec.adapters.psqlpy._types import PsqlpyConnection
 from sqlspec.driver import AsyncDriverAdapterBase
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
+from sqlspec.exceptions import SQLParsingError, SQLSpecError
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.statement.sql import StatementConfig
 from sqlspec.utils.serializers import to_json
 
@@ -20,18 +22,6 @@ if TYPE_CHECKING:
     from sqlspec.statement.sql import SQL
 
 logger = logging.getLogger("sqlspec.adapters.psqlpy")
-
-psqlpy_type_coercion_map = {
-    list: lambda x: x,
-    tuple: list,
-    dict: to_json,
-    bool: lambda x: x,
-    int: lambda x: x,
-    float: lambda x: x,
-    str: lambda x: x,
-    bytes: lambda x: x,
-    type(None): lambda _: None,
-}
 
 psqlpy_statement_config = StatementConfig(
     dialect="postgres",
@@ -46,7 +36,17 @@ psqlpy_statement_config = StatementConfig(
         supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR, ParameterStyle.QMARK},
         supported_execution_parameter_styles={ParameterStyle.NUMERIC},
         default_execution_parameter_style=ParameterStyle.NUMERIC,
-        type_coercion_map=psqlpy_type_coercion_map,
+        type_coercion_map={
+            list: lambda x: x,
+            tuple: list,
+            dict: to_json,
+            bool: lambda x: x,
+            int: lambda x: x,
+            float: lambda x: x,
+            str: lambda x: x,
+            bytes: lambda x: x,
+            type(None): lambda _: None,
+        },
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
     ),
@@ -122,36 +122,33 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         """
         return None
 
-    async def _execute_many(
-        self, cursor: PsqlpyConnection, sql: str, prepared_params: Any, statement: "SQL"
-    ) -> "ExecutionResult":
+    async def _execute_many(self, cursor: PsqlpyConnection, statement: "SQL") -> "ExecutionResult":
         """Psqlpy execute_many implementation with proper parameter format.
 
         Psqlpy expects parameters as a list of lists/sequences for execute_many.
         """
-        if not prepared_params:
+        sql = statement.sql
+        prepared_parameters = statement.parameters
+        if not prepared_parameters:
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
-        formatted_params = [
-            list(param_set) if isinstance(param_set, (list, tuple)) else [param_set] for param_set in prepared_params
+        formatted_parameters = [
+            list(param_set) if isinstance(param_set, (list, tuple)) else [param_set]
+            for param_set in prepared_parameters
         ]
 
-        await cursor.execute_many(sql, formatted_params)
-        return self.create_execution_result(cursor, rowcount_override=len(formatted_params), is_many_result=True)
+        await cursor.execute_many(sql, formatted_parameters)
+        return self.create_execution_result(cursor, rowcount_override=len(formatted_parameters), is_many_result=True)
 
-    async def _execute_script(
-        self,
-        cursor: PsqlpyConnection,
-        sql: str,
-        prepared_params: Any,
-        statement_config: "StatementConfig",
-        statement: "SQL",
-    ) -> "ExecutionResult":
+    async def _execute_script(self, cursor: PsqlpyConnection, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script by splitting and executing statements sequentially.
 
         Psqlpy supports execute_batch for multi-statement scripts.
         """
-        if not prepared_params:
+        sql = statement.sql
+        prepared_parameters = statement.parameters
+        statement_config = statement.statement_config
+        if not prepared_parameters:
             try:
                 await cursor.execute_batch(sql)
                 statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
@@ -170,18 +167,18 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         last_result = None
         for stmt in statements:
-            last_result = await cursor.execute(stmt, prepared_params or [])
+            last_result = await cursor.execute(stmt, prepared_parameters or [])
 
         return self.create_execution_result(
             last_result, statement_count=statement_count, successful_statements=statement_count, is_script_result=True
         )
 
-    async def _execute_statement(
-        self, cursor: PsqlpyConnection, sql: str, prepared_params: Any, statement: "SQL"
-    ) -> "ExecutionResult":
+    async def _execute_statement(self, cursor: PsqlpyConnection, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement using psqlpy-optimized approach."""
+        sql = statement.sql
+        prepared_parameters = statement.parameters
         if statement.returns_rows():
-            query_result = await cursor.fetch(sql, prepared_params or [])
+            query_result = await cursor.fetch(sql, prepared_parameters or [])
             dict_rows: list[dict[str, Any]] = query_result.result() if query_result else []
 
             return self.create_execution_result(
@@ -192,7 +189,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        result = await cursor.execute(sql, prepared_params or [])
+        result = await cursor.execute(sql, prepared_parameters or [])
         return self.create_execution_result(cursor, rowcount_override=self._extract_rows_affected(result))
 
     def _extract_rows_affected(self, result: Any) -> int:
@@ -251,3 +248,19 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             delattr(self, "_transaction")
         else:
             await self.connection.execute("COMMIT")
+
+    @asynccontextmanager
+    async def handle_database_exceptions(self):
+        """Handle Psqlpy-specific exceptions and wrap them appropriately."""
+        try:
+            yield
+        except psqlpy.exceptions.DatabaseError as e:
+            msg = f"Psqlpy database error: {e}"
+            raise SQLSpecError(msg) from e
+        except Exception as e:
+            # Handle any other unexpected errors
+            if "parse" in str(e).lower() or "syntax" in str(e).lower():
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected error: {e}"
+            raise SQLSpecError(msg) from e

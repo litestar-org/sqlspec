@@ -116,7 +116,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         try:
             all_config = dict(self.pool_config)
 
-            pool_params = {
+            pool_parameters = {
                 "min_size": all_config.pop("min_size", 4),
                 "max_size": all_config.pop("max_size", None),
                 "name": all_config.pop("name", None),
@@ -145,17 +145,17 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 except Exception as e:
                     logger.debug("Failed to register pgvector for psycopg sync: %s", e)
 
-            pool_params["configure"] = all_config.pop("configure", configure_connection)
+            pool_parameters["configure"] = all_config.pop("configure", configure_connection)
 
-            pool_params = {k: v for k, v in pool_params.items() if v is not None}
+            pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
 
             conninfo = all_config.pop("conninfo", None)
             if conninfo:
-                pool = ConnectionPool(conninfo, open=True, **pool_params)
+                pool = ConnectionPool(conninfo, open=True, **pool_parameters)
             else:
                 kwargs = all_config.pop("kwargs", {})
                 all_config.update(kwargs)
-                pool = ConnectionPool("", kwargs=all_config, open=True, **pool_params)
+                pool = ConnectionPool("", kwargs=all_config, open=True, **pool_parameters)
 
             logger.info("Psycopg connection pool created successfully", extra={"adapter": "psycopg"})
         except Exception as e:
@@ -294,7 +294,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
         all_config = dict(self.pool_config)
 
-        pool_params = {
+        pool_parameters = {
             "min_size": all_config.pop("min_size", 4),
             "max_size": all_config.pop("max_size", None),
             "name": all_config.pop("name", None),
@@ -324,17 +324,17 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             except Exception as e:
                 logger.debug("Failed to register pgvector for psycopg async: %s", e)
 
-        pool_params["configure"] = all_config.pop("configure", configure_connection)
+        pool_parameters["configure"] = all_config.pop("configure", configure_connection)
 
-        pool_params = {k: v for k, v in pool_params.items() if v is not None}
+        pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
 
         conninfo = all_config.pop("conninfo", None)
         if conninfo:
-            pool = AsyncConnectionPool(conninfo, open=False, **pool_params)
+            pool = AsyncConnectionPool(conninfo, open=False, **pool_parameters)
         else:
             kwargs = all_config.pop("kwargs", {})
             all_config.update(kwargs)
-            pool = AsyncConnectionPool("", kwargs=all_config, open=False, **pool_params)
+            pool = AsyncConnectionPool("", kwargs=all_config, open=False, **pool_parameters)
 
         await pool.open()
 

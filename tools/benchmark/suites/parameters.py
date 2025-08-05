@@ -1,3 +1,5 @@
+from sqlspec.parameters import ParameterStyle, TypedParameter
+
 """Parameters benchmark suite."""
 
 import math
@@ -6,8 +8,6 @@ from typing import Any
 from rich.panel import Panel
 from sqlglot import exp
 
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.types import TypedParameter
 from sqlspec.statement.sql import SQL
 from tools.benchmark.core.metrics import BenchmarkMetrics, TimingResult
 from tools.benchmark.suites.base import BaseBenchmarkSuite
@@ -97,14 +97,14 @@ class ParametersBenchmark(BaseBenchmarkSuite):
             ("in_clause", "SELECT * FROM users WHERE id IN (:id1, :id2, :id3)", {"id1": 1, "id2": 2, "id3": 3}),
         ]
 
-        for name, query, params in test_cases:
-            sql = SQL(query, params)
+        for name, query, parameters in test_cases:
+            sql = SQL(query, parameters)
 
-            def convert_params(stmt: "SQL" = sql) -> None:
+            def convert_parameters(stmt: "SQL" = sql) -> None:
                 stmt.compile(placeholder_style=target_style.value)
 
             times = BenchmarkMetrics.time_operation(
-                convert_params, iterations=self.config.iterations, warmup=self.config.warmup_iterations
+                convert_parameters, iterations=self.config.iterations, warmup=self.config.warmup_iterations
             )
             results[name] = TimingResult(operation=name, iterations=self.config.iterations, times=times)
         return results

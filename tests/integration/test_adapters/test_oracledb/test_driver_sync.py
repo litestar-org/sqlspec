@@ -37,14 +37,14 @@ def oracle_sync_session(oracle_23ai_service: OracleService) -> Generator[OracleS
 
 
 @pytest.mark.parametrize(
-    ("params", "style"),
+    ("parameters", "style"),
     [
         pytest.param(("test_name",), "positional_binds", id="positional_binds"),
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
 @pytest.mark.xdist_group("oracle")
-def test_sync_select(oracle_sync_session: OracleSyncConfig, params: Any, style: ParamStyle) -> None:
+def test_sync_select(oracle_sync_session: OracleSyncConfig, parameters: Any, style: ParamStyle) -> None:
     """Test synchronous select functionality with Oracle parameter styles."""
     with oracle_sync_session.provide_session() as driver:
         # Manual cleanup at start of test
@@ -62,19 +62,19 @@ def test_sync_select(oracle_sync_session: OracleSyncConfig, params: Any, style: 
         if style == "positional_binds":
             insert_sql = "INSERT INTO test_table (id, name) VALUES (:id, :name)"
             select_sql = "SELECT name FROM test_table WHERE name = :name"
-            insert_params = {"id": 1, "name": params[0]}
-            select_params = {"name": params[0]}
+            insert_parameters = {"id": 1, "name": parameters[0]}
+            select_parameters = {"name": parameters[0]}
         else:  # dict_binds
             insert_sql = "INSERT INTO test_table (id, name) VALUES (:id, :name)"
             select_sql = "SELECT name FROM test_table WHERE name = :name"
-            insert_params = {"id": 1, **params}
-            select_params = params
+            insert_parameters = {"id": 1, **parameters}
+            select_parameters = parameters
 
-        insert_result = driver.execute(insert_sql, insert_params)
+        insert_result = driver.execute(insert_sql, insert_parameters)
         assert isinstance(insert_result, SQLResult)
         assert insert_result.rows_affected == 1
 
-        select_result = driver.execute(select_sql, select_params)
+        select_result = driver.execute(select_sql, select_parameters)
         assert isinstance(select_result, SQLResult)
         assert select_result.data is not None
         assert len(select_result.data) == 1
@@ -85,14 +85,14 @@ def test_sync_select(oracle_sync_session: OracleSyncConfig, params: Any, style: 
 
 
 @pytest.mark.parametrize(
-    ("params", "style"),  # Keep parametrization for structure, even if params unused for select_value
+    ("parameters", "style"),  # Keep parametrization for structure, even if parameters unused for select_value
     [
         pytest.param(("test_name",), "positional_binds", id="positional_binds"),
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
 @pytest.mark.xdist_group("oracle")
-def test_sync_select_value(oracle_sync_session: OracleSyncConfig, params: Any, style: ParamStyle) -> None:
+def test_sync_select_value(oracle_sync_session: OracleSyncConfig, parameters: Any, style: ParamStyle) -> None:
     """Test synchronous select_value functionality with Oracle parameter styles."""
     with oracle_sync_session.provide_session() as driver:
         # Manual cleanup at start of test
@@ -109,9 +109,9 @@ def test_sync_select_value(oracle_sync_session: OracleSyncConfig, params: Any, s
 
         # Workaround: Use positional binds for setup insert due to DPY-4009 error with dict_binds
         if style == "positional_binds":
-            setup_value = params[0]
+            setup_value = parameters[0]
         else:  # dict_binds
-            setup_value = params["name"]
+            setup_value = parameters["name"]
         insert_sql_setup = "INSERT INTO test_table (id, name) VALUES (:id, :name)"
         insert_result = driver.execute(insert_sql_setup, {"id": 1, "name": setup_value})
         assert isinstance(insert_result, SQLResult)

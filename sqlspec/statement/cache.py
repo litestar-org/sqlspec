@@ -35,6 +35,8 @@ __all__ = (
     "log_cache_stats",
     "optimized_expression_cache",
     "reset_cache_stats",
+    "splitter_pattern_cache",
+    "splitter_result_cache",
     "sql_cache",
     "update_cache_config",
 )
@@ -67,6 +69,12 @@ class CacheConfig:
     analysis_cache_size: int = DEFAULT_CACHE_MAX_SIZE
     analysis_cache_enabled: bool = True
 
+    # Statement splitter caches for performance optimization
+    splitter_pattern_cache_size: int = 50  # Small cache for compiled regex patterns
+    splitter_pattern_cache_enabled: bool = True
+    splitter_result_cache_size: int = 1000  # Cache for statement split results
+    splitter_result_cache_enabled: bool = True
+
     builder_cache_size: int = DEFAULT_BUILDER_CACHE_SIZE
     builder_cache_enabled: bool = True
 
@@ -98,6 +106,12 @@ class CacheConfig:
             raise ValueError(msg)
         if self.file_cache_size < 0:
             msg = "file_cache_size must be non-negative"
+            raise ValueError(msg)
+        if self.splitter_pattern_cache_size < 0:
+            msg = "splitter_pattern_cache_size must be non-negative"
+            raise ValueError(msg)
+        if self.splitter_result_cache_size < 0:
+            msg = "splitter_result_cache_size must be non-negative"
             raise ValueError(msg)
 
 
@@ -144,6 +158,17 @@ class CacheStats:
     file_misses: int = 0
     file_evictions: int = 0
     file_size: int = 0
+
+    # Statement splitter cache statistics
+    splitter_pattern_hits: int = 0
+    splitter_pattern_misses: int = 0
+    splitter_pattern_evictions: int = 0
+    splitter_pattern_size: int = 0
+
+    splitter_result_hits: int = 0
+    splitter_result_misses: int = 0
+    splitter_result_evictions: int = 0
+    splitter_result_size: int = 0
 
     avg_cache_lookup_time: float = 0.0
     avg_parse_time: float = 0.0
@@ -198,6 +223,18 @@ class CacheStats:
         return self.file_hits / total if total > 0 else 0.0
 
     @property
+    def splitter_pattern_hit_rate(self) -> float:
+        """Calculate splitter pattern cache hit rate."""
+        total = self.splitter_pattern_hits + self.splitter_pattern_misses
+        return self.splitter_pattern_hits / total if total > 0 else 0.0
+
+    @property
+    def splitter_result_hit_rate(self) -> float:
+        """Calculate splitter result cache hit rate."""
+        total = self.splitter_result_hits + self.splitter_result_misses
+        return self.splitter_result_hits / total if total > 0 else 0.0
+
+    @property
     def overall_hit_rate(self) -> float:
         """Calculate overall cache hit rate across all caches."""
         total_hits = (
@@ -209,6 +246,8 @@ class CacheStats:
             + self.analysis_hits
             + self.builder_hits
             + self.file_hits
+            + self.splitter_pattern_hits
+            + self.splitter_result_hits
         )
         total_accesses = (
             self.sql_hits
@@ -227,6 +266,10 @@ class CacheStats:
             + self.builder_misses
             + self.file_hits
             + self.file_misses
+            + self.splitter_pattern_hits
+            + self.splitter_pattern_misses
+            + self.splitter_result_hits
+            + self.splitter_result_misses
         )
         return total_hits / total_accesses if total_accesses > 0 else 0.0
 
@@ -282,6 +325,20 @@ class CacheStats:
                 "evictions": self.file_evictions,
                 "size": self.file_size,
             },
+            "splitter_pattern_cache": {
+                "hits": self.splitter_pattern_hits,
+                "misses": self.splitter_pattern_misses,
+                "hit_rate": self.splitter_pattern_hit_rate,
+                "evictions": self.splitter_pattern_evictions,
+                "size": self.splitter_pattern_size,
+            },
+            "splitter_result_cache": {
+                "hits": self.splitter_result_hits,
+                "misses": self.splitter_result_misses,
+                "hit_rate": self.splitter_result_hit_rate,
+                "evictions": self.splitter_result_evictions,
+                "size": self.splitter_result_size,
+            },
             "performance": {
                 "avg_cache_lookup_time_ms": self.avg_cache_lookup_time * 1000,
                 "avg_parse_time_ms": self.avg_parse_time * 1000,
@@ -295,7 +352,9 @@ class CacheStats:
                 + self.anonymous_returns_rows_size
                 + self.compiled_size
                 + self.analysis_size
-                + self.file_size,
+                + self.file_size
+                + self.splitter_pattern_size
+                + self.splitter_result_size,
             },
         }
 
@@ -380,8 +439,8 @@ class SQLCache:
         if value is None:
             return None
 
-        sql_params_tuple_size = 2
-        if isinstance(value, tuple) and len(value) == sql_params_tuple_size:
+        sql_parameters_tuple_size = 2
+        if isinstance(value, tuple) and len(value) == sql_parameters_tuple_size:
             sql_string, parameters = value
             return (sql_string, self._safe_copy(parameters))
 
@@ -404,6 +463,12 @@ class SQLCache:
             "analysis": lambda: setattr(_cache_stats, "analysis_hits", _cache_stats.analysis_hits + 1),
             "builder": lambda: setattr(_cache_stats, "builder_hits", _cache_stats.builder_hits + 1),
             "file": lambda: setattr(_cache_stats, "file_hits", _cache_stats.file_hits + 1),
+            "splitter_pattern": lambda: setattr(
+                _cache_stats, "splitter_pattern_hits", _cache_stats.splitter_pattern_hits + 1
+            ),
+            "splitter_result": lambda: setattr(
+                _cache_stats, "splitter_result_hits", _cache_stats.splitter_result_hits + 1
+            ),
         }
         counter = hit_counters.get(self.cache_name)
         if counter is not None:
@@ -420,6 +485,12 @@ class SQLCache:
             "analysis": lambda: setattr(_cache_stats, "analysis_misses", _cache_stats.analysis_misses + 1),
             "builder": lambda: setattr(_cache_stats, "builder_misses", _cache_stats.builder_misses + 1),
             "file": lambda: setattr(_cache_stats, "file_misses", _cache_stats.file_misses + 1),
+            "splitter_pattern": lambda: setattr(
+                _cache_stats, "splitter_pattern_misses", _cache_stats.splitter_pattern_misses + 1
+            ),
+            "splitter_result": lambda: setattr(
+                _cache_stats, "splitter_result_misses", _cache_stats.splitter_result_misses + 1
+            ),
         }
         counter = miss_counters.get(self.cache_name)
         if counter is not None:
@@ -436,6 +507,12 @@ class SQLCache:
             "analysis": lambda: setattr(_cache_stats, "analysis_evictions", _cache_stats.analysis_evictions + 1),
             "builder": lambda: setattr(_cache_stats, "builder_evictions", _cache_stats.builder_evictions + 1),
             "file": lambda: setattr(_cache_stats, "file_evictions", _cache_stats.file_evictions + 1),
+            "splitter_pattern": lambda: setattr(
+                _cache_stats, "splitter_pattern_evictions", _cache_stats.splitter_pattern_evictions + 1
+            ),
+            "splitter_result": lambda: setattr(
+                _cache_stats, "splitter_result_evictions", _cache_stats.splitter_result_evictions + 1
+            ),
         }
         counter = eviction_counters.get(self.cache_name)
         if counter is not None:
@@ -862,6 +939,17 @@ def update_cache_config(config: CacheConfig) -> None:
     else:
         file_cache.clear()
 
+    # Update splitter caches
+    if config.splitter_pattern_cache_enabled:
+        splitter_pattern_cache.max_size = config.splitter_pattern_cache_size
+    else:
+        splitter_pattern_cache.clear()
+
+    if config.splitter_result_cache_enabled:
+        splitter_result_cache.max_size = config.splitter_result_cache_size
+    else:
+        splitter_result_cache.clear()
+
 
 def get_cache_stats() -> CacheStats:
     """Get current cache statistics."""
@@ -873,6 +961,8 @@ def get_cache_stats() -> CacheStats:
     _cache_stats.analysis_size = analysis_cache.size
     _cache_stats.builder_size = builder_cache.size
     _cache_stats.file_size = file_cache.size
+    _cache_stats.splitter_pattern_size = splitter_pattern_cache.size
+    _cache_stats.splitter_result_size = splitter_result_cache.size
     _cache_stats.fragment_hits = ast_fragment_cache._hit_count
     _cache_stats.fragment_misses = ast_fragment_cache._miss_count
 
@@ -906,3 +996,7 @@ anonymous_returns_rows_cache = SQLCache(
 analysis_cache = SQLCache(max_size=_cache_config.analysis_cache_size, cache_name="analysis")
 builder_cache = SQLCache(max_size=_cache_config.builder_cache_size, cache_name="builder")
 file_cache = SQLCache(max_size=_cache_config.file_cache_size, cache_name="file")
+
+# Statement splitter performance caches
+splitter_pattern_cache = SQLCache(max_size=_cache_config.splitter_pattern_cache_size, cache_name="splitter_pattern")
+splitter_result_cache = SQLCache(max_size=_cache_config.splitter_result_cache_size, cache_name="splitter_result")

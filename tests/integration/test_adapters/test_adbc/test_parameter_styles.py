@@ -17,7 +17,7 @@ from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_m
 
 
 @pytest.fixture
-def adbc_postgresql_params_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
+def adbc_postgresql_parameters_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
     """Create an ADBC PostgreSQL session for parameter style testing."""
     config = AdbcConfig(
         connection_config={
@@ -28,7 +28,7 @@ def adbc_postgresql_params_session(postgres_service: PostgresService) -> Generat
     with config.provide_session() as session:
         # Create test table
         session.execute_script("""
-            CREATE TABLE IF NOT EXISTS test_params (
+            CREATE TABLE IF NOT EXISTS test_parameters (
                 id SERIAL PRIMARY KEY,
                 name TEXT NOT NULL,
                 value INTEGER DEFAULT 0,
@@ -37,25 +37,31 @@ def adbc_postgresql_params_session(postgres_service: PostgresService) -> Generat
         """)
         # Insert test data
         session.execute(
-            SQL("INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)", ("test1", 100, "First test"))
+            SQL(
+                "INSERT INTO test_parameters (name, value, description) VALUES ($1, $2, $3)",
+                ("test1", 100, "First test"),
+            )
         )
         session.execute(
-            SQL("INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)", ("test2", 200, "Second test"))
+            SQL(
+                "INSERT INTO test_parameters (name, value, description) VALUES ($1, $2, $3)",
+                ("test2", 200, "Second test"),
+            )
         )
         yield session
         # Cleanup
-        session.execute_script("DROP TABLE IF EXISTS test_params")
+        session.execute_script("DROP TABLE IF EXISTS test_parameters")
 
 
 @pytest.fixture
-def adbc_sqlite_params_session() -> Generator[AdbcDriver, None, None]:
+def adbc_sqlite_parameters_session() -> Generator[AdbcDriver, None, None]:
     """Create an ADBC SQLite session for parameter style testing."""
     config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"})
 
     with config.provide_session() as session:
         # Create test table
         session.execute_script("""
-            CREATE TABLE IF NOT EXISTS test_params (
+            CREATE TABLE IF NOT EXISTS test_parameters (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 value INTEGER DEFAULT 0,
@@ -64,10 +70,12 @@ def adbc_sqlite_params_session() -> Generator[AdbcDriver, None, None]:
         """)
         # Insert test data
         session.execute(
-            SQL("INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)", ("test1", 100, "First test"))
+            SQL("INSERT INTO test_parameters (name, value, description) VALUES (?, ?, ?)", ("test1", 100, "First test"))
         )
         session.execute(
-            SQL("INSERT INTO test_params (name, value, description) VALUES (?, ?, ?)", ("test2", 200, "Second test"))
+            SQL(
+                "INSERT INTO test_parameters (name, value, description) VALUES (?, ?, ?)", ("test2", 200, "Second test")
+            )
         )
         yield session
 
@@ -75,7 +83,7 @@ def adbc_sqlite_params_session() -> Generator[AdbcDriver, None, None]:
 @pytest.mark.xdist_group("postgres")
 @xfail_if_driver_missing
 @pytest.mark.parametrize(
-    "params,expected_count",
+    "parameters,expected_count",
     [
         (("test1",), 1),  # Tuple parameter
         (["test1"], 1),  # List parameter
@@ -83,19 +91,21 @@ def adbc_sqlite_params_session() -> Generator[AdbcDriver, None, None]:
     ],
 )
 def test_postgresql_parameter_types(
-    adbc_postgresql_params_session: AdbcDriver, params: Any, expected_count: int
+    adbc_postgresql_parameters_session: AdbcDriver, parameters: Any, expected_count: int
 ) -> None:
     """Test different parameter types with PostgreSQL."""
     # PostgreSQL always uses numeric placeholders ($1, $2, etc.)
-    # When using dict params, we need to use numeric placeholders too
-    if isinstance(params, dict):
-        # For dict params with PostgreSQL, we need to convert to positional
+    # When using dict parameters, we need to use numeric placeholders too
+    if isinstance(parameters, dict):
+        # For dict parameters with PostgreSQL, we need to convert to positional
         # since ADBC PostgreSQL doesn't support named parameters
-        result = adbc_postgresql_params_session.execute(
-            SQL("SELECT * FROM test_params WHERE name = $1"), params["name"]
+        result = adbc_postgresql_parameters_session.execute(
+            SQL("SELECT * FROM test_parameters WHERE name = $1"), parameters["name"]
         )
     else:
-        result = adbc_postgresql_params_session.execute(SQL("SELECT * FROM test_params WHERE name = $1"), params)
+        result = adbc_postgresql_parameters_session.execute(
+            SQL("SELECT * FROM test_parameters WHERE name = $1"), parameters
+        )
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -105,21 +115,23 @@ def test_postgresql_parameter_types(
 @pytest.mark.xdist_group("adbc_sqlite")
 @xfail_if_driver_missing
 @pytest.mark.parametrize(
-    "params,style,query",
+    "parameters,style,query",
     [
-        (("test1",), "qmark", "SELECT * FROM test_params WHERE name = ?"),
-        ((":test1",), "named", "SELECT * FROM test_params WHERE name = :name"),
-        ({"name": "test1"}, "named_dict", "SELECT * FROM test_params WHERE name = :name"),
+        (("test1",), "qmark", "SELECT * FROM test_parameters WHERE name = ?"),
+        ((":test1",), "named", "SELECT * FROM test_parameters WHERE name = :name"),
+        ({"name": "test1"}, "named_dict", "SELECT * FROM test_parameters WHERE name = :name"),
     ],
 )
-def test_sqlite_parameter_styles(adbc_sqlite_params_session: AdbcDriver, params: Any, style: str, query: str) -> None:
+def test_sqlite_parameter_styles(
+    adbc_sqlite_parameters_session: AdbcDriver, parameters: Any, style: str, query: str
+) -> None:
     """Test different parameter styles with SQLite."""
     # SQLite ADBC might have limitations on parameter styles
     if style == "named":
         # Named parameters with colon prefix
-        result = adbc_sqlite_params_session.execute(query, {"name": "test1"})
+        result = adbc_sqlite_parameters_session.execute(query, {"name": "test1"})
     else:
-        result = adbc_sqlite_params_session.execute(query, params)
+        result = adbc_sqlite_parameters_session.execute(query, parameters)
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -129,10 +141,10 @@ def test_sqlite_parameter_styles(adbc_sqlite_params_session: AdbcDriver, params:
 
 @pytest.mark.xdist_group("postgres")
 @xfail_if_driver_missing
-def test_postgresql_multiple_parameters(adbc_postgresql_params_session: AdbcDriver) -> None:
+def test_postgresql_multiple_parameters(adbc_postgresql_parameters_session: AdbcDriver) -> None:
     """Test queries with multiple parameters on PostgreSQL."""
-    result = adbc_postgresql_params_session.execute(
-        SQL("SELECT * FROM test_params WHERE value >= $1 AND value <= $2 ORDER BY value"), (50, 150)
+    result = adbc_postgresql_parameters_session.execute(
+        SQL("SELECT * FROM test_parameters WHERE value >= $1 AND value <= $2 ORDER BY value"), (50, 150)
     )
 
     assert isinstance(result, SQLResult)
@@ -143,10 +155,10 @@ def test_postgresql_multiple_parameters(adbc_postgresql_params_session: AdbcDriv
 
 @pytest.mark.xdist_group("adbc_sqlite")
 @xfail_if_driver_missing
-def test_sqlite_multiple_parameters(adbc_sqlite_params_session: AdbcDriver) -> None:
+def test_sqlite_multiple_parameters(adbc_sqlite_parameters_session: AdbcDriver) -> None:
     """Test queries with multiple parameters on SQLite."""
-    result = adbc_sqlite_params_session.execute(
-        SQL("SELECT * FROM test_params WHERE value >= ? AND value <= ? ORDER BY value"), (50, 150)
+    result = adbc_sqlite_parameters_session.execute(
+        SQL("SELECT * FROM test_parameters WHERE value >= ? AND value <= ? ORDER BY value"), (50, 150)
     )
 
     assert isinstance(result, SQLResult)
@@ -157,7 +169,7 @@ def test_sqlite_multiple_parameters(adbc_sqlite_params_session: AdbcDriver) -> N
 
 @pytest.mark.xdist_group("postgres")
 @xfail_if_driver_missing
-def test_postgresql_null_parameters(adbc_postgresql_params_session: AdbcDriver) -> None:
+def test_postgresql_null_parameters(adbc_postgresql_parameters_session: AdbcDriver) -> None:
     """Test handling of NULL parameters on PostgreSQL.
 
     The ADBC PostgreSQL driver has issues with null values in bind parameters.
@@ -168,12 +180,12 @@ def test_postgresql_null_parameters(adbc_postgresql_params_session: AdbcDriver) 
     """
     # Insert a record with NULL description using string SQL (not SQL object)
     # This allows the driver's custom pipeline to handle NULL transformation
-    adbc_postgresql_params_session.execute(
-        "INSERT INTO test_params (name, value, description) VALUES ($1, $2, $3)", "null_test", 300, None
+    adbc_postgresql_parameters_session.execute(
+        "INSERT INTO test_parameters (name, value, description) VALUES ($1, $2, $3)", "null_test", 300, None
     )
 
     # Query for NULL values
-    result = adbc_postgresql_params_session.execute("SELECT * FROM test_params WHERE description IS NULL")
+    result = adbc_postgresql_parameters_session.execute("SELECT * FROM test_parameters WHERE description IS NULL")
 
     assert isinstance(result, SQLResult)
     assert result.data is not None

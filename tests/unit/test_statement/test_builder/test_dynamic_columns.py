@@ -9,8 +9,8 @@ import pytest
 from sqlglot import exp
 
 from sqlspec import sql
-from sqlspec.statement.builder import Column
-from sqlspec.statement.builder._column import ColumnExpression, FunctionColumn
+from sqlspec.builder import Column
+from sqlspec.builder._column import ColumnExpression, FunctionColumn
 
 
 def test_dynamic_column_creation() -> None:

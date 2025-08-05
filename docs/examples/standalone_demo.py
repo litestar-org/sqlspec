@@ -250,20 +250,20 @@ def display_sql_with_syntax(sql_obj: SQL, title: str = "Generated SQL") -> None:
 
     # Show parameters if any
     if sql_obj.parameters:
-        params_table = Table(title="Parameters")
-        params_table.add_column("Name", style="cyan")
-        params_table.add_column("Value", style="yellow")
+        parameters_table = Table(title="Parameters")
+        parameters_table.add_column("Name", style="cyan")
+        parameters_table.add_column("Value", style="yellow")
 
         if isinstance(sql_obj.parameters, dict):
             for name, value in sql_obj.parameters.items():
-                params_table.add_row(str(name), str(value))
+                parameters_table.add_row(str(name), str(value))
         elif isinstance(sql_obj.parameters, (list, tuple)):
             for i, value in enumerate(sql_obj.parameters):
-                params_table.add_row(f"${i + 1}", str(value))
+                parameters_table.add_row(f"${i + 1}", str(value))
         else:
-            params_table.add_row("value", str(sql_obj.parameters))
+            parameters_table.add_row("value", str(sql_obj.parameters))
 
-        console.print(params_table)
+        console.print(parameters_table)
 
 
 @rclick.group()

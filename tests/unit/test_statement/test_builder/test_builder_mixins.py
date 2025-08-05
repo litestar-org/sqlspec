@@ -26,12 +26,11 @@ from unittest.mock import Mock
 import pytest
 from sqlglot import Expression, exp
 
-from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder import Column, FunctionColumn
-from sqlspec.statement.builder.mixins._cte_and_set_ops import SetOperationMixin
-from sqlspec.statement.builder.mixins._insert_operations import InsertFromSelectMixin, InsertValuesMixin
-from sqlspec.statement.builder.mixins._join_operations import JoinClauseMixin
-from sqlspec.statement.builder.mixins._merge_operations import (
+from sqlspec.builder import Column, FunctionColumn
+from sqlspec.builder.mixins._cte_and_set_ops import SetOperationMixin
+from sqlspec.builder.mixins._insert_operations import InsertFromSelectMixin, InsertValuesMixin
+from sqlspec.builder.mixins._join_operations import JoinClauseMixin
+from sqlspec.builder.mixins._merge_operations import (
     MergeIntoClauseMixin,
     MergeMatchedClauseMixin,
     MergeNotMatchedBySourceClauseMixin,
@@ -39,15 +38,16 @@ from sqlspec.statement.builder.mixins._merge_operations import (
     MergeOnClauseMixin,
     MergeUsingClauseMixin,
 )
-from sqlspec.statement.builder.mixins._order_limit_operations import (
+from sqlspec.builder.mixins._order_limit_operations import (
     LimitOffsetClauseMixin,
     OrderByClauseMixin,
     ReturningClauseMixin,
 )
-from sqlspec.statement.builder.mixins._pivot_operations import PivotClauseMixin, UnpivotClauseMixin
-from sqlspec.statement.builder.mixins._select_operations import SelectClauseMixin
-from sqlspec.statement.builder.mixins._update_operations import UpdateFromClauseMixin, UpdateSetClauseMixin
-from sqlspec.statement.builder.mixins._where_clause import HavingClauseMixin, WhereClauseMixin
+from sqlspec.builder.mixins._pivot_operations import PivotClauseMixin, UnpivotClauseMixin
+from sqlspec.builder.mixins._select_operations import SelectClauseMixin
+from sqlspec.builder.mixins._update_operations import UpdateFromClauseMixin, UpdateSetClauseMixin
+from sqlspec.builder.mixins._where_clause import HavingClauseMixin, WhereClauseMixin
+from sqlspec.exceptions import SQLBuilderError
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -155,7 +155,7 @@ def test_where_clause_wrong_expression_type() -> None:
 
 
 @pytest.mark.parametrize(
-    "method,args,expected_params",
+    "method,args,expected_parameters",
     [
         ("where_eq", ("name", "John"), ["John"]),
         ("where_neq", ("status", "inactive"), ["inactive"]),
@@ -172,7 +172,7 @@ def test_where_clause_wrong_expression_type() -> None:
     ],
     ids=["eq", "neq", "lt", "lte", "gt", "gte", "like", "not_like", "ilike", "between", "in", "not_in"],
 )
-def test_where_helper_methods(method: str, args: tuple, expected_params: list[Any]) -> None:
+def test_where_helper_methods(method: str, args: tuple, expected_parameters: list[Any]) -> None:
     """Test WHERE clause helper methods."""
     builder = WhereTestBuilder(exp.Select())
     where_method = getattr(builder, method)
@@ -180,7 +180,7 @@ def test_where_helper_methods(method: str, args: tuple, expected_params: list[An
 
     assert result is builder
     # Check parameters were added
-    for param in expected_params:
+    for param in expected_parameters:
         assert param in builder._parameters.values()
 
 

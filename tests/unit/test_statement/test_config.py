@@ -8,8 +8,7 @@ import pytest
 from sqlspec.base import SQLSpec
 from sqlspec.config import NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
 from sqlspec.driver import CommonDriverAttributesMixin
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
 
 # Create a default parameter config for tests

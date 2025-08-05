@@ -1,3 +1,5 @@
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
+
 """Unit tests for Oracle numeric parameter handling (:1, :2 style).
 
 Oracle supports both named parameters (:name) and numeric parameters (:1, :2).
@@ -9,8 +11,6 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 import pytest
 
 from sqlspec.exceptions import MissingParameterError, ParameterError, SQLValidationError
-from sqlspec.parameters import ParameterStyle, ParameterValidator
-from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
 
 if TYPE_CHECKING:
@@ -29,13 +29,13 @@ if TYPE_CHECKING:
         ("SELECT * FROM users WHERE id = :10", ParameterStyle.POSITIONAL_COLON),
         ("INSERT INTO big_table VALUES (:1, :2, :3, :4, :5, :6, :7, :8, :9, :10)", ParameterStyle.POSITIONAL_COLON),
     ],
-    ids=["insert", "select", "update", "delete", "double_digit", "many_params"],
+    ids=["insert", "select", "update", "delete", "double_digit", "many_parameters"],
 )
 def test_positional_colon_parameter_detection(sql: str, expected_style: ParameterStyle) -> None:
     """Test that :1, :2 style parameters are detected as POSITIONAL_COLON."""
     validator = ParameterValidator()
-    params = validator.extract_parameters(sql)
-    style = validator.get_parameter_style(params)
+    parameters = validator.extract_parameters(sql)
+    style = validator.get_parameter_style(parameters)
     assert style == expected_style
 
 
@@ -56,8 +56,8 @@ def test_positional_colon_parameter_extraction(sql: str, parameters: list[Any], 
     """Test extraction of Oracle numeric parameters."""
     # Extract parameters from the SQL string
     validator = ParameterValidator()
-    extracted_params = validator.extract_parameters(sql)
-    assert len(extracted_params) == expected_param_count
+    extracted_parameters = validator.extract_parameters(sql)
+    assert len(extracted_parameters) == expected_param_count
 
 
 # Test mixed parameter styles
@@ -109,7 +109,7 @@ def test_mixed_parameter_styles(
 
 # Test parameter conversion
 @pytest.mark.parametrize(
-    "sql,input_params,target_style,expected_output",
+    "sql,input_parameters,target_style,expected_output",
     [
         # List to Oracle numeric dict
         ("INSERT INTO users VALUES (:1, :2)", ["john", 42], ParameterStyle.POSITIONAL_COLON, {"1": "john", "2": 42}),
@@ -129,12 +129,12 @@ def test_mixed_parameter_styles(
 )
 def test_positional_colon_parameter_conversion(
     sql: str,
-    input_params: Union[list[Any], dict[str, Any]],
+    input_parameters: Union[list[Any], dict[str, Any]],
     target_style: ParameterStyle,
     expected_output: Union[list[Any], dict[str, Any]],
 ) -> None:
     """Test conversion between parameter formats."""
-    stmt = SQL(sql, parameters=input_params)
+    stmt = SQL(sql, parameters=input_parameters)
     result = stmt.get_parameters(target_style)
     assert result == expected_output
 
@@ -183,14 +183,14 @@ def test_positional_colon_vs_named_colon() -> None:
 def test_positional_colon_with_execute_many() -> None:
     """Test Oracle numeric parameters with execute_many."""
     sql = "INSERT INTO users VALUES (:1, :2)"
-    params = [[1, "john"], [2, "jane"], [3, "bob"]]
-    stmt = SQL(sql).as_many(params)
+    parameters = [[1, "john"], [2, "jane"], [3, "bob"]]
+    stmt = SQL(sql).as_many(parameters)
 
     assert stmt.is_many
-    assert stmt.parameters == params
+    assert stmt.parameters == parameters
 
     # Each parameter set should work
-    for param_set in params:
+    for param_set in parameters:
         single_stmt = SQL(sql, parameters=param_set)
         assert len(single_stmt.parameter_info) == 2
 
@@ -214,8 +214,8 @@ def test_positional_colon_with_execute_many() -> None:
 def test_positional_colon_parameter_order(sql: str, expected_order: list[str]) -> None:
     """Test that parameter order is preserved correctly."""
     validator = ParameterValidator()
-    params = validator.extract_parameters(sql)
-    param_names = [p.name for p in params]
+    parameters = validator.extract_parameters(sql)
+    param_names = [p.name for p in parameters]
     assert param_names == expected_order
 
 
@@ -226,8 +226,8 @@ def test_positional_colon_regex_precedence() -> None:
     # not as a parameter named "2something"
 
     validator = ParameterValidator()
-    params = validator.extract_parameters(sql)
-    param_names = [p.name for p in params]
+    parameters = validator.extract_parameters(sql)
+    param_names = [p.name for p in parameters]
 
     # Should extract :1, :2, :name, :3 (not :2something)
     assert "1" in param_names
@@ -244,14 +244,14 @@ def test_positional_colon_regex_precedence() -> None:
         ("INSERT INTO users VALUES (:1, :2)", [1, "john"], False),
         ("INSERT INTO users VALUES (:1, :2)", {"1": 1, "2": "john"}, False),
         # Missing parameters - now auto-handled
-        ("INSERT INTO users VALUES (:1, :2)", [1], False),  # Changed: auto-generates missing params
+        ("INSERT INTO users VALUES (:1, :2)", [1], False),  # Changed: auto-generates missing parameters
         ("INSERT INTO users VALUES (:1, :2)", {"1": 1}, False),  # Changed: auto-generates missing "2"
         # Extra parameters (should be ok)
         ("INSERT INTO users VALUES (:1, :2)", [1, "john", "extra"], False),
         ("INSERT INTO users VALUES (:1, :2)", {"1": 1, "2": "john", "3": "extra"}, False),
         # Empty parameters - now auto-handled
-        ("INSERT INTO users VALUES (:1, :2)", [], False),  # Changed: auto-generates all params
-        ("INSERT INTO users VALUES (:1, :2)", {}, False),  # Changed: auto-generates all params
+        ("INSERT INTO users VALUES (:1, :2)", [], False),  # Changed: auto-generates all parameters
+        ("INSERT INTO users VALUES (:1, :2)", {}, False),  # Changed: auto-generates all parameters
     ],
     ids=[
         "valid_list",
@@ -319,8 +319,8 @@ def test_positional_colon_with_zero() -> None:
     assert stmt.parameter_info[0].name == "0"
 
     # Convert to dict format
-    params = stmt.get_parameters(ParameterStyle.POSITIONAL_COLON)
-    assert params == {"0": 42}
+    parameters = stmt.get_parameters(ParameterStyle.POSITIONAL_COLON)
+    assert parameters == {"0": 42}
 
 
 def test_positional_colon_large_numbers() -> None:
@@ -330,9 +330,9 @@ def test_positional_colon_large_numbers() -> None:
     sql = f"INSERT INTO big_table VALUES ({placeholders})"
 
     # Create corresponding parameter list
-    params = list(range(1, 101))
+    parameters = list(range(1, 101))
 
-    stmt = SQL(sql, parameters=params)
+    stmt = SQL(sql, parameters=parameters)
     assert len(stmt.parameter_info) == 100
 
     # Convert to dict and verify

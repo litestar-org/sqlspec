@@ -118,10 +118,10 @@ def test_postgresql_execute_many_update(adbc_postgresql_batch_session: AdbcDrive
     )
 
     # Now update with execute_many
-    update_params = [(100, "Update 1"), (200, "Update 2"), (300, "Update 3")]
+    update_parameters = [(100, "Update 1"), (200, "Update 2"), (300, "Update 3")]
 
     result = adbc_postgresql_batch_session.execute_many(
-        "UPDATE test_batch SET value = $1 WHERE name = $2", update_params
+        "UPDATE test_batch SET value = $1 WHERE name = $2", update_parameters
     )
 
     assert isinstance(result, SQLResult)

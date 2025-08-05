@@ -1,11 +1,13 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import re
-from typing import TYPE_CHECKING, Any, Final, Optional
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING, Any, AsyncContextManager, Final, Optional
 
-from sqlspec.adapters.asyncpg.pipeline_steps import postgres_copy_pipeline_step
+import asyncpg
+
 from sqlspec.driver import AsyncDriverAdapterBase
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
+from sqlspec.exceptions import SQLParsingError, SQLSpecError
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -18,7 +20,7 @@ from sqlspec.statement.sql import StatementConfig
 
 asyncpg_statement_config = StatementConfig(
     dialect="postgres",
-    pre_process_steps=[postgres_copy_pipeline_step],
+    pre_process_steps=None,
     post_process_steps=None,
     enable_parsing=True,
     enable_transformations=True,
@@ -84,28 +86,28 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
     async def _try_special_handling(self, cursor: "AsyncpgConnection", statement: "SQL") -> "Optional[SQLResult]":
         """Handle PostgreSQL COPY operations."""
-        if statement._processing_context and statement._processing_context.metadata.get("postgres_copy_operation"):
-            await self._handle_copy_operation_from_pipeline(cursor, statement)
+        if statement.operation_type == "COPY":
+            await self._handle_copy_operation(cursor, statement)
             return self.build_statement_result(statement, self.create_execution_result(cursor))
 
         return None
 
-    async def _execute_many(
-        self, cursor: "AsyncpgConnection", sql: str, prepared_params: Any, statement: "SQL"
-    ) -> "ExecutionResult":
+    async def _execute_many(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
         """Execute multiple statements with AsyncPG."""
-        await cursor.executemany(sql, prepared_params)
+        sql = statement.sql
+        prepared_parameters = statement.parameters
+        await cursor.executemany(sql, prepared_parameters)
 
         return self.create_execution_result(
-            cursor, rowcount_override=len(prepared_params) if prepared_params else 0, is_many_result=True
+            cursor, rowcount_override=len(prepared_parameters) if prepared_parameters else 0, is_many_result=True
         )
 
-    async def _execute_statement(
-        self, cursor: "AsyncpgConnection", sql: str, prepared_params: Any, statement: "SQL"
-    ) -> "ExecutionResult":
+    async def _execute_statement(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
         """Execute single statement with AsyncPG."""
+        sql = statement.sql
+        prepared_parameters = statement.parameters
         if statement.returns_rows():
-            records = await cursor.fetch(sql, *prepared_params)
+            records = await cursor.fetch(sql, *prepared_parameters)
             data = [dict(record) for record in records]
             return self.create_execution_result(
                 cursor,
@@ -115,20 +117,21 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        result = await cursor.execute(sql, *prepared_params)
+        result = await cursor.execute(sql, *prepared_parameters)
         return self.create_execution_result(
             result, rowcount_override=self._parse_asyncpg_status(result) if isinstance(result, str) else 0
         )
 
-    async def _handle_copy_operation_from_pipeline(self, cursor: "AsyncpgConnection", statement: "SQL") -> None:
-        """Handle PostgreSQL COPY operations using pipeline metadata.
+    async def _handle_copy_operation(self, cursor: "AsyncpgConnection", statement: "SQL") -> None:
+        """Handle PostgreSQL COPY operations.
 
         Args:
             cursor: Database connection
-            statement: SQL statement with COPY metadata from pipeline
+            statement: SQL statement with COPY operation
         """
-        metadata = statement._processing_context.metadata if statement._processing_context else {}
-        sql_text = metadata.get("postgres_copy_original_sql") or str(statement.expression)
+        metadata: dict[str, Any] = {}
+        # Use processed SQL with all transformations applied
+        sql_text = statement.sql
 
         copy_data = metadata.get("postgres_copy_data")
 
@@ -189,3 +192,23 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     async def commit(self) -> None:
         """Commit transaction using asyncpg-specific method."""
         await self.connection.execute("COMMIT")
+
+    def handle_database_exceptions(self) -> "AsyncContextManager[None]":
+        """Handle AsyncPG-specific exceptions and wrap them appropriately."""
+        return self._handle_database_exceptions_async()
+
+    @asynccontextmanager
+    async def _handle_database_exceptions_async(self) -> Any:
+        """Async context manager for database exception handling."""
+        try:
+            yield
+        except asyncpg.PostgresError as e:
+            msg = f"AsyncPG database error: {e}"
+            raise SQLSpecError(msg) from e
+        except Exception as e:
+            # Handle any other unexpected errors
+            if "parse" in str(e).lower() or "syntax" in str(e).lower():
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected error: {e}"
+            raise SQLSpecError(msg) from e

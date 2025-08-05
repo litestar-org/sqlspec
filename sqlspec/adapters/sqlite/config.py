@@ -4,7 +4,6 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager, suppress
-from queue import Empty, Full, Queue
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, TypedDict, Union, cast
 
 from typing_extensions import NotRequired
@@ -22,11 +21,13 @@ if TYPE_CHECKING:
 DEFAULT_MIN_POOL: Final[int] = 5
 DEFAULT_MAX_POOL: Final[int] = 20
 POOL_TIMEOUT: Final[float] = 30.0
-POOL_RECYCLE: Final[int] = 3600
+POOL_RECYCLE: Final[int] = 86400
 WAL_PRAGMA_SQL: Final[str] = "PRAGMA journal_mode = WAL"
 FOREIGN_KEYS_SQL: Final[str] = "PRAGMA foreign_keys = ON"
 SYNC_NORMAL_SQL: Final[str] = "PRAGMA synchronous = NORMAL"
 CACHE_SIZE_SQL: Final[str] = "PRAGMA cache_size = -64000"
+TEMP_STORE_SQL: Final[str] = "PRAGMA temp_store = MEMORY"
+MMAP_SIZE_SQL: Final[str] = "PRAGMA mmap_size = 268435456"
 
 
 class SqliteConnectionParams(TypedDict, total=False):
@@ -63,64 +64,52 @@ __all__ = ("SqliteConfig", "SqliteConnectionParams", "SqliteConnectionPool", "Sq
 
 
 class SqliteConnectionPool:
-    """QueuePool-like connection pool for SQLite with performance optimizations.
+    """Thread-local connection manager for SQLite with performance optimizations.
 
-    Implements connection pooling similar to SQLAlchemy's QueuePool to achieve
-    the 4.5x performance improvement (2k → 9k TPS) mentioned in benchmarks.
+    Uses thread-local storage to ensure each thread gets its own SQLite connection,
+    preventing the thread-safety issues that cause segmentation faults when
+    multiple cursors share the same connection concurrently.
+
+    This design trades traditional pooling for thread safety, which is essential
+    for SQLite since connections and cursors are not thread-safe.
     """
 
     __slots__ = (
-        "_checked_out",
-        "_connection_params",
+        "_connection_parameters",
         "_connection_times",
         "_created_connections",
         "_lock",
-        "_max_overflow",
-        "_max_pool_size",
-        "_min_pool_size",
-        "_pool",
         "_recycle",
-        "_timeout",
+        "_thread_local",
     )
 
     def __init__(
         self,
-        connection_params: "dict[str, Any]",
+        connection_parameters: "dict[str, Any]",
         pool_min_size: int = DEFAULT_MIN_POOL,
         pool_max_size: int = DEFAULT_MAX_POOL,
         pool_timeout: float = POOL_TIMEOUT,
         pool_recycle_seconds: int = POOL_RECYCLE,
     ) -> None:
-        """Initialize the connection pool."""
-        self._pool: "Queue[SqliteConnection]" = Queue(maxsize=pool_max_size)  # noqa: UP037
-        self._lock = threading.RLock()
-        self._min_pool_size = pool_min_size
-        self._max_pool_size = pool_max_size
-        self._timeout = pool_timeout
+        """Initialize the thread-local connection manager."""
+        self._connection_parameters = connection_parameters
         self._recycle = pool_recycle_seconds
-        self._connection_params = connection_params
+        self._thread_local = threading.local()
+        self._lock = threading.RLock()
         self._created_connections = 0
-        self._checked_out = 0
-        self._connection_times: "dict[int, float]" = {}  # noqa: UP037
-
-        try:
-            for _ in range(pool_min_size):
-                conn = self._create_connection()
-                self._pool.put_nowait(conn)
-        except Full:
-            pass
+        self._connection_times: dict[int, float] = {}
 
     def _create_connection(self) -> SqliteConnection:
         """Create a new SQLite connection with performance optimizations."""
-        connection = sqlite3.connect(**self._connection_params)
+        connection = sqlite3.connect(**self._connection_parameters)
         connection.row_factory = sqlite3.Row
 
         connection.execute(WAL_PRAGMA_SQL)
         connection.execute(FOREIGN_KEYS_SQL)
         connection.execute(SYNC_NORMAL_SQL)
         connection.execute(CACHE_SIZE_SQL)
-        connection.execute("PRAGMA temp_store = MEMORY")
-        connection.execute("PRAGMA mmap_size = 268435456")
+        connection.execute(TEMP_STORE_SQL)
+        connection.execute(MMAP_SIZE_SQL)
 
         conn_id = id(connection)
         with self._lock:
@@ -129,14 +118,33 @@ class SqliteConnectionPool:
 
         return connection  # type: ignore[no-any-return]
 
-    def _should_recycle(self, connection: SqliteConnection) -> bool:
-        """Check if connection should be recycled based on age."""
-        conn_id = id(connection)
-        created_at = self._connection_times.get(conn_id)
-        if created_at is None:
-            return True
+    def _get_thread_connection(self) -> SqliteConnection:
+        """Get or create a connection for the current thread.
 
-        return (time.time() - created_at) > self._recycle
+        Each thread gets its own dedicated SQLite connection to prevent
+        thread-safety issues with concurrent cursor operations.
+        """
+        if not hasattr(self._thread_local, "connection"):
+            self._thread_local.connection = self._create_connection()
+            self._thread_local.created_at = time.time()
+
+        # Check if connection needs recycling
+        if self._recycle > 0 and time.time() - self._thread_local.created_at > self._recycle:
+            with suppress(Exception):
+                self._thread_local.connection.close()
+            self._thread_local.connection = self._create_connection()
+            self._thread_local.created_at = time.time()
+
+        return self._thread_local.connection
+
+    def _close_thread_connection(self) -> None:
+        """Close the connection for the current thread."""
+        if hasattr(self._thread_local, "connection"):
+            with suppress(Exception):
+                self._thread_local.connection.close()
+            del self._thread_local.connection
+            if hasattr(self._thread_local, "created_at"):
+                del self._thread_local.created_at
 
     def _is_connection_alive(self, connection: SqliteConnection) -> bool:
         """Check if a connection is still alive and usable.
@@ -157,156 +165,52 @@ class SqliteConnectionPool:
 
     @contextmanager
     def get_connection(self) -> "Generator[SqliteConnection, None, None]":
-        """Get a connection from the pool with automatic return.
+        """Get a thread-local connection.
+
+        Each thread gets its own dedicated SQLite connection to prevent
+        thread-safety issues with concurrent cursor operations.
 
         Yields:
-            SqliteConnection: A connection from the pool.
+            SqliteConnection: A thread-local connection.
         """
-        connection = None
+        connection = self._get_thread_connection()
         try:
-            try:
-                connection = self._pool.get(timeout=self._timeout)
-
-                if self._should_recycle(connection):
-                    conn_id = id(connection)
-                    with suppress(Exception):
-                        connection.close()
-                    with self._lock:
-                        self._connection_times.pop(conn_id, None)
-                    connection = None
-
-            except Empty:
-                with self._lock:
-                    if self._checked_out < self._max_pool_size:
-                        connection = None  # Will create new one below
-                    else:
-                        try:
-                            connection = self._pool.get(timeout=self._timeout)
-                        except Empty:
-                            msg = f"Connection pool limit of {self._max_pool_size} reached, timeout {self._timeout}"
-                            raise RuntimeError(msg) from None
-
-            if connection is None:
-                connection = self._create_connection()
-
-            with self._lock:
-                self._checked_out += 1
-
             yield connection
-
-        finally:
-            if connection is not None:
-                with self._lock:
-                    self._checked_out -= 1
-
-                if self._is_connection_alive(connection):
-                    try:
-                        self._pool.put_nowait(connection)
-                    except Full:
-                        with suppress(Exception):
-                            connection.close()
-                else:
-                    with suppress(Exception):
-                        connection.close()
+        except Exception:
+            # On error, close and recreate connection for this thread
+            self._close_thread_connection()
+            raise
 
     def close(self) -> None:
-        """Close all connections in the pool."""
-        try:
-            while True:
-                connection = self._pool.get_nowait()
-                with suppress(Exception):
-                    connection.close()
-        except Empty:
-            pass
-
-        with self._lock:
-            self._connection_times.clear()
+        """Close the thread-local connection if it exists."""
+        self._close_thread_connection()
 
     def size(self) -> int:
-        """Get current pool size."""
-        return self._pool.qsize()
+        """Get current pool size (always 1 for thread-local)."""
+        return 1 if hasattr(self._thread_local, "connection") else 0
 
     def checked_out(self) -> int:
-        """Get number of checked out connections."""
-        return self._checked_out
+        """Get number of checked out connections (always 0 for thread-local)."""
+        return 0
 
     def acquire(self) -> SqliteConnection:
-        """Acquire a connection from the pool without a context manager.
+        """Acquire a thread-local connection.
 
-        This method gets a connection from the pool that must be manually
-        returned using the release() method.
+        Each thread gets its own dedicated SQLite connection to prevent
+        thread-safety issues with concurrent cursor operations.
 
         Returns:
-            SqliteConnection: A connection from the pool
-
-        Raises:
-            RuntimeError: If pool limit is reached and timeout expires
+            SqliteConnection: A thread-local connection
         """
-        connection = None
-        try:
-            try:
-                connection = self._pool.get(timeout=self._timeout)
-
-                if self._should_recycle(connection) or not self._is_connection_alive(connection):
-                    conn_id = id(connection)
-                    with suppress(Exception):
-                        connection.close()
-                    with self._lock:
-                        self._connection_times.pop(conn_id, None)
-                    connection = None
-
-            except Empty:
-                with self._lock:
-                    total_connections = self._checked_out + self._pool.qsize()
-                    if total_connections < self._max_pool_size:
-                        connection = None  # Will create new one below
-                    else:
-                        try:
-                            connection = self._pool.get(timeout=self._timeout)
-                        except Empty:
-                            msg = f"Pool limit of {self._max_pool_size} connections reached"
-                            raise RuntimeError(msg) from None
-
-            if connection is None:
-                connection = self._create_connection()
-
-            with self._lock:
-                self._checked_out += 1
-
-        except Exception:
-            if connection is not None:
-                with suppress(Full):
-                    self._pool.put_nowait(connection)
-            raise
-        return connection
+        return self._get_thread_connection()
 
     def release(self, connection: SqliteConnection) -> None:
-        """Return a connection to the pool.
+        """Release a thread-local connection (no-op since connection is thread-owned).
 
         Args:
-            connection: The connection to return to the pool
+            connection: The connection to release (ignored - thread owns it)
         """
-        if connection is None:
-            return
-
-        with self._lock:
-            self._checked_out = max(0, self._checked_out - 1)
-
-        if self._is_connection_alive(connection):
-            try:
-                self._pool.put_nowait(connection)
-            except Full:
-                with suppress(Exception):
-                    connection.close()
-                conn_id = id(connection)
-                with self._lock:
-                    self._connection_times.pop(conn_id, None)
-        else:
-            with suppress(Exception):
-                connection.close()
-            conn_id = id(connection)
-            with self._lock:
-                self._connection_times.pop(conn_id, None)
+        # No-op: thread-local connections are managed per-thread
 
 
 class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, SqliteDriver]):
@@ -370,7 +274,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         """Create optimized connection pool from unified configuration."""
         config_dict = self._get_connection_config_dict()
         pool_config = self._get_pool_config_dict()
-        return SqliteConnectionPool(connection_params=config_dict, **pool_config)
+        return SqliteConnectionPool(connection_parameters=config_dict, **pool_config)
 
     def _close_pool(self) -> None:
         """Close the connection pool."""

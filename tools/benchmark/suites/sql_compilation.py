@@ -93,10 +93,10 @@ class SQLCompilationBenchmark(BaseBenchmarkSuite):
         self.console.print("\n[cyan]SQLSpec Compilation:[/cyan]")
         for name, query in test_cases:
             # With parameters for more realistic scenario
-            params = {"status": "active", "date": "2024-01-01", "limit": 100}
+            parameters = {"status": "active", "date": "2024-01-01", "limit": 100}
 
             times = BenchmarkMetrics.time_operation(
-                lambda q=query, p=params: SQL(q, p).compile(),
+                lambda q=query, p=parameters: SQL(q, p).compile(),
                 iterations=self.config.iterations,
                 warmup=self.config.warmup_iterations,
             )

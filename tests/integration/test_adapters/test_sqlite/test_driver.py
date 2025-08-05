@@ -89,14 +89,14 @@ def test_sqlite_basic_crud(sqlite_session: SqliteDriver) -> None:
 
 
 @pytest.mark.parametrize(
-    ("params", "style"),
+    ("parameters", "style"),
     [
         pytest.param(("test_value"), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
     ],
 )
 @pytest.mark.xdist_group("sqlite")
-def test_sqlite_parameter_styles(sqlite_session: SqliteDriver, params: Any, style: ParamStyle) -> None:
+def test_sqlite_parameter_styles(sqlite_session: SqliteDriver, parameters: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles."""
     # Clear any existing data between parameterized test runs
     sqlite_session.execute("DELETE FROM test_table")
@@ -111,7 +111,7 @@ def test_sqlite_parameter_styles(sqlite_session: SqliteDriver, params: Any, styl
     else:  # dict_binds
         sql = "SELECT name FROM test_table WHERE name = :name"
 
-    result = sqlite_session.execute(sql, params)
+    result = sqlite_session.execute(sql, parameters)
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
@@ -125,17 +125,17 @@ def test_sqlite_execute_many(sqlite_session: SqliteDriver) -> None:
     sqlite_session.execute("DELETE FROM test_table")
     sqlite_session.commit()
 
-    params_list = [("name1", 1), ("name2", 2), ("name3", 3)]
+    parameters_list = [("name1", 1), ("name2", 2), ("name3", 3)]
 
-    result = sqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", params_list)
+    result = sqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", parameters_list)
     assert isinstance(result, SQLResult)
-    assert result.rows_affected == len(params_list)
+    assert result.rows_affected == len(parameters_list)
 
     # Verify all records were inserted
     select_result = sqlite_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == len(params_list)
+    assert select_result.data[0]["count"] == len(parameters_list)
 
     # Verify data integrity
     ordered_result = sqlite_session.execute("SELECT name, value FROM test_table ORDER BY name")

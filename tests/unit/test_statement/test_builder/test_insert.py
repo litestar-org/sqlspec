@@ -17,9 +17,9 @@ from unittest.mock import Mock
 import pytest
 from sqlglot import exp
 
+from sqlspec.builder import Insert, Select
+from sqlspec.builder._base import SafeQuery
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder import Insert, Select
-from sqlspec.statement.builder._base import SafeQuery
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL
 
@@ -470,10 +470,10 @@ def test_insert_to_statement_conversion() -> None:
     assert "param_1" in statement.sql
     assert "param_2" in statement.sql
     # Parameters might be wrapped
-    build_params = builder.build().parameters
+    build_parameters = builder.build().parameters
     if "parameters" in statement.parameters:
-        assert statement.parameters["parameters"] == build_params
+        assert statement.parameters["parameters"] == build_parameters
     else:
         # Filter out config from statement parameters for comparison
-        stmt_params = {k: v for k, v in statement.parameters.items() if k != "config"}
-        assert stmt_params == build_params
+        stmt_parameters = {k: v for k, v in statement.parameters.items() if k != "config"}
+        assert stmt_parameters == build_parameters

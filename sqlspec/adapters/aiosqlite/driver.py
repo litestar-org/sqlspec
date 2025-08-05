@@ -1,12 +1,14 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import contextlib
 import datetime
+from contextlib import asynccontextmanager
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, AsyncContextManager, Optional
 
 import aiosqlite
 
 from sqlspec.driver import AsyncDriverAdapterBase, ExecutionResult
+from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.statement import StatementConfig
 from sqlspec.utils.serializers import to_json
@@ -99,37 +101,33 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """Commit the current transaction."""
         await self.connection.commit()
 
-    async def _execute_script(
-        self,
-        cursor: "aiosqlite.Cursor",
-        sql: str,
-        prepared_params: Any,
-        statement_config: "StatementConfig",
-        statement: "SQL",
-    ) -> "ExecutionResult":
+    async def _execute_script(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script by splitting and executing statements individually."""
+        sql = statement.sql
+        prepared_parameters = statement.parameters
+        statement_config = statement.statement_config
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
 
         last_result = None
         for stmt in statements:
-            last_result = await cursor.execute(stmt, prepared_params or ())
+            last_result = await cursor.execute(stmt, prepared_parameters or ())
 
         return self.create_execution_result(
             last_result, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
         )
 
-    async def _execute_many(
-        self, cursor: "aiosqlite.Cursor", sql: str, prepared_params: Any, statement: "SQL"
-    ) -> "ExecutionResult":
+    async def _execute_many(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using aiosqlite executemany."""
-        result = await cursor.executemany(sql, prepared_params)
+        sql = statement.sql
+        prepared_parameters = statement.parameters
+        result = await cursor.executemany(sql, prepared_parameters)
         return self.create_execution_result(result, rowcount_override=cursor.rowcount or 0, is_many_result=True)
 
-    async def _execute_statement(
-        self, cursor: "aiosqlite.Cursor", sql: str, prepared_params: Any, statement: "SQL"
-    ) -> "ExecutionResult":
+    async def _execute_statement(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement using aiosqlite execute."""
-        result = await cursor.execute(sql, prepared_params or ())
+        sql = statement.sql
+        prepared_parameters = statement.parameters
+        result = await cursor.execute(sql, prepared_parameters or ())
 
         if statement.returns_rows():
             fetched_data = await cursor.fetchall()
@@ -141,3 +139,23 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             )
 
         return self.create_execution_result(result, rowcount_override=cursor.rowcount or 0)
+
+    def handle_database_exceptions(self) -> "AsyncContextManager[None]":
+        """Handle AioSQLite-specific exceptions and wrap them appropriately."""
+        return self._handle_database_exceptions_async()
+
+    @asynccontextmanager
+    async def _handle_database_exceptions_async(self) -> Any:
+        """Async context manager for database exception handling."""
+        try:
+            yield
+        except aiosqlite.Error as e:
+            msg = f"AioSQLite database error: {e}"
+            raise SQLSpecError(msg) from e
+        except Exception as e:
+            # Handle any other unexpected errors
+            if "parse" in str(e).lower() or "syntax" in str(e).lower():
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected error: {e}"
+            raise SQLSpecError(msg) from e

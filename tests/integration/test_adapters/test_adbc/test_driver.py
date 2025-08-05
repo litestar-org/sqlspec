@@ -490,14 +490,16 @@ def test_adbc_bigquery_data_types() -> None:
 
 
 @pytest.mark.parametrize(
-    ("params", "style"),
+    ("parameters", "style"),
     [
         pytest.param(("test_value",), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
     ],
 )
 @pytest.mark.xdist_group("postgres")
-def test_adbc_postgresql_parameter_styles(adbc_postgresql_session: AdbcDriver, params: Any, style: ParamStyle) -> None:
+def test_adbc_postgresql_parameter_styles(
+    adbc_postgresql_session: AdbcDriver, parameters: Any, style: ParamStyle
+) -> None:
     """Test different parameter binding styles with ADBC PostgreSQL."""
     # Insert test data
     adbc_postgresql_session.execute("INSERT INTO test_table (name) VALUES ($1)", ("test_value",))
@@ -507,9 +509,9 @@ def test_adbc_postgresql_parameter_styles(adbc_postgresql_session: AdbcDriver, p
         sql = "SELECT name FROM test_table WHERE name = $1"
     else:  # dict_binds - PostgreSQL uses numbered parameters
         sql = "SELECT name FROM test_table WHERE name = $1"
-        params = (params["name"],) if isinstance(params, dict) else params
+        parameters = (parameters["name"],) if isinstance(parameters, dict) else parameters
 
-    result = adbc_postgresql_session.execute(sql, params)
+    result = adbc_postgresql_session.execute(sql, parameters)
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert result.get_count() == 1
@@ -519,17 +521,19 @@ def test_adbc_postgresql_parameter_styles(adbc_postgresql_session: AdbcDriver, p
 @pytest.mark.xdist_group("postgres")
 def test_adbc_postgresql_execute_many(adbc_postgresql_session: AdbcDriver) -> None:
     """Test execute_many functionality with ADBC PostgreSQL."""
-    params_list = [("name1", 1), ("name2", 2), ("name3", 3)]
+    parameters_list = [("name1", 1), ("name2", 2), ("name3", 3)]
 
-    result = adbc_postgresql_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", params_list)
+    result = adbc_postgresql_session.execute_many(
+        "INSERT INTO test_table (name, value) VALUES ($1, $2)", parameters_list
+    )
     assert isinstance(result, SQLResult)
-    assert result.rows_affected == len(params_list)
+    assert result.rows_affected == len(parameters_list)
 
     # Verify all records were inserted
     select_result = adbc_postgresql_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == len(params_list)
+    assert select_result.data[0]["count"] == len(parameters_list)
 
     # Verify data integrity
     ordered_result = adbc_postgresql_session.execute("SELECT name, value FROM test_table ORDER BY name")

@@ -1,3 +1,5 @@
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
+
 """Tests for SQLTranslatorMixin with config dialect support."""
 
 from contextlib import AbstractContextManager
@@ -12,8 +14,6 @@ from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.driver._common import ExecutionResult
 from sqlspec.driver.mixins._sql_translator import SQLTranslatorMixin
 from sqlspec.exceptions import SQLConversionError
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
 
 # Create a default parameter config for tests
@@ -81,18 +81,18 @@ class MockDriver(SyncDriverAdapterBase, SQLTranslatorMixin):
         """Mock extract execute rowcount."""
         return 0
 
-    def _execute_many(self, cursor: "Any", sql: str, prepared_params: "Any", statement: "SQL") -> "ExecutionResult":
+    def _execute_many(self, cursor: "Any", sql: str, prepared_parameters: "Any", statement: "SQL") -> "ExecutionResult":
         """Mock execute many."""
         return self.create_execution_result(cursor, is_many_result=True)
 
     def _execute_statement(
-        self, cursor: "Any", sql: str, prepared_params: "Any", statement: "SQL"
+        self, cursor: "Any", sql: str, prepared_parameters: "Any", statement: "SQL"
     ) -> "ExecutionResult":
         """Mock execute statement."""
         return self.create_execution_result(cursor)
 
     def _execute_script(
-        self, cursor: "Any", sql: str, prepared_params: "Any", statement_config: "StatementConfig", statement: "SQL"
+        self, cursor: "Any", sql: str, prepared_parameters: "Any", statement_config: "StatementConfig", statement: "SQL"
     ) -> "ExecutionResult":
         """Mock execute script."""
         return self.create_execution_result(cursor, is_script_result=True)

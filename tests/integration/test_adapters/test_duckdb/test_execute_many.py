@@ -59,9 +59,9 @@ def test_duckdb_execute_many_update(duckdb_batch_session: DuckDBDriver) -> None:
     )
 
     # Now update with execute_many
-    update_params = [(100, "Update 1"), (200, "Update 2"), (300, "Update 3")]
+    update_parameters = [(100, "Update 1"), (200, "Update 2"), (300, "Update 3")]
 
-    result = duckdb_batch_session.execute_many("UPDATE test_batch SET value = ? WHERE name = ?", update_params)
+    result = duckdb_batch_session.execute_many("UPDATE test_batch SET value = ? WHERE name = ?", update_parameters)
 
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
@@ -128,9 +128,9 @@ def test_duckdb_execute_many_delete(duckdb_batch_session: DuckDBDriver) -> None:
     )
 
     # Delete specific items by name
-    delete_params = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
+    delete_parameters = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
 
-    result = duckdb_batch_session.execute_many("DELETE FROM test_batch WHERE name = ?", delete_params)
+    result = duckdb_batch_session.execute_many("DELETE FROM test_batch WHERE name = ?", delete_parameters)
 
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
@@ -257,10 +257,10 @@ def test_duckdb_execute_many_with_arrays(duckdb_batch_session: DuckDBDriver) -> 
 
     except Exception:
         # If DuckDB array syntax is different, test with simpler data
-        simple_params = [(1, "Simple 1", 10, "tag1"), (2, "Simple 2", 20, "tag2"), (3, "Simple 3", 30, "tag3")]
+        simple_parameters = [(1, "Simple 1", 10, "tag1"), (2, "Simple 2", 20, "tag2"), (3, "Simple 3", 30, "tag3")]
 
         duckdb_batch_session.execute_many(
-            "INSERT INTO test_batch (id, name, value, category) VALUES (?, ?, ?, ?)", simple_params
+            "INSERT INTO test_batch (id, name, value, category) VALUES (?, ?, ?, ?)", simple_parameters
         )
 
         check_result = duckdb_batch_session.execute("SELECT COUNT(*) as count FROM test_batch")

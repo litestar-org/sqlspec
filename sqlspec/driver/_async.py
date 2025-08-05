@@ -1,7 +1,7 @@
 """Asynchronous driver protocol implementation."""
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, AsyncContextManager, Optional, Union, cast, overload
 
 from sqlspec.driver._common import CommonDriverAttributesMixin, ExecutionResult
 from sqlspec.driver.mixins import SQLTranslatorMixin, ToSchemaMixin
@@ -12,7 +12,7 @@ from sqlspec.utils.type_guards import is_dict_row, is_indexable_row
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from sqlspec.statement.builder import QueryBuilder
+    from sqlspec.builder import QueryBuilder
     from sqlspec.statement.filters import StatementFilter
     from sqlspec.statement.result import SQLResult
     from sqlspec.statement.sql import SQL, Statement, StatementConfig
@@ -36,6 +36,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         database-specific steps to abstract methods that concrete adapters
         must implement.
 
+        All database operations are wrapped in the mandatory exception handler,
+        ensuring consistent error handling across all drivers.
+
         Args:
             statement: The SQL statement to execute.
             connection: The database connection to use.
@@ -43,22 +46,19 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         Returns:
             The result of the SQL execution.
         """
+        async with self.handle_database_exceptions(), self.with_cursor(connection) as cursor:
+            statement._ensure_processed()
 
-        statement._ensure_processed()
-
-        async with self.with_cursor(connection) as cursor:
             special_result = await self._try_special_handling(cursor, statement)
             if special_result is not None:
                 return special_result
 
-            sql, params = self._get_compiled_sql(statement, self.statement_config)
-
             if statement.is_script:
-                execution_result = await self._execute_script(cursor, sql, params, self.statement_config, statement)
+                execution_result = await self._execute_script(cursor, statement)
             elif statement.is_many:
-                execution_result = await self._execute_many(cursor, sql, statement.param_list, statement)
+                execution_result = await self._execute_many(cursor, statement)
             else:
-                execution_result = await self._execute_statement(cursor, sql, params, statement)
+                execution_result = await self._execute_statement(cursor, statement)
 
             return self.build_statement_result(statement, execution_result)
 
@@ -69,6 +69,34 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         This method should return an async context manager that yields a cursor.
         For async drivers, this is typically implemented using a custom async
         context manager class.
+        """
+
+    @abstractmethod
+    def handle_database_exceptions(self) -> "AsyncContextManager[None]":
+        """MANDATORY: Handle database-specific exceptions and wrap them appropriately.
+
+        This async context manager is the ONLY place where exceptions should be caught
+        and wrapped in SQLSpec exceptions. All other layers (SQLTransformer,
+        statement processing, etc.) should let exceptions bubble up naturally.
+
+        Each driver MUST implement this to handle their specific database exceptions:
+        - SQLGlot ParseError -> SQLSpecParseError
+        - Database connection errors -> SQLSpecConnectionError
+        - Constraint violations -> SQLSpecIntegrityError
+        - Driver-specific errors -> SQLSpecDatabaseError
+
+        Example implementation:
+            @asynccontextmanager
+            async def handle_database_exceptions(self):
+                try:
+                    yield
+                except sqlglot.ParseError as e:
+                    raise SQLSpecParseError(f"SQL parsing failed: {e}") from e
+                except asyncpg.PostgresError as e:
+                    raise SQLSpecDatabaseError(f"Database error: {e}") from e
+
+        Returns:
+            An async context manager that wraps database operations with proper exception handling
         """
 
     @abstractmethod
@@ -99,9 +127,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
             None if standard execution should proceed
         """
 
-    async def _execute_script(
-        self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig", statement: "SQL"
-    ) -> ExecutionResult:
+    async def _execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute a SQL script (multiple statements).
 
         Default implementation splits script and executes statements individually.
@@ -109,35 +135,34 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
 
         Args:
             cursor: Database cursor/connection object
-            sql: Compiled SQL script
-            prepared_params: Prepared parameters
-            statement_config: Statement configuration for dialect information
-            statement: Original SQL statement object with metadata
+            statement: SQL statement object with all necessary data and configuration
 
         Returns:
             ExecutionResult with script execution data including statement counts
         """
-        statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
 
         last_result = None
         for stmt in statements:
-            last_result = await self._execute_statement(cursor, stmt, prepared_params, statement)
+            # Create individual statement for each script part
+            single_stmt = statement.copy(statement=stmt, parameters=prepared_parameters)
+            last_result = await self._execute_statement(cursor, single_stmt)
 
         return self.create_execution_result(
             last_result, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
         )
 
     @abstractmethod
-    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> ExecutionResult:
+    async def _execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute SQL with multiple parameter sets (executemany).
 
         Must be implemented by each driver for database-specific executemany logic.
 
         Args:
             cursor: Database cursor/connection object
-            sql: Compiled SQL statement
-            prepared_params: List of prepared parameter sets
-            statement: Original SQL statement object with metadata
+            statement: SQL statement object with all necessary data and configuration
+                      Use statement.sql and statement.parameters for driver data
 
         Returns:
             ExecutionResult with execution data for the many operation
@@ -147,18 +172,15 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         """
 
     @abstractmethod
-    async def _execute_statement(
-        self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL"
-    ) -> ExecutionResult:
+    async def _execute_statement(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute a single SQL statement.
 
         Must be implemented by each driver for database-specific execution logic.
 
         Args:
             cursor: Database cursor/connection object
-            sql: Compiled SQL statement
-            prepared_params: Prepared parameters
-            statement: Original SQL statement object with metadata
+            statement: SQL statement object with all necessary data and configuration
+                      Use statement.sql and statement.parameters for driver data
 
         Returns:
             ExecutionResult with execution data

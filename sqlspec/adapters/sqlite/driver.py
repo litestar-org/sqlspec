@@ -1,18 +1,18 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import contextlib
 import datetime
+import sqlite3
+from contextlib import contextmanager
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional
 
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
+from sqlspec.exceptions import SQLParsingError, SQLSpecError
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.statement.sql import StatementConfig
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    import sqlite3
-
     from sqlspec.adapters.sqlite._types import SqliteConnection
     from sqlspec.driver import ExecutionResult
     from sqlspec.statement.result import SQLResult
@@ -76,6 +76,25 @@ class SqliteDriver(SyncDriverAdapterBase):
     def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
         return SqliteCursor(connection)
 
+    def handle_database_exceptions(self) -> "contextmanager[None]":
+        """Handle SQLite-specific exceptions and wrap them appropriately."""
+        return contextmanager(self._handle_database_exceptions_impl)()
+
+    def _handle_database_exceptions_impl(self) -> Any:
+        """Implementation of database exception handling without decorator."""
+        try:
+            yield
+        except sqlite3.Error as e:
+            msg = f"SQLite database error: {e}"
+            raise SQLSpecError(msg) from e
+        except Exception as e:
+            # Handle any other unexpected errors
+            if "parse" in str(e).lower() or "syntax" in str(e).lower():
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected error: {e}"
+            raise SQLSpecError(msg) from e
+
     def _try_special_handling(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "Optional[SQLResult]":
         """Hook for SQLite-specific special operations.
 
@@ -91,36 +110,31 @@ class SqliteDriver(SyncDriverAdapterBase):
         """
         return None
 
-    def _execute_script(
-        self,
-        cursor: "sqlite3.Cursor",
-        sql: str,
-        prepared_params: Optional[Any],
-        statement_config: "StatementConfig",
-        statement: "SQL",
-    ) -> "ExecutionResult":
+    def _execute_script(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script using SQLite's native executescript (parameters embedded as static values)."""
-        statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
+        sql = statement.sql
+        prepared_parameters = statement.parameters
+        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         for stmt in statements:
-            cursor.execute(stmt, prepared_params or ())
+            cursor.execute(stmt, prepared_parameters or ())
 
         return self.create_execution_result(
             cursor, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
         )
 
-    def _execute_many(
-        self, cursor: "sqlite3.Cursor", sql: str, prepared_params: Any, statement: "SQL"
-    ) -> "ExecutionResult":
+    def _execute_many(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using SQLite executemany."""
-        cursor.executemany(sql, prepared_params)
+        sql = statement.sql
+        prepared_parameters = statement.parameters
+        cursor.executemany(sql, prepared_parameters)
         return self.create_execution_result(cursor, rowcount_override=cursor.rowcount or 0, is_many_result=True)
 
-    def _execute_statement(
-        self, cursor: "sqlite3.Cursor", sql: str, prepared_params: Any, statement: "SQL"
-    ) -> "ExecutionResult":
+    def _execute_statement(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement using SQLite execute."""
-        cursor.execute(sql, prepared_params or ())
+        sql = statement.sql
+        prepared_parameters = statement.parameters
+        cursor.execute(sql, prepared_parameters or ())
 
         if statement.returns_rows():
             fetched_data = cursor.fetchall()

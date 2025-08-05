@@ -18,9 +18,9 @@ from typing import Any
 import pytest
 from sqlglot import exp
 
+from sqlspec.builder import Select, Update
+from sqlspec.builder._base import SafeQuery
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder import Select, Update
-from sqlspec.statement.builder._base import SafeQuery
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL
 
@@ -435,14 +435,14 @@ def test_update_to_statement_conversion() -> None:
     assert "WHERE" in statement.sql
     assert "id =" in statement.sql or '"id" =' in statement.sql
     # Parameters should be available (might be nested)
-    build_params = builder.build().parameters
+    build_parameters = builder.build().parameters
     if isinstance(statement.parameters, dict) and "parameters" in statement.parameters:
         # Nested format
-        assert statement.parameters["parameters"] == build_params
+        assert statement.parameters["parameters"] == build_parameters
     else:
         # Direct format - filter out config from statement parameters for comparison
-        stmt_params = {k: v for k, v in statement.parameters.items() if k != "config"}
-        assert stmt_params == build_params
+        stmt_parameters = {k: v for k, v in statement.parameters.items() if k != "config"}
+        assert stmt_parameters == build_parameters
 
 
 # Test fluent interface chaining

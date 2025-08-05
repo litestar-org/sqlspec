@@ -1,19 +1,19 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
-
 import datetime
 import logging
+from contextlib import contextmanager
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from google.cloud.bigquery import ArrayQueryParameter, QueryJob, QueryJobConfig, ScalarQueryParameter
+from google.cloud.exceptions import GoogleCloudError
 from sqlglot import exp
 
 from sqlspec.adapters.bigquery._types import BigQueryConnection
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.driver._common import ExecutionResult
-from sqlspec.exceptions import SQLSpecError
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
+from sqlspec.exceptions import SQLParsingError, SQLSpecError
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
 from sqlspec.utils.serializers import to_json
 
@@ -89,34 +89,34 @@ def _get_bq_param_type(value: Any) -> tuple[Optional[str], Optional[str]]:
 
 
 def _bigquery_output_transformer(
-    sql: str, params: Any
+    sql: str, parameters: Any
 ) -> "tuple[str, list[Union[ArrayQueryParameter, ScalarQueryParameter]]]":
     """Transform parameters to BigQuery QueryParameter objects."""
-    if not params:
+    if not parameters:
         return sql, []
 
-    if not isinstance(params, dict):
+    if not isinstance(parameters, dict):
         return sql, []
 
-    bq_params: list[Union[ArrayQueryParameter, ScalarQueryParameter]] = []
+    bq_parameters: list[Union[ArrayQueryParameter, ScalarQueryParameter]] = []
 
-    for name, value in params.items():
+    for name, value in parameters.items():
         param_name_for_bq = name.lstrip("@")
         actual_value = getattr(value, "value", value)
         param_type, array_element_type = _get_bq_param_type(actual_value)
 
         if param_type == "ARRAY" and array_element_type:
-            bq_params.append(ArrayQueryParameter(param_name_for_bq, array_element_type, actual_value))
+            bq_parameters.append(ArrayQueryParameter(param_name_for_bq, array_element_type, actual_value))
         elif param_type == "JSON":
             json_str = to_json(actual_value)
-            bq_params.append(ScalarQueryParameter(param_name_for_bq, "STRING", json_str))
+            bq_parameters.append(ScalarQueryParameter(param_name_for_bq, "STRING", json_str))
         elif param_type:
-            bq_params.append(ScalarQueryParameter(param_name_for_bq, param_type, actual_value))
+            bq_parameters.append(ScalarQueryParameter(param_name_for_bq, param_type, actual_value))
         else:
             msg = f"Unsupported BigQuery parameter type for value of param '{name}': {type(actual_value)}"
             raise SQLSpecError(msg)
 
-    return sql, bq_params
+    return sql, bq_parameters
 
 
 bigquery_type_coercion_map = {
@@ -254,17 +254,18 @@ class BigQueryDriver(SyncDriverAdapterBase):
         # Let the base class handle script execution via the standard pipeline
         return None
 
-    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: SQL) -> ExecutionResult:
+    def _execute_many(self, cursor: Any, statement: SQL) -> ExecutionResult:
         """BigQuery execute_many implementation - converts to script execution."""
-        if not prepared_params:
+        prepared_parameters = statement.parameters
+        if not prepared_parameters:
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
         script_statements = []
 
-        for param_set in prepared_params:
+        for param_set in prepared_parameters:
             parsed_expr = statement.expression
             if parsed_expr is None:
-                script_statements.append(sql)
+                script_statements.append(statement.sql)
                 continue
 
             parsed_expr = parsed_expr.copy()
@@ -288,15 +289,21 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 stmt_sql = substituted_expr.sql(dialect="bigquery")
                 script_statements.append(stmt_sql)
             except Exception:
-                script_statements.append(sql)
+                script_statements.append(statement.sql)
 
         script_sql = ";\n".join(script_statements) + ";"
 
-        return self._execute_script(cursor, script_sql, None, self.statement_config, statement)
+        # Create a new SQL statement for the script
+        from sqlspec.statement.sql import SQL
 
-    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any, statement: SQL) -> ExecutionResult:
+        script_statement = SQL(script_sql, statement_config=statement.statement_config)
+        return self._execute_script(cursor, script_statement)
+
+    def _execute_statement(self, cursor: Any, statement: SQL) -> ExecutionResult:
         """BigQuery single statement execution."""
-        cursor.job = self._run_query_job(sql, prepared_params, connection=cursor.connection)
+        sql = statement.sql
+        prepared_parameters = statement.parameters
+        cursor.job = self._run_query_job(sql, prepared_parameters, connection=cursor.connection)
 
         if statement.returns_rows():
             job_result = cursor.job.result()
@@ -313,3 +320,22 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         cursor.job.result()
         return self.create_execution_result(cursor, rowcount_override=cursor.job.num_dml_affected_rows or 0)
+
+    def handle_database_exceptions(self) -> "contextmanager[None]":
+        """Handle BigQuery-specific exceptions and wrap them appropriately."""
+        return contextmanager(self._handle_database_exceptions_impl)()
+
+    def _handle_database_exceptions_impl(self) -> Any:
+        """Implementation of database exception handling without decorator."""
+        try:
+            yield
+        except GoogleCloudError as e:
+            msg = f"BigQuery database error: {e}"
+            raise SQLSpecError(msg) from e
+        except Exception as e:
+            # Handle any other unexpected errors
+            if "parse" in str(e).lower() or "syntax" in str(e).lower():
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected error: {e}"
+            raise SQLSpecError(msg) from e

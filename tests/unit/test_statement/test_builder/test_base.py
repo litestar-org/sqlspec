@@ -1,3 +1,5 @@
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
+
 """Comprehensive unit tests for QueryBuilder base class and WhereClauseMixin.
 
 This module tests the foundational builder functionality including:
@@ -19,12 +21,9 @@ from sqlglot import Expression, exp
 from sqlglot.dialects.dialect import Dialect
 from sqlglot.expressions import Condition
 
-from sqlspec.exceptions import SQLBuilderError
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
-from sqlspec.statement.builder import ColumnExpression
-from sqlspec.statement.builder._base import QueryBuilder, SafeQuery
-from sqlspec.statement.builder._ddl import (
+from sqlspec.builder import ColumnExpression
+from sqlspec.builder._base import QueryBuilder, SafeQuery
+from sqlspec.builder._ddl import (
     AlterTable,
     CommentOn,
     CreateIndex,
@@ -39,8 +38,9 @@ from sqlspec.statement.builder._ddl import (
     RenameTable,
     Truncate,
 )
-from sqlspec.statement.builder._select import Select
-from sqlspec.statement.builder.mixins._where_clause import WhereClauseMixin
+from sqlspec.builder._select import Select
+from sqlspec.builder.mixins._where_clause import WhereClauseMixin
+from sqlspec.exceptions import SQLBuilderError
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, StatementConfig
 
@@ -377,7 +377,7 @@ def test_query_builder_build_expression_not_initialized() -> None:
         builder.build()
 
 
-@patch("sqlspec.statement.builder._base.logger")
+@patch("sqlspec.builder._base.logger")
 def test_query_builder_build_sql_generation_error(mock_logger: Mock, test_builder: MockQueryBuilder) -> None:
     """Test build method handles SQL generation errors."""
 
@@ -776,7 +776,7 @@ def test_query_builder_large_parameter_count(test_builder: MockQueryBuilder) -> 
 
 def test_query_builder_complex_parameter_types(test_builder: MockQueryBuilder) -> None:
     """Test QueryBuilder with complex parameter types."""
-    complex_params = {
+    complex_parameters = {
         "list_param": [1, 2, 3],
         "dict_param": {"nested": {"key": "value"}},
         "none_param": None,
@@ -785,12 +785,12 @@ def test_query_builder_complex_parameter_types(test_builder: MockQueryBuilder) -
         "tuple_param": (7, 8, 9),
     }
 
-    for name, value in complex_params.items():
+    for name, value in complex_parameters.items():
         test_builder.add_parameter(value, name)
 
     query = test_builder.build()
 
-    for name, expected_value in complex_params.items():
+    for name, expected_value in complex_parameters.items():
         assert query.parameters[name] == expected_value
 
 

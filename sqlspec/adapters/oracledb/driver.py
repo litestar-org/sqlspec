@@ -1,12 +1,14 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
-from typing import TYPE_CHECKING, Any, Optional, cast
+from contextlib import asynccontextmanager, contextmanager
+from typing import TYPE_CHECKING, Any, AsyncContextManager, ContextManager, Optional, cast
 
+import oracledb
 from oracledb import AsyncCursor, Cursor
 
 from sqlspec.adapters.oracledb._types import OracleAsyncConnection, OracleSyncConnection
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
+from sqlspec.exceptions import SQLParsingError, SQLSpecError
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.statement.sql import StatementConfig
 
 if TYPE_CHECKING:
@@ -75,16 +77,20 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         """
         return None
 
-    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
+    def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Oracle executemany implementation."""
-        cursor.executemany(sql, prepared_params)
+        sql = statement.sql
+        prepared_parameters = statement.parameters
+        cursor.executemany(sql, prepared_parameters)
         return self.create_execution_result(
             cursor, rowcount_override=cursor.rowcount if cursor.rowcount is not None else 0, is_many_result=True
         )
 
-    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
+    def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Oracle single execution."""
-        cursor.execute(sql, prepared_params or {})
+        sql = statement.sql
+        prepared_parameters = statement.parameters
+        cursor.execute(sql, prepared_parameters or {})
 
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
@@ -109,6 +115,25 @@ class OracleSyncDriver(SyncDriverAdapterBase):
     def commit(self) -> None:
         """Commit the current transaction."""
         self.connection.commit()
+
+    def handle_database_exceptions(self) -> "ContextManager[None]":
+        """Handle Oracle-specific exceptions and wrap them appropriately."""
+        return contextmanager(self._handle_database_exceptions_impl)()
+
+    def _handle_database_exceptions_impl(self) -> Any:
+        """Implementation of database exception handling without decorator."""
+        try:
+            yield
+        except oracledb.Error as e:
+            msg = f"Oracle database error: {e}"
+            raise SQLSpecError(msg) from e
+        except Exception as e:
+            # Handle any other unexpected errors
+            if "parse" in str(e).lower() or "syntax" in str(e).lower():
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected error: {e}"
+            raise SQLSpecError(msg) from e
 
 
 class OracleAsyncCursor:
@@ -153,19 +178,21 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         """
         return None
 
-    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
+    async def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Oracle async executemany implementation."""
-        await cursor.executemany(sql, prepared_params)
+        sql = statement.sql
+        prepared_parameters = statement.parameters
+        await cursor.executemany(sql, prepared_parameters)
 
         return self.create_execution_result(
             cursor, rowcount_override=cursor.rowcount if cursor.rowcount is not None else 0, is_many_result=True
         )
 
-    async def _execute_statement(
-        self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL"
-    ) -> "ExecutionResult":
+    async def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Oracle async single execution."""
-        await cursor.execute(sql, prepared_params or {})
+        sql = statement.sql
+        prepared_parameters = statement.parameters
+        await cursor.execute(sql, prepared_parameters or {})
 
         if statement.returns_rows():
             fetched_data = await cursor.fetchall()
@@ -190,3 +217,21 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
     async def commit(self) -> None:
         """Commit the current transaction."""
         await self.connection.commit()
+
+    def handle_database_exceptions(self) -> "AsyncContextManager[None]":
+        """Handle Oracle-specific exceptions and wrap them appropriately."""
+        return asynccontextmanager(self._handle_database_exceptions_impl)()
+
+    async def _handle_database_exceptions_impl(self) -> Any:
+        try:
+            yield
+        except oracledb.Error as e:
+            msg = f"Oracle database error: {e}"
+            raise SQLSpecError(msg) from e
+        except Exception as e:
+            # Handle any other unexpected errors
+            if "parse" in str(e).lower() or "syntax" in str(e).lower():
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected error: {e}"
+            raise SQLSpecError(msg) from e

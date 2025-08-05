@@ -1,12 +1,14 @@
 # ruff: noqa: D104 RUF100 FA100 BLE001 UP037 PLR0913 ANN401 COM812 S608 A002 ARG002 SLF001
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional
 
+import duckdb
 from sqlglot import exp
 
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
+from sqlspec.exceptions import SQLParsingError, SQLSpecError
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.statement.sql import StatementConfig
 
 if TYPE_CHECKING:
@@ -73,18 +75,19 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """
         return None
 
-    def _execute_script(
-        self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig", statement: "SQL"
-    ) -> "ExecutionResult":
+    def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script by splitting and executing statements individually.
 
         DuckDB supports parameters in individual statements.
         """
+        sql = statement.sql
+        prepared_parameters = statement.parameters
+        statement_config = statement.statement_config
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
 
         last_result = None
         for stmt in statements:
-            last_result = cursor.execute(stmt, prepared_params or ())
+            last_result = cursor.execute(stmt, prepared_parameters or ())
 
         return self.create_execution_result(
             last_result, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
@@ -100,12 +103,14 @@ class DuckDBDriver(SyncDriverAdapterBase):
         sql_upper = statement._raw_sql.strip().upper()
         return sql_upper.startswith(("INSERT", "UPDATE", "DELETE"))
 
-    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
+    def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """DuckDB executemany with accurate row counting."""
-        if prepared_params:
-            cursor.executemany(sql, prepared_params)
+        sql = statement.sql
+        prepared_parameters = statement.parameters
+        if prepared_parameters:
+            cursor.executemany(sql, prepared_parameters)
             if self._is_modifying_operation(statement):
-                row_count = len(prepared_params)
+                row_count = len(prepared_parameters)
             else:
                 try:
                     result = cursor.fetchone()
@@ -117,9 +122,11 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
-    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
+    def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """DuckDB single execution."""
-        cursor.execute(sql, prepared_params or ())
+        sql = statement.sql
+        prepared_parameters = statement.parameters
+        cursor.execute(sql, prepared_parameters or ())
 
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
@@ -156,3 +163,22 @@ class DuckDBDriver(SyncDriverAdapterBase):
     def commit(self) -> None:
         """Commit the current transaction."""
         self.connection.commit()
+
+    def handle_database_exceptions(self) -> "contextmanager[None]":
+        """Handle DuckDB-specific exceptions and wrap them appropriately."""
+        return contextmanager(self._handle_database_exceptions_impl)()
+
+    def _handle_database_exceptions_impl(self) -> Any:
+        """Implementation of database exception handling without decorator."""
+        try:
+            yield
+        except duckdb.Error as e:
+            msg = f"DuckDB database error: {e}"
+            raise SQLSpecError(msg) from e
+        except Exception as e:
+            # Handle any other unexpected errors
+            if "parse" in str(e).lower() or "syntax" in str(e).lower():
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected error: {e}"
+            raise SQLSpecError(msg) from e

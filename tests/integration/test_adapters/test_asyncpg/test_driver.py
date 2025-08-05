@@ -88,14 +88,14 @@ async def test_asyncpg_basic_crud(asyncpg_session: AsyncpgDriver) -> None:
 
 
 @pytest.mark.parametrize(
-    ("params", "style"),
+    ("parameters", "style"),
     [
         pytest.param(("test_value"), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
     ],
 )
 @pytest.mark.xdist_group("postgres")
-async def test_asyncpg_parameter_styles(asyncpg_session: AsyncpgDriver, params: Any, style: ParamStyle) -> None:
+async def test_asyncpg_parameter_styles(asyncpg_session: AsyncpgDriver, parameters: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles."""
     # Insert test data
     await asyncpg_session.execute("INSERT INTO test_table (name) VALUES ($1)", ("test_value"))
@@ -103,13 +103,13 @@ async def test_asyncpg_parameter_styles(asyncpg_session: AsyncpgDriver, params: 
     # Test parameter style
     if style == "tuple_binds":
         sql = "SELECT name FROM test_table WHERE name = $1"
-        result = await asyncpg_session.execute(sql, params)
+        result = await asyncpg_session.execute(sql, parameters)
     else:  # dict_binds
         # AsyncPG only supports numeric placeholders, so we need to use $1 even with dict
         # The driver should handle the conversion from dict to positional
         sql = "SELECT name FROM test_table WHERE name = $1"
         # Convert dict to tuple for AsyncPG
-        result = await asyncpg_session.execute(sql, (params["name"]))
+        result = await asyncpg_session.execute(sql, (parameters["name"]))
     assert isinstance(result, SQLResult)
     assert result is not None
     assert len(result) == 1
@@ -119,17 +119,17 @@ async def test_asyncpg_parameter_styles(asyncpg_session: AsyncpgDriver, params: 
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_many(asyncpg_session: AsyncpgDriver) -> None:
     """Test execute_many functionality."""
-    params_list = [("name1", 1), ("name2", 2), ("name3", 3)]
+    parameters_list = [("name1", 1), ("name2", 2), ("name3", 3)]
 
-    result = await asyncpg_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", params_list)
+    result = await asyncpg_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", parameters_list)
     assert isinstance(result, SQLResult)
-    assert result.rows_affected == len(params_list)
+    assert result.rows_affected == len(parameters_list)
 
     # Verify all records were inserted
     select_result = await asyncpg_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result is not None
-    assert select_result[0]["count"] == len(params_list)
+    assert select_result[0]["count"] == len(parameters_list)
 
     # Verify data integrity
     ordered_result = await asyncpg_session.execute("SELECT name, value FROM test_table ORDER BY name")
@@ -143,10 +143,21 @@ async def test_asyncpg_execute_many(asyncpg_session: AsyncpgDriver) -> None:
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_script(asyncpg_session: AsyncpgDriver) -> None:
     """Test execute_script functionality."""
-    script = """
-        INSERT INTO test_table (name, value) VALUES ('script_test1', 999);
-        INSERT INTO test_table (name, value) VALUES ('script_test2', 888);
-        UPDATE test_table SET value = 1000 WHERE name = 'script_test1';
+    import random
+    import time
+
+    # Use unique test data to avoid isolation issues
+    test_suffix = f"{str(int(time.time() * 1000))[-6:]}_{random.randint(1000, 9999)}"  # Timestamp + random
+    test_name1 = f"script_test1_{test_suffix}"
+    test_name2 = f"script_test2_{test_suffix}"
+
+    # Clean up any existing test data with this suffix
+    await asyncpg_session.execute(f"DELETE FROM test_table WHERE name LIKE 'script_test%_{test_suffix}'")
+
+    script = f"""
+        INSERT INTO test_table (name, value) VALUES ('{test_name1}', 999);
+        INSERT INTO test_table (name, value) VALUES ('{test_name2}', 888);
+        UPDATE test_table SET value = 1000 WHERE name = '{test_name1}';
     """
 
     result = await asyncpg_session.execute_script(script)
@@ -156,15 +167,18 @@ async def test_asyncpg_execute_script(asyncpg_session: AsyncpgDriver) -> None:
 
     # Verify script effects
     select_result = await asyncpg_session.execute(
-        "SELECT name, value FROM test_table WHERE name LIKE 'script_test%' ORDER BY name"
+        f"SELECT name, value FROM test_table WHERE name LIKE 'script_test%_{test_suffix}' ORDER BY name"
     )
     assert isinstance(select_result, SQLResult)
     assert select_result is not None
     assert len(select_result) == 2
-    assert select_result[0]["name"] == "script_test1"
+    assert select_result[0]["name"] == test_name1
     assert select_result[0]["value"] == 1000
-    assert select_result[1]["name"] == "script_test2"
+    assert select_result[1]["name"] == test_name2
     assert select_result[1]["value"] == 888
+
+    # Clean up test data
+    await asyncpg_session.execute(f"DELETE FROM test_table WHERE name LIKE 'script_test%_{test_suffix}'")
 
 
 @pytest.mark.xdist_group("postgres")
@@ -499,57 +513,67 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: AsyncpgDri
     - LEFT JOIN with to_jsonb function
     - Named parameters (:date_start, :date_end)
     """
-    # Create required tables
-    await asyncpg_session.execute_script("""
-        CREATE TABLE alert_definition (
+    import random
+    import time
+
+    # Use unique table names to avoid conflicts with parallel tests
+    test_suffix = f"{str(int(time.time() * 1000))[-6:]}_{random.randint(1000, 9999)}"  # Timestamp + random
+    alert_def_table = f"alert_definition_{test_suffix}"
+    asset_maint_table = f"asset_maintenance_{test_suffix}"
+    users_table = f"users_{test_suffix}"
+    alert_users_table = f"alert_users_{test_suffix}"
+
+    # Create required tables with unique names
+    await asyncpg_session.execute_script(f"""
+        CREATE TABLE {alert_def_table} (
             id SERIAL PRIMARY KEY,
             name TEXT UNIQUE NOT NULL
         );
 
-        CREATE TABLE asset_maintenance (
+        CREATE TABLE {asset_maint_table} (
             id SERIAL PRIMARY KEY,
             responsible_id INTEGER NOT NULL,
             planned_date_start DATE,
             cancelled BOOLEAN DEFAULT FALSE
         );
 
-        CREATE TABLE users (
+        CREATE TABLE {users_table} (
             id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
             email TEXT NOT NULL
         );
 
-        CREATE TABLE alert_users (
+        CREATE TABLE {alert_users_table} (
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             asset_maintenance_id INTEGER NOT NULL,
             alert_definition_id INTEGER NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            CONSTRAINT unique_alert UNIQUE (user_id, asset_maintenance_id, alert_definition_id),
-            FOREIGN KEY (user_id) REFERENCES users(id),
-            FOREIGN KEY (asset_maintenance_id) REFERENCES asset_maintenance(id),
-            FOREIGN KEY (alert_definition_id) REFERENCES alert_definition(id)
+            CONSTRAINT unique_alert_{test_suffix} UNIQUE (user_id, asset_maintenance_id, alert_definition_id),
+            FOREIGN KEY (user_id) REFERENCES {users_table}(id),
+            FOREIGN KEY (asset_maintenance_id) REFERENCES {asset_maint_table}(id),
+            FOREIGN KEY (alert_definition_id) REFERENCES {alert_def_table}(id)
         );
     """)
 
     # Insert test data
-    await asyncpg_session.execute("INSERT INTO alert_definition (name) VALUES ($1)", ("maintenances_today"))
+    await asyncpg_session.execute(f"INSERT INTO {alert_def_table} (name) VALUES ($1)", ("maintenances_today"))
 
     # Insert users
     await asyncpg_session.execute_many(
-        "INSERT INTO users (name, email) VALUES ($1, $2)",
+        f"INSERT INTO {users_table} (name, email) VALUES ($1, $2)",
         [("John Doe", "john@example.com"), ("Jane Smith", "jane@example.com"), ("Bob Wilson", "bob@example.com")],
     )
 
     # Get user IDs
-    users_result = await asyncpg_session.execute("SELECT id, name FROM users ORDER BY id")
+    users_result = await asyncpg_session.execute(f"SELECT id, name FROM {users_table} ORDER BY id")
     user_ids = {row["name"]: row["id"] for row in users_result}
 
     # Insert asset maintenance records
     from datetime import date
 
-    _maintenance_result = await asyncpg_session.execute_many(
-        "INSERT INTO asset_maintenance (responsible_id, planned_date_start, cancelled) VALUES ($1, $2, $3)",
+    await asyncpg_session.execute_many(
+        f"INSERT INTO {asset_maint_table} (responsible_id, planned_date_start, cancelled) VALUES ($1, $2, $3)",
         [
             (user_ids["John Doe"], date(2024, 1, 15), False),  # Within date range
             (user_ids["Jane Smith"], date(2024, 1, 16), False),  # Within date range
@@ -561,25 +585,25 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: AsyncpgDri
     )
 
     # Verify the maintenance records were inserted
-    maintenance_result = await asyncpg_session.execute("SELECT COUNT(*) as count FROM asset_maintenance")
+    maintenance_result = await asyncpg_session.execute(f"SELECT COUNT(*) as count FROM {asset_maint_table}")
     assert maintenance_result.data[0]["count"] == 6
 
     # Execute the query with AsyncPG numeric placeholders
     # AsyncPG doesn't support named parameters, so we use $1, $2
     result = await asyncpg_session.execute(
-        """
+        f"""
         -- name: asset_maintenance_alert
         -- Get a list of maintenances that are happening between 2 dates and insert the alert to be sent into the database, returns inserted data
         with inserted_data as (
-            insert into alert_users (user_id, asset_maintenance_id, alert_definition_id)
-            select responsible_id, id, (select id from alert_definition where name = 'maintenances_today') from asset_maintenance
+            insert into {alert_users_table} (user_id, asset_maintenance_id, alert_definition_id)
+            select responsible_id, id, (select id from {alert_def_table} where name = 'maintenances_today') from {asset_maint_table}
             where planned_date_start is not null
             and planned_date_start between $1 and $2
-            and cancelled = False ON CONFLICT ON CONSTRAINT unique_alert DO NOTHING
+            and cancelled = False ON CONFLICT ON CONSTRAINT unique_alert_{test_suffix} DO NOTHING
             returning *)
-        select inserted_data.*, to_jsonb(users.*) as user
+        select inserted_data.*, to_jsonb({users_table}.*) as user
         from inserted_data
-        left join users on users.id = inserted_data.user_id
+        left join {users_table} on {users_table}.id = inserted_data.user_id
     """,
         (date(2024, 1, 15), date(2024, 1, 17)),
     )
@@ -588,11 +612,11 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: AsyncpgDri
     assert result.data is not None
     # Now try with dates as strings
     date_test = await asyncpg_session.execute(
-        "SELECT * FROM asset_maintenance WHERE planned_date_start::text BETWEEN '2024-01-15' AND '2024-01-17' AND cancelled = False"
+        f"SELECT * FROM {asset_maint_table} WHERE planned_date_start::text BETWEEN '2024-01-15' AND '2024-01-17' AND cancelled = False"
     )
 
     check_result = await asyncpg_session.execute(
-        "SELECT * FROM asset_maintenance WHERE planned_date_start BETWEEN $1 AND $2 AND cancelled = False",
+        f"SELECT * FROM {asset_maint_table} WHERE planned_date_start BETWEEN $1 AND $2 AND cancelled = False",
         (date(2024, 1, 15), date(2024, 1, 17)),
     )
 
@@ -606,7 +630,7 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: AsyncpgDri
 
     # The INSERT...ON CONFLICT DO NOTHING might not return any rows if they already exist
     # or if the insert doesn't happen. Let's check if any rows were actually inserted
-    alert_users_count = await asyncpg_session.execute("SELECT COUNT(*) as count FROM alert_users")
+    alert_users_count = await asyncpg_session.execute(f"SELECT COUNT(*) as count FROM {alert_users_table}")
     inserted_count = alert_users_count.data[0]["count"]
 
     # If no rows were inserted, the WITH clause returns empty and so does the final SELECT
@@ -638,28 +662,36 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: AsyncpgDri
 
     # Test idempotency - running the same query again should return no rows
     result2 = await asyncpg_session.execute(
-        """
+        f"""
         with inserted_data as (
-            insert into alert_users (user_id, asset_maintenance_id, alert_definition_id)
-            select responsible_id, id, (select id from alert_definition where name = 'maintenances_today') from asset_maintenance
+            insert into {alert_users_table} (user_id, asset_maintenance_id, alert_definition_id)
+            select responsible_id, id, (select id from {alert_def_table} where name = 'maintenances_today') from {asset_maint_table}
             where planned_date_start is not null
             and planned_date_start between $1 and $2
-            and cancelled = False ON CONFLICT ON CONSTRAINT unique_alert DO NOTHING
+            and cancelled = False ON CONFLICT ON CONSTRAINT unique_alert_{test_suffix} DO NOTHING
             returning *)
-        select inserted_data.*, to_jsonb(users.*) as user
+        select inserted_data.*, to_jsonb({users_table}.*) as user
         from inserted_data
-        left join users on users.id = inserted_data.user_id
+        left join {users_table} on {users_table}.id = inserted_data.user_id
     """,
-        {"date_start": date(2024, 1, 15), "date_end": date(2024, 1, 17)},
+        (date(2024, 1, 15), date(2024, 1, 17)),
     )
 
     assert result2.data is not None
     assert len(result2.data) == 0  # No new rows should be inserted/returned
 
     # Verify the records are actually in the database
-    count_result = await asyncpg_session.execute("SELECT COUNT(*) as count FROM alert_users")
+    count_result = await asyncpg_session.execute(f"SELECT COUNT(*) as count FROM {alert_users_table}")
     assert count_result.data is not None
     assert count_result.data[0]["count"] == 3
+
+    # Clean up tables with unique names
+    await asyncpg_session.execute_script(f"""
+        DROP TABLE IF EXISTS {alert_users_table} CASCADE;
+        DROP TABLE IF EXISTS {asset_maint_table} CASCADE;
+        DROP TABLE IF EXISTS {users_table} CASCADE;
+        DROP TABLE IF EXISTS {alert_def_table} CASCADE;
+    """)
 
 
 @pytest.mark.integration

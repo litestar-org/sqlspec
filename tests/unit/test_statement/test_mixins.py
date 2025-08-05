@@ -1,3 +1,5 @@
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
+
 """Unit tests for driver mixins.
 
 Tests the mixin classes that provide additional functionality for database drivers,
@@ -12,8 +14,6 @@ from sqlglot import exp, parse_one
 
 from sqlspec.driver.mixins import SQLTranslatorMixin, ToSchemaMixin
 from sqlspec.exceptions import SQLConversionError
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
 
 # Create a default parameter config for tests

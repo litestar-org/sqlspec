@@ -81,9 +81,11 @@ async def test_asyncpg_execute_many_update(asyncpg_batch_session: AsyncpgDriver)
     )
 
     # Now update with execute_many
-    update_params = [(100, "Update 1"), (200, "Update 2"), (300, "Update 3")]
+    update_parameters = [(100, "Update 1"), (200, "Update 2"), (300, "Update 3")]
 
-    result = await asyncpg_batch_session.execute_many("UPDATE test_batch SET value = $1 WHERE name = $2", update_params)
+    result = await asyncpg_batch_session.execute_many(
+        "UPDATE test_batch SET value = $1 WHERE name = $2", update_parameters
+    )
 
     assert isinstance(result, SQLResult)
 
@@ -154,9 +156,9 @@ async def test_asyncpg_execute_many_delete(asyncpg_batch_session: AsyncpgDriver)
     )
 
     # Delete specific items by name
-    delete_params = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
+    delete_parameters = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
 
-    result = await asyncpg_batch_session.execute_many("DELETE FROM test_batch WHERE name = $1", delete_params)
+    result = await asyncpg_batch_session.execute_many("DELETE FROM test_batch WHERE name = $1", delete_parameters)
 
     assert isinstance(result, SQLResult)
 

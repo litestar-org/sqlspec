@@ -80,15 +80,15 @@ def _hash_value(value: Any, _seen: set[int]) -> int:
 
 
 def hash_parameters(
-    positional_params: Optional[list[Any]] = None,
-    named_params: Optional[dict[str, Any]] = None,
+    positional_parameters: Optional[list[Any]] = None,
+    named_parameters: Optional[dict[str, Any]] = None,
     original_parameters: Optional[Any] = None,
 ) -> int:
     """Generate hash for SQL parameters.
 
     Args:
-        positional_params: List of positional parameters
-        named_params: Dictionary of named parameters
+        positional_parameters: List of positional parameters
+        named_parameters: Dictionary of named parameters
         original_parameters: Original parameters (for execute_many)
 
     Returns:
@@ -97,34 +97,34 @@ def hash_parameters(
     param_hash = 0
 
     # Hash positional parameters
-    if positional_params:
-        from sqlspec.parameters.types import TypedParameter
+    if positional_parameters:
+        from sqlspec.parameters import TypedParameter
 
-        hashable_params = []
-        for param in positional_params:
+        hashable_parameters = []
+        for param in positional_parameters:
             if isinstance(param, TypedParameter):
                 if isinstance(param.value, (list, dict)):
-                    hashable_params.append((repr(param.value), param.type_hint))
+                    hashable_parameters.append((repr(param.value), param.type_hint))
                 else:
-                    hashable_params.append((param.value, param.type_hint))
+                    hashable_parameters.append((param.value, param.type_hint))
             elif isinstance(param, (list, dict)):
                 # Convert unhashable types to hashable representations
-                hashable_params.append((repr(param), "unhashable"))
+                hashable_parameters.append((repr(param), "unhashable"))
             else:
                 # Check if param itself contains unhashable types
                 try:
                     hash(param)
-                    hashable_params.append((param, "primitive"))
+                    hashable_parameters.append((param, "primitive"))
                 except TypeError:
                     # If unhashable, convert to string representation
-                    hashable_params.append((repr(param), "unhashable_repr"))
+                    hashable_parameters.append((repr(param), "unhashable_repr"))
 
-        param_hash ^= hash(tuple(hashable_params))
+        param_hash ^= hash(tuple(hashable_parameters))
 
-    if named_params:
-        # Handle unhashable types in named params
+    if named_parameters:
+        # Handle unhashable types in named parameters
         hashable_items = []
-        for key, value in sorted(named_params.items()):
+        for key, value in sorted(named_parameters.items()):
             if is_typed_parameter(value):
                 # For TypedParameter, hash its value with type info
                 if isinstance(value.value, (list, dict)):
@@ -213,8 +213,8 @@ def hash_sql_statement(statement: "SQL") -> str:
 
     # Hash all parameters
     param_hash = hash_parameters(
-        positional_params=statement._positional_params,
-        named_params=statement._named_params,
+        positional_parameters=statement._positional_parameters,
+        named_parameters=statement._named_parameters,
         original_parameters=statement._original_parameters,
     )
 

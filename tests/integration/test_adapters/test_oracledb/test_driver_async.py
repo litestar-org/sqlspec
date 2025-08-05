@@ -41,14 +41,14 @@ async def oracle_async_session(oracle_23ai_service: OracleService) -> AsyncGener
 
 
 @pytest.mark.parametrize(
-    ("params", "style"),
+    ("parameters", "style"),
     [
         pytest.param(("test_name"), "positional_binds", id="positional_binds"),
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
 @pytest.mark.xdist_group("oracle")
-async def test_async_select(oracle_async_session: OracleAsyncConfig, params: Any, style: ParamStyle) -> None:
+async def test_async_select(oracle_async_session: OracleAsyncConfig, parameters: Any, style: ParamStyle) -> None:
     """Test async select functionality with Oracle parameter styles."""
     async with oracle_async_session.provide_session() as driver:
         # Manual cleanup at start of test
@@ -70,11 +70,11 @@ async def test_async_select(oracle_async_session: OracleAsyncConfig, params: Any
             insert_sql = "INSERT INTO test_table (id, name) VALUES (1, :name)"
             select_sql = "SELECT name FROM test_table WHERE name = :name"
 
-        insert_result = await driver.execute(insert_sql, params)
+        insert_result = await driver.execute(insert_sql, parameters)
         assert isinstance(insert_result, SQLResult)
         assert insert_result.rows_affected == 1
 
-        select_result = await driver.execute(select_sql, params)
+        select_result = await driver.execute(select_sql, parameters)
         assert isinstance(select_result, SQLResult)
         assert select_result.data is not None
         assert len(select_result.data) == 1
@@ -86,14 +86,14 @@ async def test_async_select(oracle_async_session: OracleAsyncConfig, params: Any
 
 
 @pytest.mark.parametrize(
-    ("params", "style"),  # Keep parametrization for structure
+    ("parameters", "style"),  # Keep parametrization for structure
     [
         pytest.param(("test_name"), "positional_binds", id="positional_binds"),
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
 @pytest.mark.xdist_group("oracle")
-async def test_async_select_value(oracle_async_session: OracleAsyncConfig, params: Any, style: ParamStyle) -> None:
+async def test_async_select_value(oracle_async_session: OracleAsyncConfig, parameters: Any, style: ParamStyle) -> None:
     """Test async select value functionality with Oracle parameter styles."""
     async with oracle_async_session.provide_session() as driver:
         # Manual cleanup at start of test
@@ -114,7 +114,7 @@ async def test_async_select_value(oracle_async_session: OracleAsyncConfig, param
         else:  # dict_binds
             insert_sql = "INSERT INTO test_table (id, name) VALUES (1, :name)"
 
-        insert_result = await driver.execute(insert_sql, params)
+        insert_result = await driver.execute(insert_sql, parameters)
         assert isinstance(insert_result, SQLResult)
         assert insert_result.rows_affected == 1
 
@@ -179,17 +179,17 @@ async def test_execute_many_insert(oracle_async_session: OracleAsyncConfig) -> N
         await driver.execute_script(sql_create)
 
         insert_sql = "INSERT INTO test_many_table (id, name) VALUES (:1, :2)"
-        params_list = [(1, "name1"), (2, "name2"), (3, "name3")]
+        parameters_list = [(1, "name1"), (2, "name2"), (3, "name3")]
 
-        result = await driver.execute_many(insert_sql, parameters=params_list)
+        result = await driver.execute_many(insert_sql, parameters=parameters_list)
         assert isinstance(result, SQLResult)
-        assert result.rows_affected == len(params_list)
+        assert result.rows_affected == len(parameters_list)
 
         select_sql = "SELECT COUNT(*) as count FROM test_many_table"
         count_result = await driver.execute(select_sql)
         assert isinstance(count_result, SQLResult)
         assert count_result.data is not None
-        assert count_result.data[0]["COUNT"] == len(params_list)  # Oracle returns uppercase column names
+        assert count_result.data[0]["COUNT"] == len(parameters_list)  # Oracle returns uppercase column names
 
 
 @pytest.mark.xdist_group("oracle")

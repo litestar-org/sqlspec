@@ -100,9 +100,9 @@ class MockSyncDriver(SyncDriverAdapterBase):
         """Hook for mock-specific special operations - none needed."""
         return None
 
-    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any, statement: SQL) -> ExecutionResult:
+    def _execute_statement(self, cursor: Any, sql: str, prepared_parameters: Any, statement: SQL) -> ExecutionResult:
         """Execute single SQL statement using mock cursor."""
-        cursor.execute(sql, prepared_params or ())
+        cursor.execute(sql, prepared_parameters or ())
 
         # Determine if this is a SELECT statement
         sql_upper = sql.upper().strip()
@@ -118,9 +118,9 @@ class MockSyncDriver(SyncDriverAdapterBase):
             )
         return self.create_execution_result(cursor_result=None, rowcount_override=1, is_select_result=False)
 
-    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: SQL) -> Any:
+    def _execute_many(self, cursor: Any, sql: str, prepared_parameters: Any, statement: SQL) -> Any:
         """Execute SQL with multiple parameter sets using mock cursor."""
-        return cursor.executemany(sql, prepared_params)
+        return cursor.executemany(sql, prepared_parameters)
 
     def _get_selected_data(self, cursor: Any) -> tuple[list[dict[str, Any]], list[str], int]:
         """Extract data from cursor after SELECT execution."""
@@ -136,11 +136,11 @@ class MockSyncDriver(SyncDriverAdapterBase):
         return 1  # Mock always returns 1 affected row
 
     def _execute_script(
-        self, cursor: Any, sql: str, prepared_params: Any, statement_config: StatementConfig, statement: SQL
+        self, cursor: Any, sql: str, prepared_parameters: Any, statement_config: StatementConfig, statement: SQL
     ) -> Any:
         """Execute a SQL script (multiple statements)."""
         # Mock implementation - just execute as single statement
-        return cursor.execute(sql, prepared_params or ())
+        return cursor.execute(sql, prepared_parameters or ())
 
     def begin(self) -> None:
         """Mock begin transaction."""
@@ -254,9 +254,11 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         """Hook for mock-specific special operations - none needed."""
         return None
 
-    async def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any, statement: SQL) -> ExecutionResult:
+    async def _execute_statement(
+        self, cursor: Any, sql: str, prepared_parameters: Any, statement: SQL
+    ) -> ExecutionResult:
         """Execute single SQL statement using mock cursor."""
-        await cursor.execute(sql, prepared_params or ())
+        await cursor.execute(sql, prepared_parameters or ())
 
         # Determine if this is a SELECT statement
         sql_upper = sql.upper().strip()
@@ -273,9 +275,9 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         # Mock non-SELECT result
         return self.create_execution_result(cursor_result=None, rowcount_override=1, is_select_result=False)
 
-    async def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: SQL) -> Any:
+    async def _execute_many(self, cursor: Any, sql: str, prepared_parameters: Any, statement: SQL) -> Any:
         """Execute SQL with multiple parameter sets using mock cursor."""
-        return await cursor.executemany(sql, prepared_params)
+        return await cursor.executemany(sql, prepared_parameters)
 
     async def _get_selected_data(self, cursor: Any) -> tuple[list[dict[str, Any]], list[str], int]:
         """Extract data from cursor after SELECT execution."""
@@ -498,7 +500,7 @@ def test_sync_driver_build_statement_with_sql_object() -> None:
     # SQL objects are immutable, so a new instance is created
     assert isinstance(statement, SQL)
     assert statement._raw_sql == sql_obj._raw_sql
-    assert statement._named_params == sql_obj._named_params  # type: ignore[attr-defined]
+    assert statement._named_parameters == sql_obj._named_parameters  # type: ignore[attr-defined]
 
 
 def test_sync_driver_build_statement_with_filters() -> None:

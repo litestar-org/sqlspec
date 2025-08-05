@@ -1,9 +1,34 @@
 """SQLSpec: Safe and elegant SQL query building for Python."""
 
-from sqlspec import adapters, base, driver, exceptions, extensions, loader, parameters, statement, typing, utils
+from sqlspec import (
+    adapters,
+    base,
+    builder,
+    driver,
+    exceptions,
+    extensions,
+    loader,
+    parameters,
+    statement,
+    typing,
+    utils,
+)
 from sqlspec.__metadata__ import __version__
 from sqlspec._sql import SQLFactory
 from sqlspec.base import SQLSpec
+from sqlspec.builder import (
+    Column,
+    ColumnExpression,
+    CreateTable,
+    Delete,
+    DropTable,
+    FunctionColumn,
+    Insert,
+    Merge,
+    QueryBuilder,
+    Select,
+    Update,
+)
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 from sqlspec.driver import AsyncDriverAdapterBase, ExecutionResult, SyncDriverAdapterBase
 from sqlspec.exceptions import (
@@ -17,19 +42,6 @@ from sqlspec.exceptions import (
 )
 from sqlspec.loader import SQLFile, SQLFileLoader
 from sqlspec.parameters import ParameterConverter, ParameterProcessor, ParameterStyle, ParameterStyleConfig
-from sqlspec.statement.builder import (
-    Column,
-    ColumnExpression,
-    CreateTable,
-    Delete,
-    DropTable,
-    FunctionColumn,
-    Insert,
-    Merge,
-    QueryBuilder,
-    Select,
-    Update,
-)
 from sqlspec.statement.cache import CacheConfig, CacheStats
 from sqlspec.statement.result import ArrowResult, SQLResult
 from sqlspec.statement.sql import SQL, StatementConfig
@@ -85,6 +97,7 @@ __all__ = (
     "__version__",
     "adapters",
     "base",
+    "builder",
     "driver",
     "exceptions",
     "extensions",

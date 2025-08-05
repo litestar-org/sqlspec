@@ -435,6 +435,6 @@ class PipelineExecutionError(SQLSpecError):
 
     def get_failed_parameters(self) -> "Optional[Any]":
         """Get the parameters that failed."""
-        if self.failed_operation and hasattr(self.failed_operation, "original_params"):
-            return self.failed_operation.original_params
+        if self.failed_operation and hasattr(self.failed_operation, "original_parameters"):
+            return self.failed_operation.original_parameters
         return None

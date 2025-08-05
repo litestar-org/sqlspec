@@ -3,7 +3,7 @@
 
 from typing import Any, Union
 
-from tests.fixtures.sql_utils import create_tuple_or_dict_params, format_placeholder, format_sql_params
+from tests.fixtures.sql_utils import create_tuple_or_dict_parameters, format_placeholder, format_sql_parameters
 
 # Example 1: Direct placeholder formatting
 # Before:
@@ -23,20 +23,20 @@ def example_direct_placeholder(style: str, dialect: str = "postgres") -> str:
     """
 
 
-# Example 2: Using format_sql_params for a more complex query
+# Example 2: Using format_sql_parameters for a more complex query
 def example_with_formatting(
     style: str, dialect: str = "postgres"
 ) -> tuple[str, Union[tuple[Any, ...], dict[str, Any]]]:
-    """Example of using format_sql_params for a query with multiple parameters."""
+    """Example of using format_sql_parameters for a query with multiple parameters."""
     sql_template = """
     INSERT INTO test_table (name, id, created_at)
     VALUES ({}, {}, {})
     """
 
-    # Get formatted SQL and empty params object
-    formatted_sql, empty_params = format_sql_params(sql_template, ["name", "id", "created_at"], style, dialect)
+    # Get formatted SQL and empty parameters object
+    formatted_sql, empty_parameters = format_sql_parameters(sql_template, ["name", "id", "created_at"], style, dialect)
 
-    return formatted_sql, empty_params
+    return formatted_sql, empty_parameters
 
 
 # Example 3: Creating parameter objects based on style
@@ -46,7 +46,7 @@ def example_param_creation(style: str, name: str, id_value: int) -> Union[tuple[
     field_names = ["name", "id"]
 
     # Create parameters based on style
-    return create_tuple_or_dict_params(values, field_names, style)
+    return create_tuple_or_dict_parameters(values, field_names, style)
 
 
 # Usage in tests:
@@ -63,19 +63,19 @@ def demo_usage() -> None:
     # Output: INSERT INTO test_table (name) VALUES (:name)
 
     # Example of complex query formatting
-    complex_sql, empty_params = example_with_formatting("tuple_binds", "sqlite")
+    complex_sql, empty_parameters = example_with_formatting("tuple_binds", "sqlite")
     print(f"Complex query with SQLite tuple binds: {complex_sql}")
-    print(f"Empty params object: {empty_params}")
+    print(f"Empty parameters object: {empty_parameters}")
     # Output: INSERT INTO test_table (name, id, created_at) VALUES (?, ?, ?)
-    # Empty params: ()
+    # Empty parameters: ()
 
     # Example of parameter creation
-    tuple_params = example_param_creation("tuple_binds", "test_name", 123)
-    dict_params = example_param_creation("named_binds", "test_name", 123)
-    print(f"Tuple params: {tuple_params}")
-    print(f"Dict params: {dict_params}")
-    # Output: Tuple params: ('test_name', 123)
-    # Dict params: {'name': 'test_name', 'id': 123}
+    tuple_parameters = example_param_creation("tuple_binds", "test_name", 123)
+    dict_parameters = example_param_creation("named_binds", "test_name", 123)
+    print(f"Tuple parameters: {tuple_parameters}")
+    print(f"Dict parameters: {dict_parameters}")
+    # Output: Tuple parameters: ('test_name', 123)
+    # Dict parameters: {'name': 'test_name', 'id': 123}
 
 
 if __name__ == "__main__":

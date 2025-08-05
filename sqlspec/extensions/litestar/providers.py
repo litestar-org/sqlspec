@@ -13,7 +13,7 @@ from typing import Any, Literal, NamedTuple, Optional, TypedDict, Union, cast
 from uuid import UUID
 
 from litestar.di import Provide
-from litestar.params import Dependency, Parameter
+from litestar.parameters import Dependency, Parameter
 from typing_extensions import NotRequired
 
 from sqlspec.statement.filters import (

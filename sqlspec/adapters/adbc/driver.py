@@ -3,12 +3,12 @@ import contextlib
 import datetime
 import decimal
 import logging
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional, cast
 
-from sqlspec.adapters.adbc.pipeline_steps import adbc_null_parameter_pipeline_step
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
+from sqlspec.exceptions import SQLParsingError, SQLSpecError
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
 from sqlspec.utils.serializers import to_json
 
@@ -41,8 +41,6 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
     )
 
     post_process_steps = None
-    if detected_dialect in {"postgres", "postgresql"}:
-        post_process_steps = [adbc_null_parameter_pipeline_step]
 
     return StatementConfig(
         dialect=detected_dialect,
@@ -158,14 +156,34 @@ class AdbcDriver(SyncDriverAdapterBase):
             with contextlib.suppress(Exception):
                 cursor.execute("ROLLBACK")
 
-    def _handle_postgres_empty_params(self, params: "Any") -> "Any":
+    def _handle_postgres_empty_parameters(self, parameters: "Any") -> "Any":
         """Process empty parameters for PostgreSQL compatibility."""
-        if self.dialect == "postgres" and isinstance(params, dict) and not params:
+        if self.dialect == "postgres" and isinstance(parameters, dict) and not parameters:
             return None
-        return params
+        return parameters
 
     def with_cursor(self, connection: "AdbcConnection") -> "AdbcCursor":
         return AdbcCursor(connection)
+
+    def handle_database_exceptions(self) -> "contextmanager[None]":
+        """Handle ADBC-specific exceptions and wrap them appropriately."""
+        return contextmanager(self._handle_database_exceptions_impl)()
+
+    def _handle_database_exceptions_impl(self) -> Any:
+        """Implementation of database exception handling without decorator."""
+        try:
+            yield
+        except Exception as e:
+            # Handle ADBC-specific errors
+            if "adbc" in str(e).lower() or "arrow" in str(e).lower():
+                msg = f"ADBC database error: {e}"
+                raise SQLSpecError(msg) from e
+            elif "parse" in str(e).lower() or "syntax" in str(e).lower():
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            else:
+                msg = f"Unexpected database error: {e}"
+                raise SQLSpecError(msg) from e
 
     def _try_special_handling(self, cursor: "Cursor", statement: "SQL") -> "Optional[SQLResult]":
         """Handle ADBC-specific operations including script execution."""
@@ -177,10 +195,10 @@ class AdbcDriver(SyncDriverAdapterBase):
 
                 for stmt in statements:
                     if stmt.strip():
-                        prepared_params = self.prepare_driver_parameters(
-                            self._handle_postgres_empty_params(parameters), self.statement_config, is_many=False
+                        prepared_parameters = self.prepare_driver_parameters(
+                            self._handle_postgres_empty_parameters(parameters), self.statement_config, is_many=False
                         )
-                        cursor.execute(stmt, parameters=prepared_params)
+                        cursor.execute(stmt, parameters=prepared_parameters)
 
                 execution_result = self.create_execution_result(
                     cursor,
@@ -196,14 +214,16 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         return None
 
-    def _execute_many(self, cursor: "Cursor", sql: str, prepared_params: Any, statement: "SQL") -> "ExecutionResult":
+    def _execute_many(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
         """ADBC executemany implementation."""
+        sql = statement.sql
+        prepared_parameters = statement.parameters
         try:
-            if not prepared_params:
+            if not prepared_parameters:
                 cursor._rowcount = 0
                 row_count = 0
             else:
-                cursor.executemany(sql, prepared_params)
+                cursor.executemany(sql, prepared_parameters)
                 row_count = cursor.rowcount if cursor.rowcount is not None else -1
 
         except Exception as e:
@@ -212,13 +232,15 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
-    def _execute_statement(
-        self, cursor: "Cursor", sql: str, prepared_params: Any, statement: "SQL"
-    ) -> "ExecutionResult":
+    def _execute_statement(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
         """ADBC single execution."""
+        sql = statement.sql
+        prepared_parameters = statement.parameters
         try:
-            params = self._handle_single_param_list(sql, self._handle_postgres_empty_params(prepared_params))
-            cursor.execute(sql, parameters=params)
+            parameters = self._handle_single_param_list(
+                sql, self._handle_postgres_empty_parameters(prepared_parameters)
+            )
+            cursor.execute(sql, parameters=parameters)
 
         except Exception as e:
             self._handle_postgres_rollback(cursor)
@@ -259,7 +281,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         with self.with_cursor(self.connection) as cursor:
             cursor.execute("COMMIT")
 
-    def _handle_single_param_list(self, sql: str, params: "list[Any]") -> "list[Any]":
+    def _handle_single_param_list(self, sql: str, parameters: "list[Any]") -> "list[Any]":
         """Handle single parameter list edge cases for ADBC compatibility."""
         try:
             import sqlglot
@@ -275,11 +297,11 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         if (
             param_count == 1
-            and len(params) == 1
-            and isinstance(params[0], (list, tuple))
-            and len(params[0]) == 1
-            and not isinstance(params[0][0], (list, tuple))
+            and len(parameters) == 1
+            and isinstance(parameters[0], (list, tuple))
+            and len(parameters[0]) == 1
+            and not isinstance(parameters[0][0], (list, tuple))
         ):
-            return list(params[0])
+            return list(parameters[0])
 
-        return params
+        return parameters

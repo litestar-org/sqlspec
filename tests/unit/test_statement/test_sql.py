@@ -61,29 +61,29 @@ def test_sql_initialization_with_string() -> None:
 def test_sql_initialization_with_parameters() -> None:
     """Test SQL initialization with parameters."""
     sql_str = "SELECT * FROM users WHERE id = :id"
-    params: dict[str, Any] = {"id": 1}
-    stmt = SQL(sql_str, **params)  # type: ignore[arg-type]  # kwargs are passed correctly
+    parameters: dict[str, Any] = {"id": 1}
+    stmt = SQL(sql_str, **parameters)  # type: ignore[arg-type]  # kwargs are passed correctly
 
     assert stmt.sql == sql_str
-    assert stmt.parameters == params
+    assert stmt.parameters == parameters
 
 
 @pytest.mark.parametrize(
-    "sql,params,expected_sql",
+    "sql,parameters,expected_sql",
     [
         ("SELECT * FROM users WHERE id = ?", (1), "SELECT * FROM users WHERE id = ?"),
         ("SELECT * FROM users WHERE id = :id", {"id": 1}, "SELECT * FROM users WHERE id = :id"),
         ("SELECT * FROM users WHERE id = $1", (1), "SELECT * FROM users WHERE id = $1"),
     ],
 )
-def test_sql_with_different_parameter_styles(sql: str, params: "StatementParameters", expected_sql: str) -> None:
+def test_sql_with_different_parameter_styles(sql: str, parameters: "StatementParameters", expected_sql: str) -> None:
     """Test SQL handles different parameter styles."""
-    if isinstance(params, dict):
-        stmt = SQL(sql, **params)
-    elif isinstance(params, tuple):
-        stmt = SQL(sql, *params)
+    if isinstance(parameters, dict):
+        stmt = SQL(sql, **parameters)
+    elif isinstance(parameters, tuple):
+        stmt = SQL(sql, *parameters)
     else:
-        stmt = SQL(sql, params)
+        stmt = SQL(sql, parameters)
     assert stmt.sql == expected_sql
 
 
@@ -220,8 +220,8 @@ def test_sql_filter_method() -> None:
     # Filter is applied - limit is parameterized with unique name
     assert "LIMIT :" in stmt2.sql
     # Check that there's a parameter with value 10 (limit parameter)
-    limit_params = [key for key, value in stmt2.parameters.items() if value == 10 and key.startswith("limit_")]
-    assert len(limit_params) == 1
+    limit_parameters = [key for key, value in stmt2.parameters.items() if value == 10 and key.startswith("limit_")]
+    assert len(limit_parameters) == 1
 
 
 def test_sql_multiple_filters() -> None:
@@ -264,18 +264,18 @@ def test_sql_with_literal_parameterization() -> None:
 
     # The SQL should have the literal parameterized
     sql = stmt.sql
-    params = stmt.parameters
+    parameters = stmt.parameters
 
     # With default processing enabled, literal should be parameterized
     assert sql == "SELECT * FROM users WHERE id = ?"
     # The extracted parameters are returned as a list
-    assert isinstance(params, list)
-    assert len(params) == 1
+    assert isinstance(parameters, list)
+    assert len(parameters) == 1
     # Parameters are wrapped with type information by default
-    from sqlspec.parameters.types import TypedParameter
+    from sqlspec.parameters import TypedParameter
 
-    assert isinstance(params[0], TypedParameter)
-    assert params[0].value == 1
+    assert isinstance(parameters[0], TypedParameter)
+    assert parameters[0].value == 1
 
 
 def test_sql_comment_removal() -> None:

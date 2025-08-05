@@ -1,3 +1,5 @@
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
+
 """Test parameter conversion logic follows core principles.
 
 Tests validate that parameter conversion ONLY occurs when:
@@ -15,8 +17,6 @@ import pytest
 
 from sqlspec.driver._common import ExecutionResult
 from sqlspec.driver._sync import SyncDriverAdapterBase
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
 
 
@@ -34,14 +34,14 @@ class MockAdapter(SyncDriverAdapterBase):
     def _try_special_handling(self, cursor: Any, statement: Any) -> Any:
         return None
 
-    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> ExecutionResult:
+    def _execute_many(self, cursor: Any, sql: str, prepared_parameters: Any, statement: "SQL") -> ExecutionResult:
         return self.create_execution_result(cursor, is_many_result=True)
 
-    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any, statement: "SQL") -> ExecutionResult:
+    def _execute_statement(self, cursor: Any, sql: str, prepared_parameters: Any, statement: "SQL") -> ExecutionResult:
         return self.create_execution_result(cursor)
 
     def _execute_script(
-        self, cursor: Any, sql: str, prepared_params: Any, statement_config: "StatementConfig", statement: "SQL"
+        self, cursor: Any, sql: str, prepared_parameters: Any, statement_config: "StatementConfig", statement: "SQL"
     ) -> ExecutionResult:
         return self.create_execution_result(cursor, is_script_result=True)
 
@@ -79,20 +79,22 @@ def test_parameter_conversion_only_when_necessary() -> None:
     mock_statement.parameters = [1]  # Mock parameters attribute
     mock_statement.is_many = False  # Mock is_many attribute
     # Mock internal attributes used by hash_sql_statement
-    mock_statement._positional_params = [1]
-    mock_statement._named_params = {}
+    mock_statement._positional_parameters = [1]
+    mock_statement._named_parameters = {}
     mock_statement._original_parameters = [1]
     mock_statement._raw_sql = "SELECT * FROM test WHERE id = ?"
     mock_statement._statement = None  # Indicates raw SQL
     mock_statement._filters = []
 
     # Test that _get_compiled_sql uses explicit placeholder_style
-    sql, params = adapter._get_compiled_sql(mock_statement, statement_config)
+    sql, parameters = adapter._get_compiled_sql(mock_statement, statement_config)
 
     # Should call compile with explicit style even when it matches default
-    mock_statement.compile.assert_called_once_with(placeholder_style=ParameterStyle.QMARK, flatten_single_params=False)
+    mock_statement.compile.assert_called_once_with(
+        placeholder_style=ParameterStyle.QMARK, flatten_single_parameters=False
+    )
     assert sql == "SELECT * FROM test WHERE id = ?"
-    assert params == [1]
+    assert parameters == [1]
 
 
 def test_parameter_style_conversion_when_different() -> None:
@@ -113,22 +115,22 @@ def test_parameter_style_conversion_when_different() -> None:
     mock_statement.parameters = [1]  # Mock parameters attribute
     mock_statement.is_many = False  # Mock is_many attribute
     # Mock internal attributes used by hash_sql_statement
-    mock_statement._positional_params = [1]
-    mock_statement._named_params = {}
+    mock_statement._positional_parameters = [1]
+    mock_statement._named_parameters = {}
     mock_statement._original_parameters = [1]
     mock_statement._raw_sql = "SELECT * FROM test WHERE id = $1"
     mock_statement._statement = None  # Indicates raw SQL
     mock_statement._filters = []
 
     # Test compilation with different execution style
-    sql, params = adapter._get_compiled_sql(mock_statement, statement_config)
+    sql, parameters = adapter._get_compiled_sql(mock_statement, statement_config)
 
     # Should call compile with explicit execution style
     mock_statement.compile.assert_called_once_with(
-        placeholder_style=ParameterStyle.NUMERIC, flatten_single_params=False
+        placeholder_style=ParameterStyle.NUMERIC, flatten_single_parameters=False
     )
     assert sql == "SELECT * FROM test WHERE id = $1"
-    assert params == [1]
+    assert parameters == [1]
 
 
 def test_no_parameter_conversion_without_target_style() -> None:
@@ -153,20 +155,22 @@ def test_no_parameter_conversion_without_target_style() -> None:
     mock_statement.parameters = [1]  # Mock parameters attribute
     mock_statement.is_many = False  # Mock is_many attribute
     # Mock internal attributes used by hash_sql_statement
-    mock_statement._positional_params = [1]
-    mock_statement._named_params = {}
+    mock_statement._positional_parameters = [1]
+    mock_statement._named_parameters = {}
     mock_statement._original_parameters = [1]
     mock_statement._raw_sql = "SELECT * FROM test WHERE id = ?"
     mock_statement._statement = None  # Indicates raw SQL
     mock_statement._filters = []
 
     # Test compilation - should use explicit style from default parameter style
-    sql, params = adapter._get_compiled_sql(mock_statement, statement_config)
+    sql, parameters = adapter._get_compiled_sql(mock_statement, statement_config)
 
     # Should call compile with explicit style (which equals default in this case)
-    mock_statement.compile.assert_called_once_with(placeholder_style=ParameterStyle.QMARK, flatten_single_params=False)
+    mock_statement.compile.assert_called_once_with(
+        placeholder_style=ParameterStyle.QMARK, flatten_single_parameters=False
+    )
     assert sql == "SELECT * FROM test WHERE id = ?"
-    assert params == [1]
+    assert parameters == [1]
 
 
 def test_parameter_preparation_preserves_values() -> None:
@@ -181,11 +185,11 @@ def test_parameter_preparation_preserves_values() -> None:
     adapter = MockAdapter(statement_config)
 
     # Test various parameter types
-    test_params = ["string_value", 123, 45.67, True, None, [1, 2, 3], {"key": "value"}]
+    test_parameters = ["string_value", 123, 45.67, True, None, [1, 2, 3], {"key": "value"}]
 
     # Should preserve all values unchanged when no conversion needed
-    prepared = adapter.prepare_driver_parameters(test_params, statement_config)
-    assert prepared == test_params
+    prepared = adapter.prepare_driver_parameters(test_parameters, statement_config)
+    assert prepared == test_parameters
 
 
 def test_parameter_style_configurations() -> None:
@@ -246,8 +250,8 @@ def test_base_get_compiled_sql_always_explicit() -> None:
     mock_statement.parameters = [1]  # Mock parameters attribute
     mock_statement.is_many = False  # Mock is_many attribute
     # Mock internal attributes used by hash_sql_statement
-    mock_statement._positional_params = [1]
-    mock_statement._named_params = {}
+    mock_statement._positional_parameters = [1]
+    mock_statement._named_parameters = {}
     mock_statement._original_parameters = [1]
     mock_statement._raw_sql = "SELECT * FROM test WHERE id = ?"
     mock_statement._statement = None  # Indicates raw SQL
@@ -258,7 +262,9 @@ def test_base_get_compiled_sql_always_explicit() -> None:
 
     # Should ALWAYS call with explicit placeholder_style when target_style is set
     # This prevents SQLGlot from using its internal default which may differ
-    mock_statement.compile.assert_called_once_with(placeholder_style=ParameterStyle.QMARK, flatten_single_params=False)
+    mock_statement.compile.assert_called_once_with(
+        placeholder_style=ParameterStyle.QMARK, flatten_single_parameters=False
+    )
 
 
 @pytest.mark.parametrize(
@@ -291,8 +297,8 @@ def test_parameter_style_compilation(adapter_style: ParameterStyle, expected_sty
     mock_statement.parameters = []  # Mock parameters attribute (empty for this test)
     mock_statement.is_many = False  # Mock is_many attribute
     # Mock internal attributes used by hash_sql_statement
-    mock_statement._positional_params = []
-    mock_statement._named_params = {}
+    mock_statement._positional_parameters = []
+    mock_statement._named_parameters = {}
     mock_statement._original_parameters = []
     mock_statement._raw_sql = "SELECT * FROM test"
     mock_statement._statement = None  # Indicates raw SQL
@@ -302,4 +308,4 @@ def test_parameter_style_compilation(adapter_style: ParameterStyle, expected_sty
     adapter._get_compiled_sql(mock_statement, statement_config)
 
     # Should use the correct parameter style
-    mock_statement.compile.assert_called_once_with(placeholder_style=expected_style, flatten_single_params=False)
+    mock_statement.compile.assert_called_once_with(placeholder_style=expected_style, flatten_single_parameters=False)

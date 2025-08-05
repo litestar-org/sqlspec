@@ -1,4 +1,4 @@
-"""Integration tests for dialect propagation through the SQL pipeline."""
+"""Integration tests for dialect propagation through SQLTransformer."""
 
 import sqlite3
 from unittest.mock import Mock, patch
@@ -13,7 +13,7 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
-from sqlspec.statement.builder import Select
+from sqlspec.builder import Select
 
 # Import removed - SQLProcessingContext no longer exists in new architecture
 from sqlspec.statement.result import SQLResult
@@ -205,18 +205,6 @@ async def test_asyncmy_dialect_propagation_with_filters(mysql_service: MySQLServ
 
 
 # SQL processing tests
-def test_sql_transform_context_with_dialect() -> None:
-    """Test that SQLTransformContext properly handles dialect."""
-    from sqlglot import parse_one
-
-    from sqlspec.statement.pipeline import SQLTransformContext
-
-    # Create context with dialect
-    expression = parse_one("SELECT * FROM users", dialect="postgres")
-    context = SQLTransformContext(current_expression=expression, original_expression=expression, dialect="postgres")
-
-    assert context.dialect == "postgres"
-    assert context.original_expression.sql() == "SELECT * FROM users"
 
 
 def test_query_builder_dialect_inheritance() -> None:

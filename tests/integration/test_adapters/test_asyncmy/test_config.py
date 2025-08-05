@@ -9,21 +9,21 @@ from sqlspec.statement.sql import StatementConfig
 
 def test_asyncmy_typed_dict_structure() -> None:
     """Test Asyncmy TypedDict structure."""
-    # Test that we can create valid connection params
-    connection_params: AsyncmyConnectionParams = {
+    # Test that we can create valid connection parameters
+    connection_parameters: AsyncmyConnectionParams = {
         "host": "localhost",
         "port": 3306,
         "user": "test_user",
         "password": "test_password",
         "database": "test_db",
     }
-    assert connection_params["host"] == "localhost"
-    assert connection_params["port"] == 3306
+    assert connection_parameters["host"] == "localhost"
+    assert connection_parameters["port"] == 3306
 
-    # Test that pool params inherit from connection params and add pool-specific fields
-    pool_params: AsyncmyPoolParams = {"host": "localhost", "port": 3306, "minsize": 5, "maxsize": 20, "echo": True}
-    assert pool_params["host"] == "localhost"
-    assert pool_params["minsize"] == 5
+    # Test that pool parameters inherit from connection parameters and add pool-specific fields
+    pool_parameters: AsyncmyPoolParams = {"host": "localhost", "port": 3306, "minsize": 5, "maxsize": 20, "echo": True}
+    assert pool_parameters["host"] == "localhost"
+    assert pool_parameters["minsize"] == 5
 
 
 def test_asyncmy_config_basic_creation() -> None:

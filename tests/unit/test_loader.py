@@ -146,8 +146,8 @@ INSERT INTO users (username, email) VALUES (:username, :email);
         assert "SELECT * FROM users WHERE id = :user_id" in sql.sql
 
         # Get SQL with parameters
-        sql_with_params = loader.get_sql("create_user", username="alice", email="alice@example.com")
-        assert sql_with_params.parameters == {"username": "alice", "email": "alice@example.com"}
+        sql_with_parameters = loader.get_sql("create_user", username="alice", email="alice@example.com")
+        assert sql_with_parameters.parameters == {"username": "alice", "email": "alice@example.com"}
 
     def test_load_multiple_files(self, mock_path_read: Mock, mock_path_exists: Mock, mock_path_is_file: Mock) -> None:
         """Test loading multiple SQL files."""

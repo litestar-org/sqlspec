@@ -95,19 +95,19 @@ def test_before_after_filter(
         if result.parameters:
             assert isinstance(result.parameters, dict)
             if before:
-                params_dict = result.parameters
-                if "parameters" in params_dict and isinstance(params_dict["parameters"], dict):
-                    params_dict = params_dict["parameters"]
-                    if "parameters" in params_dict:
-                        params_dict = params_dict["parameters"]
-                assert any("before" in k for k in params_dict.keys())
+                parameters_dict = result.parameters
+                if "parameters" in parameters_dict and isinstance(parameters_dict["parameters"], dict):
+                    parameters_dict = parameters_dict["parameters"]
+                    if "parameters" in parameters_dict:
+                        parameters_dict = parameters_dict["parameters"]
+                assert any("before" in k for k in parameters_dict.keys())
             if after:
-                params_dict = result.parameters
-                if "parameters" in params_dict and isinstance(params_dict["parameters"], dict):
-                    params_dict = params_dict["parameters"]
-                    if "parameters" in params_dict:
-                        params_dict = params_dict["parameters"]
-                assert any("after" in k for k in params_dict.keys())
+                parameters_dict = result.parameters
+                if "parameters" in parameters_dict and isinstance(parameters_dict["parameters"], dict):
+                    parameters_dict = parameters_dict["parameters"]
+                    if "parameters" in parameters_dict:
+                        parameters_dict = parameters_dict["parameters"]
+                assert any("after" in k for k in parameters_dict.keys())
     else:
         assert result.sql == statement.sql
 
@@ -176,8 +176,8 @@ def test_in_collection_filter(values: Optional[Collection[Any]], expected_behavi
         assert "IN" in result.sql.upper()
         if result.parameters:
             assert isinstance(result.parameters, dict)
-            status_params = [k for k in result.parameters.keys() if "status_in_" in k]
-            assert len(status_params) == len(values) if values else 0
+            status_parameters = [k for k in result.parameters.keys() if "status_in_" in k]
+            assert len(status_parameters) == len(values) if values else 0
     elif expected_behavior == "false_condition":
         assert "FALSE" in result.sql.upper() or "0 = 1" in result.sql
     else:
@@ -194,8 +194,8 @@ def test_in_collection_filter_preserves_values() -> None:
 
     if result.parameters:
         assert isinstance(result.parameters, dict)
-        category_params = {k: v for k, v in result.parameters.items() if "category_in_" in k}
-        param_values = set(category_params.values())
+        category_parameters = {k: v for k, v in result.parameters.items() if "category_in_" in k}
+        param_values = set(category_parameters.values())
         assert param_values == set(values)
 
 
@@ -342,9 +342,9 @@ def test_search_filter_wildcard_wrapping() -> None:
 
     if result.parameters:
         assert isinstance(result.parameters, dict)
-        search_params = [v for k, v in result.parameters.items() if "search" in k and "_not_" not in k]
-        assert len(search_params) == 1
-        assert search_params[0] == "%john%"
+        search_parameters = [v for k, v in result.parameters.items() if "search" in k and "_not_" not in k]
+        assert len(search_parameters) == 1
+        assert search_parameters[0] == "%john%"
 
 
 @pytest.mark.parametrize(
@@ -439,9 +439,9 @@ def test_filters_with_special_characters() -> None:
 
     if result.parameters:
         assert isinstance(result.parameters, dict)
-        search_params = [v for v in result.parameters.values() if isinstance(v, str) and "john" in v]
-        assert len(search_params) == 1
-        assert search_params[0] == "%john%_doe%"
+        search_parameters = [v for v in result.parameters.values() if isinstance(v, str) and "john" in v]
+        assert len(search_parameters) == 1
+        assert search_parameters[0] == "%john%_doe%"
 
 
 @pytest.mark.parametrize(

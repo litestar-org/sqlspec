@@ -41,21 +41,21 @@ def duckdb_session() -> Generator[DuckDBDriver, None, None]:
 
 
 @pytest.mark.parametrize(
-    ("params", "style"),
+    ("parameters", "style"),
     [
         pytest.param(("test_name", 1), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_name", "id": 1}, "dict_binds", id="dict_binds"),
     ],
 )
 @pytest.mark.xdist_group("duckdb")
-def test_insert(duckdb_session: DuckDBDriver, params: Any, style: ParamStyle) -> None:
+def test_insert(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle) -> None:
     """Test inserting data with different parameter styles."""
     if style == "tuple_binds":
         sql = "INSERT INTO test_table (name, id) VALUES (?, ?)"
     else:
         sql = "INSERT INTO test_table (name, id) VALUES (:name, :id)"
 
-    result = duckdb_session.execute(sql, params)
+    result = duckdb_session.execute(sql, parameters)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 1
 
@@ -71,14 +71,14 @@ def test_insert(duckdb_session: DuckDBDriver, params: Any, style: ParamStyle) ->
 
 
 @pytest.mark.parametrize(
-    ("params", "style"),
+    ("parameters", "style"),
     [
         pytest.param(("test_name", 1), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_name", "id": 1}, "dict_binds", id="dict_binds"),
     ],
 )
 @pytest.mark.xdist_group("duckdb")
-def test_select(duckdb_session: DuckDBDriver, params: Any, style: ParamStyle) -> None:
+def test_select(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle) -> None:
     """Test selecting data with different parameter styles."""
     # Insert test record
     if style == "tuple_binds":
@@ -86,7 +86,7 @@ def test_select(duckdb_session: DuckDBDriver, params: Any, style: ParamStyle) ->
     else:
         insert_sql = "INSERT INTO test_table (name, id) VALUES (:name, :id)"
 
-    insert_result = duckdb_session.execute(insert_sql, params)
+    insert_result = duckdb_session.execute(insert_sql, parameters)
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
@@ -101,12 +101,12 @@ def test_select(duckdb_session: DuckDBDriver, params: Any, style: ParamStyle) ->
     # Test select with a WHERE clause
     if style == "tuple_binds":
         select_where_sql = "SELECT id FROM test_table WHERE name = ?"
-        where_params = "test_name"
+        where_parameters = "test_name"
     else:
         select_where_sql = "SELECT id FROM test_table WHERE name = :name"
-        where_params = {"name": "test_name"}
+        where_parameters = {"name": "test_name"}
 
-    where_result = duckdb_session.execute(select_where_sql, where_params)
+    where_result = duckdb_session.execute(select_where_sql, where_parameters)
     assert isinstance(where_result, SQLResult)
     assert where_result.data is not None
     assert len(where_result.data) == 1
@@ -116,14 +116,14 @@ def test_select(duckdb_session: DuckDBDriver, params: Any, style: ParamStyle) ->
 
 
 @pytest.mark.parametrize(
-    ("params", "style"),
+    ("parameters", "style"),
     [
         pytest.param(("test_name", 1), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_name", "id": 1}, "dict_binds", id="dict_binds"),
     ],
 )
 @pytest.mark.xdist_group("duckdb")
-def test_select_value(duckdb_session: DuckDBDriver, params: Any, style: ParamStyle) -> None:
+def test_select_value(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle) -> None:
     """Test select value with different parameter styles."""
     # Insert test record
     if style == "tuple_binds":
@@ -131,19 +131,19 @@ def test_select_value(duckdb_session: DuckDBDriver, params: Any, style: ParamSty
     else:
         insert_sql = "INSERT INTO test_table (name, id) VALUES (:name, :id)"
 
-    insert_result = duckdb_session.execute(insert_sql, params)
+    insert_result = duckdb_session.execute(insert_sql, parameters)
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
     # Test select value
     if style == "tuple_binds":
         value_sql = "SELECT name FROM test_table WHERE id = ?"
-        value_params = 1
+        value_parameters = 1
     else:
         value_sql = "SELECT name FROM test_table WHERE id = :id"
-        value_params = {"id": 1}
+        value_parameters = {"id": 1}
 
-    value_result = duckdb_session.execute(value_sql, value_params)
+    value_result = duckdb_session.execute(value_sql, value_parameters)
     assert isinstance(value_result, SQLResult)
     assert value_result.data is not None
     assert len(value_result.data) == 1
@@ -160,17 +160,17 @@ def test_select_value(duckdb_session: DuckDBDriver, params: Any, style: ParamSty
 def test_execute_many_insert(duckdb_session: DuckDBDriver) -> None:
     """Test execute_many functionality for batch inserts."""
     insert_sql = "INSERT INTO test_table (name, id) VALUES (?, ?)"
-    params_list = [("name1", 10), ("name2", 20), ("name3", 30)]
+    parameters_list = [("name1", 10), ("name2", 20), ("name3", 30)]
 
-    result = duckdb_session.execute_many(insert_sql, params_list)
+    result = duckdb_session.execute_many(insert_sql, parameters_list)
     assert isinstance(result, SQLResult)
-    assert result.rows_affected == len(params_list)
+    assert result.rows_affected == len(parameters_list)
 
     # Verify all records were inserted
     select_result = duckdb_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == len(params_list)
+    assert select_result.data[0]["count"] == len(parameters_list)
 
 
 @pytest.mark.xdist_group("duckdb")

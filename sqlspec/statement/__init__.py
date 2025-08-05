@@ -1,7 +1,7 @@
 """SQL utilities, validation, and parameter handling."""
 
-from sqlspec.statement import builder, filters, result, sql
-from sqlspec.statement.builder import QueryBuilder, SafeQuery
+from sqlspec.builder import QueryBuilder, SafeQuery
+from sqlspec.statement import filters, result, sql
 from sqlspec.statement.filters import (
     AnyCollectionFilter,
     BeforeAfterFilter,
@@ -52,7 +52,6 @@ __all__ = (
     "StatementFilter",
     "StatementFilter",
     "StatementResult",
-    "builder",
     "filters",
     "result",
     "sql",

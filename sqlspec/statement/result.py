@@ -13,7 +13,7 @@ __all__ = ("ArrowResult", "SQLResult", "StatementResult")
 
 T = TypeVar("T")
 
-OperationType = Literal["SELECT", "INSERT", "UPDATE", "DELETE", "EXECUTE", "SCRIPT"]
+OperationType = Literal["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT"]
 
 
 class StatementResult(ABC):
@@ -113,7 +113,6 @@ class SQLResult(StatementResult):
         "operation_index",
         "operation_type",
         "parameters",
-        "pipeline_sql",
         "statement_results",
         "successful_statements",
         "total_count",
@@ -131,7 +130,6 @@ class SQLResult(StatementResult):
         error: Optional[Exception] = None,
         operation_type: OperationType = "SELECT",
         operation_index: Optional[int] = None,
-        pipeline_sql: Optional["SQL"] = None,
         parameters: Optional[Any] = None,
         column_names: Optional["list[str]"] = None,
         total_count: Optional[int] = None,
@@ -153,7 +151,6 @@ class SQLResult(StatementResult):
         self.error = error
         self.operation_type = operation_type
         self.operation_index = operation_index
-        self.pipeline_sql = pipeline_sql
         self.parameters = parameters
         self.column_names = column_names if column_names is not None else []
         self.total_count = total_count

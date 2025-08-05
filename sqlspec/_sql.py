@@ -11,8 +11,8 @@ from sqlglot import exp
 from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 
+from sqlspec.builder import Column, Delete, Insert, Merge, Select, Truncate, Update
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder import Column, Delete, Insert, Merge, Select, Truncate, Update
 
 __all__ = ("Case", "Column", "Delete", "Insert", "Merge", "SQLFactory", "Select", "Truncate", "Update")
 

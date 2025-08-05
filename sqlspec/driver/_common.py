@@ -5,13 +5,11 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple, Optional, Union, cast
 from mypy_extensions import trait
 from sqlglot import exp
 
+from sqlspec.builder import QueryBuilder
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.types import TypedParameter
+from sqlspec.parameters import ParameterStyle, TypedParameter
 from sqlspec.statement import SQLResult, Statement, StatementFilter
-from sqlspec.statement.builder import QueryBuilder
 from sqlspec.statement.cache import get_cache_config, sql_cache
-from sqlspec.statement.pipeline import SQLTransformContext, create_pipeline_from_config
 from sqlspec.statement.result import OperationType
 from sqlspec.statement.splitter import split_sql_script
 from sqlspec.statement.sql import SQL, StatementConfig
@@ -252,6 +250,11 @@ class CommonDriverAttributesMixin:
             return "EXECUTE"
 
         expr_type = type(expression).__name__.upper()
+
+        # Handle Anonymous expressions that might be unparseable scripts
+        if "ANONYMOUS" in expr_type and statement.is_script:
+            return "SCRIPT"
+
         if "INSERT" in expr_type:
             return "INSERT"
         if "UPDATE" in expr_type:
@@ -260,6 +263,8 @@ class CommonDriverAttributesMixin:
             return "DELETE"
         if "SELECT" in expr_type:
             return "SELECT"
+        if "COPY" in expr_type:
+            return "COPY"
         return "EXECUTE"
 
     def prepare_statement(
@@ -280,10 +285,10 @@ class CommonDriverAttributesMixin:
             return statement.to_statement(statement_config)
         if isinstance(statement, SQL):
             if parameters or kwargs:
-                merged_params = (
-                    (*statement._positional_params, *parameters) if parameters else statement._positional_params
+                merged_parameters = (
+                    (*statement._positional_parameters, *parameters) if parameters else statement._positional_parameters
                 )
-                return SQL(statement.sql, *merged_params, statement_config=statement_config, **kwargs)
+                return SQL(statement.sql, *merged_parameters, statement_config=statement_config, **kwargs)
             if self.statement_config.dialect and (
                 not statement.statement_config.dialect
                 or statement.statement_config.dialect != self.statement_config.dialect
@@ -314,7 +319,7 @@ class CommonDriverAttributesMixin:
         return [
             sql_script.strip()
             for sql_script in split_sql_script(
-                script, dialect=str(statement_config.dialect), strip_trailing_semicolon=strip_trailing_semicolon
+                script, dialect=str(statement_config.dialect), strip_trailing_terminator=strip_trailing_semicolon
             )
             if sql_script.strip()
         ]
@@ -339,7 +344,7 @@ class CommonDriverAttributesMixin:
         if not parameters:
             return []
         return (
-            [self._format_parameter_set(params, statement_config) for params in parameters]
+            [self._format_parameter_set(parameters, statement_config) for parameters in parameters]
             if is_many
             else self._format_parameter_set(parameters, statement_config)
         )
@@ -382,7 +387,7 @@ class CommonDriverAttributesMixin:
                 ParameterStyle.QMARK,
                 ParameterStyle.POSITIONAL_PYFORMAT,
             }:
-                ordered_params = []
+                ordered_parameters = []
                 sorted_items = sorted(
                     parameters.items(),
                     key=lambda item: int(item[0])
@@ -390,8 +395,8 @@ class CommonDriverAttributesMixin:
                     else (int(item[0][6:]) if item[0].startswith("param_") and item[0][6:].isdigit() else float("inf")),
                 )
                 for _, value in sorted_items:
-                    ordered_params.append(apply_type_coercion(value))
-                return ordered_params
+                    ordered_parameters.append(apply_type_coercion(value))
+                return ordered_parameters
 
             return {k: apply_type_coercion(v) for k, v in parameters.items()}
 
@@ -400,45 +405,15 @@ class CommonDriverAttributesMixin:
 
         return [apply_type_coercion(parameters)]
 
-    def _apply_pipeline_transformations(
-        self, expression: "exp.Expression", parameters: Any = None, config: "Optional[StatementConfig]" = None
-    ) -> tuple["exp.Expression", Any]:
-        """Apply pipeline transformations to SQL expression.
-
-        This method creates and applies a transformation pipeline based on
-        the SQL configuration, allowing drivers to leverage the pipeline
-        architecture for consistent SQL processing.
-
-        Args:
-            expression: SQLGlot expression to transform
-            parameters: Optional parameters for the SQL
-            config: SQL configuration (uses driver's config if not provided)
-
-        Returns:
-            Tuple of (transformed expression, processed parameters)
-        """
-        config = config or self.statement_config
-        pipeline = create_pipeline_from_config(config, driver_adapter=self)
-        context = SQLTransformContext(
-            current_expression=expression,
-            original_expression=expression,
-            parameters=parameters,
-            dialect=str(self.statement_config.dialect or ""),
-            metadata={},
-            driver_adapter=self,
-        )
-        result_context = pipeline(context)
-        return result_context.current_expression, result_context.merged_parameters
-
     def _get_compiled_sql(
-        self, statement: "SQL", statement_config: "StatementConfig", flatten_single_params: bool = False
+        self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
     ) -> tuple[str, Any]:
         """Get compiled SQL with optimal parameter style and caching support.
 
         Args:
             statement: SQL statement to compile
             statement_config: Complete statement configuration including parameter config, dialect, etc.
-            flatten_single_params: If True, flatten single-element lists for scalar parameters
+            flatten_single_parameters: If True, flatten single-element lists for scalar parameters
 
         Returns:
             Tuple of (compiled_sql, parameters)
@@ -446,14 +421,18 @@ class CommonDriverAttributesMixin:
         cache_config = get_cache_config()
         cache_key = None
         if cache_config.compiled_cache_enabled and statement_config.enable_caching:
-            cache_key = self._generate_compilation_cache_key(statement, statement_config, flatten_single_params)
+            cache_key = self._generate_compilation_cache_key(statement, statement_config, flatten_single_parameters)
             cached_result = sql_cache.get(cache_key)
             if cached_result is not None:
-                sql, params = cached_result
-                prepared_params = self.prepare_driver_parameters(params, statement_config, is_many=statement.is_many)
+                sql, parameters = cached_result
+                prepared_parameters = self.prepare_driver_parameters(
+                    parameters, statement_config, is_many=statement.is_many
+                )
                 if statement_config.parameter_config.output_transformer:
-                    sql, prepared_params = statement_config.parameter_config.output_transformer(sql, prepared_params)
-                return sql, prepared_params
+                    sql, prepared_parameters = statement_config.parameter_config.output_transformer(
+                        sql, prepared_parameters
+                    )
+                return sql, prepared_parameters
         if statement.is_script and not statement_config.parameter_config.needs_static_script_compilation:
             target_style = ParameterStyle.STATIC
         elif statement_config.parameter_config.supported_execution_parameter_styles is not None:
@@ -468,20 +447,22 @@ class CommonDriverAttributesMixin:
         else:
             target_style = statement_config.parameter_config.default_parameter_style
 
-        sql, params = statement.compile(placeholder_style=target_style, flatten_single_params=flatten_single_params)
+        sql, parameters = statement.compile(
+            placeholder_style=target_style, flatten_single_parameters=flatten_single_parameters
+        )
 
         if cache_key is not None:
-            sql_cache.set(cache_key, (sql, params))
+            sql_cache.set(cache_key, (sql, parameters))
 
-        prepared_params = self.prepare_driver_parameters(params, statement_config, is_many=statement.is_many)
+        prepared_parameters = self.prepare_driver_parameters(parameters, statement_config, is_many=statement.is_many)
 
         if statement_config.parameter_config.output_transformer:
-            sql, prepared_params = statement_config.parameter_config.output_transformer(sql, prepared_params)
+            sql, prepared_parameters = statement_config.parameter_config.output_transformer(sql, prepared_parameters)
 
-        return sql, prepared_params
+        return sql, prepared_parameters
 
     def _generate_compilation_cache_key(
-        self, statement: "SQL", config: "StatementConfig", flatten_single_params: bool
+        self, statement: "SQL", config: "StatementConfig", flatten_single_parameters: bool
     ) -> str:
         """Generate cache key that includes all compilation context.
 
@@ -495,7 +476,7 @@ class CommonDriverAttributesMixin:
                 config.dialect,
                 statement.is_script,
                 statement.is_many,
-                flatten_single_params,
+                flatten_single_parameters,
                 bool(config.parameter_config.output_transformer),
                 bool(config.parameter_config.needs_static_script_compilation),
             )
@@ -534,8 +515,8 @@ class CommonDriverAttributesMixin:
             count_expr.set("limit", None)
             count_expr.set("offset", None)
 
-            return SQL(count_expr, *original_sql._positional_params, statement_config=original_sql.statement_config)
+            return SQL(count_expr, *original_sql._positional_parameters, statement_config=original_sql.statement_config)
 
         subquery = cast("exp.Select", expr).subquery(alias="total_query")
         count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
-        return SQL(count_expr, *original_sql._positional_params, statement_config=original_sql.statement_config)
+        return SQL(count_expr, *original_sql._positional_parameters, statement_config=original_sql.statement_config)

@@ -185,9 +185,10 @@ try:
     ATTRS_INSTALLED = True
 except ImportError:
 
-    @runtime_checkable
     class AttrsInstance(Protocol):  # type: ignore[no-redef]
         """Placeholder Implementation for attrs classes"""
+
+        __attrs_attrs__: "ClassVar[tuple[Any, ...]]" = ()
 
     def attrs_asdict(*args: Any, **kwargs: Any) -> "dict[str, Any]":  # type: ignore[misc] # noqa: ARG001
         """Placeholder implementation"""

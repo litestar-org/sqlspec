@@ -18,9 +18,9 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from sqlglot import exp
 
+from sqlspec.builder import Merge, Select
+from sqlspec.builder._base import SafeQuery
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.builder import Merge, Select
-from sqlspec.statement.builder._base import SafeQuery
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL
 
@@ -141,7 +141,7 @@ def test_merge_on_returns_self() -> None:
 
 # Test WHEN MATCHED THEN UPDATE
 @pytest.mark.parametrize(
-    "updates,condition,expected_params",
+    "updates,condition,expected_parameters",
     [
         ({"name": "John Doe"}, None, ["John Doe"]),
         ({"status": "active", "updated_at": "2024-01-01"}, None, ["active", "2024-01-01"]),
@@ -150,7 +150,7 @@ def test_merge_on_returns_self() -> None:
     ],
     ids=["single_update", "multiple_updates", "conditional_update", "complex_conditional"],
 )
-def test_merge_when_matched_update(updates: dict[str, Any], condition: Any, expected_params: list[Any]) -> None:
+def test_merge_when_matched_update(updates: dict[str, Any], condition: Any, expected_parameters: list[Any]) -> None:
     """Test WHEN MATCHED THEN UPDATE with various scenarios."""
     builder = (
         Merge()
@@ -168,7 +168,7 @@ def test_merge_when_matched_update(updates: dict[str, Any], condition: Any, expe
 
     # Check parameters
     assert isinstance(query.parameters, dict)
-    for param in expected_params:
+    for param in expected_parameters:
         assert param in query.parameters.values()
 
 

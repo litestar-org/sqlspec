@@ -52,14 +52,14 @@ async def _manage_table(psqlpy_config: PsqlpyConfig) -> AsyncGenerator[None, Non
 
 
 @pytest.mark.parametrize(
-    ("params", "style"),
+    ("parameters", "style"),
     [
         pytest.param(("test_name"), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
 @pytest.mark.asyncio
-async def test_insert_returning_param_styles(psqlpy_config: PsqlpyConfig, params: Any, style: ParamStyle) -> None:
+async def test_insert_returning_param_styles(psqlpy_config: PsqlpyConfig, parameters: Any, style: ParamStyle) -> None:
     """Test insert returning with different parameter styles."""
     if style == "tuple_binds":
         sql = "INSERT INTO test_table (name) VALUES (?) RETURNING *"
@@ -67,7 +67,7 @@ async def test_insert_returning_param_styles(psqlpy_config: PsqlpyConfig, params
         sql = "INSERT INTO test_table (name) VALUES (:name) RETURNING *"
 
     async with psqlpy_config.provide_session() as driver:
-        result = await driver.execute(sql, params)
+        result = await driver.execute(sql, parameters)
         assert isinstance(result, SQLResult)
         assert result.data is not None
         assert len(result.data) == 1
@@ -76,13 +76,13 @@ async def test_insert_returning_param_styles(psqlpy_config: PsqlpyConfig, params
 
 
 @pytest.mark.parametrize(
-    ("params", "style"),
+    ("parameters", "style"),
     [
         pytest.param(("test_name"), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
-async def test_select_param_styles(psqlpy_config: PsqlpyConfig, params: Any, style: ParamStyle) -> None:
+async def test_select_param_styles(psqlpy_config: PsqlpyConfig, parameters: Any, style: ParamStyle) -> None:
     """Test select with different parameter styles."""
     # Insert test data first (using tuple style for simplicity here)
     insert_sql = "INSERT INTO test_table (name) VALUES (?)"
@@ -97,7 +97,7 @@ async def test_select_param_styles(psqlpy_config: PsqlpyConfig, params: Any, sty
         else:  # dict_binds
             select_sql = "SELECT id, name FROM test_table WHERE name = :name"
 
-        select_result = await driver.execute(select_sql, params)
+        select_result = await driver.execute(select_sql, parameters)
         assert isinstance(select_result, SQLResult)
         assert select_result.data is not None
         assert len(select_result.data) == 1
@@ -163,8 +163,8 @@ async def test_select_methods(psqlpy_config: PsqlpyConfig) -> None:
     async with psqlpy_config.provide_session() as driver:
         # Insert multiple records using execute_many
         insert_sql = "INSERT INTO test_table (name) VALUES ($1)"
-        params_list = [("name1",), ("name2",)]
-        many_result = await driver.execute_many(insert_sql, params_list)
+        parameters_list = [("name1",), ("name2",)]
+        many_result = await driver.execute_many(insert_sql, parameters_list)
         assert isinstance(many_result, SQLResult)
         assert many_result.rows_affected == 2  # psqlpy now tracks execute_many rows correctly
 
@@ -231,8 +231,8 @@ async def test_multiple_positional_parameters(psqlpy_config: PsqlpyConfig) -> No
     async with psqlpy_config.provide_session() as driver:
         # Insert multiple records using execute_many
         insert_sql = "INSERT INTO test_table (name) VALUES (?)"
-        params_list = [("param1"), ("param2")]
-        many_result = await driver.execute_many(insert_sql, params_list)
+        parameters_list = [("param1"), ("param2")]
+        many_result = await driver.execute_many(insert_sql, parameters_list)
         assert isinstance(many_result, SQLResult)
         assert many_result.rows_affected == 2  # psqlpy now tracks execute_many rows correctly
 
@@ -355,8 +355,8 @@ async def test_regex_parameter_binding_complex_case(psqlpy_config: PsqlpyConfig)
     async with psqlpy_config.provide_session() as driver:
         # Insert test records using execute_many
         insert_sql = "INSERT INTO test_table (name) VALUES (?)"
-        params_list = [("complex1"), ("complex2"), ("complex3")]
-        many_result = await driver.execute_many(insert_sql, params_list)
+        parameters_list = [("complex1"), ("complex2"), ("complex3")]
+        many_result = await driver.execute_many(insert_sql, parameters_list)
         assert isinstance(many_result, SQLResult)
         assert many_result.rows_affected == 3  # psqlpy now tracks execute_many rows correctly
 
@@ -410,9 +410,9 @@ async def test_execute_many_insert(psqlpy_config: PsqlpyConfig) -> None:
     """Test execute_many functionality for batch inserts."""
     async with psqlpy_config.provide_session() as driver:
         insert_sql = "INSERT INTO test_table (name) VALUES (?)"
-        params_list = [("many_name1"), ("many_name2"), ("many_name3")]
+        parameters_list = [("many_name1"), ("many_name2"), ("many_name3")]
 
-        result = await driver.execute_many(insert_sql, params_list)
+        result = await driver.execute_many(insert_sql, parameters_list)
         assert isinstance(result, SQLResult)
         assert result.rows_affected == 3  # psqlpy now tracks execute_many rows correctly
 
@@ -420,7 +420,7 @@ async def test_execute_many_insert(psqlpy_config: PsqlpyConfig) -> None:
         select_result = await driver.execute("SELECT COUNT(*) as count FROM test_table")
         assert isinstance(select_result, SQLResult)
         assert select_result.data is not None
-        assert select_result.data[0]["count"] == len(params_list)
+        assert select_result.data[0]["count"] == len(parameters_list)
 
 
 async def test_update_operation(psqlpy_config: PsqlpyConfig) -> None:

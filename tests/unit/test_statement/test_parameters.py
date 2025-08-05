@@ -97,7 +97,7 @@ def validator() -> ParameterValidator:
         ("SELECT * FROM users WHERE id = :1", 1, [ParameterStyle.POSITIONAL_COLON]),
     ],
     ids=[
-        "no_params",
+        "no_parameters",
         "single_qmark",
         "single_named_colon",
         "multiple_qmark",
@@ -114,11 +114,11 @@ def test_extract_parameters(
     validator: ParameterValidator, sql: str, expected_count: int, expected_styles: list[ParameterStyle]
 ) -> None:
     """Test parameter extraction from various SQL patterns."""
-    params = validator.extract_parameters(sql)
+    parameters = validator.extract_parameters(sql)
 
-    assert len(params) == expected_count
+    assert len(parameters) == expected_count
     for i, expected_style in enumerate(expected_styles):
-        assert params[i].style == expected_style
+        assert parameters[i].style == expected_style
 
 
 @pytest.mark.parametrize(
@@ -150,12 +150,12 @@ def test_extract_parameters_ignores_special_cases(
     validator: ParameterValidator, sql: str, should_be_ignored: bool
 ) -> None:
     """Test that parameters in special contexts are handled correctly."""
-    params = validator.extract_parameters(sql)
+    parameters = validator.extract_parameters(sql)
 
     if should_be_ignored:
-        assert len(params) == 0
+        assert len(parameters) == 0
     else:
-        assert all(p.placeholder_text != "::int" for p in params)
+        assert all(p.placeholder_text != "::int" for p in parameters)
 
 
 @pytest.mark.parametrize(
@@ -174,8 +174,8 @@ def test_extract_parameters_ignores_special_cases(
 )
 def test_get_parameter_style(validator: ParameterValidator, sql: str, expected_style: ParameterStyle) -> None:
     """Test parameter style detection."""
-    params = validator.extract_parameters(sql)
-    style = validator.get_parameter_style(params)
+    parameters = validator.extract_parameters(sql)
+    style = validator.get_parameter_style(parameters)
     assert style == expected_style
 
 
@@ -194,13 +194,13 @@ def test_get_parameter_style(validator: ParameterValidator, sql: str, expected_s
 )
 def test_determine_parameter_input_type(validator: ParameterValidator, sql: str, expected_type: Optional[type]) -> None:
     """Test parameter input type determination."""
-    params = validator.extract_parameters(sql)
-    input_type = validator.determine_parameter_input_type(params)
+    parameters = validator.extract_parameters(sql)
+    input_type = validator.determine_parameter_input_type(parameters)
     assert input_type == expected_type
 
 
 @pytest.mark.parametrize(
-    "sql,provided_params,should_pass",
+    "sql,provided_parameters,should_pass",
     [
         # Valid cases
         ("SELECT * FROM users WHERE id = ?", [123], True),
@@ -224,8 +224,8 @@ def test_determine_parameter_input_type(validator: ParameterValidator, sql: str,
         "valid_named",
         "valid_multiple_qmark",
         "valid_multiple_named",
-        "valid_no_params_none",
-        "valid_no_params_empty",
+        "valid_no_parameters_none",
+        "valid_no_parameters_empty",
         "invalid_qmark_with_dict",
         "invalid_named_with_list",
         "invalid_missing_qmark",
@@ -235,26 +235,26 @@ def test_determine_parameter_input_type(validator: ParameterValidator, sql: str,
     ],
 )
 def test_validate_parameters(
-    validator: ParameterValidator, sql: str, provided_params: "StatementParameters", should_pass: bool
+    validator: ParameterValidator, sql: str, provided_parameters: "StatementParameters", should_pass: bool
 ) -> None:
     """Test parameter validation."""
-    params = validator.extract_parameters(sql)
+    parameters = validator.extract_parameters(sql)
 
     if should_pass:
-        validator.validate_parameters(params, provided_params, sql)
+        validator.validate_parameters(parameters, provided_parameters, sql)
     else:
         with pytest.raises((ParameterStyleMismatchError, MissingParameterError, ExtraParameterError)):
-            validator.validate_parameters(params, provided_params, sql)
+            validator.validate_parameters(parameters, provided_parameters, sql)
 
 
 def test_parameter_extraction_caching(validator: ParameterValidator) -> None:
     """Test that parameter extraction results are cached."""
     sql = "SELECT * FROM users WHERE id = ? AND name = :name"
 
-    params1 = validator.extract_parameters(sql)
-    params2 = validator.extract_parameters(sql)
+    parameters1 = validator.extract_parameters(sql)
+    parameters2 = validator.extract_parameters(sql)
 
-    assert params1 is params2
+    assert parameters1 is parameters2
 
 
 @pytest.fixture
@@ -292,49 +292,6 @@ def test_merge_parameters(
     assert result == expected_result
 
 
-@pytest.mark.parametrize(
-    "sql,parameters,args,kwargs,validate,should_succeed",
-    [
-        # Valid conversions
-        ("SELECT * FROM users WHERE id = ?", None, [123], None, True, True),
-        ("SELECT * FROM users WHERE name = :name", None, None, {"name": "John"}, True, True),
-        ("SELECT * FROM users WHERE id = ? AND name = :name", None, [123], {"name": "John"}, True, True),
-        ("SELECT * FROM users", None, None, None, True, True),
-        # Invalid with validation enabled
-        ("SELECT * FROM users WHERE id = ?", None, None, {"id": 123}, True, False),
-        ("SELECT * FROM users WHERE name = :name", None, [123], None, True, False),
-        # Valid with validation disabled
-        ("SELECT * FROM users WHERE id = ?", None, None, {"id": 123}, False, True),
-    ],
-    ids=[
-        "valid_qmark",
-        "valid_named",
-        "valid_mixed",
-        "valid_no_params",
-        "invalid_style_mismatch_qmark",
-        "invalid_style_mismatch_named",
-        "invalid_but_validation_off",
-    ],
-)
-def test_convert_parameters(
-    converter: ParameterConverter,
-    sql: str,
-    parameters: "StatementParameters",
-    args: "StatementParameters",
-    kwargs: "dict[str, Any]",
-    validate: bool,
-    should_succeed: bool,
-) -> None:
-    """Test parameter conversion process."""
-    if should_succeed:
-        result = converter.convert_parameters(sql, parameters, [args], kwargs, validate)
-        assert isinstance(result.transformed_sql, str)
-        assert isinstance(result.parameter_info, list)
-    else:
-        with pytest.raises((ParameterStyleMismatchError, MissingParameterError, ExtraParameterError)):
-            converter.convert_parameters(sql, parameters, [args], kwargs, validate)
-
-
 def test_transform_sql_for_parsing(converter: ParameterConverter) -> None:
     """Test SQL transformation for parsing."""
     sql = "SELECT * FROM users WHERE id = ? AND name = :name"
@@ -361,45 +318,25 @@ def test_mixed_parameter_style_detection(
     validator: ParameterValidator, sql: str, expected_dominant_style: ParameterStyle
 ) -> None:
     """Test detection of dominant parameter style in mixed cases."""
-    params = validator.extract_parameters(sql)
-    style = validator.get_parameter_style(params)
+    parameters = validator.extract_parameters(sql)
+    style = validator.get_parameter_style(parameters)
     assert style == expected_dominant_style
-
-
-def test_scalar_parameter_handling(converter: ParameterConverter) -> None:
-    """Test handling of scalar parameters for single parameter queries."""
-    sql = "SELECT * FROM users WHERE id = ?"
-    result = converter.convert_parameters(sql, 123, None, None, validate=True)
-
-    assert result.merged_parameters == 123
 
 
 def test_parameter_validation_with_empty_sql(validator: ParameterValidator) -> None:
     """Test parameter validation with empty SQL."""
-    params = validator.extract_parameters("")
-    assert len(params) == 0
-
-
-def test_parameter_conversion_error_handling(converter: ParameterConverter) -> None:
-    """Test parameter conversion error handling with validation disabled."""
-    sql = "SELECT * FROM users WHERE id = ?"
-
-    result = converter.convert_parameters(sql, {"id": 123}, None, None, validate=False)
-    assert result.merged_parameters == {"id": 123}
-
-    sql_missing = "SELECT * FROM users WHERE id = ? AND name = ?"
-    with pytest.raises(MissingParameterError):
-        converter.convert_parameters(sql_missing, [1], None, None, validate=True)
+    parameters = validator.extract_parameters("")
+    assert len(parameters) == 0
 
 
 @pytest.mark.parametrize(
-    "sql,params", [("SELECT * FROM users WHERE id = ?", []), ("SELECT * FROM users WHERE name = :name", {})]
+    "sql,parameters", [("SELECT * FROM users WHERE id = ?", []), ("SELECT * FROM users WHERE name = :name", {})]
 )
-def test_missing_parameter_errors(validator: ParameterValidator, sql: str, params: "StatementParameters") -> None:
+def test_missing_parameter_errors(validator: ParameterValidator, sql: str, parameters: "StatementParameters") -> None:
     """Test missing parameter error conditions."""
     param_info = validator.extract_parameters(sql)
     with pytest.raises(MissingParameterError):
-        validator.validate_parameters(param_info, params, sql)
+        validator.validate_parameters(param_info, parameters, sql)
 
 
 def test_complex_sql_parameter_extraction(validator: ParameterValidator) -> None:
@@ -414,10 +351,10 @@ def test_complex_sql_parameter_extraction(validator: ParameterValidator) -> None
       AND o.status = @status
       AND o.total > $1
     """
-    params = validator.extract_parameters(sql)
+    parameters = validator.extract_parameters(sql)
 
-    assert len(params) == 5
-    styles = {p.style for p in params}
+    assert len(parameters) == 5
+    styles = {p.style for p in parameters}
     assert ParameterStyle.NAMED_COLON in styles
     assert ParameterStyle.NAMED_PYFORMAT in styles
     assert ParameterStyle.QMARK in styles
@@ -428,11 +365,11 @@ def test_complex_sql_parameter_extraction(validator: ParameterValidator) -> None
 def test_parameter_position_tracking(validator: ParameterValidator) -> None:
     """Test that parameter positions are tracked correctly."""
     sql = "SELECT * FROM users WHERE id = ? AND name = :name"
-    params = validator.extract_parameters(sql)
+    parameters = validator.extract_parameters(sql)
 
-    assert len(params) == 2
-    qmark_param = next(p for p in params if p.style == ParameterStyle.QMARK)
-    named_param = next(p for p in params if p.style == ParameterStyle.NAMED_COLON)
+    assert len(parameters) == 2
+    qmark_param = next(p for p in parameters if p.style == ParameterStyle.QMARK)
+    named_param = next(p for p in parameters if p.style == ParameterStyle.NAMED_COLON)
 
     assert qmark_param.position < named_param.position
     assert sql[qmark_param.position] == "?"
@@ -442,23 +379,23 @@ def test_parameter_position_tracking(validator: ParameterValidator) -> None:
 def test_positional_colon_parameters(validator: ParameterValidator) -> None:
     """Test Oracle-style numeric parameters (:1, :2, etc.)."""
     sql = "SELECT * FROM users WHERE id = :1 AND name = :2 AND active = :3"
-    params = validator.extract_parameters(sql)
+    parameters = validator.extract_parameters(sql)
 
-    assert len(params) == 3
-    assert all(p.style == ParameterStyle.POSITIONAL_COLON for p in params)
-    assert params[0].placeholder_text == ":1"
-    assert params[1].placeholder_text == ":2"
-    assert params[2].placeholder_text == ":3"
+    assert len(parameters) == 3
+    assert all(p.style == ParameterStyle.POSITIONAL_COLON for p in parameters)
+    assert parameters[0].placeholder_text == ":1"
+    assert parameters[1].placeholder_text == ":2"
+    assert parameters[2].placeholder_text == ":3"
 
 
 def test_dollar_numeric_vs_named_parameters(validator: ParameterValidator) -> None:
     """Test differentiation between $1 (numeric) and $name (named) parameters."""
     sql = "SELECT * FROM users WHERE id = $1 AND name = $username"
-    params = validator.extract_parameters(sql)
+    parameters = validator.extract_parameters(sql)
 
-    assert len(params) == 2
-    numeric_param = next(p for p in params if p.placeholder_text == "$1")
-    named_param = next(p for p in params if p.placeholder_text == "$username")
+    assert len(parameters) == 2
+    numeric_param = next(p for p in parameters if p.placeholder_text == "$1")
+    named_param = next(p for p in parameters if p.placeholder_text == "$username")
 
     assert numeric_param.style == ParameterStyle.NUMERIC
     assert named_param.style == ParameterStyle.NAMED_DOLLAR
@@ -467,12 +404,12 @@ def test_dollar_numeric_vs_named_parameters(validator: ParameterValidator) -> No
 def test_parameter_ordinal_assignment(validator: ParameterValidator) -> None:
     """Test that parameter ordinals are assigned correctly for positional parameters."""
     sql = "SELECT * FROM users WHERE id = ? AND name = ? AND email = ?"
-    params = validator.extract_parameters(sql)
+    parameters = validator.extract_parameters(sql)
 
-    assert len(params) == 3
-    assert params[0].ordinal == 0
-    assert params[1].ordinal == 1
-    assert params[2].ordinal == 2
+    assert len(parameters) == 3
+    assert parameters[0].ordinal == 0
+    assert parameters[1].ordinal == 1
+    assert parameters[2].ordinal == 2
 
 
 def test_parameter_info_repr() -> None:

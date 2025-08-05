@@ -1,11 +1,11 @@
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
+
 """Tests for SQL statement caching."""
 
 import threading
 import time
 from unittest.mock import MagicMock
 
-from sqlspec.parameters import ParameterStyle
-from sqlspec.parameters.config import ParameterStyleConfig
 from sqlspec.statement.cache import SQLCache, sql_cache
 from sqlspec.statement.sql import SQL, StatementConfig, _ProcessedState
 
