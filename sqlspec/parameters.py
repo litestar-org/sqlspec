@@ -506,8 +506,16 @@ class ParameterValidator:
                 ParameterStyle.NAMED_PYFORMAT,
                 ParameterStyle.POSITIONAL_COLON,
             },
-            "postgres": base_incompatible,  # PostgreSQL dialect is strict
-            "postgresql": base_incompatible,
+            "postgres": {
+                # PostgreSQL in SQLGlot supports pyformat styles (%(name)s and %s)
+                # Only POSITIONAL_COLON is incompatible
+                ParameterStyle.POSITIONAL_COLON
+            },
+            "postgresql": {
+                # PostgreSQL in SQLGlot supports pyformat styles (%(name)s and %s)
+                # Only POSITIONAL_COLON is incompatible
+                ParameterStyle.POSITIONAL_COLON
+            },
             "oracle": base_incompatible,
             "bigquery": base_incompatible,
         }
@@ -597,7 +605,7 @@ class ParameterConverter:
             ParameterStyle.QMARK: lambda _i, _param: "?",
             ParameterStyle.NUMERIC: lambda i, _param: f"${i + 1}",
             ParameterStyle.POSITIONAL_PYFORMAT: lambda _i, _param: "%s",
-            ParameterStyle.POSITIONAL_COLON: lambda i, _param: f":{i + 1}",
+            ParameterStyle.POSITIONAL_COLON: self._generate_positional_colon_placeholder,
             ParameterStyle.NAMED_COLON: self._generate_named_colon_placeholder,
             ParameterStyle.NAMED_PYFORMAT: self._generate_named_pyformat_placeholder,
             ParameterStyle.NAMED_AT: self._generate_named_at_placeholder,
@@ -841,10 +849,7 @@ class ParameterConverter:
         """Convert parameters to positional colon format (Oracle :1, :2, :3)."""
         if isinstance(parameters, dict):
             # Check if the dict has param_N keys that need to be converted to numeric keys
-            needs_conversion = any(
-                key.startswith("param_") and key[6:].isdigit()
-                for key in parameters
-            )
+            needs_conversion = any(key.startswith("param_") and key[6:].isdigit() for key in parameters)
             if needs_conversion:
                 result = {}
                 for key, value in parameters.items():
@@ -875,6 +880,9 @@ class ParameterConverter:
                     param_list.append(parameters[p.name])
                 elif f"param_{p.ordinal}" in parameters:
                     param_list.append(parameters[f"param_{p.ordinal}"])
+                # Check for param_N where N is the 1-based position (for gaps)
+                elif f"param_{p.ordinal + 1}" in parameters:
+                    param_list.append(parameters[f"param_{p.ordinal + 1}"])
                 elif str(p.ordinal + 1) in parameters:
                     param_list.append(parameters[str(p.ordinal + 1)])
                 elif i < len(param_values):
@@ -889,6 +897,16 @@ class ParameterConverter:
     def _convert_to_named_colon_format(self, parameters: Any, param_info: list[ParameterInfo]) -> dict[str, Any]:
         """Convert parameters to named colon format (:name, :param_0)."""
         if isinstance(parameters, dict):
+            # Check if we need to convert numeric keys to param_N format
+            if param_info and all(p.style == ParameterStyle.POSITIONAL_COLON for p in param_info):
+                # Converting from POSITIONAL_COLON dict to NAMED_COLON
+                result = {}
+                for key, value in parameters.items():
+                    if key.isdigit():
+                        result[f"param_{key}"] = value
+                    else:
+                        result[key] = value
+                return result
             return parameters
         if isinstance(parameters, (list, tuple)):
             result = {}
@@ -896,6 +914,9 @@ class ParameterConverter:
                 param_name = None
                 if i < len(param_info) and param_info[i].name:
                     param_name = param_info[i].name
+                    # For POSITIONAL_COLON parameters being converted to NAMED_COLON
+                    if param_info[i].style == ParameterStyle.POSITIONAL_COLON and param_name and param_name.isdigit():
+                        param_name = f"param_{param_name}"
                 if param_name:
                     result[param_name] = value
                 else:
@@ -903,6 +924,9 @@ class ParameterConverter:
             return result
         if parameters is not None:
             param_name = param_info[0].name if param_info and param_info[0].name else "param_0"
+            # For POSITIONAL_COLON parameters being converted to NAMED_COLON
+            if param_info and param_info[0].style == ParameterStyle.POSITIONAL_COLON and param_name.isdigit():
+                param_name = f"param_{param_name}"
             return {param_name: parameters}
         return {}
 
@@ -963,6 +987,14 @@ class ParameterConverter:
             result_dict["1"] = parameters
         return result_dict
 
+    def _generate_positional_colon_placeholder(self, i: int, param: ParameterInfo) -> str:
+        """Generate positional colon placeholder, preserving original numeric names when gaps exist."""
+        # If the original parameter was POSITIONAL_COLON with a numeric name, preserve it
+        if param.style == ParameterStyle.POSITIONAL_COLON and param.name and param.name.isdigit():
+            return f":{param.name}"
+        # Otherwise use sequential numbering
+        return f":{i + 1}"
+
     def _generate_named_colon_placeholder(self, i: int, param: ParameterInfo) -> str:
         """Generate named colon placeholder (:name or :param_N)."""
         if param.style in {
@@ -971,7 +1003,11 @@ class ParameterConverter:
             ParameterStyle.NUMERIC,
             ParameterStyle.POSITIONAL_PYFORMAT,
         }:
-            name = f"param_{i}"
+            # For POSITIONAL_COLON, preserve the numeric part from the original placeholder
+            if param.style == ParameterStyle.POSITIONAL_COLON and param.name and param.name.isdigit():
+                name = f"param_{param.name}"
+            else:
+                name = f"param_{i}"
         else:
             name = param.name or f"param_{i}"
         return f":{name}"
@@ -984,7 +1020,11 @@ class ParameterConverter:
             ParameterStyle.NUMERIC,
             ParameterStyle.POSITIONAL_PYFORMAT,
         }:
-            name = f"param_{i}"
+            # For POSITIONAL_COLON, preserve the numeric part from the original placeholder
+            if param.style == ParameterStyle.POSITIONAL_COLON and param.name and param.name.isdigit():
+                name = f"param_{param.name}"
+            else:
+                name = f"param_{i}"
         else:
             name = param.name or f"param_{i}"
         return f"%({name})s"
@@ -997,7 +1037,11 @@ class ParameterConverter:
             ParameterStyle.NUMERIC,
             ParameterStyle.POSITIONAL_PYFORMAT,
         }:
-            name = f"param_{i}"
+            # For POSITIONAL_COLON, preserve the numeric part from the original placeholder
+            if param.style == ParameterStyle.POSITIONAL_COLON and param.name and param.name.isdigit():
+                name = f"param_{param.name}"
+            else:
+                name = f"param_{i}"
         else:
             name = param.name or f"param_{i}"
         return f"@{name}"
@@ -1010,7 +1054,11 @@ class ParameterConverter:
             ParameterStyle.NUMERIC,
             ParameterStyle.POSITIONAL_PYFORMAT,
         }:
-            name = f"param_{i}"
+            # For POSITIONAL_COLON, preserve the numeric part from the original placeholder
+            if param.style == ParameterStyle.POSITIONAL_COLON and param.name and param.name.isdigit():
+                name = f"param_{param.name}"
+            else:
+                name = f"param_{i}"
         else:
             name = param.name or f"param_{i}"
         return f"${name}"

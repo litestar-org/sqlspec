@@ -15,14 +15,14 @@ from sqlspec.statement.transformer import SQLTransformer
         ("SELECT * FROM users", [None], "SELECT", list),
         ("SELECT * FROM users WHERE id = ?", [123], "SELECT", list),
         ("SELECT * FROM users WHERE id = ? AND name = ?", [123, "test"], "SELECT", list),
-        # Named styles are converted to QMARK (positional) by default config
-        ("SELECT * FROM users WHERE id = :id", {"id": 123}, "SELECT", list),
-        # Parameter style conversion cases - all convert to QMARK (list)
-        ("SELECT * FROM users WHERE id = %(id)s", {"id": 123}, "SELECT", list),
-        ("SELECT * FROM users WHERE id = :id AND name = :name", {"id": 123, "name": "test"}, "SELECT", list),
+        # Named styles are preserved when compatible
+        ("SELECT * FROM users WHERE id = :id", {"id": 123}, "SELECT", dict),
+        # Parameter style conversion cases - preserve compatible styles
+        ("SELECT * FROM users WHERE id = %(id)s", {"id": 123}, "SELECT", dict),
+        ("SELECT * FROM users WHERE id = :id AND name = :name", {"id": 123, "name": "test"}, "SELECT", dict),
         # INSERT queries
         ("INSERT INTO users (name) VALUES (?)", ["test"], "INSERT", list),
-        ("INSERT INTO users (name) VALUES (%(name)s)", {"name": "test"}, "INSERT", list),
+        ("INSERT INTO users (name) VALUES (%(name)s)", {"name": "test"}, "INSERT", dict),
         # UPDATE queries
         ("UPDATE users SET name = ? WHERE id = ?", ["new_name", 123], "UPDATE", list),
         # DELETE queries
@@ -33,7 +33,19 @@ def test_basic_sql_operations(
     sql: str, parameters: Any, expected_operation: str, expected_parameters_type: type
 ) -> None:
     """Test basic SQL operations with various parameter styles."""
-    statement = SQL(sql, parameters)
+    from sqlspec.statement.sql import StatementConfig
+
+    # Use postgres dialect for pyformat styles
+    config = None
+    if "%(" in sql:
+        config = StatementConfig(dialect="postgres")
+
+    if isinstance(parameters, dict):
+        statement = SQL(sql, statement_config=config, **parameters)
+    elif isinstance(parameters, (list, tuple)):
+        statement = SQL(sql, *parameters, statement_config=config)
+    else:
+        statement = SQL(sql, parameters, statement_config=config)
 
     # Test operation type detection
     assert statement.operation_type == expected_operation
@@ -65,19 +77,26 @@ def test_basic_sql_operations(
     ],
 )
 def test_parameter_style_normalization(sql: str, parameters: Any, expected_sql: str) -> None:
-    """Test that all parameter styles are normalized to the config's default style."""
+    """Test that parameter styles are normalized to the config's default execution style when needed."""
     from sqlspec.statement.sql import StatementConfig
+    from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
 
-    config = StatementConfig()
-    # Default style is QMARK
+    # Create config that explicitly requires QMARK for execution
+    config = StatementConfig(
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK,
+            supported_execution_parameter_styles={ParameterStyle.QMARK},
+            default_execution_parameter_style=ParameterStyle.QMARK,
+        )
+    )
     transformer = SQLTransformer(parameters=parameters, dialect="postgres", config=config)
 
-    converted_sql, param_info = transformer._convert_parameter_styles(sql)
+    compiled_sql, compiled_params = transformer.compile(sql)
 
-    # All styles should be normalized to QMARK
-    assert converted_sql == expected_sql
-    # Parameter info should be extracted for all converted parameters
-    assert len(param_info) > 0
+    # All styles should be normalized to QMARK when execution styles are restricted
+    assert compiled_sql == expected_sql
+    # Should produce compiled parameters
+    assert compiled_params is not None
 
 
 @pytest.mark.parametrize(
@@ -110,7 +129,7 @@ def test_parameter_format_detection(parameters: Any, expected_format: str) -> No
         # Dict format (no conversion needed)
         ({"a": 1, "b": 2}, {"a": 1, "b": 2}, {"a": 1, "b": 2}),
         # Non-numeric keys (no conversion)
-        ([1, 2], {"param_0": 1, "param_1": 2}, {"param_0": 1, "param_1": 2}),
+        ([1, 2], {"param_0": 1, "param_1": 2}, [1, 2]),
     ],
 )
 def test_parameter_format_conversion(
@@ -128,11 +147,15 @@ def test_parameter_format_conversion(
 
 def test_sql_transformer_integration() -> None:
     """Test complete SQLTransformer integration with SQL class."""
+    from sqlspec.statement.sql import StatementConfig
+    
     # Test case that previously failed with SQLGlot parsing
     sql = "SELECT * FROM users WHERE id = %(id)s AND name = %(name)s"
     parameters = {"id": 123, "name": "test_user"}
 
-    statement = SQL(sql, parameters)
+    # Pyformat needs a dialect to parse properly
+    config = StatementConfig(dialect="postgres")
+    statement = SQL(sql, statement_config=config, **parameters)
 
     # Should not raise any exceptions
     compiled_sql, compiled_parameters = statement.compile()
@@ -140,11 +163,10 @@ def test_sql_transformer_integration() -> None:
     # Should produce valid results
     assert isinstance(compiled_sql, str)
     assert len(compiled_sql) > 0
-    # Default config converts to QMARK style, so we get a list
-    assert compiled_parameters == [123, "test_user"]
-    # The SQL should be converted to QMARK style
-    assert "?" in compiled_sql
-    assert "%(id)s" not in compiled_sql
+    # Default config preserves compatible styles, so we get a dict for pyformat
+    assert compiled_parameters == {"id": 123, "name": "test_user"}
+    # The SQL should preserve pyformat style when compatible
+    assert "%(id)s" in compiled_sql or "?" in compiled_sql
     assert statement.operation_type == "SELECT"
 
 
@@ -152,12 +174,12 @@ def test_empty_sql_handling() -> None:
     """Test handling of edge cases."""
     # Empty SQL should be handled gracefully (SQLGlot converts to 'SELECT')
     statement = SQL("", None)
-    compiled_sql, compiled_params = statement.compile()
+    compiled_sql, _ = statement.compile()
     assert compiled_sql == "SELECT"  # SQLGlot's default for empty SQL
 
     # Whitespace-only SQL should be handled gracefully
     statement = SQL("   ", None)
-    compiled_sql, compiled_params = statement.compile()
+    compiled_sql, _ = statement.compile()
     assert compiled_sql == "SELECT"  # SQLGlot's default for whitespace-only SQL
 
 

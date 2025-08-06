@@ -183,37 +183,24 @@ class SQLTransformer:
         if not param_info:
             return raw_sql, []
 
-        # Check both SQLGlot compatibility AND execution compatibility
+        # Check if we need conversion for SQLGlot compatibility
         converter = ParameterConverter()
         incompatible_styles = converter.validator.get_sqlglot_incompatible_styles(self.dialect)
         detected_styles = {p.style for p in param_info}
 
-        # Check if SQLGlot can't handle the current format
+        # Only convert if SQLGlot can't handle the current format
         needs_sqlglot_conversion = any(style in incompatible_styles for style in detected_styles)
 
-        # Check if driver can't execute the current format
-        execution_styles = self.config.parameter_config.supported_execution_parameter_styles
-        needs_execution_conversion = execution_styles is not None and not all(
-            style in execution_styles for style in detected_styles
-        )
-
-        # If no execution styles specified, check against default parameter style
-        if execution_styles is None:
-            default_style = self.config.parameter_config.default_parameter_style
-            needs_execution_conversion = not all(style == default_style for style in detected_styles)
-
-        # Note: We removed the special case that preserved incompatible styles.
-        # SQLGlot needs compatible parameter styles to parse correctly, so we must
-        # convert incompatible styles even if they're supported for execution.
-
-        # Convert if either SQLGlot or execution requires it
-        needs_conversion = needs_sqlglot_conversion or needs_execution_conversion
+        # IMPORTANT: We only convert for SQLGlot compatibility, NOT execution compatibility
+        # The final execution style conversion happens later in _convert_to_execution_style
+        # This preserves the original parameter styles when possible (e.g., %(name)s for psycopg)
+        needs_conversion = needs_sqlglot_conversion
 
         if needs_conversion:
             # To match SQL class behavior exactly, use _convert_to_sqlglot_compatible
             # which always converts to :param_N format
             converted_sql = converter._convert_to_sqlglot_compatible(raw_sql, param_info)
-            
+
             # For parameter conversion, we need to handle dict to list conversion
             # when the original params are dict but we're converting to positional style
             if isinstance(self.parameters, dict) and param_info:
@@ -228,7 +215,7 @@ class SQLTransformer:
                 self._parameter_map["converted_params"] = converted_params
             else:
                 self._parameter_map["converted_params"] = self.parameters
-                
+
             new_param_info = validator.extract_parameters(converted_sql)
             return converted_sql, new_param_info
 
@@ -264,6 +251,65 @@ class SQLTransformer:
             return False
         return True
 
+    def _ensure_execution_compatibility(self, sql: str) -> "tuple[str, Any]":
+        """Ensure SQL is in a format the driver can execute.
+
+        This checks if the current parameter style is supported for execution.
+        If not, it converts to a supported style.
+
+        Args:
+            sql: SQL with parameter placeholders
+
+        Returns:
+            Tuple of (final_sql, final_parameters)
+        """
+        from sqlspec.parameters import ParameterConverter, ParameterValidator
+
+        # Check current parameter styles in the SQL
+        validator = ParameterValidator()
+        param_info = validator.extract_parameters(sql)
+
+        if not param_info:
+            # No parameters, just finalize and return
+            final_params = self._finalize_parameters(sql)
+            return sql, final_params
+
+        current_styles = {p.style for p in param_info}
+
+        # Check if current styles are supported for execution
+        execution_styles = self.config.parameter_config.supported_execution_parameter_styles
+
+        if execution_styles is not None:
+            # Check if ALL current styles are supported
+            if all(style in execution_styles for style in current_styles):
+                # Already in a supported execution style
+                final_params = self._finalize_parameters(sql)
+                return sql, final_params
+
+            # Need to convert to a supported execution style
+            # Choose the first supported style (could be smarter about this)
+            target_style = next(iter(execution_styles))
+
+            # Convert to target style
+            converter = ParameterConverter()
+            try:
+                # Use converted parameters from earlier conversion if available
+                source_params = self._parameter_map.get("converted_params", self.parameters)
+                converted_sql, converted_params = converter.convert_placeholder_style(sql, source_params, target_style)
+                # Update parameter map with execution-converted params
+                self._parameter_map["execution_params"] = converted_params
+                final_params = self._finalize_parameters(converted_sql)
+                return converted_sql, final_params
+            except Exception:
+                # Conversion failed, use original
+                final_params = self._finalize_parameters(sql)
+                return sql, final_params
+        else:
+            # No specific execution styles defined, driver should handle any style
+            # This is the default case for drivers that auto-detect parameter styles
+            final_params = self._finalize_parameters(sql)
+            return sql, final_params
+
     def compile(self, raw_sql: str) -> "tuple[str, Any]":
         """Single compilation method replacing entire pipeline.
 
@@ -291,10 +337,10 @@ class SQLTransformer:
                 transformed = parsed.transform(self.transform)
 
                 # 4. Generate SQL once with copy=False for performance
-                final_sql = transformed.sql(dialect=self.dialect, copy=False)
+                generated_sql = transformed.sql(dialect=self.dialect, copy=False)
 
-                # 5. Process final parameters with the generated SQL
-                final_parameters = self._finalize_parameters(final_sql)
+                # 5. Check if we need execution style conversion
+                final_sql, final_parameters = self._ensure_execution_compatibility(generated_sql)
 
                 # 6. Cache result
                 self._cached_result = (final_sql, final_parameters)
@@ -321,8 +367,12 @@ class SQLTransformer:
         if "null_parameter_positions" in self._context:
             return self._convert_to_original_format(self._apply_without_null_parameters())
 
-        # Use converted parameters if available from parameter style conversion
-        if "converted_params" in self._parameter_map:
+        # Use execution-converted parameters if available
+        if "execution_params" in self._parameter_map:
+            execution_params = self._parameter_map["execution_params"]
+            final_parameters = self._convert_to_original_format(execution_params)
+        # Otherwise use converted parameters from parameter style conversion
+        elif "converted_params" in self._parameter_map:
             converted_params = self._parameter_map["converted_params"]
             final_parameters = self._convert_to_original_format(converted_params)
         else:
@@ -338,7 +388,7 @@ class SQLTransformer:
         # Return None for empty parameters to match SQL class behavior
         if not final_parameters:
             return None
-        
+
         return final_parameters
 
     def _convert_to_original_format(self, parameters: Any) -> Any:

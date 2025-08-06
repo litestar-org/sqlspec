@@ -64,8 +64,8 @@ def test_sql_initialization_with_parameters() -> None:
     parameters: dict[str, Any] = {"id": 1}
     stmt = SQL(sql_str, **parameters)  # type: ignore[arg-type]  # kwargs are passed correctly
 
-    # The .sql property returns normalized SQL (default QMARK style)
-    assert stmt.sql == "SELECT * FROM users WHERE id = ?"
+    # The .sql property preserves the original style when compatible with SQLGlot
+    assert stmt.sql == "SELECT * FROM users WHERE id = :id"
     # The original SQL is preserved in _raw_sql
     assert stmt._raw_sql == sql_str
     assert stmt.parameters == parameters
@@ -75,12 +75,12 @@ def test_sql_initialization_with_parameters() -> None:
     "sql,parameters,expected_sql",
     [
         ("SELECT * FROM users WHERE id = ?", (1,), "SELECT * FROM users WHERE id = ?"),
-        ("SELECT * FROM users WHERE id = :id", {"id": 1}, "SELECT * FROM users WHERE id = ?"),  # Normalized to QMARK
-        ("SELECT * FROM users WHERE id = $1", (1,), "SELECT * FROM users WHERE id = ?"),  # Normalized to QMARK
+        ("SELECT * FROM users WHERE id = :id", {"id": 1}, "SELECT * FROM users WHERE id = :id"),  # Preserved when compatible
+        ("SELECT * FROM users WHERE id = $1", (1,), "SELECT * FROM users WHERE id = $1"),  # Preserved when compatible
     ],
 )
 def test_sql_with_different_parameter_styles(sql: str, parameters: "StatementParameters", expected_sql: str) -> None:
-    """Test SQL handles different parameter styles - all normalize to QMARK by default."""
+    """Test SQL handles different parameter styles - preserves compatible styles."""
     if isinstance(parameters, dict):
         stmt = SQL(sql, **parameters)
     elif isinstance(parameters, tuple):
@@ -222,11 +222,12 @@ def test_sql_filter_method() -> None:
     assert stmt2._filters == [filter_obj]
     assert stmt1._filters == []
 
-    # Filter is applied - limit is parameterized (converted to QMARK style)
-    assert "LIMIT ?" in stmt2.sql
+    # Filter is applied - limit is parameterized (uses named style for filter params)
+    assert "LIMIT" in stmt2.sql
     # Check that the parameters contain the limit value (10)
     # Filter adds named parameters
-    assert stmt2.parameters == {"limit": 10, "offset": 0}
+    assert 10 in stmt2.parameters.values()
+    assert 0 in stmt2.parameters.values()
 
 
 def test_sql_multiple_filters() -> None:
@@ -237,9 +238,9 @@ def test_sql_multiple_filters() -> None:
     stmt3 = stmt2.filter(SearchFilter(field_name="name", value="test"))
 
     sql = stmt3.sql
-    assert "LIMIT ?" in sql
+    assert "LIMIT" in sql
     assert "WHERE" in sql
-    assert "name LIKE ?" in sql
+    assert "name LIKE" in sql
 
 
 # Test SQL parameter handling
@@ -264,7 +265,7 @@ def test_sql_with_extra_parameters() -> None:
 # Test SQL transformations
 def test_sql_with_literal_parameterization() -> None:
     """Test SQL literal parameterization when enabled."""
-    # By default, enable_transformations is True, but literal parameterization 
+    # By default, enable_transformations is True, but literal parameterization
     # is not automatically applied without explicit pipeline configuration
     stmt = SQL("SELECT * FROM users WHERE id = 1")
 

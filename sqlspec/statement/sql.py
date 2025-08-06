@@ -379,6 +379,7 @@ class SQL:
             styles = {p.style for p in param_info}
             # Only auto-configure for POSITIONAL_COLON style to preserve Oracle compatibility
             from sqlspec.parameters import ParameterStyle
+
             if ParameterStyle.POSITIONAL_COLON in styles:
                 # Create a config that preserves the POSITIONAL_COLON style
                 return StatementConfig(
@@ -448,13 +449,18 @@ class SQL:
                 param_value = kwargs.pop("parameters")
                 if isinstance(param_value, (list, tuple)):
                     self._positional_parameters.extend(param_value)
+                    # Also set _original_parameters if not already set
+                    if self._original_parameters is None:
+                        self._original_parameters = tuple(param_value)
                 elif is_dict(param_value):
                     self._named_parameters.update(param_value)
                 else:
                     self._positional_parameters.append(param_value)
+                    if self._original_parameters is None:
+                        self._original_parameters = (param_value,)
 
         self._named_parameters.update({k: v for k, v in kwargs.items() if not k.startswith("_")})
-        
+
         # IMPORTANT: If SQL was converted to :param_N format, remap parameters to match
         if self._original_sql and self._named_parameters:
             validator = self.statement_config.parameter_validator
@@ -464,9 +470,9 @@ class SQL:
                 converter = self.statement_config.parameter_converter
                 dialect_str = str(self.statement_config.dialect) if self.statement_config.dialect else None
                 incompatible_styles = converter.validator.get_sqlglot_incompatible_styles(dialect_str)
-                detected_styles = {p.style for p in param_info}
+                {p.style for p in param_info}
                 needs_conversion = any(p.style in incompatible_styles for p in param_info)
-                
+
                 if needs_conversion:
                     # Remap parameters from original names to param_N names
                     remapped_params = {}
@@ -538,10 +544,13 @@ class SQL:
 
             # If all parameters are POSITIONAL_COLON style, convert list to dict with numeric keys
             from sqlspec.parameters import ParameterStyle
+
             if original_param_info and all(p.style == ParameterStyle.POSITIONAL_COLON for p in original_param_info):
                 converted_params = {}
                 # Sort parameters by their numeric value to get the mapping
-                sorted_params = sorted(original_param_info, key=lambda p: int(p.name) if p.name and p.name.isdigit() else 0)
+                sorted_params = sorted(
+                    original_param_info, key=lambda p: int(p.name) if p.name and p.name.isdigit() else 0
+                )
                 # Map list items to the actual numeric placeholders in the SQL
                 for i, param in enumerate(sorted_params):
                     if i < len(final_parameters) and param.name:
@@ -605,7 +614,9 @@ class SQL:
 
         converted_sql = statement
 
-        if needs_conversion:
+        # Only convert if we have incompatible styles AND we have parameters
+        # If no parameters are provided, don't convert - they might be added later via as_many()
+        if needs_conversion and (self._positional_parameters or self._named_parameters):
             converter = self.statement_config.parameter_converter
             converted_sql = converter._convert_to_sqlglot_compatible(statement, param_info)
             self._original_sql = statement
@@ -629,10 +640,12 @@ class SQL:
         try:
             expressions = sqlglot.parse(converted_sql, dialect=self._dialect)  # pyright: ignore
             if not expressions:
-                return exp.Anonymous(this=statement)
+                # Use converted_sql for Anonymous to preserve parameter conversions
+                return exp.Anonymous(this=converted_sql)
             first_expr = expressions[0]
             if first_expr is None:
-                return exp.Anonymous(this=statement)
+                # Use converted_sql for Anonymous to preserve parameter conversions
+                return exp.Anonymous(this=converted_sql)
 
             if not use_base_cache:
                 ast_fragment_cache.set_fragment(
@@ -647,7 +660,8 @@ class SQL:
             logger.warning(
                 "Failed to parse SQL, returning Anonymous expression.", extra={"sql": statement, "error": str(e)}
             )
-            return exp.Anonymous(this=statement)
+            # Use converted_sql for Anonymous to preserve parameter conversions
+            return exp.Anonymous(this=converted_sql)
         return first_expr
 
     @staticmethod
@@ -824,11 +838,19 @@ class SQL:
 
         return self._copy_with(_filters=new_filters, _positional_parameters=new_positional, _named_parameters=new_named)
 
-    def as_many(self, parameters: "Optional[Union[list[Any], Sequence[StatementParameters]]]" = None) -> "SQL":
-        """Mark for executemany with optional parameters.
+    def as_many(
+        self,
+        parameters: "Optional[Union[list[Any], Sequence[StatementParameters]]]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
+    ) -> "SQL":
+        """Mark for executemany with optional parameters and configuration.
 
         If no parameters are provided, uses the existing original parameters
         to preserve batch structure for execute_many operations.
+
+        Args:
+            parameters: Optional parameters for the execute_many operation
+            statement_config: Optional statement configuration to use for the new SQL object
         """
         overrides: dict[str, Any] = {"_is_many": True}
 
@@ -842,6 +864,9 @@ class SQL:
         elif self._positional_parameters:
             # Fallback to positional parameters if no original parameters available
             overrides["_original_parameters"] = self._positional_parameters
+
+        if statement_config is not None:
+            overrides["statement_config"] = statement_config
 
         return self._copy_with(**overrides)
 
@@ -970,7 +995,23 @@ class SQL:
             and isinstance(self._original_parameters, tuple)
             and not self._named_parameters
         ):
-            # For positional-only parameters, return the original tuple
+            # Check if we have POSITIONAL_COLON style parameters that need dict conversion
+            if self._raw_sql:
+                param_info = self.parameter_info
+                if param_info:
+                    from sqlspec.parameters import ParameterStyle
+
+                    # If all parameters are POSITIONAL_COLON style, convert to dict
+                    if all(p.style == ParameterStyle.POSITIONAL_COLON for p in param_info):
+                        result = {}
+                        # Map positional params to their numeric placeholders
+                        sorted_params = sorted(param_info, key=lambda p: int(p.name) if p.name and p.name.isdigit() else 0)
+                        for i, param in enumerate(sorted_params):
+                            if i < len(self._original_parameters) and param.name:
+                                result[param.name] = self._original_parameters[i]
+                        return result
+
+            # For other positional-only parameters, return the original tuple
             # This preserves the expected format for simple positional queries
             return self._original_parameters
 
@@ -1139,10 +1180,10 @@ class SQL:
                 if i < len(param_info) and param_info[i].name:
                     name = param_info[i].name
                     # Handle converted names like "param_1" -> extract the numeric part
-                    if name.startswith("param_") and name[6:].isdigit():
+                    if name and name.startswith("param_") and len(name) > 6 and name[6:].isdigit():
                         # For POSITIONAL_COLON converted names, use the numeric part
                         result[name[6:]] = value
-                    else:
+                    elif name:
                         # Use the actual name from the SQL placeholder
                         result[name] = value
                 else:

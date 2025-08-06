@@ -21,9 +21,10 @@ if TYPE_CHECKING:
 asyncmy_statement_config = StatementConfig(
     dialect="mysql",
     parameter_config=ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.QMARK,
-        default_execution_parameter_style=ParameterStyle.QMARK,
-        supported_parameter_styles={ParameterStyle.QMARK},
+        default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,  # MySQL uses %s
+        default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,  # MySQL uses %s
+        supported_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT},  # Only %s is supported
+        supported_execution_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT},  # Only %s for execution
         type_coercion_map={},
         has_native_list_expansion=False,
         needs_static_script_compilation=True,

@@ -289,12 +289,27 @@ class CommonDriverAttributesMixin:
                     (*statement._positional_parameters, *parameters) if parameters else statement._positional_parameters
                 )
                 return SQL(statement.sql, *merged_parameters, statement_config=statement_config, **kwargs)
-            if self.statement_config.dialect and (
-                not statement.statement_config.dialect
-                or statement.statement_config.dialect != self.statement_config.dialect
+            if statement_config.dialect and (
+                not statement.statement_config.dialect or statement.statement_config.dialect != statement_config.dialect
             ):
-                new_config = statement.statement_config.replace(dialect=self.statement_config.dialect)
-                return statement.copy(statement_config=new_config, dialect=self.statement_config.dialect)
+                # When dialect changes, we need to rebuild the SQL object with the new config
+                # to ensure proper parsing with the correct dialect
+                new_config = statement.statement_config.replace(dialect=statement_config.dialect)
+                # Use the original raw SQL if available, otherwise use the current SQL
+                sql_text = statement._raw_sql or statement.sql
+
+                # Rebuild the SQL object with the new config
+                # If is_many is set, we need to preserve the parameters that were set via as_many()
+                if statement.is_many and statement.parameters:
+                    # Create SQL without parameters first, then call as_many()
+                    new_sql = SQL(sql_text, statement_config=new_config)
+                    new_sql = new_sql.as_many(statement.parameters)
+                elif statement._named_parameters:
+                    new_sql = SQL(sql_text, statement_config=new_config, **statement._named_parameters)
+                else:
+                    new_sql = SQL(sql_text, *statement._positional_parameters, statement_config=new_config)
+
+                return new_sql
             return statement
         return SQL(statement, *parameters, statement_config=statement_config, **kwargs)
 
@@ -470,17 +485,15 @@ class CommonDriverAttributesMixin:
         that affect SQL compilation, preventing cache contamination between
         different compilation contexts.
         """
-        context_hash = hash(
-            (
-                config.parameter_config.hash(),
-                config.dialect,
-                statement.is_script,
-                statement.is_many,
-                flatten_single_parameters,
-                bool(config.parameter_config.output_transformer),
-                bool(config.parameter_config.needs_static_script_compilation),
-            )
-        )
+        context_hash = hash((
+            config.parameter_config.hash(),
+            config.dialect,
+            statement.is_script,
+            statement.is_many,
+            flatten_single_parameters,
+            bool(config.parameter_config.output_transformer),
+            bool(config.parameter_config.needs_static_script_compilation),
+        ))
 
         base_hash = hash_sql_statement(statement)
         return f"compiled:{base_hash}:{context_hash}"

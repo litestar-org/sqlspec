@@ -216,11 +216,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
 
         Parameters passed will be used as the batch execution sequence.
         """
-        sql_statement = self.prepare_statement(
-            statement, filters, statement_config=statement_config or self.statement_config, kwargs=kwargs
-        )
+        config = statement_config or self.statement_config
+        sql_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
         return await self.dispatch_statement_execution(
-            statement=sql_statement.as_many(parameters), connection=self.connection
+            statement=sql_statement.as_many(parameters, statement_config=config), connection=self.connection
         )
 
     async def execute_script(
