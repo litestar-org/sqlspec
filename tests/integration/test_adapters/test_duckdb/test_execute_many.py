@@ -177,7 +177,7 @@ def test_duckdb_execute_many_with_sql_object(duckdb_batch_session: DuckDBDriver)
 
     parameters = [(10, "SQL Obj 1", 111, "SOB"), (20, "SQL Obj 2", 222, "SOB"), (30, "SQL Obj 3", 333, "SOB")]
 
-    sql_obj = SQL("INSERT INTO test_batch (id, name, value, category) VALUES (?, ?, ?, ?)").as_many(parameters)
+    sql_obj = SQL("INSERT INTO test_batch (id, name, value, category) VALUES (?, ?, ?, ?)", parameters, is_many=True)
 
     result = duckdb_batch_session.execute(sql_obj)
 

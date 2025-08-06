@@ -1,14 +1,13 @@
-"""Unit tests for SQL.as_many() method."""
+"""Unit tests for SQL is_many parameter functionality."""
 
 from sqlspec.statement.sql import SQL
 
 
-def test_as_many_with_parameters() -> None:
-    """Test as_many() method with parameters list."""
+def test_is_many_with_parameters() -> None:
+    """Test is_many=True with parameters list."""
     parameters = [("Item 1", 100, "A"), ("Item 2", 200, "B"), ("Item 3", 300, "A")]
 
-    sql = SQL("INSERT INTO test_table (name, value, category) VALUES (?, ?, ?)")
-    sql_many = sql.as_many(parameters)
+    sql_many = SQL("INSERT INTO test_table (name, value, category) VALUES (?, ?, ?)", parameters, is_many=True)
 
     # Check properties
     assert sql_many.is_many is True
@@ -20,10 +19,9 @@ def test_as_many_with_parameters() -> None:
     assert compiled_parameters == parameters
 
 
-def test_as_many_with_empty_list() -> None:
-    """Test as_many() method with empty list."""
-    sql = SQL("INSERT INTO test_table (name, value, category) VALUES (?, ?, ?)")
-    sql_many = sql.as_many([])
+def test_is_many_with_empty_list() -> None:
+    """Test is_many=True with empty list."""
+    sql_many = SQL("INSERT INTO test_table (name, value, category) VALUES (?, ?, ?)", [], is_many=True)
 
     assert sql_many.is_many is True
     assert sql_many.parameters == []
@@ -34,10 +32,9 @@ def test_as_many_with_empty_list() -> None:
     assert compiled_parameters == []
 
 
-def test_as_many_without_parameters() -> None:
-    """Test as_many() method without parameters."""
-    sql = SQL("INSERT INTO test_table (name, value, category) VALUES (?, ?, ?)")
-    sql_many = sql.as_many()
+def test_is_many_without_parameters() -> None:
+    """Test is_many=True without parameters."""
+    sql_many = SQL("INSERT INTO test_table (name, value, category) VALUES (?, ?, ?)", is_many=True)
 
     assert sql_many.is_many is True
     # When no parameters are provided, original_parameters is None
@@ -48,13 +45,12 @@ def test_as_many_without_parameters() -> None:
     assert parameters == {} or parameters is None or parameters == []
 
 
-def test_as_many_with_placeholder_conversion() -> None:
-    """Test as_many() with placeholder style conversion."""
+def test_is_many_with_placeholder_conversion() -> None:
+    """Test is_many=True with placeholder style conversion."""
     parameters = [("Item 1", 100, "A"), ("Item 2", 200, "B")]
 
     # Original SQL with numeric placeholders
-    sql = SQL("INSERT INTO test_table (name, value, category) VALUES ($1, $2, $3)")
-    sql_many = sql.as_many(parameters)
+    sql_many = SQL("INSERT INTO test_table (name, value, category) VALUES ($1, $2, $3)", parameters, is_many=True)
 
     # Convert to qmark style
     compiled_sql, compiled_parameters = sql_many.compile(placeholder_style="qmark")
@@ -63,32 +59,30 @@ def test_as_many_with_placeholder_conversion() -> None:
     assert compiled_parameters == parameters
 
 
-def test_as_many_preserves_list_of_tuples() -> None:
-    """Test that as_many() preserves the list of tuples structure for execute_many."""
+def test_is_many_preserves_list_of_tuples() -> None:
+    """Test that is_many=True preserves the list of tuples structure for execute_many."""
     # Different parameter formats
     tuple_parameters = [("Item 1", 100), ("Item 2", 200)]
 
     list_parameters = [["Item 3", 300], ["Item 4", 400]]
 
     # Test with tuples
-    sql1 = SQL("INSERT INTO test_table (name, value) VALUES (?, ?)").as_many(tuple_parameters)
+    sql1 = SQL("INSERT INTO test_table (name, value) VALUES (?, ?)", tuple_parameters, is_many=True)
     assert sql1.parameters == tuple_parameters
     assert isinstance(sql1.parameters[0], tuple)
 
     # Test with lists
-    sql2 = SQL("INSERT INTO test_table (name, value) VALUES (?, ?)").as_many(list_parameters)
+    sql2 = SQL("INSERT INTO test_table (name, value) VALUES (?, ?)", list_parameters, is_many=True)
     assert sql2.parameters == list_parameters
     assert isinstance(sql2.parameters[0], list)
 
 
-def test_as_many_chaining() -> None:
-    """Test that as_many() can be chained with other methods."""
-    base_sql = SQL("INSERT INTO test_table (name, value) VALUES (?, ?)")
+def test_is_many_chaining() -> None:
+    """Test that is_many=True works with other methods."""
+    # Create SQL with is_many=True
+    sql_many = SQL("INSERT INTO test_table (name, value) VALUES (?, ?)", [("Item 1", 100)], is_many=True)
 
-    # Create as_many first
-    sql_many = base_sql.as_many([("Item 1", 100)])
-
-    # Should still be marked as many
+    # Should be marked as many
     assert sql_many.is_many is True
 
     # Copy should preserve is_many flag and parameters

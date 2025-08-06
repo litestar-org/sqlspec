@@ -103,8 +103,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
     async def _execute_script(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script by splitting and executing statements individually."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statement_config = statement.statement_config
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
 
@@ -118,15 +117,13 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
     async def _execute_many(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using aiosqlite executemany."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         result = await cursor.executemany(sql, prepared_parameters)
         return self.create_execution_result(result, rowcount_override=cursor.rowcount or 0, is_many_result=True)
 
     async def _execute_statement(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement using aiosqlite execute."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         result = await cursor.execute(sql, prepared_parameters or ())
 
         if statement.returns_rows():

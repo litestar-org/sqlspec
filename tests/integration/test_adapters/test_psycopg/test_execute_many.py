@@ -204,7 +204,7 @@ def test_psycopg_execute_many_with_sql_object(psycopg_batch_session: PsycopgSync
 
     parameters = [("SQL Obj 1", 111, "SOB"), ("SQL Obj 2", 222, "SOB"), ("SQL Obj 3", 333, "SOB")]
 
-    sql_obj = SQL("INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)").as_many(parameters)
+    sql_obj = SQL("INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)", parameters, is_many=True)
 
     result = psycopg_batch_session.execute(sql_obj)
 

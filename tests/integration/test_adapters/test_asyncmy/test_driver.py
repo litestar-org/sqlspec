@@ -192,10 +192,12 @@ async def test_asyncmy_data_types(asyncmy_driver: AsyncmyDriver) -> None:
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         test_data,
     )
-    assert result.num_rows == 1
+    assert result.rows_affected == 1
 
-    # Retrieve and verify data
-    select_result = await driver.execute("SELECT * FROM data_types_test WHERE id = ?", (result.last_insert_id,))
+    # Retrieve and verify data using unique test values
+    select_result = await driver.execute(
+        "SELECT * FROM data_types_test WHERE text_col = ? AND int_col = ?", ("test_string", 42)
+    )
     assert len(select_result.get_data()) == 1
     row = select_result.get_data()[0]
     assert row["text_col"] == "test_string"

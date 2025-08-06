@@ -81,8 +81,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
 
     def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Oracle executemany implementation."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.executemany(sql, prepared_parameters)
         return self.create_execution_result(
             cursor, rowcount_override=cursor.rowcount if cursor.rowcount is not None else 0, is_many_result=True
@@ -90,8 +89,7 @@ class OracleSyncDriver(SyncDriverAdapterBase):
 
     def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Oracle single execution."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.execute(sql, prepared_parameters or {})
 
         if statement.returns_rows():
@@ -183,8 +181,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
 
     async def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Oracle async executemany implementation."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.executemany(sql, prepared_parameters)
 
         return self.create_execution_result(
@@ -193,8 +190,7 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
 
     async def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Oracle async single execution."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, prepared_parameters or {})
 
         if statement.returns_rows():

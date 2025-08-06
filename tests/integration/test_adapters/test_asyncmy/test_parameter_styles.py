@@ -43,7 +43,7 @@ async def asyncmy_parameter_session(mysql_service: MySQLService) -> AsyncGenerat
         # Clear any existing data
         await session.execute_script("TRUNCATE TABLE test_parameter_conversion")
 
-        # Insert test data using ? placeholders (AsyncMy QMARK format)
+        # Insert test data using ? placeholders (will be converted to %s)
         await session.execute(
             "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)",
             ("test1", 100, "First test"),
@@ -65,55 +65,58 @@ async def asyncmy_parameter_session(mysql_service: MySQLService) -> AsyncGenerat
 @pytest.mark.asyncio
 @pytest.mark.xdist_group("mysql")
 async def test_asyncmy_qmark_style_no_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
-    """Test that ? placeholders are used directly without conversion (target format)."""
+    """Test that ? placeholders get converted to %s placeholders."""
     driver = asyncmy_parameter_session
 
-    # Query using ? placeholders - should NOT require conversion
+    # Query using ? placeholders - should require conversion to %s
     result = await driver.execute("SELECT * FROM test_parameter_conversion WHERE name = ? AND value > ?", ("test1", 50))
 
     assert isinstance(result, SQLResult)
-    assert result.rowcount == 1
-    assert len(result.rows) == 1
-    assert result.rows[0]["name"] == "test1"
-    assert result.rows[0]["value"] == 100
+    assert result.rows_affected == 1
+    assert result.data is not None
+    assert len(result.data) == 1
+    assert result.data[0]["name"] == "test1"
+    assert result.data[0]["value"] == 100
 
 
 @pytest.mark.asyncio
 @pytest.mark.xdist_group("mysql")
 async def test_asyncmy_pyformat_style_requires_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
-    """Test that %s placeholders get converted to ? placeholders."""
+    """Test that %s placeholders are used directly without conversion (native format)."""
     driver = asyncmy_parameter_session
 
-    # Query using %s placeholders - SHOULD require conversion to ?
-    # Note: This tests the SQLTransformer conversion logic
+    # Query using %s placeholders - should NOT require conversion (native format)
+    # Note: AsyncMy natively uses %s placeholders
     result = await driver.execute(
         "SELECT * FROM test_parameter_conversion WHERE name = %s AND value > %s", ("test2", 150)
     )
 
     assert isinstance(result, SQLResult)
-    assert result.rowcount == 1
-    assert len(result.rows) == 1
-    assert result.rows[0]["name"] == "test2"
-    assert result.rows[0]["value"] == 200
+    assert result.rows_affected == 1
+    assert result.data is not None
+    assert len(result.data) == 1
+    assert result.data[0]["name"] == "test2"
+    assert result.data[0]["value"] == 200
 
 
 @pytest.mark.asyncio
 @pytest.mark.xdist_group("mysql")
 async def test_asyncmy_named_pyformat_style_requires_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
-    """Test that %(name)s placeholders get converted to ? placeholders."""
+    """Test that %(name)s placeholders get converted to %s placeholders."""
     driver = asyncmy_parameter_session
 
-    # Query using %(name)s placeholders - SHOULD require conversion to ?
+    # Query using %(name)s placeholders - SHOULD require conversion to %s
     result = await driver.execute(
         "SELECT * FROM test_parameter_conversion WHERE name = %(test_name)s AND value < %(max_value)s",
         {"test_name": "test3", "max_value": 350},
     )
 
     assert isinstance(result, SQLResult)
-    assert result.rowcount == 1
-    assert len(result.rows) == 1
-    assert result.rows[0]["name"] == "test3"
-    assert result.rows[0]["value"] == 300
+    assert result.rows_affected == 1
+    assert result.data is not None
+    assert len(result.data) == 1
+    assert result.data[0]["name"] == "test3"
+    assert result.data[0]["value"] == 300
 
 
 @pytest.mark.asyncio
@@ -122,21 +125,23 @@ async def test_asyncmy_sql_object_conversion_validation(asyncmy_parameter_sessio
     """Test parameter conversion with SQL object containing different parameter styles."""
     driver = asyncmy_parameter_session
 
-    # Test SQL object with %s style - should convert to ?
-    sql_pyformat = SQL("SELECT * FROM test_parameter_conversion WHERE value BETWEEN %s AND %s", parameters=[150, 250])
+    # Test SQL object with %s style - should use directly (native format)
+    sql_pyformat = SQL("SELECT * FROM test_parameter_conversion WHERE value BETWEEN %s AND %s", 150, 250)
     result = await driver.execute(sql_pyformat)
 
     assert isinstance(result, SQLResult)
-    assert result.rowcount == 1
-    assert result.rows[0]["name"] == "test2"
+    assert result.rows_affected == 1
+    assert result.data is not None
+    assert result.data[0]["name"] == "test2"
 
-    # Test SQL object with ? style - should use directly
-    sql_qmark = SQL("SELECT * FROM test_parameter_conversion WHERE name = ? OR name = ?", parameters=["test1", "test3"])
+    # Test SQL object with ? style - should convert to %s
+    sql_qmark = SQL("SELECT * FROM test_parameter_conversion WHERE name = ? OR name = ?", "test1", "test3")
     result2 = await driver.execute(sql_qmark)
 
     assert isinstance(result2, SQLResult)
-    assert result2.rowcount == 2
-    names = [row["name"] for row in result2.rows]
+    assert result2.rows_affected == 2
+    assert result2.data is not None
+    names = [row["name"] for row in result2.data]
     assert "test1" in names
     assert "test3" in names
 
@@ -147,21 +152,22 @@ async def test_asyncmy_mixed_parameter_types_conversion(asyncmy_parameter_sessio
     """Test conversion with different parameter value types."""
     driver = asyncmy_parameter_session
 
-    # Insert test data with different types using %s (should convert to ?)
+    # Insert test data with different types using %s (native format)
     await driver.execute(
         "INSERT INTO test_parameter_conversion (name, value, description) VALUES (%s, %s, %s)",
         ("mixed_test", 999, "Mixed type test"),
     )
 
-    # Query with NULL parameter using %s (should convert to ?)
+    # Query with NULL parameter using %s (native format)
     result = await driver.execute(
         "SELECT * FROM test_parameter_conversion WHERE description IS NOT NULL AND value = %s", (999,)
     )
 
     assert isinstance(result, SQLResult)
-    assert result.rowcount == 1
-    assert result.rows[0]["name"] == "mixed_test"
-    assert result.rows[0]["description"] == "Mixed type test"
+    assert result.rows_affected == 1
+    assert result.data is not None
+    assert result.data[0]["name"] == "mixed_test"
+    assert result.data[0]["description"] == "Mixed type test"
 
 
 @pytest.mark.asyncio
@@ -170,7 +176,7 @@ async def test_asyncmy_execute_many_parameter_conversion(asyncmy_parameter_sessi
     """Test parameter conversion in execute_many operations."""
     driver = asyncmy_parameter_session
 
-    # Test execute_many with %s placeholders - should convert to ?
+    # Test execute_many with %s placeholders - native format
     batch_data = [("batch1", 1000, "Batch test 1"), ("batch2", 2000, "Batch test 2"), ("batch3", 3000, "Batch test 3")]
 
     result = await driver.execute_many(
@@ -178,14 +184,15 @@ async def test_asyncmy_execute_many_parameter_conversion(asyncmy_parameter_sessi
     )
 
     assert isinstance(result, SQLResult)
-    assert result.rowcount == 3
+    assert result.rows_affected == 3
 
     # Verify the data was inserted correctly
     verify_result = await driver.execute(
         "SELECT COUNT(*) as count FROM test_parameter_conversion WHERE name LIKE ?", ("batch%",)
     )
 
-    assert verify_result.rows[0]["count"] == 3
+    assert verify_result.data is not None
+    assert verify_result.data[0]["count"] == 3
 
 
 @pytest.mark.asyncio
@@ -196,18 +203,21 @@ async def test_asyncmy_parameter_conversion_edge_cases(asyncmy_parameter_session
 
     # Empty parameter list with %s - should handle gracefully
     result = await driver.execute("SELECT COUNT(*) as total FROM test_parameter_conversion")
-    assert result.rows[0]["total"] >= 3  # Our test data
+    assert result.data is not None
+    assert result.data[0]["total"] >= 3  # Our test data
 
     # Single parameter with %s conversion
     result2 = await driver.execute("SELECT * FROM test_parameter_conversion WHERE name = %s", ("test1",))
-    assert result2.rowcount == 1
-    assert result2.rows[0]["name"] == "test1"
+    assert result2.rows_affected == 1
+    assert result2.data is not None
+    assert result2.data[0]["name"] == "test1"
 
     # Parameter with LIKE operation requiring conversion
     result3 = await driver.execute(
         "SELECT COUNT(*) as count FROM test_parameter_conversion WHERE name LIKE %s", ("test%",)
     )
-    assert result3.rows[0]["count"] >= 3
+    assert result3.data is not None
+    assert result3.data[0]["count"] >= 3
 
 
 @pytest.mark.asyncio
@@ -218,23 +228,25 @@ async def test_asyncmy_parameter_style_consistency_validation(asyncmy_parameter_
 
     # Same query with different parameter styles should yield same results
 
-    # Using ? (no conversion needed)
+    # Using ? (conversion to %s needed)
     result_qmark = await driver.execute(
         "SELECT name, value FROM test_parameter_conversion WHERE value >= ? ORDER BY value", (200,)
     )
 
-    # Using %s (conversion needed)
+    # Using %s (native format)
     result_pyformat = await driver.execute(
         "SELECT name, value FROM test_parameter_conversion WHERE value >= %s ORDER BY value", (200,)
     )
 
     # Results should be identical
-    assert result_qmark.rowcount == result_pyformat.rowcount
-    assert len(result_qmark.rows) == len(result_pyformat.rows)
+    assert result_qmark.rows_affected == result_pyformat.rows_affected
+    assert result_qmark.data is not None
+    assert result_pyformat.data is not None
+    assert len(result_qmark.data) == len(result_pyformat.data)
 
-    for i in range(len(result_qmark.rows)):
-        assert result_qmark.rows[i]["name"] == result_pyformat.rows[i]["name"]
-        assert result_qmark.rows[i]["value"] == result_pyformat.rows[i]["value"]
+    for i in range(len(result_qmark.data)):
+        assert result_qmark.data[i]["name"] == result_pyformat.data[i]["name"]
+        assert result_qmark.data[i]["value"] == result_pyformat.data[i]["value"]
 
 
 @pytest.mark.asyncio
@@ -249,7 +261,7 @@ async def test_asyncmy_complex_query_parameter_conversion(asyncmy_parameter_sess
         [("complex1", 150, "Complex test"), ("complex2", 250, "Complex test"), ("complex3", 350, "Complex test")],
     )
 
-    # Complex query with subquery and multiple parameters using %s (should convert)
+    # Complex query with subquery and multiple parameters using %s (native format)
     result = await driver.execute(
         """
         SELECT name, value, description
@@ -266,6 +278,7 @@ async def test_asyncmy_complex_query_parameter_conversion(asyncmy_parameter_sess
     )
 
     assert isinstance(result, SQLResult)
-    assert result.rowcount == 1
-    assert result.rows[0]["name"] == "complex2"
-    assert result.rows[0]["value"] == 250
+    assert result.rows_affected == 1
+    assert result.data is not None
+    assert result.data[0]["name"] == "complex2"
+    assert result.data[0]["value"] == 250

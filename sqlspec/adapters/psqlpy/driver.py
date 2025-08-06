@@ -127,8 +127,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         Psqlpy expects parameters as a list of lists/sequences for execute_many.
         """
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         if not prepared_parameters:
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
@@ -145,8 +144,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         Psqlpy supports execute_batch for multi-statement scripts.
         """
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statement_config = statement.statement_config
         if not prepared_parameters:
             try:
@@ -175,8 +173,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
     async def _execute_statement(self, cursor: PsqlpyConnection, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement using psqlpy-optimized approach."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         if statement.returns_rows():
             query_result = await cursor.fetch(sql, prepared_parameters or [])
             dict_rows: list[dict[str, Any]] = query_result.result() if query_result else []

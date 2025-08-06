@@ -251,7 +251,7 @@ def test_sql_multiple_filters() -> None:
 def test_sql_with_missing_parameters() -> None:
     """Test SQL handles missing parameters gracefully."""
     # SQL allows creating statements with placeholders but no parameters
-    # This enables patterns like SQL("SELECT * FROM users WHERE id = ?").as_many([...])
+    # This enables patterns like SQL("SELECT * FROM users WHERE id = ?", [...], is_many=True)
     stmt = SQL("SELECT * FROM users WHERE id = ?")
     assert stmt.sql == "SELECT * FROM users WHERE id = ?"
     assert stmt.parameters == {}

@@ -623,6 +623,8 @@ class ParameterConverter:
             ParameterStyle.POSITIONAL_PYFORMAT: self._convert_to_positional_format,
             ParameterStyle.NAMED_COLON: self._convert_to_named_colon_format,
             ParameterStyle.NAMED_PYFORMAT: self._convert_to_named_pyformat_format,
+            ParameterStyle.NAMED_AT: self._convert_to_named_colon_format,
+            ParameterStyle.NAMED_DOLLAR: self._convert_to_named_colon_format,
         }
 
         # Type wrapping is now handled by singledispatch (see wrap_with_type)

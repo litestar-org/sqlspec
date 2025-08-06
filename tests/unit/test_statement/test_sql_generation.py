@@ -65,7 +65,7 @@ class TestSQLGenerationPerformance:
             ("user3", "user3@example.com"),
         ]
 
-        sql = SQL(base_query).as_many(batch_parameters)
+        sql = SQL(base_query, batch_parameters, is_many=True)
         compiled_sql, parameters = sql.compile()
 
         # Should handle batch operations correctly

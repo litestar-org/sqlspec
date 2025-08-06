@@ -23,7 +23,7 @@ asyncmy_statement_config = StatementConfig(
     parameter_config=ParameterStyleConfig(
         default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,  # MySQL uses %s
         default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,  # MySQL uses %s
-        supported_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT},  # Only %s is supported
+        supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT},  # Support both ? and %s
         supported_execution_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT},  # Only %s for execution
         type_coercion_map={},
         has_native_list_expansion=False,
@@ -92,8 +92,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
     async def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """AsyncMy executemany implementation."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.executemany(sql, prepared_parameters)
 
         return self.create_execution_result(
@@ -102,8 +101,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
     async def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """AsyncMy single execution."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         await cursor.execute(sql, prepared_parameters or None)
 

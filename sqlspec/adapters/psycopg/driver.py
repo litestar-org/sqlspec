@@ -170,10 +170,12 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         Returns:
             SQLResult for the COPY operation
         """
+        # Get compiled SQL (but COPY commands typically don't have parameters in the SQL itself)
+        sql, _ = self._get_compiled_sql(statement, self.statement_config)
         execution_args = statement.statement_config.execution_args or {}
         data_param = execution_args.get("data_param", 0)  # Default to first parameter
 
-        # Extract COPY data from parameters
+        # Extract COPY data from parameters - use original parameters for data extraction
         copy_data = None
         if statement.parameters:
             if isinstance(data_param, str):
@@ -188,11 +190,11 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
                     # Single parameter
                     copy_data = statement.parameters
 
-        # Execute COPY operation
+        # Execute COPY operation using compiled SQL
         if copy_data is not None:
-            result = self._execute_copy_with_data(cursor, statement.sql, str(copy_data))
+            result = self._execute_copy_with_data(cursor, sql, str(copy_data))
         else:
-            result = self._execute_copy_without_data(cursor, statement.sql)
+            result = self._execute_copy_without_data(cursor, sql)
 
         row_count = result.rowcount if result.rowcount is not None else -1
         execution_result = self.create_execution_result(result, rowcount_override=row_count)
@@ -215,8 +217,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
 
         Psycopg doesn't have executescript but supports parameters in all statements.
         """
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         statement_count = len(statements)
 
@@ -231,8 +232,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
 
     def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using Psycopg executemany."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         result = cursor.executemany(sql, prepared_parameters)
 
         row_count = cursor.rowcount if cursor.rowcount is not None else 0
@@ -240,8 +240,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
 
     def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement using Psycopg execute."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         # Only pass parameters if they exist - psycopg treats empty containers as parameterized mode
         result = cursor.execute(sql, prepared_parameters) if prepared_parameters else cursor.execute(sql)
 
@@ -347,10 +346,12 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         Returns:
             SQLResult for the COPY operation
         """
+        # Get compiled SQL (but COPY commands typically don't have parameters in the SQL itself)
+        sql, _ = self._get_compiled_sql(statement, self.statement_config)
         execution_args = statement.statement_config.execution_args or {}
         data_param = execution_args.get("data_param", 0)  # Default to first parameter
 
-        # Extract COPY data from parameters
+        # Extract COPY data from parameters - use original parameters for data extraction
         copy_data = None
         if statement.parameters:
             if isinstance(data_param, str):
@@ -365,11 +366,11 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
                     # Single parameter
                     copy_data = statement.parameters
 
-        # Execute COPY operation
+        # Execute COPY operation using compiled SQL
         if copy_data is not None:
-            result = await self._execute_copy_with_data(cursor, statement.sql, str(copy_data))
+            result = await self._execute_copy_with_data(cursor, sql, str(copy_data))
         else:
-            result = await self._execute_copy_without_data(cursor, statement.sql)
+            result = await self._execute_copy_without_data(cursor, sql)
 
         row_count = result.rowcount if result.rowcount is not None else -1
         execution_result = self.create_execution_result(result, rowcount_override=row_count)
@@ -392,8 +393,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
 
         Psycopg doesn't have executescript but supports parameters in all statements.
         """
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         for stmt in statements:
@@ -412,8 +412,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
 
     async def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using Psycopg executemany."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         result = await cursor.executemany(sql, prepared_parameters)
 
         row_count = cursor.rowcount if cursor.rowcount is not None else 0
@@ -421,8 +420,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
 
     async def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement using Psycopg execute."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         # Only pass parameters if they exist - psycopg treats empty containers as parameterized mode
         if prepared_parameters:
             result = await cursor.execute(sql, prepared_parameters)

@@ -115,8 +115,7 @@ class SqliteDriver(SyncDriverAdapterBase):
 
     def _execute_script(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL script using SQLite's native executescript (parameters embedded as static values)."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         for stmt in statements:
@@ -128,15 +127,13 @@ class SqliteDriver(SyncDriverAdapterBase):
 
     def _execute_many(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using SQLite executemany."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.executemany(sql, prepared_parameters)
         return self.create_execution_result(cursor, rowcount_override=cursor.rowcount or 0, is_many_result=True)
 
     def _execute_statement(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement using SQLite execute."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.execute(sql, prepared_parameters or ())
 
         if statement.returns_rows():

@@ -207,7 +207,7 @@ async def test_asyncpg_execute_many_with_sql_object(asyncpg_batch_session: Async
 
     parameters = [("SQL Obj 1", 111, "SOB"), ("SQL Obj 2", 222, "SOB"), ("SQL Obj 3", 333, "SOB")]
 
-    sql_obj = SQL("INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)").as_many(parameters)
+    sql_obj = SQL("INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)", parameters, is_many=True)
 
     result = await asyncpg_batch_session.execute(sql_obj)
 

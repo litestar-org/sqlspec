@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 from sqlspec.driver._common import CommonDriverAttributesMixin, ExecutionResult
 from sqlspec.driver.mixins import SQLTranslatorMixin, ToSchemaMixin
 from sqlspec.exceptions import NotFoundError
+from sqlspec.statement.sql import SQL
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_dict_row, is_indexable_row
 
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.statement.filters import StatementFilter
     from sqlspec.statement.result import SQLResult
-    from sqlspec.statement.sql import SQL, Statement, StatementConfig
+    from sqlspec.statement.sql import Statement, StatementConfig
     from sqlspec.typing import ModelDTOT, ModelT, RowT, StatementParameters
 
 logger = get_logger("sqlspec")
@@ -210,10 +211,17 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         Parameters passed will be used as the batch execution sequence.
         """
         config = statement_config or self.statement_config
-        sql_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
-        return self.dispatch_statement_execution(
-            statement=sql_statement.as_many(parameters, statement_config=config), connection=self.connection
-        )
+
+        # Create SQL object with is_many=True and execute_many parameters
+        if isinstance(statement, SQL):
+            # If already a SQL object, create a new one with is_many=True and the execute_many parameters
+            sql_statement = SQL(statement._raw_sql, parameters, statement_config=config, is_many=True, **kwargs)
+        else:
+            # Create new SQL object directly with is_many=True (handles str, QueryBuilder via prepare_statement logic)
+            base_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
+            sql_statement = SQL(base_statement._raw_sql, parameters, statement_config=config, is_many=True, **kwargs)
+
+        return self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
 
     def execute_script(
         self,

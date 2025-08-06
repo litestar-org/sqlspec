@@ -88,8 +88,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         DuckDB supports parameters in individual statements.
         """
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statement_config = statement.statement_config
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
 
@@ -113,8 +112,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
     def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """DuckDB executemany with accurate row counting."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         if prepared_parameters:
             cursor.executemany(sql, prepared_parameters)
             if self._is_modifying_operation(statement):
@@ -132,8 +130,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
     def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """DuckDB single execution."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.execute(sql, prepared_parameters or ())
 
         if statement.returns_rows():

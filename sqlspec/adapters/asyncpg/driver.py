@@ -94,8 +94,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
     async def _execute_many(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
         """Execute multiple statements with AsyncPG."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.executemany(sql, prepared_parameters)
 
         return self.create_execution_result(
@@ -104,8 +103,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
     async def _execute_statement(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
         """Execute single statement with AsyncPG."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         if statement.returns_rows():
             records = await cursor.fetch(sql, *prepared_parameters)
             data = [dict(record) for record in records]

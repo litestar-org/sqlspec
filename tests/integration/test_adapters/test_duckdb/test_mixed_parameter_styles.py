@@ -155,8 +155,10 @@ def test_execute_many_with_numeric_style(duckdb_test_setup: tuple[DuckDBDriver, 
     """)
 
     # Use numeric style for execute_many
-    sql = SQL("INSERT INTO test_many (id, data) VALUES ($1, $2)").as_many(
-        parameters=[(7, "seven"), (8, "eight"), (9, "nine")]
+    sql = SQL(
+        "INSERT INTO test_many (id, data) VALUES ($1, $2)",
+        parameters=[(7, "seven"), (8, "eight"), (9, "nine")],
+        is_many=True,
     )
 
     result = session.execute(sql)

@@ -322,8 +322,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
     def _execute_statement(self, cursor: Any, statement: SQL) -> ExecutionResult:
         """BigQuery single statement execution."""
-        sql = statement.sql
-        parameters = statement.parameters
+        sql, parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.job = self._run_query_job(sql, parameters, connection=cursor.connection)
 
         if statement.returns_rows():

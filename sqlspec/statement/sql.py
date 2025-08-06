@@ -27,11 +27,8 @@ from sqlspec.utils.type_guards import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.typing import StatementParameters
 
 __all__ = ("SQL", "Statement", "StatementConfig")
 
@@ -304,9 +301,20 @@ class SQL:
         _dialect: "DialectType" = None,
         statement_config: "Optional[StatementConfig]" = None,
         _builder_result_type: "Optional[type]" = None,
+        is_many: "Optional[bool]" = None,
         **kwargs: Any,
     ) -> None:
-        """Initialize SQL with centralized parameter management."""
+        """Initialize SQL with centralized parameter management.
+
+        Args:
+            statement: SQL string, expression, or existing SQL object
+            *parameters: Parameters for the SQL statement
+            _dialect: SQL dialect for parsing and generation
+            statement_config: Configuration for SQL processing
+            _builder_result_type: Builder result type for chaining
+            is_many: If True, marks this SQL for execute_many operations
+            **kwargs: Additional keyword arguments
+        """
 
         # If no statement_config provided, detect parameter style and preserve it
 
@@ -329,13 +337,39 @@ class SQL:
 
         if isinstance(statement, SQL):
             self._init_from_sql_object(statement, _dialect, statement_config or StatementConfig(), _builder_result_type)
+            # Override is_many if explicitly provided
+            if is_many is not None:
+                self._is_many = is_many
         else:
             self._init_from_str_or_expression(statement, parameters)
+            # Set is_many based on parameter or auto-detection
+            if is_many is not None:
+                self._is_many = is_many
+            elif self._should_auto_detect_many(parameters):
+                self._is_many = True
 
         if not isinstance(statement, SQL):
             self._set_original_parameters(*parameters)
 
         self._process_parameters(*parameters, **kwargs)
+
+    def _should_auto_detect_many(self, parameters: tuple) -> bool:
+        """Auto-detect if this should be treated as execute_many based on parameter structure.
+
+        Args:
+            parameters: The parameters tuple passed to __init__
+
+        Returns:
+            True if this looks like execute_many parameters (list of tuples/lists)
+        """
+        # If we have exactly one parameter and it's a list of tuples/lists, treat as execute_many
+        if len(parameters) == 1 and isinstance(parameters[0], list):
+            param_list = parameters[0]
+            # Check if all items in the list are tuples or lists (parameter sets)
+            # and we have more than one item (single item lists could be array parameters)
+            if len(param_list) > 1 and all(isinstance(item, (tuple, list)) for item in param_list):
+                return True
+        return False
 
     @staticmethod
     def _normalize_dialect(dialect: "DialectType") -> "Optional[str]":
@@ -836,38 +870,6 @@ class SQL:
         new_named.update(named_parameters)
 
         return self._copy_with(_filters=new_filters, _positional_parameters=new_positional, _named_parameters=new_named)
-
-    def as_many(
-        self,
-        parameters: "Optional[Union[list[Any], Sequence[StatementParameters]]]" = None,
-        statement_config: "Optional[StatementConfig]" = None,
-    ) -> "SQL":
-        """Mark for executemany with optional parameters and configuration.
-
-        If no parameters are provided, uses the existing original parameters
-        to preserve batch structure for execute_many operations.
-
-        Args:
-            parameters: Optional parameters for the execute_many operation
-            statement_config: Optional statement configuration to use for the new SQL object
-        """
-        overrides: dict[str, Any] = {"_is_many": True}
-
-        if parameters is not None:
-            overrides["_positional_parameters"] = []
-            overrides["_named_parameters"] = {}
-            overrides["_original_parameters"] = parameters
-        elif self._original_parameters is not None:
-            # Preserve original batch structure instead of flattened positional parameters
-            overrides["_original_parameters"] = self._original_parameters
-        elif self._positional_parameters:
-            # Fallback to positional parameters if no original parameters available
-            overrides["_original_parameters"] = self._positional_parameters
-
-        if statement_config is not None:
-            overrides["statement_config"] = statement_config
-
-        return self._copy_with(**overrides)
 
     def as_script(self) -> "SQL":
         """Mark as script for execution."""

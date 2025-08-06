@@ -299,11 +299,10 @@ class CommonDriverAttributesMixin:
                 sql_text = statement._raw_sql or statement.sql
 
                 # Rebuild the SQL object with the new config
-                # If is_many is set, we need to preserve the parameters that were set via as_many()
+                # If is_many is set, we need to preserve the execute_many parameters
                 if statement.is_many and statement.parameters:
-                    # Create SQL without parameters first, then call as_many()
-                    new_sql = SQL(sql_text, statement_config=new_config)
-                    new_sql = new_sql.as_many(statement.parameters)
+                    # Create SQL with is_many=True and the execute_many parameters
+                    new_sql = SQL(sql_text, statement.parameters, statement_config=new_config, is_many=True)
                 elif statement._named_parameters:
                     new_sql = SQL(sql_text, statement_config=new_config, **statement._named_parameters)
                 else:
@@ -416,7 +415,11 @@ class CommonDriverAttributesMixin:
             return {k: apply_type_coercion(v) for k, v in parameters.items()}
 
         if isinstance(parameters, (list, tuple)):
-            return [apply_type_coercion(p) for p in parameters]
+            coerced_params = [apply_type_coercion(p) for p in parameters]
+            # Preserve original parameter format if requested
+            if statement_config.parameter_config.preserve_parameter_format and isinstance(parameters, tuple):
+                return tuple(coerced_params)
+            return coerced_params
 
         return [apply_type_coercion(parameters)]
 

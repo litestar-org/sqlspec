@@ -183,7 +183,7 @@ def test_positional_colon_with_execute_many() -> None:
     """Test Oracle numeric parameters with execute_many."""
     sql = "INSERT INTO users VALUES (:1, :2)"
     parameters = [[1, "john"], [2, "jane"], [3, "bob"]]
-    stmt = SQL(sql).as_many(parameters)
+    stmt = SQL(sql, parameters, is_many=True)
 
     assert stmt.is_many
     assert stmt.parameters == parameters
