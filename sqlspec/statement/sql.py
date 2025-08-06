@@ -285,6 +285,7 @@ class SQL:
         "_is_script",
         "_named_parameters",
         "_original_parameters",
+        "_original_param_info",
         "_original_sql",
         "_placeholder_mapping",
         "_positional_parameters",
@@ -589,28 +590,21 @@ class SQL:
                         converted_params[param.name] = final_parameters[i]
                 final_parameters = converted_params
 
-        # Use SQLTransformer directly for processing
+        # Use SQLTransformer directly for parameter processing only
         transformer = SQLTransformer(
             parameters=final_parameters, dialect=self._dialect or "", config=self.statement_config
         )
 
-        # Use the final expression (with filters applied) instead of raw SQL
+        # Generate final SQL for compilation, but reuse the already-parsed expression
         # Remove comments from the SQL output
         final_sql = final_expression.sql(dialect=self._dialect or "", comments=False)
 
+        # Only transform parameters - don't re-parse the expression
         processed_sql, processed_parameters = transformer.compile(final_sql)
 
-        # Try to parse the processed SQL for expression analysis
-        # If SQLGlot cannot parse it (transformer returned original SQL), create Anonymous expression
-        try:
-            processed_expression = sqlglot.parse_one(processed_sql, dialect=self._dialect)
-        except sqlglot.ParseError:
-            # This happens when transformer returned unparsable SQL as-is (e.g., complex PL/SQL)
-            processed_expression = exp.Anonymous(this=processed_sql)
-            if self._is_script:
-                logger.debug("Script contains unparsable SQL syntax, treating as Anonymous expression")
-            else:
-                logger.debug("SQL cannot be parsed by SQLGlot, treating as Anonymous expression")
+        # Reuse the successfully parsed expression instead of re-parsing
+        # This eliminates the redundant Parse #2 that was causing failures
+        processed_expression = final_expression
 
         # Store the processed state
         self._processed_state = _ProcessedState(
@@ -646,13 +640,14 @@ class SQL:
 
         converted_sql = statement
 
-        # Only convert if we have incompatible styles AND we have parameters
-        # Check both instance parameters and passed parameters
-        has_parameters = self._positional_parameters or self._named_parameters or (parameters and len(parameters) > 0)
-        if needs_conversion and has_parameters:
+        # Phase 1: Always convert if we have incompatible parameter styles for SQLGlot parsing
+        if needs_conversion:
             converter = self.statement_config.parameter_converter
-            converted_sql = converter._convert_to_sqlglot_compatible(statement, param_info)
+            converted_sql, original_param_info = converter.normalize_sql_for_parsing(
+                statement, str(self._dialect) if self._dialect else None
+            )
             self._original_sql = statement
+            self._original_param_info = original_param_info
 
         use_base_cache = not needs_conversion and not param_info and isinstance(statement, str)
 

@@ -21,14 +21,14 @@ if TYPE_CHECKING:
 asyncmy_statement_config = StatementConfig(
     dialect="mysql",
     parameter_config=ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,  # MySQL uses %s
-        default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,  # MySQL uses %s
-        supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT},  # Support both ? and %s
-        supported_execution_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT},  # Only %s for execution
+        default_parameter_style=ParameterStyle.QMARK,
+        default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
+        supported_parameter_styles={ParameterStyle.QMARK},
+        supported_execution_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT},
         type_coercion_map={},
         has_native_list_expansion=False,
         needs_static_script_compilation=True,
-        preserve_parameter_format=True,  # AsyncMy needs exact tuple/list format preservation
+        preserve_parameter_format=True,
     ),
 )
 

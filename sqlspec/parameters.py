@@ -702,14 +702,28 @@ class ParameterConverter:
             return value
         return _wrap_parameter_by_type(value, semantic_name)
 
-    def _convert_to_sqlglot_compatible(self, sql: str, param_info: list[ParameterInfo]) -> str:
-        """Convert SQL with SQLGlot-incompatible parameters to compatible named colon style.
-
-        Simplified version that only returns the converted SQL since the state is not used.
+    def normalize_sql_for_parsing(self, sql: str, dialect: Optional[str] = None) -> tuple[str, list[ParameterInfo]]:
+        """Phase 1: Convert SQL to a parseable format and return parameter info.
+        
+        This is the first phase of two-phase parameter normalization. It takes raw SQL
+        with potentially SQLGlot-incompatible parameter styles and converts them to
+        a canonical, parseable format (named colon style).
+        
+        Args:
+            sql: Raw SQL string with any parameter style
+            dialect: Target SQL dialect for compatibility checking
+            
+        Returns:
+            Tuple of (parseable_sql, original_parameter_info)
         """
-        if not param_info:
-            return sql
+        param_info = self.validator.extract_parameters(sql)
+        incompatible_styles = self.validator.get_sqlglot_incompatible_styles(dialect)
+        
+        needs_conversion = any(p.style in incompatible_styles for p in param_info)
+        if not needs_conversion:
+            return sql, param_info
 
+        # Convert to canonical named colon format for SQLGlot parsing
         result_parts = []
         current_pos = 0
 
@@ -717,7 +731,7 @@ class ParameterConverter:
             result_parts.append(sql[current_pos : param.position])
 
             # For POSITIONAL_COLON parameters, preserve the numeric name
-            # e.g., :1 -> :param_1 (not :param_0)
+            # e.g., :1 -> :param_1 (not :param_0)  
             if param.style == ParameterStyle.POSITIONAL_COLON and param.name:
                 new_placeholder = f":param_{param.name}"
             else:
@@ -726,7 +740,16 @@ class ParameterConverter:
             current_pos = param.position + len(param.placeholder_text)
 
         result_parts.append(sql[current_pos:])
-        return "".join(result_parts)
+        return "".join(result_parts), param_info
+
+    def _convert_to_sqlglot_compatible(self, sql: str, param_info: list[ParameterInfo]) -> str:
+        """Convert SQL with SQLGlot-incompatible parameters to compatible named colon style.
+
+        Simplified version that only returns the converted SQL since the state is not used.
+        DEPRECATED: Use normalize_sql_for_parsing() instead for new code.
+        """
+        parseable_sql, _ = self.normalize_sql_for_parsing(sql)
+        return parseable_sql
 
     def merge_parameters(
         self, parameters: Optional[Any], args: Optional[list[Any]], kwargs: Optional[dict[str, Any]]
