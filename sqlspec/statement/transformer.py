@@ -202,37 +202,33 @@ class SQLTransformer:
             default_style = self.config.parameter_config.default_parameter_style
             needs_execution_conversion = not all(style == default_style for style in detected_styles)
 
-        # Special case: if the detected style is supported for execution but incompatible with SQLGlot,
-        # DON'T convert - let SQLGlot and the driver handle it
-        if not needs_execution_conversion and needs_sqlglot_conversion:
-            # Input style is supported for execution but incompatible with SQLGlot
-            # Preserve it anyway - the driver can handle it even if SQLGlot can't parse it natively
-            return raw_sql, param_info
+        # Note: We removed the special case that preserved incompatible styles.
+        # SQLGlot needs compatible parameter styles to parse correctly, so we must
+        # convert incompatible styles even if they're supported for execution.
 
         # Convert if either SQLGlot or execution requires it
         needs_conversion = needs_sqlglot_conversion or needs_execution_conversion
 
         if needs_conversion:
-            # Convert to the driver's execution parameter style when needed for execution compatibility
-            if needs_execution_conversion:
-                target_style = self.config.parameter_config.default_execution_parameter_style
-                # Fallback if execution style is not set
-                if target_style is None:
-                    target_style = self.config.parameter_config.default_parameter_style
+            # To match SQL class behavior exactly, use _convert_to_sqlglot_compatible
+            # which always converts to :param_N format
+            converted_sql = converter._convert_to_sqlglot_compatible(raw_sql, param_info)
+            
+            # For parameter conversion, we need to handle dict to list conversion
+            # when the original params are dict but we're converting to positional style
+            if isinstance(self.parameters, dict) and param_info:
+                # Convert dict to list based on parameter order in SQL
+                converted_params = []
+                for p in param_info:
+                    if p.name and p.name in self.parameters:
+                        converted_params.append(self.parameters[p.name])
+                    else:
+                        # Fallback for unnamed parameters
+                        converted_params.append(None)
+                self._parameter_map["converted_params"] = converted_params
             else:
-                # Convert to the driver's preferred parameter style for SQLGlot compatibility
-                target_style = self.config.parameter_config.default_parameter_style
-
-            # Special handling when conversion to execution style is needed but target is incompatible with SQLGlot
-            if needs_execution_conversion and target_style in incompatible_styles:
-                # For execution conversion, we need to use the target style even if SQLGlot is incompatible
-                # The ParameterConverter will handle the conversion properly
-                pass  # Keep target_style as is for execution compatibility
-            elif target_style in incompatible_styles:
-                # Only fall back for SQLGlot compatibility issues (not execution issues)
-                target_style = ParameterStyle.QMARK if self.dialect != "oracle" else ParameterStyle.NAMED_COLON
-
-            converted_sql, _ = converter.convert_placeholder_style(raw_sql, self.parameters, target_style)
+                self._parameter_map["converted_params"] = self.parameters
+                
             new_param_info = validator.extract_parameters(converted_sql)
             return converted_sql, new_param_info
 
@@ -288,7 +284,7 @@ class SQLTransformer:
                 # 1. Convert incompatible parameter styles for SQLGlot parsing
                 converted_sql, _ = self._convert_parameter_styles(raw_sql)
 
-                # 2. Parse SQL once - handle unparseable SQL gracefully
+                # 2. Parse SQL once - handle unparsable SQL gracefully
                 parsed = sqlglot.parse_one(converted_sql, dialect=self.dialect)
 
                 # 3. Transform AST once using proper SQLGlot patterns
@@ -325,17 +321,24 @@ class SQLTransformer:
         if "null_parameter_positions" in self._context:
             return self._convert_to_original_format(self._apply_without_null_parameters())
 
-        final_parameters = (
-            self.parameters if not self._parameter_map else self._convert_to_original_format(self.parameters)
-        )
+        # Use converted parameters if available from parameter style conversion
+        if "converted_params" in self._parameter_map:
+            converted_params = self._parameter_map["converted_params"]
+            final_parameters = self._convert_to_original_format(converted_params)
+        else:
+            final_parameters = (
+                self.parameters if not self._parameter_map else self._convert_to_original_format(self.parameters)
+            )
 
-        # Convert parameter format based on actual generated SQL style
-        sql_to_check = generated_sql or (self._cached_result[0] if self._cached_result else None)
-        if sql_to_check:
-            actual_sql_style = self._detect_sql_parameter_style(sql_to_check)
-            if actual_sql_style and self._needs_parameter_format_conversion(actual_sql_style, final_parameters):
-                return self._convert_parameters_for_execution_style(actual_sql_style, final_parameters, sql_to_check)
+        # Note: We do NOT convert parameter format based on SQL style here.
+        # The SQL class doesn't do this - it preserves the original parameter format
+        # even when the SQL uses a different style (e.g., list params with :param_0 SQL).
+        # This allows drivers to handle the mapping internally.
 
+        # Return None for empty parameters to match SQL class behavior
+        if not final_parameters:
+            return None
+        
         return final_parameters
 
     def _convert_to_original_format(self, parameters: Any) -> Any:
@@ -345,14 +348,19 @@ class SQLTransformer:
         Otherwise, preserve the current format.
         """
         # If original format was positional and current result is dict, convert to list
-        if (
-            self.parameter_style in {"tuple", "list"}
-            and isinstance(parameters, dict)
-            and all(k.isdigit() for k in parameters)
-        ):
-            # Sort by numeric key and return values as list
-            sorted_items = sorted(parameters.items(), key=lambda x: int(x[0]))
-            result_list = [item[1] for item in sorted_items]
+        if self.parameter_style in {"tuple", "list"} and isinstance(parameters, dict):
+            # Check for numeric keys or param_N keys
+            if all(k.isdigit() for k in parameters):
+                # Pure numeric keys - sort by number
+                sorted_items = sorted(parameters.items(), key=lambda x: int(x[0]))
+                result_list = [item[1] for item in sorted_items]
+            elif all(k.startswith("param_") and k[6:].isdigit() for k in parameters):
+                # param_N keys - extract number and sort
+                sorted_items = sorted(parameters.items(), key=lambda x: int(x[0][6:]))
+                result_list = [item[1] for item in sorted_items]
+            else:
+                # Can't convert - return as is
+                return parameters
 
             # Return tuple if original was tuple, list if original was list
             return tuple(result_list) if self.parameter_style == "tuple" else result_list

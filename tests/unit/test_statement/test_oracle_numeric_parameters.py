@@ -1,5 +1,3 @@
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-
 """Unit tests for Oracle numeric parameter handling (:1, :2 style).
 
 Oracle supports both named parameters (:name) and numeric parameters (:1, :2).
@@ -11,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 import pytest
 
 from sqlspec.exceptions import MissingParameterError, ParameterError, SQLValidationError
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig, ParameterValidator
 from sqlspec.statement.sql import SQL, StatementConfig
 
 if TYPE_CHECKING:
@@ -147,8 +146,8 @@ def test_positional_colon_parameter_conversion(
         ("INSERT INTO users VALUES (:1, :2)", ["john", 42], ParameterStyle.POSITIONAL_COLON, [":1", ":2"]),
         # Convert to question marks
         ("INSERT INTO users VALUES (:1, :2)", ["john", 42], ParameterStyle.QMARK, ["?", "?"]),
-        # Convert to named style
-        ("INSERT INTO users VALUES (:1, :2)", ["john", 42], ParameterStyle.NAMED_COLON, [":param_0", ":param_1"]),
+        # Convert to named style - should preserve numeric part from POSITIONAL_COLON
+        ("INSERT INTO users VALUES (:1, :2)", ["john", 42], ParameterStyle.NAMED_COLON, [":param_1", ":param_2"]),
         # Convert to numeric dollar style
         ("INSERT INTO users VALUES (:1, :2)", ["john", 42], ParameterStyle.NUMERIC, ["$1", "$2"]),
     ],
@@ -282,8 +281,9 @@ def test_positional_colon_parameter_validation(
             _ = stmt.to_sql()
     else:
         # Should not raise
-        result = stmt.to_sql()
-        assert ":1" in result or "?" in result or ":param_0" in result  # Depending on normalization
+        result = stmt.to_sql(placeholder_style=ParameterStyle.POSITIONAL_COLON)
+        # With supported_parameter_styles={POSITIONAL_COLON}, we preserve the original style
+        assert ":1" in result and ":2" in result
 
 
 # Test special cases
@@ -305,18 +305,13 @@ def test_positional_colon_in_strings_and_comments() -> None:
     statement_config = StatementConfig(parameter_config=parameter_config)
     stmt = SQL(sql, parameters=[42], statement_config=statement_config)
 
-    # Should only find :5 as a real parameter
-    assert len(stmt.parameter_info) == 1
-    assert stmt.parameter_info[0].name == "5"
+    assert stmt.parameters == {"5": 42}  # Only :5 should be a parameter, mapped as dict
 
 
 def test_positional_colon_with_zero() -> None:
     """Test that :0 is handled correctly (some databases start at 0)."""
     sql = "SELECT * FROM users WHERE id = :0"
     stmt = SQL(sql, parameters=[42])
-
-    assert len(stmt.parameter_info) == 1
-    assert stmt.parameter_info[0].name == "0"
 
     # Convert to dict format
     parameters = stmt.get_parameters(ParameterStyle.POSITIONAL_COLON)

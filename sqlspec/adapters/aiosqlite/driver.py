@@ -1,9 +1,9 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import contextlib
 import datetime
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, AsyncContextManager, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import aiosqlite
 
@@ -140,13 +140,12 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
         return self.create_execution_result(result, rowcount_override=cursor.rowcount or 0)
 
-    def handle_database_exceptions(self) -> "AsyncContextManager[None]":
+    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
         """Handle AioSQLite-specific exceptions and wrap them appropriately."""
         return self._handle_database_exceptions_async()
 
     @asynccontextmanager
     async def _handle_database_exceptions_async(self) -> Any:
-        """Async context manager for database exception handling."""
         try:
             yield
         except aiosqlite.Error as e:

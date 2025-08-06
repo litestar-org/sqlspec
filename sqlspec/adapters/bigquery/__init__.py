@@ -1,11 +1,6 @@
 from sqlspec.adapters.bigquery._types import BigQueryConnection
 from sqlspec.adapters.bigquery.config import BigQueryConfig, BigQueryConnectionParams
-from sqlspec.adapters.bigquery.driver import (
-    BigQueryCursor,
-    BigQueryDriver,
-    BigQueryParameterMapper,
-    bigquery_statement_config,
-)
+from sqlspec.adapters.bigquery.driver import BigQueryCursor, BigQueryDriver, bigquery_statement_config
 
 __all__ = (
     "BigQueryConfig",
@@ -13,6 +8,5 @@ __all__ = (
     "BigQueryConnectionParams",
     "BigQueryCursor",
     "BigQueryDriver",
-    "BigQueryParameterMapper",
     "bigquery_statement_config",
 )

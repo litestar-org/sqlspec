@@ -1,6 +1,6 @@
 import logging
-from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, Optional
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 import psycopg
 
@@ -12,6 +12,8 @@ from sqlspec.statement.sql import SQL, StatementConfig
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Generator
+
     from sqlspec.driver._common import ExecutionResult
     from sqlspec.statement.result import SQLResult
     from sqlspec.statement.sql import SQL
@@ -269,11 +271,12 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         """Commit transaction using psycopg-specific method."""
         self.connection.commit()
 
-    def handle_database_exceptions(self):
+    def handle_database_exceptions(self) -> "Generator[None, None, None]":
         """Handle Psycopg-specific exceptions and wrap them appropriately."""
-        return contextmanager(self._handle_database_exceptions_impl)()
+        return cast("Generator[None, None, None]", self._handle_database_exceptions_impl())
 
-    def _handle_database_exceptions_impl(self) -> Any:
+    @contextmanager
+    def _handle_database_exceptions_impl(self) -> "Generator[None, None, None]":
         """Implementation of database exception handling without decorator."""
         try:
             yield
@@ -452,8 +455,12 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         """Commit transaction using psycopg-specific method."""
         await self.connection.commit()
 
+    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
+        """Handle Psycopg-specific exceptions and wrap them appropriately."""
+        return self._handle_database_exceptions_impl()
+
     @asynccontextmanager
-    async def handle_database_exceptions(self):
+    async def _handle_database_exceptions_impl(self) -> "AsyncGenerator[None, None]":
         """Handle Psycopg-specific exceptions and wrap them appropriately."""
         try:
             yield

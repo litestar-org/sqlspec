@@ -10,8 +10,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_dict_row, is_indexable_row
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-    from contextlib import contextmanager
+    from collections.abc import Generator, Sequence
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.statement.filters import StatementFilter
@@ -73,7 +72,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         """
 
     @abstractmethod
-    def handle_database_exceptions(self) -> "contextmanager[None]":
+    def handle_database_exceptions(self) -> "Generator[None, None, None]":
         """MANDATORY: Handle database-specific exceptions and wrap them appropriately.
 
         This context manager is the ONLY place where exceptions should be caught
@@ -256,7 +255,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         **kwargs: Any,
     ) -> "Union[ModelT, RowT, dict[str, Any]]": ...  # pyright: ignore[reportInvalidTypeVarUse]
 
-    def select_one(  # type: ignore[misc]
+    def select_one(
         self,
         statement: "Union[Statement, QueryBuilder]",
         /,

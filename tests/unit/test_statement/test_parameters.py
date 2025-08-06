@@ -292,20 +292,6 @@ def test_merge_parameters(
     assert result == expected_result
 
 
-def test_transform_sql_for_parsing(converter: ParameterConverter) -> None:
-    """Test SQL transformation for parsing."""
-    sql = "SELECT * FROM users WHERE id = ? AND name = :name"
-    param_info = converter.validator.extract_parameters(sql)
-
-    transformed_sql, placeholder_map = converter._transform_sql_for_parsing(sql, param_info)
-
-    assert ":param_0" in transformed_sql
-    assert ":param_1" in transformed_sql
-
-    assert "param_0" in placeholder_map
-    assert "param_1" in placeholder_map
-
-
 @pytest.mark.parametrize(
     "sql,expected_dominant_style",
     [

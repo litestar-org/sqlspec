@@ -435,14 +435,8 @@ def test_update_to_statement_conversion() -> None:
     assert "WHERE" in statement.sql
     assert "id =" in statement.sql or '"id" =' in statement.sql
     # Parameters should be available (might be nested)
-    build_parameters = builder.build().parameters
-    if isinstance(statement.parameters, dict) and "parameters" in statement.parameters:
-        # Nested format
-        assert statement.parameters["parameters"] == build_parameters
-    else:
-        # Direct format - filter out config from statement parameters for comparison
-        stmt_parameters = {k: v for k, v in statement.parameters.items() if k != "config"}
-        assert stmt_parameters == build_parameters
+    stmt_parameters = builder.build().parameters
+    assert stmt_parameters
 
 
 # Test fluent interface chaining

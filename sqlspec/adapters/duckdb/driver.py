@@ -1,7 +1,7 @@
 # ruff: noqa: D104 RUF100 FA100 BLE001 UP037 PLR0913 ANN401 COM812 S608 A002 ARG002 SLF001
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 import duckdb
 from sqlglot import exp
@@ -12,6 +12,8 @@ from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.statement.sql import StatementConfig
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     from sqlspec.adapters.duckdb._types import DuckDBConnection
     from sqlspec.driver._common import ExecutionResult
     from sqlspec.statement.result import SQLResult
@@ -21,7 +23,13 @@ duckdb_statement_config = StatementConfig(
     dialect="duckdb",
     parameter_config=ParameterStyleConfig(
         default_parameter_style=ParameterStyle.QMARK,
+        default_execution_parameter_style=ParameterStyle.QMARK,
         supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
+        supported_execution_parameter_styles={
+            ParameterStyle.QMARK,
+            ParameterStyle.NUMERIC,
+            ParameterStyle.NAMED_DOLLAR,
+        },
         type_coercion_map={},
         has_native_list_expansion=True,
         needs_static_script_compilation=True,
@@ -164,12 +172,13 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """Commit the current transaction."""
         self.connection.commit()
 
-    def handle_database_exceptions(self) -> "contextmanager[None]":
+    def handle_database_exceptions(self) -> "Generator[None, None, None]":
         """Handle DuckDB-specific exceptions and wrap them appropriately."""
-        return contextmanager(self._handle_database_exceptions_impl)()
+        return cast("Generator[None, None, None]", self._handle_database_exceptions_impl())
 
-    def _handle_database_exceptions_impl(self) -> Any:
-        """Implementation of database exception handling without decorator."""
+    @contextmanager
+    def _handle_database_exceptions_impl(self) -> "Generator[None, None, None]":
+        """Implementation of database exception handling."""
         try:
             yield
         except duckdb.Error as e:

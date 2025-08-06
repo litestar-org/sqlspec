@@ -1,5 +1,3 @@
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-
 """Test parameter conversion logic follows core principles.
 
 Tests validate that parameter conversion ONLY occurs when:
@@ -17,6 +15,7 @@ import pytest
 
 from sqlspec.driver._common import ExecutionResult
 from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
 
 

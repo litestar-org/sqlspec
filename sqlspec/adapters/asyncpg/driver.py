@@ -1,7 +1,7 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 import re
-from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, AsyncContextManager, Final, Optional
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 import asyncpg
 
@@ -193,13 +193,12 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """Commit transaction using asyncpg-specific method."""
         await self.connection.execute("COMMIT")
 
-    def handle_database_exceptions(self) -> "AsyncContextManager[None]":
+    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
         """Handle AsyncPG-specific exceptions and wrap them appropriately."""
         return self._handle_database_exceptions_async()
 
     @asynccontextmanager
     async def _handle_database_exceptions_async(self) -> Any:
-        """Async context manager for database exception handling."""
         try:
             yield
         except asyncpg.PostgresError as e:

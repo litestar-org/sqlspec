@@ -19,7 +19,7 @@ class TestSQLGenerationPerformance:
 
         # This should work identically after optimization
         assert original_sql == "SELECT * FROM users WHERE id = ?"
-        assert original_parameters == (123,)
+        assert original_parameters in [(123,), [123]]
 
     def test_expression_reuse_safety(self) -> None:
         """Verify expressions can be safely reused after copy=False."""
@@ -33,10 +33,10 @@ class TestSQLGenerationPerformance:
 
         assert sql1_compiled == sql2_compiled
         assert parameters1 != parameters2
-        assert parameters1 == (True,)
-        assert parameters2 == (False,)
+        assert parameters1 in [(True,), [True]]
+        assert parameters2 in [(False,), [False]]
 
-    def test_complex_query_functionality(self):
+    def test_complex_query_functionality(self) -> None:
         """Test that complex queries still work correctly after optimization."""
         complex_query = """
         SELECT u.id, u.name, p.title, c.name as category
@@ -54,9 +54,9 @@ class TestSQLGenerationPerformance:
         # Should compile without errors
         assert "SELECT" in compiled_sql
         assert "JOIN" in compiled_sql
-        assert parameters == (True, True, 10)
+        assert parameters in [(True, True, 10), [True, True, 10]]
 
-    def test_batch_operation_functionality(self):
+    def test_batch_operation_functionality(self) -> None:
         """Test that batch operations work correctly after optimization."""
         base_query = "INSERT INTO users (name, email) VALUES (?, ?)"
         batch_parameters = [
@@ -72,7 +72,7 @@ class TestSQLGenerationPerformance:
         assert "INSERT INTO users" in compiled_sql
         assert parameters == batch_parameters
 
-    def test_parameter_styles_maintained(self):
+    def test_parameter_styles_maintained(self) -> None:
         """Test that parameter style handling is preserved."""
         # Test different parameter styles
         queries_and_parameters = [
@@ -85,13 +85,13 @@ class TestSQLGenerationPerformance:
             if isinstance(parameters, tuple):
                 sql = SQL(query, *parameters)
             else:
-                sql = SQL(query, **parameters)
+                sql = SQL(query, parameters)
 
             compiled_sql, compiled_parameters = sql.compile()
             # Should compile without errors
             assert "SELECT" in compiled_sql
 
-    def test_script_execution_safety(self):
+    def test_script_execution_safety(self) -> None:
         """Test that script execution works correctly after optimization."""
         script = """
         CREATE TABLE test_table (id INTEGER PRIMARY KEY);
@@ -108,7 +108,7 @@ class TestSQLGenerationPerformance:
         assert "SELECT" in compiled_sql
 
     @pytest.mark.benchmark
-    def test_copy_optimization_performance_basic(self):
+    def test_copy_optimization_performance_basic(self) -> None:
         """Basic performance test for copy=False optimization."""
         test_queries = [
             ("SELECT * FROM users WHERE id = ?", (1,)),
@@ -134,7 +134,7 @@ class TestSQLGenerationPerformance:
         # Basic sanity check - should complete in reasonable time
         assert execution_time < 5.0  # Should complete within 5 seconds
 
-    def test_expression_mutation_safety(self):
+    def test_expression_mutation_safety(self) -> None:
         """Test that expressions aren't mutated unsafely after copy=False."""
         base_query = "SELECT * FROM users WHERE id = ?"
 
@@ -147,9 +147,9 @@ class TestSQLGenerationPerformance:
         # Each should have maintained its own parameters
         for i, (compiled_sql, parameters) in enumerate(compiled_results):
             assert compiled_sql == "SELECT * FROM users WHERE id = ?"
-            assert parameters == (i + 1,)  # Parameters should be 1, 2, 3
+            assert parameters in [(i + 1,), [i + 1]]
 
-    def test_caching_compatibility(self):
+    def test_caching_compatibility(self) -> None:
         """Test that copy=False optimization works with caching."""
         config = StatementConfig(enable_caching=True)
         query = "SELECT * FROM users WHERE active = ?"

@@ -134,7 +134,7 @@ def test_unsupported_style_fallback(duckdb_test_setup: tuple[DuckDBDriver, str])
     session, table_name = duckdb_test_setup
 
     # Create SQL with named style (not supported by DuckDB)
-    sql = SQL(f"SELECT * FROM {table_name} WHERE name = :name", parameters={"name": "test1"})
+    sql = SQL(f"SELECT * FROM {table_name} WHERE name = :name", {"name": "test1"})
 
     # This should still work because it should be converted to supported style
     result = session.execute(sql)

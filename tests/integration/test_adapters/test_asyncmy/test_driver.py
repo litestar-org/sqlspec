@@ -7,6 +7,7 @@ transaction management, and error handling.
 
 from __future__ import annotations
 
+import math
 from collections.abc import AsyncGenerator
 from typing import Literal
 
@@ -64,51 +65,32 @@ async def test_asyncmy_basic_crud(asyncmy_driver: AsyncmyDriver) -> None:
     driver = asyncmy_driver
 
     # INSERT
-    insert_result = await driver.execute(
-        "INSERT INTO test_table (name, value) VALUES (?, ?)",
-        ("test_user", 42)
-    )
-    assert insert_result.rowcount == 1
-    assert insert_result.last_insert_id is not None
+    insert_result = await driver.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("test_user", 42))
+    assert insert_result.num_rows == 1
 
     # SELECT
-    select_result = await driver.execute(
-        "SELECT * FROM test_table WHERE name = ?",
-        ("test_user",)
-    )
-    assert select_result.rowcount == 1
-    assert len(select_result.rows) == 1
-    row = select_result.rows[0]
+    select_result = await driver.execute("SELECT * FROM test_table WHERE name = ?", ("test_user",))
+    assert select_result.num_rows == 1
+    assert len(select_result.get_data()) == 1
+    row = select_result.get_data()[0]
     assert row["name"] == "test_user"
     assert row["value"] == 42
 
     # UPDATE
-    update_result = await driver.execute(
-        "UPDATE test_table SET value = ? WHERE name = ?",
-        (100, "test_user")
-    )
-    assert update_result.rowcount == 1
+    update_result = await driver.execute("UPDATE test_table SET value = ? WHERE name = ?", (100, "test_user"))
+    assert update_result.num_rows == 1
 
     # Verify update
-    updated_result = await driver.execute(
-        "SELECT value FROM test_table WHERE name = ?",
-        ("test_user",)
-    )
-    assert updated_result.rows[0]["value"] == 100
+    updated_result = await driver.execute("SELECT value FROM test_table WHERE name = ?", ("test_user",))
+    assert updated_result.get_data()[0]["value"] == 100
 
     # DELETE
-    delete_result = await driver.execute(
-        "DELETE FROM test_table WHERE name = ?",
-        ("test_user",)
-    )
-    assert delete_result.rowcount == 1
+    delete_result = await driver.execute("DELETE FROM test_table WHERE name = ?", ("test_user",))
+    assert delete_result.num_rows == 1
 
     # Verify deletion
-    verify_result = await driver.execute(
-        "SELECT COUNT(*) as count FROM test_table WHERE name = ?",
-        ("test_user",)
-    )
-    assert verify_result.rows[0]["count"] == 0
+    verify_result = await driver.execute("SELECT COUNT(*) as count FROM test_table WHERE name = ?", ("test_user",))
+    assert verify_result.get_data()[0]["count"] == 0
 
 
 @pytest.mark.asyncio
@@ -118,28 +100,20 @@ async def test_asyncmy_parameter_styles(asyncmy_driver: AsyncmyDriver) -> None:
     driver = asyncmy_driver
 
     # Test positional parameters (tuple)
-    result1 = await driver.execute(
-        "INSERT INTO test_table (name, value) VALUES (?, ?)",
-        ("user1", 10)
-    )
-    assert result1.rowcount == 1
+    result1 = await driver.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("user1", 10))
+    assert result1.num_rows == 1
 
     # Test positional parameters (list)
-    result2 = await driver.execute(
-        "INSERT INTO test_table (name, value) VALUES (?, ?)",
-        ["user2", 20]
-    )
-    assert result2.rowcount == 1
+    result2 = await driver.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ["user2", 20])
+    assert result2.num_rows == 1
 
     # Verify both inserts
-    select_result = await driver.execute(
-        "SELECT name, value FROM test_table ORDER BY name"
-    )
-    assert len(select_result.rows) == 2
-    assert select_result.rows[0]["name"] == "user1"
-    assert select_result.rows[0]["value"] == 10
-    assert select_result.rows[1]["name"] == "user2"
-    assert select_result.rows[1]["value"] == 20
+    select_result = await driver.execute("SELECT name, value FROM test_table ORDER BY name")
+    assert len(select_result.get_data()) == 2
+    assert select_result.get_data()[0]["name"] == "user1"
+    assert select_result.get_data()[0]["value"] == 10
+    assert select_result.get_data()[1]["name"] == "user2"
+    assert select_result.get_data()[1]["value"] == 20
 
 
 @pytest.mark.asyncio
@@ -149,26 +123,18 @@ async def test_asyncmy_execute_many(asyncmy_driver: AsyncmyDriver) -> None:
     driver = asyncmy_driver
 
     # Test batch insert
-    data = [
-        ("batch_user_1", 100),
-        ("batch_user_2", 200),
-        ("batch_user_3", 300),
-    ]
+    data = [("batch_user_1", 100), ("batch_user_2", 200), ("batch_user_3", 300)]
 
-    result = await driver.execute_many(
-        "INSERT INTO test_table (name, value) VALUES (?, ?)",
-        data
-    )
-    assert result.rowcount == 3
+    result = await driver.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", data)
+    assert result.num_rows == 3
 
     # Verify batch insert
     select_result = await driver.execute(
-        "SELECT name, value FROM test_table WHERE name LIKE ? ORDER BY name",
-        ("batch_user_%",)
+        "SELECT name, value FROM test_table WHERE name LIKE ? ORDER BY name", ("batch_user_%",)
     )
-    assert len(select_result.rows) == 3
-    assert select_result.rows[0]["name"] == "batch_user_1"
-    assert select_result.rows[0]["value"] == 100
+    assert len(select_result.get_data()) == 3
+    assert select_result.get_data()[0]["name"] == "batch_user_1"
+    assert select_result.get_data()[0]["value"] == 100
 
 
 @pytest.mark.asyncio
@@ -184,16 +150,15 @@ async def test_asyncmy_execute_script(asyncmy_driver: AsyncmyDriver) -> None:
     """
 
     result = await driver.execute_script(script)
-    assert result.is_script_result is True
+    assert result.operation_type == "SCRIPT"  # Check operation type
 
     # Verify script execution
     select_result = await driver.execute(
-        "SELECT name, value FROM test_table WHERE name LIKE ? ORDER BY name",
-        ("script_user_%",)
+        "SELECT name, value FROM test_table WHERE name LIKE ? ORDER BY name", ("script_user_%",)
     )
-    assert len(select_result.rows) == 2
-    assert select_result.rows[0]["value"] == 2000  # 1000 * 2
-    assert select_result.rows[1]["value"] == 4000  # 2000 * 2
+    assert len(select_result.get_data()) == 2
+    assert select_result.get_data()[0]["value"] == 2000  # 1000 * 2
+    assert select_result.get_data()[1]["value"] == 4000  # 2000 * 2
 
 
 @pytest.mark.asyncio
@@ -218,34 +183,24 @@ async def test_asyncmy_data_types(asyncmy_driver: AsyncmyDriver) -> None:
 
     # Insert test data
     from datetime import date, datetime
-    test_data = (
-        "test_string",
-        42,
-        3.14,
-        True,
-        date(2023, 1, 1),
-        datetime(2023, 1, 1, 12, 0, 0),
-        '{"key": "value"}'
-    )
+
+    test_data = ("test_string", 42, math.pi, True, date(2023, 1, 1), datetime(2023, 1, 1, 12, 0, 0), '{"key": "value"}')
 
     result = await driver.execute(
         """INSERT INTO data_types_test
            (text_col, int_col, float_col, bool_col, date_col, datetime_col, json_col)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        test_data
+        test_data,
     )
-    assert result.rowcount == 1
+    assert result.num_rows == 1
 
     # Retrieve and verify data
-    select_result = await driver.execute(
-        "SELECT * FROM data_types_test WHERE id = ?",
-        (result.last_insert_id,)
-    )
-    assert len(select_result.rows) == 1
-    row = select_result.rows[0]
+    select_result = await driver.execute("SELECT * FROM data_types_test WHERE id = ?", (result.last_insert_id,))
+    assert len(select_result.get_data()) == 1
+    row = select_result.get_data()[0]
     assert row["text_col"] == "test_string"
     assert row["int_col"] == 42
-    assert abs(row["float_col"] - 3.14) < 0.01
+    assert abs(row["float_col"] - math.pi) < 0.01
     assert row["bool_col"] == 1  # MySQL returns boolean as int
 
 
@@ -257,33 +212,21 @@ async def test_asyncmy_transaction_management(asyncmy_driver: AsyncmyDriver) -> 
 
     # Test successful transaction
     await driver.begin()
-    await driver.execute(
-        "INSERT INTO test_table (name, value) VALUES (?, ?)",
-        ("tx_user_1", 100)
-    )
+    await driver.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("tx_user_1", 100))
     await driver.commit()
 
     # Verify commit
-    result = await driver.execute(
-        "SELECT COUNT(*) as count FROM test_table WHERE name = ?",
-        ("tx_user_1",)
-    )
-    assert result.rows[0]["count"] == 1
+    result = await driver.execute("SELECT COUNT(*) as count FROM test_table WHERE name = ?", ("tx_user_1",))
+    assert result.get_data()[0]["count"] == 1
 
     # Test rollback transaction
     await driver.begin()
-    await driver.execute(
-        "INSERT INTO test_table (name, value) VALUES (?, ?)",
-        ("tx_user_2", 200)
-    )
+    await driver.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("tx_user_2", 200))
     await driver.rollback()
 
     # Verify rollback
-    result = await driver.execute(
-        "SELECT COUNT(*) as count FROM test_table WHERE name = ?",
-        ("tx_user_2",)
-    )
-    assert result.rows[0]["count"] == 0
+    result = await driver.execute("SELECT COUNT(*) as count FROM test_table WHERE name = ?", ("tx_user_2",))
+    assert result.get_data()[0]["count"] == 0
 
 
 @pytest.mark.asyncio
@@ -293,20 +236,14 @@ async def test_asyncmy_null_parameters(asyncmy_driver: AsyncmyDriver) -> None:
     driver = asyncmy_driver
 
     # Insert with NULL value
-    result = await driver.execute(
-        "INSERT INTO test_table (name, value) VALUES (?, ?)",
-        ("null_test", None)
-    )
-    assert result.rowcount == 1
+    result = await driver.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("null_test", None))
+    assert result.num_rows == 1
 
     # Verify NULL handling
-    select_result = await driver.execute(
-        "SELECT name, value FROM test_table WHERE name = ?",
-        ("null_test",)
-    )
-    assert len(select_result.rows) == 1
-    assert select_result.rows[0]["name"] == "null_test"
-    assert select_result.rows[0]["value"] is None
+    select_result = await driver.execute("SELECT name, value FROM test_table WHERE name = ?", ("null_test",))
+    assert len(select_result.get_data()) == 1
+    assert select_result.get_data()[0]["name"] == "null_test"
+    assert select_result.get_data()[0]["value"] is None
 
 
 @pytest.mark.asyncio
@@ -320,15 +257,12 @@ async def test_asyncmy_error_handling(asyncmy_driver: AsyncmyDriver) -> None:
         await driver.execute("INVALID SQL STATEMENT")
 
     # Test constraint violation (duplicate primary key)
-    await driver.execute(
-        "INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)",
-        (1, "user1", 100)
-    )
+    await driver.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "user1", 100))
 
     with pytest.raises(Exception):  # Should be wrapped as SQLSpecError
         await driver.execute(
             "INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)",
-            (1, "user2", 200)  # Same ID
+            (1, "user2", 200),  # Same ID
         )
 
 
@@ -340,19 +274,14 @@ async def test_asyncmy_large_result_set(asyncmy_driver: AsyncmyDriver) -> None:
 
     # Insert multiple rows for testing
     batch_data = [(f"user_{i}", i * 10) for i in range(100)]
-    await driver.execute_many(
-        "INSERT INTO test_table (name, value) VALUES (?, ?)",
-        batch_data
-    )
+    await driver.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", batch_data)
 
     # Test large SELECT
-    result = await driver.execute(
-        "SELECT * FROM test_table ORDER BY value"
-    )
-    assert result.rowcount == 100
-    assert len(result.rows) == 100
-    assert result.rows[0]["name"] == "user_0"
-    assert result.rows[99]["name"] == "user_99"
+    result = await driver.execute("SELECT * FROM test_table ORDER BY value")
+    assert result.num_rows == 100
+    assert len(result.get_data()) == 100
+    assert result.get_data()[0]["name"] == "user_0"
+    assert result.get_data()[99]["name"] == "user_99"
 
 
 @pytest.mark.asyncio
@@ -362,25 +291,18 @@ async def test_asyncmy_mysql_specific_features(asyncmy_driver: AsyncmyDriver) ->
     driver = asyncmy_driver
 
     # Test MySQL INSERT ... ON DUPLICATE KEY UPDATE
-    await driver.execute(
-        "INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)",
-        (1, "duplicate_test", 100)
-    )
+    await driver.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "duplicate_test", 100))
 
     # Use ON DUPLICATE KEY UPDATE
-    result = await driver.execute(
+    _ = await driver.execute(
         """INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)
            ON DUPLICATE KEY UPDATE value = VALUES(value) + 50""",
-        (1, "duplicate_test_updated", 200)
+        (1, "duplicate_test_updated", 200),
     )
-    assert result.rowcount in (1, 2)  # MySQL returns 1 for insert, 2 for update
 
     # Verify the update occurred
-    select_result = await driver.execute(
-        "SELECT name, value FROM test_table WHERE id = ?",
-        (1,)
-    )
-    assert select_result.rows[0]["value"] == 250  # 200 + 50
+    select_result = await driver.execute("SELECT name, value FROM test_table WHERE id = ?", (1,))
+    assert select_result.get_data()[0]["value"] == 250  # 200 + 50
 
 
 @pytest.mark.asyncio
@@ -399,25 +321,24 @@ async def test_asyncmy_complex_queries(asyncmy_driver: AsyncmyDriver) -> None:
     """)
 
     # Insert test data
+    await driver.execute("INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "john_doe", 100))
     await driver.execute(
-        "INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)",
-        (1, "john_doe", 100)
-    )
-    await driver.execute(
-        "INSERT INTO user_profiles (user_id, email, age) VALUES (?, ?, ?)",
-        (1, "john@example.com", 30)
+        "INSERT INTO user_profiles (user_id, email, age) VALUES (?, ?, ?)", (1, "john@example.com", 30)
     )
 
     # Test JOIN query
-    result = await driver.execute("""
+    result = await driver.execute(
+        """
         SELECT t.name, t.value, p.email, p.age
         FROM test_table t
         JOIN user_profiles p ON t.id = p.user_id
         WHERE t.name = ?
-    """, ("john_doe",))
+    """,
+        ("john_doe",),
+    )
 
-    assert len(result.rows) == 1
-    row = result.rows[0]
+    assert len(result.get_data()) == 1
+    row = result.get_data()[0]
     assert row["name"] == "john_doe"
     assert row["email"] == "john@example.com"
     assert row["age"] == 30
@@ -431,36 +352,25 @@ async def test_asyncmy_edge_cases(asyncmy_driver: AsyncmyDriver) -> None:
 
     # Test empty parameter list
     result = await driver.execute("SELECT 1 as test_col", ())
-    assert len(result.rows) == 1
-    assert result.rows[0]["test_col"] == 1
+    assert len(result.get_data()) == 1
+    assert result.get_data()[0]["test_col"] == 1
 
     # Test single parameter
-    result = await driver.execute(
-        "SELECT ? as param_value",
-        (42,)
-    )
-    assert result.rows[0]["param_value"] == 42
+    result = await driver.execute("SELECT ? as param_value", (42,))
+    assert result.get_data()[0]["param_value"] == 42
 
     # Test None parameters in execute_many
-    data_with_nulls = [
-        ("user1", 100),
-        ("user2", None),
-        ("user3", 300),
-    ]
+    data_with_nulls = [("user1", 100), ("user2", None), ("user3", 300)]
 
-    result = await driver.execute_many(
-        "INSERT INTO test_table (name, value) VALUES (?, ?)",
-        data_with_nulls
-    )
-    assert result.rowcount == 3
+    result = await driver.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", data_with_nulls)
+    assert result.num_rows == 3
 
     # Verify NULL handling in batch
     select_result = await driver.execute(
-        "SELECT name, value FROM test_table WHERE name IN (?, ?, ?) ORDER BY name",
-        ("user1", "user2", "user3")
+        "SELECT name, value FROM test_table WHERE name IN (?, ?, ?) ORDER BY name", ("user1", "user2", "user3")
     )
-    assert len(select_result.rows) == 3
-    assert select_result.rows[1]["value"] is None  # user2
+    assert len(select_result.get_data()) == 3
+    assert select_result.get_data()[1]["value"] is None  # user2
 
 
 @pytest.mark.asyncio
@@ -470,30 +380,20 @@ async def test_asyncmy_result_metadata(asyncmy_driver: AsyncmyDriver) -> None:
     driver = asyncmy_driver
 
     # Test INSERT result metadata
-    insert_result = await driver.execute(
-        "INSERT INTO test_table (name, value) VALUES (?, ?)",
-        ("metadata_test", 500)
-    )
-    assert insert_result.rowcount == 1
-    assert insert_result.last_insert_id is not None
-    assert insert_result.is_select_result is False
+    insert_result = await driver.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("metadata_test", 500))
+    assert insert_result.num_rows == 1
+    assert insert_result.operation_type == "INSERT"  # Check operation type
     assert insert_result.column_names is None or len(insert_result.column_names) == 0
 
     # Test SELECT result metadata
-    select_result = await driver.execute(
-        "SELECT id, name, value FROM test_table WHERE name = ?",
-        ("metadata_test",)
-    )
-    assert select_result.rowcount == 1
-    assert select_result.is_select_result is True
+    select_result = await driver.execute("SELECT id, name, value FROM test_table WHERE name = ?", ("metadata_test",))
+    assert select_result.num_rows == 1
+    assert select_result.operation_type == "SELECT"
     assert select_result.column_names == ["id", "name", "value"]
-    assert len(select_result.rows) == 1
+    assert len(select_result.get_data()) == 1
 
     # Test no-results query metadata
-    empty_result = await driver.execute(
-        "SELECT * FROM test_table WHERE name = ?",
-        ("nonexistent",)
-    )
-    assert empty_result.rowcount == 0
-    assert empty_result.is_select_result is True
-    assert len(empty_result.rows) == 0
+    empty_result = await driver.execute("SELECT * FROM test_table WHERE name = ?", ("nonexistent",))
+    assert empty_result.num_rows == 0
+    assert empty_result.operation_type == "SELECT"
+    assert len(empty_result.get_data()) == 0

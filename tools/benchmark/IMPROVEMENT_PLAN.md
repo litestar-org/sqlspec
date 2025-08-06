@@ -7,32 +7,40 @@ This document outlines specific improvements needed before moving the benchmark 
 ## Current Issues Identified
 
 ### 1. CLI Interface Complexity
+
 **File**: `cli.py` (lines 67-91)
 **Issue**: Excessive display configuration options that don't align with user needs
 **Problems**:
+
 - Too many visual config options (`--show-all`, `--max-items`, `--table-width`, `--display-mode`, `--no-truncate`)
 - Focus on individual metrics rather than driver grouping
 - Complex visualization options that obscure core comparison data
 
 ### 2. Missing Oracle Database Support
+
 **File**: `suites/orm_comparison.py` (lines 140-230)
 **Issue**: Oracle adapter exists in codebase but not integrated into benchmarks
 **Missing**:
+
 - Oracle sync benchmark configuration (using `oracledb` adapter)
 - Oracle async benchmark configuration (using `oracledb` adapter)
 - Container setup for Oracle database testing
 
 ### 3. Unfair Test Scenarios
+
 **File**: `suites/orm_comparison.py` (lines 530-859)
 **Issues**:
+
 - Hardcoded IDs (line 24: `SINGLE_ROW_ID = 500`) make tests predictable
 - Limited query complexity (mostly simple SELECT/INSERT/UPDATE)
 - No realistic workload simulation (mixed operations, varying data sizes)
 - Batch sizes are static (lines 25-26: `BATCH_UPDATE_LIMIT = 100`)
 
 ### 4. Display Logic Complexity
+
 **File**: `visualization/reports.py` (lines 40-100)
 **Issues**:
+
 - Individual metric focus instead of driver-grouped results
 - Complex display options that don't serve the core use case
 - Multiple visualization modes when only driver comparison is needed
@@ -44,7 +52,9 @@ This document outlines specific improvements needed before moving the benchmark 
 **Target File**: `cli.py`
 
 **Changes Needed**:
+
 1. **Remove unnecessary display options** (lines 67-91):
+
    ```python
    # REMOVE these options:
    --show-all, --max-items, --table-width, --display-mode, --no-truncate
@@ -54,6 +64,7 @@ This document outlines specific improvements needed before moving the benchmark 
    ```
 
 2. **Default to driver-grouped results**:
+
    ```python
    # Default display should group by driver, not individual metrics
    display_options = {
@@ -68,7 +79,9 @@ This document outlines specific improvements needed before moving the benchmark 
 **Target File**: `suites/orm_comparison.py`
 
 **Changes Needed**:
+
 1. **Add Oracle sync configuration** (after line 114):
+
    ```python
    {
        "name": "Oracle Sync",
@@ -87,6 +100,7 @@ This document outlines specific improvements needed before moving the benchmark 
    ```
 
 2. **Add Oracle async configuration**:
+
    ```python
    {
        "name": "Oracle Async",
@@ -105,6 +119,7 @@ This document outlines specific improvements needed before moving the benchmark 
    ```
 
 3. **Add Oracle container support** in `infrastructure/containers.py`:
+
    ```python
    def start_oracle(self, keep_containers: bool = False) -> tuple[str, int]:
        """Start Oracle container and return host, port."""
@@ -112,6 +127,7 @@ This document outlines specific improvements needed before moving the benchmark 
    ```
 
 4. **Add Oracle config methods**:
+
    ```python
    def _get_oracle_sync_configs(self, host: str, port: int) -> tuple[OracleConfig, OracleConfig]:
        """Get Oracle sync configs with and without caching."""
@@ -125,12 +141,14 @@ This document outlines specific improvements needed before moving the benchmark 
 **Target File**: `suites/orm_comparison.py`
 
 **Changes Needed**:
+
 1. **Randomize test data** (lines 24-26):
+
    ```python
    # REPLACE static values with:
    import random
 
-   def get_random_test_params():
+   def get_random_test_parameters():
        return {
            "single_row_id": random.randint(100, 900),
            "batch_size": random.choice([50, 100, 200]),
@@ -139,6 +157,7 @@ This document outlines specific improvements needed before moving the benchmark 
    ```
 
 2. **Add complex query scenarios**:
+
    ```python
    # NEW benchmark methods:
    def _benchmark_complex_join(self, ...):
@@ -152,6 +171,7 @@ This document outlines specific improvements needed before moving the benchmark 
    ```
 
 3. **Add varying data sizes**:
+
    ```python
    # NEW test scenarios:
    operations = {
@@ -168,7 +188,9 @@ This document outlines specific improvements needed before moving the benchmark 
 **Target File**: `visualization/reports.py`
 
 **Changes Needed**:
+
 1. **Default to driver-grouped display** (lines 62-79):
+
    ```python
    def display_suite_results(self, suite_name: str, results: dict[str, TimingResult]) -> None:
        """Display results grouped by driver, focusing on write operations."""
@@ -180,6 +202,7 @@ This document outlines specific improvements needed before moving the benchmark 
    ```
 
 2. **Remove individual metric displays**:
+
    ```python
    # REMOVE complex visualization methods, keep only:
    def _display_driver_comparison_table(self, driver_results: dict) -> None:
@@ -187,6 +210,7 @@ This document outlines specific improvements needed before moving the benchmark 
    ```
 
 3. **Focus on write operation metrics**:
+
    ```python
    def _filter_write_operations(self, results: dict) -> dict:
        """Filter to show only insert/update/delete operations."""
@@ -198,16 +222,19 @@ This document outlines specific improvements needed before moving the benchmark 
 ## Implementation Priority
 
 ### Immediate (Before Project Move)
+
 1. ✅ **CLI Simplification**: Remove unnecessary display options
 2. ✅ **Oracle Integration**: Add sync/async Oracle benchmarks
 3. ✅ **Driver Grouping**: Default display to group by driver
 
 ### Near-term (After Project Move)
+
 4. **Test Scenarios**: Add complex queries and randomized data
 5. **Reporting Cleanup**: Simplify visualization logic
 6. **Container Support**: Oracle database container integration
 
 ### Future Enhancements
+
 7. **Mixed Workloads**: Realistic application usage patterns
 8. **Performance Baselines**: Historical performance tracking
 9. **Automated Regression Detection**: Alert on performance drops

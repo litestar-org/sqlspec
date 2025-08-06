@@ -186,13 +186,13 @@ async def test_asyncmy_dialect_propagation_with_filters(mysql_service: MySQLServ
 
         # Create temp table and execute a query with filter
         await driver.execute_script("CREATE TEMPORARY TABLE test_users (id INT, name VARCHAR(100))")
-        await driver.execute_script("INSERT INTO test_users VALUES (1, 'test'), (2, 'another')")
+        await driver.execute("INSERT INTO test_users VALUES (1, 'test'), (2, 'another')")
 
         # Test with LimitOffsetFilter
         from sqlspec.statement.filters import LimitOffsetFilter
 
-        sql = SQL("SELECT * FROM test_users", statement_config=config.statement_config).filter(
-            LimitOffsetFilter(limit=1, offset=0)
+        sql = SQL(
+            "SELECT * FROM test_users", LimitOffsetFilter(limit=1, offset=0), statement_config=config.statement_config
         )
         result = await driver.execute(sql)
 

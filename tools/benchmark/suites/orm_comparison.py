@@ -29,9 +29,9 @@ from tools.benchmark.suites.base import BaseBenchmarkSuite
 def get_random_test_parameters() -> dict[str, int]:
     """Generate randomized test parameters for fair benchmarking."""
     return {
-        "single_row_id": random.randint(100, 900),
-        "batch_update_limit": random.choice([50, 100, 200]),
-        "batch_select_limit": random.choice([50, 100, 200]),
+        "single_row_id": random.randint(100, 900),  # noqa: S311
+        "batch_update_limit": random.choice([50, 100, 200]),  # noqa: S311
+        "batch_select_limit": random.choice([50, 100, 200]),  # noqa: S311
     }
 
 
@@ -264,7 +264,7 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         # SQLAlchemy gets its own isolated database file
         self._sqlite_sqlalchemy_db = self._generate_unique_db_path("sqlite_sqlalchemy")
 
-        def _on_sqlite_connect(dbapi_connection, connection_record) -> None:
+        def _on_sqlite_connect(dbapi_connection: Any, connection_record: Any) -> None:
             """Enable WAL mode and optimizations to match SQLSpec adapter behavior."""
             dbapi_connection.execute("PRAGMA journal_mode=WAL")
             dbapi_connection.execute("PRAGMA foreign_keys=ON")
@@ -731,10 +731,8 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             options = config.pool_config["options"]
             if "search_path=" in options:
                 schema_name = options.split("search_path=")[-1]
-                try:
+                with contextlib.suppress(Exception):
                     session.execute(f"SET search_path = {schema_name}")
-                except Exception:
-                    pass  # Continue if setting search_path fails
 
     async def _apply_psycopg_search_path_if_needed_async(self, session: Any, config: Any) -> None:
         """Apply search_path for Psycopg adapters if needed (async version)."""
@@ -742,10 +740,8 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
             options = config.pool_config["options"]
             if "search_path=" in options:
                 schema_name = options.split("search_path=")[-1]
-                try:
+                with contextlib.suppress(Exception):
                     await session.execute(f"SET search_path = {schema_name}")
-                except Exception:
-                    pass  # Continue if setting search_path fails
 
     def _setup_sqlspec_sync_databases(self, config_no_cache: Any, config_with_cache: Any) -> None:
         """Set up SQLSpec databases with the same data that SQLAlchemy has."""
@@ -773,26 +769,27 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
                             schema_name = uri.split("search_path%3D")[-1].split("&")[0]
 
                 # Check connection_config (for ADBC)
-                elif config.connection_config:
-                    if "uri" in config.connection_config and "search_path" in config.connection_config["uri"]:
-                        # For ADBC: uri with search_path parameter
-                        uri = config.connection_config["uri"]
-                        if "search_path%3D" in uri:
-                            schema_name = uri.split("search_path%3D")[-1].split("&")[0]
+                elif (
+                    config.connection_config
+                    and "uri" in config.connection_config
+                    and "search_path" in config.connection_config["uri"]
+                ):
+                    # For ADBC: uri with search_path parameter
+                    uri = config.connection_config["uri"]
+                    if "search_path%3D" in uri:
+                        schema_name = uri.split("search_path%3D")[-1].split("&")[0]
 
                 if schema_name:
-                    try:
+                    with contextlib.suppress(Exception):
+                        # Schema might already exist
                         session.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_name}")
-                    except Exception:
-                        pass  # Schema might already exist
 
                     # For Psycopg adapters, we need to explicitly set search_path in each session
                     # because connection options don't persist across connection pool operations
                     if config.pool_config and "options" in config.pool_config:
-                        try:
+                        with contextlib.suppress(Exception):
+                            # Continue if setting search_path fails
                             session.execute(f"SET search_path = {schema_name}")
-                        except Exception:
-                            pass  # Continue if setting search_path fails
 
                 # Create table - DDL statements now properly skip parameterization
                 session.execute("DROP TABLE IF EXISTS users")
@@ -838,26 +835,25 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
                             schema_name = uri.split("search_path%3D")[-1].split("&")[0]
 
                 # Check connection_config (for ADBC)
-                elif config.connection_config:
-                    if "uri" in config.connection_config and "search_path" in config.connection_config["uri"]:
-                        # For ADBC: uri with search_path parameter
-                        uri = config.connection_config["uri"]
-                        if "search_path%3D" in uri:
-                            schema_name = uri.split("search_path%3D")[-1].split("&")[0]
+                elif (
+                    config.connection_config
+                    and "uri" in config.connection_config
+                    and "search_path" in config.connection_config["uri"]
+                ):
+                    # For ADBC: uri with search_path parameter
+                    uri = config.connection_config["uri"]
+                    if "search_path%3D" in uri:
+                        schema_name = uri.split("search_path%3D")[-1].split("&")[0]
 
                 if schema_name:
-                    try:
+                    with contextlib.suppress(Exception):
                         await session.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_name}")
-                    except Exception:
-                        pass  # Schema might already exist
 
                     # For Psycopg adapters, we need to explicitly set search_path in each session
                     # because connection options don't persist across connection pool operations
                     if config.pool_config and "options" in config.pool_config:
-                        try:
+                        with contextlib.suppress(Exception):
                             await session.execute(f"SET search_path = {schema_name}")
-                        except Exception:
-                            pass  # Continue if setting search_path fails
 
                 # Create table - DDL statements now properly skip parameterization
                 await session.execute("DROP TABLE IF EXISTS users")

@@ -1,5 +1,3 @@
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-
 """Tests for SQLTranslatorMixin with config dialect support."""
 
 from contextlib import AbstractContextManager
@@ -14,6 +12,7 @@ from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.driver._common import ExecutionResult
 from sqlspec.driver.mixins._sql_translator import SQLTranslatorMixin
 from sqlspec.exceptions import SQLConversionError
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.statement.sql import SQL, StatementConfig
 
 # Create a default parameter config for tests

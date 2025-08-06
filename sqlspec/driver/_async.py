@@ -1,7 +1,7 @@
 """Asynchronous driver protocol implementation."""
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, AsyncContextManager, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from sqlspec.driver._common import CommonDriverAttributesMixin, ExecutionResult
 from sqlspec.driver.mixins import SQLTranslatorMixin, ToSchemaMixin
@@ -11,6 +11,7 @@ from sqlspec.utils.type_guards import is_dict_row, is_indexable_row
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from contextlib import AbstractAsyncContextManager
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.statement.filters import StatementFilter
@@ -72,7 +73,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         """
 
     @abstractmethod
-    def handle_database_exceptions(self) -> "AsyncContextManager[None]":
+    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
         """MANDATORY: Handle database-specific exceptions and wrap them appropriately.
 
         This async context manager is the ONLY place where exceptions should be caught

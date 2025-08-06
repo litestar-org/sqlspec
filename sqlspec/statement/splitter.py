@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Generator
 from enum import Enum
 from re import Pattern
-from typing import Callable, Optional, Union
+from typing import Callable, Optional, Union, cast
 
 from typing_extensions import TypeAlias
 
@@ -459,7 +459,7 @@ class StatementSplitter:
         if cache_config.splitter_pattern_cache_enabled:
             cached_patterns = splitter_pattern_cache.get(self._pattern_cache_key)
             if cached_patterns is not None:
-                return cached_patterns
+                return cast("list[tuple[TokenType, CompiledTokenPattern]]", cached_patterns)
 
         # Compile patterns
         compiled: list[tuple[TokenType, CompiledTokenPattern]] = []
@@ -539,7 +539,7 @@ class StatementSplitter:
         if cache_config.splitter_result_cache_enabled:
             cached_result = splitter_result_cache.get(cache_key)
             if cached_result is not None:
-                return cached_result
+                return cast("list[str]", cached_result)
 
         # Perform the actual splitting
         statements = self._do_split(sql)

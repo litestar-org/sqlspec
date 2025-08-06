@@ -1,5 +1,3 @@
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-
 """Comprehensive unit tests for QueryBuilder base class and WhereClauseMixin.
 
 This module tests the foundational builder functionality including:
@@ -41,6 +39,7 @@ from sqlspec.builder._ddl import (
 from sqlspec.builder._select import Select
 from sqlspec.builder.mixins._where_clause import WhereClauseMixin
 from sqlspec.exceptions import SQLBuilderError
+from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.statement.result import SQLResult
 from sqlspec.statement.sql import SQL, StatementConfig
 

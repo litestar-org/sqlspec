@@ -36,28 +36,31 @@ class CommonTableExpressionMixin:
             msg = "Cannot add WITH clause: expression not initialized."
             raise SQLBuilderError(msg)
 
-        if not hasattr(self._expression, "with_") and not isinstance(
-            self._expression, (exp.Select, exp.Insert, exp.Update, exp.Delete)
-        ):
+        if not isinstance(self._expression, (exp.Select, exp.Insert, exp.Update, exp.Delete)):
             msg = f"Cannot add WITH clause to {type(self._expression).__name__} expression."
             raise SQLBuilderError(msg)
 
         cte_expr: Optional[exp.Expression] = None
-        if hasattr(query, "to_statement"):
-            # Query is a builder instance
-            built_query = query.to_statement()  # pyright: ignore
-            cte_sql = built_query.to_sql()
-            cte_expr = exp.maybe_parse(cte_sql, dialect=getattr(self, "dialect", None))
-
-            # Merge parameters
-            if hasattr(self, "add_parameter"):
-                parameters = getattr(built_query, "parameters", None) or {}
-                for param_name, param_value in parameters.items():
-                    self.add_parameter(param_value, name=param_name)  # pyright: ignore
-        elif isinstance(query, str):
-            cte_expr = exp.maybe_parse(query, dialect=getattr(self, "dialect", None))
+        if isinstance(query, str):
+            cte_expr = exp.maybe_parse(query, dialect=self.dialect)  # type: ignore[attr-defined]
         elif isinstance(query, exp.Expression):
             cte_expr = query
+        else:
+            # Query is a builder instance - trust the protocol
+            built_query = query.to_statement()  # pyright: ignore
+            cte_sql = built_query.to_sql()
+            cte_expr = exp.maybe_parse(cte_sql, dialect=self.dialect)  # type: ignore[attr-defined]
+
+            # Merge parameters - handle both dict and list formats
+            # We know builders have add_parameter method
+            parameters = built_query.parameters
+            if parameters:
+                if isinstance(parameters, dict):
+                    for param_name, param_value in parameters.items():
+                        self.add_parameter(param_value, name=param_name)  # type: ignore[attr-defined]
+                elif isinstance(parameters, (list, tuple)):
+                    for param_value in parameters:
+                        self.add_parameter(param_value)  # type: ignore[attr-defined]
 
         if not cte_expr:
             msg = f"Could not parse CTE query: {query}"
@@ -71,22 +74,18 @@ class CommonTableExpressionMixin:
             cte_alias_expr = exp.alias_(cte_expr, name)
 
         # Different handling for different expression types
-        if hasattr(self._expression, "with_"):
-            existing_with = self._expression.args.get("with")  # pyright: ignore
-            if existing_with:
-                existing_with.expressions.append(cte_alias_expr)
-                if recursive:
-                    existing_with.set("recursive", recursive)
-            else:
-                self._expression = self._expression.with_(cte_alias_expr, as_=name, copy=False)  # pyright: ignore
-                if recursive:
-                    with_clause = self._expression.find(exp.With)
-                    if with_clause:
-                        with_clause.set("recursive", recursive)
+        # Select, Insert, Update, Delete all support WITH clause
+        existing_with = self._expression.args.get("with")  # pyright: ignore
+        if existing_with:
+            existing_with.expressions.append(cte_alias_expr)
+            if recursive:
+                existing_with.set("recursive", recursive)
         else:
-            # Store CTEs for later application during build
-            if not hasattr(self, "_with_ctes"):
-                setattr(self, "_with_ctes", {})
+            self._expression = self._expression.with_(cte_alias_expr, as_=name, copy=False)  # type: ignore[union-attr]
+            if recursive:
+                with_clause = self._expression.find(exp.With)
+                if with_clause:
+                    with_clause.set("recursive", recursive)
             self._with_ctes[name] = exp.CTE(this=cte_expr, alias=exp.to_table(name))  # type: ignore[attr-defined]
 
         return self
@@ -114,14 +113,14 @@ class SetOperationMixin:
         """
         left_query = self.build()  # type: ignore[attr-defined]
         right_query = other.build()
-        left_expr: Optional[exp.Expression] = exp.maybe_parse(left_query.sql, dialect=getattr(self, "dialect", None))
-        right_expr: Optional[exp.Expression] = exp.maybe_parse(right_query.sql, dialect=getattr(self, "dialect", None))
+        left_expr: Optional[exp.Expression] = exp.maybe_parse(left_query.sql, dialect=self.dialect)
+        right_expr: Optional[exp.Expression] = exp.maybe_parse(right_query.sql, dialect=self.dialect)
         if not left_expr or not right_expr:
             msg = "Could not parse queries for UNION operation"
             raise SQLBuilderError(msg)
         union_expr = exp.union(left_expr, right_expr, distinct=not all_)
         new_builder = type(self)()
-        new_builder.dialect = getattr(self, "dialect", None)
+        new_builder.dialect = self.dialect
         new_builder._expression = union_expr
         merged_parameters = dict(left_query.parameters)
         for param_name, param_value in right_query.parameters.items():
@@ -161,14 +160,14 @@ class SetOperationMixin:
         """
         left_query = self.build()  # type: ignore[attr-defined]
         right_query = other.build()
-        left_expr: Optional[exp.Expression] = exp.maybe_parse(left_query.sql, dialect=getattr(self, "dialect", None))
-        right_expr: Optional[exp.Expression] = exp.maybe_parse(right_query.sql, dialect=getattr(self, "dialect", None))
+        left_expr: Optional[exp.Expression] = exp.maybe_parse(left_query.sql, dialect=self.dialect)
+        right_expr: Optional[exp.Expression] = exp.maybe_parse(right_query.sql, dialect=self.dialect)
         if not left_expr or not right_expr:
             msg = "Could not parse queries for INTERSECT operation"
             raise SQLBuilderError(msg)
         intersect_expr = exp.intersect(left_expr, right_expr, distinct=True)
         new_builder = type(self)()
-        new_builder.dialect = getattr(self, "dialect", None)
+        new_builder.dialect = self.dialect
         new_builder._expression = intersect_expr
         # Merge parameters
         merged_parameters = dict(left_query.parameters)
@@ -190,14 +189,14 @@ class SetOperationMixin:
         """
         left_query = self.build()  # type: ignore[attr-defined]
         right_query = other.build()
-        left_expr: Optional[exp.Expression] = exp.maybe_parse(left_query.sql, dialect=getattr(self, "dialect", None))
-        right_expr: Optional[exp.Expression] = exp.maybe_parse(right_query.sql, dialect=getattr(self, "dialect", None))
+        left_expr: Optional[exp.Expression] = exp.maybe_parse(left_query.sql, dialect=self.dialect)
+        right_expr: Optional[exp.Expression] = exp.maybe_parse(right_query.sql, dialect=self.dialect)
         if not left_expr or not right_expr:
             msg = "Could not parse queries for EXCEPT operation"
             raise SQLBuilderError(msg)
         except_expr = exp.except_(left_expr, right_expr)
         new_builder = type(self)()
-        new_builder.dialect = getattr(self, "dialect", None)
+        new_builder.dialect = self.dialect
         new_builder._expression = except_expr
         # Merge parameters
         merged_parameters = dict(left_query.parameters)

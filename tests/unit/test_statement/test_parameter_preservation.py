@@ -22,12 +22,12 @@ def test_ctas_preserves_parameter_names() -> None:
 
     # Build and check
     safe_query = ctas_builder.build()
-    # Create config for DDL operations
+    # Create config for DDL operations - use NAMED_COLON to preserve parameter names in SQL
     parameter_config = ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+        default_parameter_style=ParameterStyle.NAMED_COLON, supported_parameter_styles={ParameterStyle.NAMED_COLON}
     )
     config = StatementConfig(parameter_config=parameter_config)
-    sql_statement = SQL(safe_query.sql, parameters=safe_query.parameters, config=config)
+    sql_statement = SQL(safe_query.sql, parameters=safe_query.parameters, statement_config=config)
 
     # Parameters should preserve original names
     assert "active" in safe_query.parameters
@@ -77,7 +77,7 @@ def test_mixed_parameter_style_normalization() -> None:
     parameters = sql.parameters
     assert isinstance(parameters, dict)
     assert parameters["active"] == "enabled"
-    assert parameters["arg_0"] == 123  # Positional param gets assigned a name
+    assert parameters["param_0"] == 123  # Positional param gets assigned a name
 
     # Test just positional - returns tuple
     sql2 = SQL("SELECT * FROM users WHERE id = ?", 123)

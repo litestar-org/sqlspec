@@ -53,13 +53,16 @@ class InsertValuesMixin:
             raise SQLBuilderError(msg)
         column_exprs = [exp.column(col) if isinstance(col, str) else col for col in columns]
         self._expression.set("columns", column_exprs)
-        # Synchronize the _columns attribute on the builder (if present)
-        if hasattr(self, "_columns"):
-            # If no columns, clear the list
+        # Synchronize the _columns attribute on the builder if present
+        # Some test classes may not have this attribute
+        try:
+            cols = self._columns  # type: ignore[attr-defined]
             if not columns:
-                self._columns.clear()  # pyright: ignore
+                cols.clear()
             else:
-                self._columns[:] = [col.name if isinstance(col, exp.Column) else str(col) for col in columns]  # pyright: ignore
+                cols[:] = [col.name if isinstance(col, exp.Column) else str(col) for col in columns]
+        except AttributeError:
+            pass  # Test classes may not have _columns
         return self
 
     def values(self, *values: Any) -> Self:
@@ -69,11 +72,14 @@ class InsertValuesMixin:
         if not isinstance(self._expression, exp.Insert):
             msg = "Cannot add values to a non-INSERT expression."
             raise SQLBuilderError(msg)
-        if (
-            hasattr(self, "_columns") and getattr(self, "_columns", []) and len(values) != len(self._columns)  # pyright: ignore
-        ):
-            msg = f"Number of values ({len(values)}) does not match the number of specified columns ({len(self._columns)})."  # pyright: ignore
-            raise SQLBuilderError(msg)
+        # Check column count if _columns exists
+        try:
+            _columns = self._columns  # type: ignore[attr-defined]
+            if _columns and len(values) != len(_columns):
+                msg = f"Number of values ({len(values)}) does not match the number of specified columns ({len(_columns)})."
+                raise SQLBuilderError(msg)
+        except AttributeError:
+            pass  # Test classes may not have _columns
         row_exprs = []
         for v in values:
             if isinstance(v, exp.Expression):
@@ -114,7 +120,12 @@ class InsertFromSelectMixin:
         Raises:
             SQLBuilderError: If the table is not set or the select_builder is invalid.
         """
-        if not getattr(self, "_table", None):
+        # Check if _table is set - it should be for proper Insert classes
+        try:
+            if not self._table:  # type: ignore[attr-defined]
+                msg = "The target table must be set using .into() before adding values."
+                raise SQLBuilderError(msg)
+        except AttributeError:
             msg = "The target table must be set using .into() before adding values."
             raise SQLBuilderError(msg)
         if self._expression is None:
@@ -122,12 +133,12 @@ class InsertFromSelectMixin:
         if not isinstance(self._expression, exp.Insert):
             msg = "Cannot set INSERT source on a non-INSERT expression."
             raise SQLBuilderError(msg)
-        # Merge parameters from the SELECT builder
-        subquery_parameters = getattr(select_builder, "_parameters", None)
+        # Merge parameters from the SELECT builder - trust the protocol
+        subquery_parameters = select_builder._parameters  # pyright: ignore[attr-defined]
         if subquery_parameters:
             for p_name, p_value in subquery_parameters.items():
                 self.add_parameter(p_value, name=p_name)  # type: ignore[attr-defined]
-        select_expr = getattr(select_builder, "_expression", None)
+        select_expr = select_builder._expression  # pyright: ignore[attr-defined]
         if select_expr and isinstance(select_expr, exp.Select):
             self._expression.set("expression", select_expr.copy())
         else:

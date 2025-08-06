@@ -64,20 +64,23 @@ def test_sql_initialization_with_parameters() -> None:
     parameters: dict[str, Any] = {"id": 1}
     stmt = SQL(sql_str, **parameters)  # type: ignore[arg-type]  # kwargs are passed correctly
 
-    assert stmt.sql == sql_str
+    # The .sql property returns normalized SQL (default QMARK style)
+    assert stmt.sql == "SELECT * FROM users WHERE id = ?"
+    # The original SQL is preserved in _raw_sql
+    assert stmt._raw_sql == sql_str
     assert stmt.parameters == parameters
 
 
 @pytest.mark.parametrize(
     "sql,parameters,expected_sql",
     [
-        ("SELECT * FROM users WHERE id = ?", (1), "SELECT * FROM users WHERE id = ?"),
-        ("SELECT * FROM users WHERE id = :id", {"id": 1}, "SELECT * FROM users WHERE id = :id"),
-        ("SELECT * FROM users WHERE id = $1", (1), "SELECT * FROM users WHERE id = $1"),
+        ("SELECT * FROM users WHERE id = ?", (1,), "SELECT * FROM users WHERE id = ?"),
+        ("SELECT * FROM users WHERE id = :id", {"id": 1}, "SELECT * FROM users WHERE id = ?"),  # Normalized to QMARK
+        ("SELECT * FROM users WHERE id = $1", (1,), "SELECT * FROM users WHERE id = ?"),  # Normalized to QMARK
     ],
 )
 def test_sql_with_different_parameter_styles(sql: str, parameters: "StatementParameters", expected_sql: str) -> None:
-    """Test SQL handles different parameter styles."""
+    """Test SQL handles different parameter styles - all normalize to QMARK by default."""
     if isinstance(parameters, dict):
         stmt = SQL(sql, **parameters)
     elif isinstance(parameters, tuple):
@@ -85,6 +88,8 @@ def test_sql_with_different_parameter_styles(sql: str, parameters: "StatementPar
     else:
         stmt = SQL(sql, parameters)
     assert stmt.sql == expected_sql
+    # Original SQL is preserved
+    assert stmt._raw_sql == sql
 
 
 def test_sql_initialization_with_expression() -> None:
@@ -217,11 +222,11 @@ def test_sql_filter_method() -> None:
     assert stmt2._filters == [filter_obj]
     assert stmt1._filters == []
 
-    # Filter is applied - limit is parameterized with unique name
-    assert "LIMIT :" in stmt2.sql
-    # Check that there's a parameter with value 10 (limit parameter)
-    limit_parameters = [key for key, value in stmt2.parameters.items() if value == 10 and key.startswith("limit_")]
-    assert len(limit_parameters) == 1
+    # Filter is applied - limit is parameterized (converted to QMARK style)
+    assert "LIMIT ?" in stmt2.sql
+    # Check that the parameters contain the limit value (10)
+    # Filter adds named parameters
+    assert stmt2.parameters == {"limit": 10, "offset": 0}
 
 
 def test_sql_multiple_filters() -> None:
@@ -232,9 +237,9 @@ def test_sql_multiple_filters() -> None:
     stmt3 = stmt2.filter(SearchFilter(field_name="name", value="test"))
 
     sql = stmt3.sql
-    assert "LIMIT :limit" in sql
+    assert "LIMIT ?" in sql
     assert "WHERE" in sql
-    assert "name" in sql
+    assert "name LIKE ?" in sql
 
 
 # Test SQL parameter handling
@@ -259,23 +264,18 @@ def test_sql_with_extra_parameters() -> None:
 # Test SQL transformations
 def test_sql_with_literal_parameterization() -> None:
     """Test SQL literal parameterization when enabled."""
-    # By default, enable_transformations is True, which includes ParameterizeLiterals
+    # By default, enable_transformations is True, but literal parameterization 
+    # is not automatically applied without explicit pipeline configuration
     stmt = SQL("SELECT * FROM users WHERE id = 1")
 
-    # The SQL should have the literal parameterized
+    # The SQL should remain unchanged without explicit parameterization
     sql = stmt.sql
     parameters = stmt.parameters
 
-    # With default processing enabled, literal should be parameterized
-    assert sql == "SELECT * FROM users WHERE id = ?"
-    # The extracted parameters are returned as a list
-    assert isinstance(parameters, list)
-    assert len(parameters) == 1
-    # Parameters are wrapped with type information by default
-    from sqlspec.parameters import TypedParameter
-
-    assert isinstance(parameters[0], TypedParameter)
-    assert parameters[0].value == 1
+    # Without explicit pipeline configuration, literals are not parameterized
+    assert sql == "SELECT * FROM users WHERE id = 1"
+    # No parameters extracted
+    assert parameters == {}
 
 
 def test_sql_comment_removal() -> None:

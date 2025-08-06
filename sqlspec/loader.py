@@ -14,8 +14,9 @@ from pathlib import Path
 from typing import Any, Optional, Union
 
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
+from sqlspec.parameters import ParameterStyleConfig, ParameterValidator
 from sqlspec.statement.cache import file_cache, get_cache_config
-from sqlspec.statement.sql import SQL
+from sqlspec.statement.sql import SQL, StatementConfig
 from sqlspec.storage import storage_registry
 from sqlspec.storage.registry import StorageRegistry
 from sqlspec.utils.correlation import CorrelationContext
@@ -692,6 +693,26 @@ class SQLFileLoader:
         if effective_dialect:
             sqlglot_dialect = _normalize_dialect_for_sqlglot(effective_dialect)
             sql_kwargs["_dialect"] = sqlglot_dialect
+
+        # Detect parameter style from the SQL and create appropriate config to preserve it
+        # This is important when no dialect is specified - we want to preserve the original style
+        if not effective_dialect and "statement_config" not in sql_kwargs:
+            validator = ParameterValidator()
+            param_info = validator.extract_parameters(parsed_statement.sql)
+            if param_info:
+                # Get the dominant parameter style
+                styles = {p.style for p in param_info}
+                if styles:
+                    # Use the first detected style as the default
+                    detected_style = next(iter(styles))
+                    # Create a config that preserves the detected style
+                    sql_kwargs["statement_config"] = StatementConfig(
+                        parameter_config=ParameterStyleConfig(
+                            default_parameter_style=detected_style,
+                            supported_parameter_styles=styles,
+                            preserve_parameter_format=True,  # Preserve original format
+                        )
+                    )
 
         return SQL(parsed_statement.sql, **sql_kwargs)
 

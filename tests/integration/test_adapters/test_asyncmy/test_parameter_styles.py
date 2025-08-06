@@ -46,15 +46,14 @@ async def asyncmy_parameter_session(mysql_service: MySQLService) -> AsyncGenerat
         # Insert test data using ? placeholders (AsyncMy QMARK format)
         await session.execute(
             "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)",
-            ("test1", 100, "First test")
+            ("test1", 100, "First test"),
         )
         await session.execute(
             "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)",
-            ("test2", 200, "Second test")
+            ("test2", 200, "Second test"),
         )
         await session.execute(
-            "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)",
-            ("test3", 300, None)
+            "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)", ("test3", 300, None)
         )
 
         yield session
@@ -70,10 +69,7 @@ async def test_asyncmy_qmark_style_no_conversion(asyncmy_parameter_session: Asyn
     driver = asyncmy_parameter_session
 
     # Query using ? placeholders - should NOT require conversion
-    result = await driver.execute(
-        "SELECT * FROM test_parameter_conversion WHERE name = ? AND value > ?",
-        ("test1", 50)
-    )
+    result = await driver.execute("SELECT * FROM test_parameter_conversion WHERE name = ? AND value > ?", ("test1", 50))
 
     assert isinstance(result, SQLResult)
     assert result.rowcount == 1
@@ -91,8 +87,7 @@ async def test_asyncmy_pyformat_style_requires_conversion(asyncmy_parameter_sess
     # Query using %s placeholders - SHOULD require conversion to ?
     # Note: This tests the SQLTransformer conversion logic
     result = await driver.execute(
-        "SELECT * FROM test_parameter_conversion WHERE name = %s AND value > %s",
-        ("test2", 150)
+        "SELECT * FROM test_parameter_conversion WHERE name = %s AND value > %s", ("test2", 150)
     )
 
     assert isinstance(result, SQLResult)
@@ -111,7 +106,7 @@ async def test_asyncmy_named_pyformat_style_requires_conversion(asyncmy_paramete
     # Query using %(name)s placeholders - SHOULD require conversion to ?
     result = await driver.execute(
         "SELECT * FROM test_parameter_conversion WHERE name = %(test_name)s AND value < %(max_value)s",
-        {"test_name": "test3", "max_value": 350}
+        {"test_name": "test3", "max_value": 350},
     )
 
     assert isinstance(result, SQLResult)
@@ -128,10 +123,7 @@ async def test_asyncmy_sql_object_conversion_validation(asyncmy_parameter_sessio
     driver = asyncmy_parameter_session
 
     # Test SQL object with %s style - should convert to ?
-    sql_pyformat = SQL(
-        "SELECT * FROM test_parameter_conversion WHERE value BETWEEN %s AND %s",
-        parameters=[150, 250]
-    )
+    sql_pyformat = SQL("SELECT * FROM test_parameter_conversion WHERE value BETWEEN %s AND %s", parameters=[150, 250])
     result = await driver.execute(sql_pyformat)
 
     assert isinstance(result, SQLResult)
@@ -139,10 +131,7 @@ async def test_asyncmy_sql_object_conversion_validation(asyncmy_parameter_sessio
     assert result.rows[0]["name"] == "test2"
 
     # Test SQL object with ? style - should use directly
-    sql_qmark = SQL(
-        "SELECT * FROM test_parameter_conversion WHERE name = ? OR name = ?",
-        parameters=["test1", "test3"]
-    )
+    sql_qmark = SQL("SELECT * FROM test_parameter_conversion WHERE name = ? OR name = ?", parameters=["test1", "test3"])
     result2 = await driver.execute(sql_qmark)
 
     assert isinstance(result2, SQLResult)
@@ -161,13 +150,12 @@ async def test_asyncmy_mixed_parameter_types_conversion(asyncmy_parameter_sessio
     # Insert test data with different types using %s (should convert to ?)
     await driver.execute(
         "INSERT INTO test_parameter_conversion (name, value, description) VALUES (%s, %s, %s)",
-        ("mixed_test", 999, "Mixed type test")
+        ("mixed_test", 999, "Mixed type test"),
     )
 
     # Query with NULL parameter using %s (should convert to ?)
     result = await driver.execute(
-        "SELECT * FROM test_parameter_conversion WHERE description IS NOT NULL AND value = %s",
-        (999,)
+        "SELECT * FROM test_parameter_conversion WHERE description IS NOT NULL AND value = %s", (999,)
     )
 
     assert isinstance(result, SQLResult)
@@ -183,15 +171,10 @@ async def test_asyncmy_execute_many_parameter_conversion(asyncmy_parameter_sessi
     driver = asyncmy_parameter_session
 
     # Test execute_many with %s placeholders - should convert to ?
-    batch_data = [
-        ("batch1", 1000, "Batch test 1"),
-        ("batch2", 2000, "Batch test 2"),
-        ("batch3", 3000, "Batch test 3"),
-    ]
+    batch_data = [("batch1", 1000, "Batch test 1"), ("batch2", 2000, "Batch test 2"), ("batch3", 3000, "Batch test 3")]
 
     result = await driver.execute_many(
-        "INSERT INTO test_parameter_conversion (name, value, description) VALUES (%s, %s, %s)",
-        batch_data
+        "INSERT INTO test_parameter_conversion (name, value, description) VALUES (%s, %s, %s)", batch_data
     )
 
     assert isinstance(result, SQLResult)
@@ -199,8 +182,7 @@ async def test_asyncmy_execute_many_parameter_conversion(asyncmy_parameter_sessi
 
     # Verify the data was inserted correctly
     verify_result = await driver.execute(
-        "SELECT COUNT(*) as count FROM test_parameter_conversion WHERE name LIKE ?",
-        ("batch%",)
+        "SELECT COUNT(*) as count FROM test_parameter_conversion WHERE name LIKE ?", ("batch%",)
     )
 
     assert verify_result.rows[0]["count"] == 3
@@ -213,23 +195,17 @@ async def test_asyncmy_parameter_conversion_edge_cases(asyncmy_parameter_session
     driver = asyncmy_parameter_session
 
     # Empty parameter list with %s - should handle gracefully
-    result = await driver.execute(
-        "SELECT COUNT(*) as total FROM test_parameter_conversion"
-    )
+    result = await driver.execute("SELECT COUNT(*) as total FROM test_parameter_conversion")
     assert result.rows[0]["total"] >= 3  # Our test data
 
     # Single parameter with %s conversion
-    result2 = await driver.execute(
-        "SELECT * FROM test_parameter_conversion WHERE name = %s",
-        ("test1",)
-    )
+    result2 = await driver.execute("SELECT * FROM test_parameter_conversion WHERE name = %s", ("test1",))
     assert result2.rowcount == 1
     assert result2.rows[0]["name"] == "test1"
 
     # Parameter with LIKE operation requiring conversion
     result3 = await driver.execute(
-        "SELECT COUNT(*) as count FROM test_parameter_conversion WHERE name LIKE %s",
-        ("test%",)
+        "SELECT COUNT(*) as count FROM test_parameter_conversion WHERE name LIKE %s", ("test%",)
     )
     assert result3.rows[0]["count"] >= 3
 
@@ -244,14 +220,12 @@ async def test_asyncmy_parameter_style_consistency_validation(asyncmy_parameter_
 
     # Using ? (no conversion needed)
     result_qmark = await driver.execute(
-        "SELECT name, value FROM test_parameter_conversion WHERE value >= ? ORDER BY value",
-        (200,)
+        "SELECT name, value FROM test_parameter_conversion WHERE value >= ? ORDER BY value", (200,)
     )
 
     # Using %s (conversion needed)
     result_pyformat = await driver.execute(
-        "SELECT name, value FROM test_parameter_conversion WHERE value >= %s ORDER BY value",
-        (200,)
+        "SELECT name, value FROM test_parameter_conversion WHERE value >= %s ORDER BY value", (200,)
     )
 
     # Results should be identical
@@ -272,11 +246,7 @@ async def test_asyncmy_complex_query_parameter_conversion(asyncmy_parameter_sess
     # Insert additional test data
     await driver.execute_many(
         "INSERT INTO test_parameter_conversion (name, value, description) VALUES (?, ?, ?)",
-        [
-            ("complex1", 150, "Complex test"),
-            ("complex2", 250, "Complex test"),
-            ("complex3", 350, "Complex test"),
-        ]
+        [("complex1", 150, "Complex test"), ("complex2", 250, "Complex test"), ("complex3", 350, "Complex test")],
     )
 
     # Complex query with subquery and multiple parameters using %s (should convert)
@@ -292,7 +262,7 @@ async def test_asyncmy_complex_query_parameter_conversion(asyncmy_parameter_sess
         )
         ORDER BY value
         """,
-        ("Complex test", 200, 300, 100)
+        ("Complex test", 200, 300, 100),
     )
 
     assert isinstance(result, SQLResult)

@@ -1,5 +1,3 @@
-from sqlspec.parameters import ParameterStyle, TypedParameter
-
 """Parameters benchmark suite."""
 
 import math
@@ -8,6 +6,7 @@ from typing import Any
 from rich.panel import Panel
 from sqlglot import exp
 
+from sqlspec.parameters import ParameterStyle, TypedParameter
 from sqlspec.statement.sql import SQL
 from tools.benchmark.core.metrics import BenchmarkMetrics, TimingResult
 from tools.benchmark.suites.base import BaseBenchmarkSuite

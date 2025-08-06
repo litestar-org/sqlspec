@@ -4,7 +4,7 @@ import datetime
 import sqlite3
 from contextlib import contextmanager
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
@@ -13,6 +13,8 @@ from sqlspec.statement.sql import StatementConfig
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     from sqlspec.adapters.sqlite._types import SqliteConnection
     from sqlspec.driver import ExecutionResult
     from sqlspec.statement.result import SQLResult
@@ -76,11 +78,12 @@ class SqliteDriver(SyncDriverAdapterBase):
     def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
         return SqliteCursor(connection)
 
-    def handle_database_exceptions(self) -> "contextmanager[None]":
+    def handle_database_exceptions(self) -> "Generator[None, None, None]":
         """Handle SQLite-specific exceptions and wrap them appropriately."""
-        return contextmanager(self._handle_database_exceptions_impl)()
+        return cast("Generator[None, None, None]", self._handle_database_exceptions_impl())
 
-    def _handle_database_exceptions_impl(self) -> Any:
+    @contextmanager
+    def _handle_database_exceptions_impl(self) -> "Generator[None, None, None]":
         """Implementation of database exception handling without decorator."""
         try:
             yield

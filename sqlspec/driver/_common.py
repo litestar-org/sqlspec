@@ -251,7 +251,7 @@ class CommonDriverAttributesMixin:
 
         expr_type = type(expression).__name__.upper()
 
-        # Handle Anonymous expressions that might be unparseable scripts
+        # Handle Anonymous expressions that might be unparsable scripts
         if "ANONYMOUS" in expr_type and statement.is_script:
             return "SCRIPT"
 

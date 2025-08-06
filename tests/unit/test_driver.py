@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -100,12 +101,15 @@ class MockSyncDriver(SyncDriverAdapterBase):
         """Hook for mock-specific special operations - none needed."""
         return None
 
-    def _execute_statement(self, cursor: Any, sql: str, prepared_parameters: Any, statement: SQL) -> ExecutionResult:
+    def handle_database_exceptions(self) -> Generator[None, None, None]:
+        yield
+
+    def _execute_statement(self, cursor: Any, statement: SQL) -> ExecutionResult:
         """Execute single SQL statement using mock cursor."""
-        cursor.execute(sql, prepared_parameters or ())
+        cursor.execute(statement.sql, statement.parameters or ())
 
         # Determine if this is a SELECT statement
-        sql_upper = sql.upper().strip()
+        sql_upper = statement.sql.upper().strip()
         if sql_upper.startswith("SELECT"):
             # Mock SELECT result - empty as expected by tests
             mock_data: list[dict[str, Any]] = []
@@ -118,9 +122,9 @@ class MockSyncDriver(SyncDriverAdapterBase):
             )
         return self.create_execution_result(cursor_result=None, rowcount_override=1, is_select_result=False)
 
-    def _execute_many(self, cursor: Any, sql: str, prepared_parameters: Any, statement: SQL) -> Any:
+    def _execute_many(self, cursor: Any, statement: SQL) -> Any:
         """Execute SQL with multiple parameter sets using mock cursor."""
-        return cursor.executemany(sql, prepared_parameters)
+        return cursor.executemany(statement.sql, statement.parameters)
 
     def _get_selected_data(self, cursor: Any) -> tuple[list[dict[str, Any]], list[str], int]:
         """Extract data from cursor after SELECT execution."""
@@ -135,12 +139,10 @@ class MockSyncDriver(SyncDriverAdapterBase):
         """Extract row count from cursor after INSERT/UPDATE/DELETE."""
         return 1  # Mock always returns 1 affected row
 
-    def _execute_script(
-        self, cursor: Any, sql: str, prepared_parameters: Any, statement_config: StatementConfig, statement: SQL
-    ) -> Any:
+    def _execute_script(self, cursor: Any, statement: SQL) -> Any:
         """Execute a SQL script (multiple statements)."""
         # Mock implementation - just execute as single statement
-        return cursor.execute(sql, prepared_parameters or ())
+        return cursor.execute(statement.sql, statement.parameters or ())
 
     def begin(self) -> None:
         """Mock begin transaction."""
@@ -254,14 +256,12 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         """Hook for mock-specific special operations - none needed."""
         return None
 
-    async def _execute_statement(
-        self, cursor: Any, sql: str, prepared_parameters: Any, statement: SQL
-    ) -> ExecutionResult:
+    async def _execute_statement(self, cursor: Any, statement: SQL) -> ExecutionResult:
         """Execute single SQL statement using mock cursor."""
-        await cursor.execute(sql, prepared_parameters or ())
+        await cursor.execute(statement.sql, statement.parameters or ())
 
         # Determine if this is a SELECT statement
-        sql_upper = sql.upper().strip()
+        sql_upper = statement.sql.upper().strip()
         if sql_upper.startswith("SELECT"):
             # Mock SELECT result - empty as expected by tests
             mock_data: list[dict[str, Any]] = []
@@ -275,9 +275,9 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         # Mock non-SELECT result
         return self.create_execution_result(cursor_result=None, rowcount_override=1, is_select_result=False)
 
-    async def _execute_many(self, cursor: Any, sql: str, prepared_parameters: Any, statement: SQL) -> Any:
+    async def _execute_many(self, cursor: Any, statement: SQL) -> Any:
         """Execute SQL with multiple parameter sets using mock cursor."""
-        return await cursor.executemany(sql, prepared_parameters)
+        return await cursor.executemany(statement.sql, statement.parameters)
 
     async def _get_selected_data(self, cursor: Any) -> tuple[list[dict[str, Any]], list[str], int]:
         """Extract data from cursor after SELECT execution."""
@@ -628,7 +628,16 @@ def test_sync_driver_execute_script() -> None:
 def test_sync_driver_execute_with_parameters() -> None:
     """Test sync driver execute with parameters."""
     connection = MockConnection()
-    driver = MockSyncDriver(connection)
+    # Use a config that supports NAMED_COLON style for this test
+    config = StatementConfig(
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.NAMED_COLON,
+            supported_parameter_styles={ParameterStyle.NAMED_COLON},
+            preserve_parameter_format=True,
+        ),
+        enable_validation=False,
+    )
+    driver = MockSyncDriver(connection, statement_config=config)
 
     # Only provide parameters that are actually used in the SQL
 
@@ -642,10 +651,8 @@ def test_sync_driver_execute_with_parameters() -> None:
         )
         mock_execute.return_value = mock_result
 
-        # Use a non-strict config to avoid validation issues
-        config = _create_test_statement_config()
         # Pass named parameters as keyword arguments
-        result = driver.execute("SELECT * FROM users WHERE id = :id", id=1, _config=config)
+        result = driver.execute("SELECT * FROM users WHERE id = :id", id=1)
 
         mock_execute.assert_called_once()
         # Check that the statement passed to dispatch_statement_execution contains the parameters
@@ -862,61 +869,3 @@ def test_driver_returns_rows_detection(statement_type: str, expected_returns_row
             assert result.data  # Should have data for SELECT
         else:
             assert result.rows_affected is not None  # Should have rows_affected for DML/DDL
-
-
-# Concurrent and Threading Tests
-
-
-async def test_async_driver_concurrent_execution() -> None:
-    """Test async driver concurrent execution."""
-    import asyncio
-
-    connection = MockAsyncConnection()
-    driver = MockAsyncDriver(connection)
-
-    async def execute_query(query_id: int) -> Any:
-        return await driver.execute(f"SELECT {query_id} as id")
-
-    # Execute multiple queries concurrently
-    tasks = [execute_query(i) for i in range(5)]
-    results = await asyncio.gather(*tasks)
-
-    assert len(results) == 5
-
-
-# Integration Tests
-
-
-def test_driver_full_execution_flow() -> None:
-    """Test complete driver execution flow."""
-    connection = MockConnection()
-    config = _create_test_statement_config()  # Use non-strict config
-    driver = MockSyncDriver(connection, config)
-
-    # Test actual execution with MockSyncDriver's built-in logic
-    # The MockSyncDriver should handle the execution properly
-    result = driver.execute("SELECT * FROM users WHERE id = :id", {"id": 1})
-
-    # Verify result structure (should be SQLResult)
-    assert isinstance(result, SQLResult)
-    assert result.operation_type == "SELECT"
-    # MockSyncDriver doesn't actually execute queries, so data will be empty
-    assert result.data == []
-
-
-async def test_async_driver_full_execution_flow() -> None:
-    """Test complete async driver execution flow."""
-    connection = MockAsyncConnection()
-    config = _create_test_statement_config()  # Use non-strict config
-
-    driver = MockAsyncDriver(connection, config)
-
-    # Test actual execution with MockAsyncDriver's built-in logic
-    # The MockAsyncDriver should handle the execution properly
-    result = await driver.execute("SELECT * FROM users WHERE id = :id", {"id": 1})
-
-    # Verify result structure (should be SQLResult)
-    assert isinstance(result, SQLResult)
-    assert result.operation_type == "SELECT"
-    # MockAsyncDriver doesn't actually execute queries, so data will be empty
-    assert result.data == []

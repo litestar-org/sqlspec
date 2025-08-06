@@ -2,7 +2,7 @@
 
 import logging
 import re
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 import psqlpy
@@ -54,7 +54,7 @@ psqlpy_statement_config = StatementConfig(
 
 PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 
-__all__ = ("PsqlpyCursor", "PsqlpyDriver", "psqlpy_statement_config", "psqlpy_type_coercion_map")
+__all__ = ("PsqlpyCursor", "PsqlpyDriver", "psqlpy_statement_config")
 
 
 class PsqlpyCursor:
@@ -249,9 +249,13 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         else:
             await self.connection.execute("COMMIT")
 
-    @asynccontextmanager
-    async def handle_database_exceptions(self):
+    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
         """Handle Psqlpy-specific exceptions and wrap them appropriately."""
+        return self._handle_database_exceptions_impl()
+
+    @asynccontextmanager
+    async def _handle_database_exceptions_impl(self) -> Any:
+        """Implementation of database exception handling without decorator."""
         try:
             yield
         except psqlpy.exceptions.DatabaseError as e:

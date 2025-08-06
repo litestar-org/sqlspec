@@ -13,6 +13,8 @@ from sqlspec.statement.sql import SQL, StatementConfig
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     from adbc_driver_manager.dbapi import Cursor
 
     from sqlspec.adapters.adbc._types import AdbcConnection
@@ -165,11 +167,12 @@ class AdbcDriver(SyncDriverAdapterBase):
     def with_cursor(self, connection: "AdbcConnection") -> "AdbcCursor":
         return AdbcCursor(connection)
 
-    def handle_database_exceptions(self) -> "contextmanager[None]":
+    def handle_database_exceptions(self) -> "Generator[None, None, None]":
         """Handle ADBC-specific exceptions and wrap them appropriately."""
-        return contextmanager(self._handle_database_exceptions_impl)()
+        return cast("Generator[None, None, None]", self._handle_database_exceptions_impl())
 
-    def _handle_database_exceptions_impl(self) -> Any:
+    @contextmanager
+    def _handle_database_exceptions_impl(self) -> "Generator[None, None, None]":
         """Implementation of database exception handling without decorator."""
         try:
             yield

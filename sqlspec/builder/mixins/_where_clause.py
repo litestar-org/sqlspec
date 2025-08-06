@@ -170,9 +170,7 @@ class WhereClauseMixin:
             The current builder instance for method chaining.
         """
         # Special case: if this is an Update and _expression is not exp.Update, raise the expected error for test coverage
-        if self.__class__.__name__ == "Update" and not (
-            hasattr(self, "_expression") and isinstance(getattr(self, "_expression", None), exp.Update)
-        ):
+        if self.__class__.__name__ == "Update" and not isinstance(self._expression, exp.Update):  # type: ignore[attr-defined]
             msg = "Cannot add WHERE clause to non-UPDATE expression"
             raise SQLBuilderError(msg)
 
@@ -211,7 +209,7 @@ class WhereClauseMixin:
             where_expr = column_expr_obj._expression  # pyright: ignore
         elif has_sqlglot_expression(condition):
             # This is a ColumnExpression from our new Column syntax
-            raw_expr = getattr(condition, "sqlglot_expression", None)
+            raw_expr = condition.sqlglot_expression  # pyright: ignore[attr-defined]
             if raw_expr is not None:
                 where_expr = builder._parameterize_expression(raw_expr)
             else:
@@ -334,8 +332,9 @@ class WhereClauseMixin:
             subquery_exp: exp.Expression
             if has_query_builder_parameters(values):
                 subquery = values.build()  # pyright: ignore
-                sql_str = getattr(subquery, "sql", str(subquery))
-                subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(builder, "dialect_name", None)))
+                # Trust that subquery follows the expected protocol with .sql attribute
+                sql_str = subquery.sql
+                subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=builder.dialect_name))
             else:
                 subquery_exp = values  # type: ignore[assignment]
             condition = col_expr.isin(subquery_exp)
@@ -358,8 +357,9 @@ class WhereClauseMixin:
             subquery_exp: exp.Expression
             if has_query_builder_parameters(values):
                 subquery = values.build()  # pyright: ignore
-                sql_str = getattr(subquery, "sql", str(subquery))
-                subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(builder, "dialect_name", None)))
+                # Trust that subquery follows the expected protocol with .sql attribute
+
+                subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=builder.dialect_name))  # pyright: ignore
             else:
                 subquery_exp = values  # type: ignore[assignment]
             condition = exp.Not(this=col_expr.isin(subquery_exp))
@@ -392,10 +392,11 @@ class WhereClauseMixin:
                 for p_name, p_value in subquery_builder_parameters.items():
                     builder.add_parameter(p_value, name=p_name)
             sub_sql_obj = subquery.build()  # pyright: ignore
-            sql_str = getattr(sub_sql_obj, "sql", str(sub_sql_obj))
-            sub_expr = exp.maybe_parse(sql_str, dialect=getattr(builder, "dialect_name", None))
+            # Trust the protocol - sub_sql_obj has .sql attribute
+
+            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=builder.dialect_name)  # pyright: ignore
         else:
-            sub_expr = exp.maybe_parse(str(subquery), dialect=getattr(builder, "dialect_name", None))
+            sub_expr = exp.maybe_parse(str(subquery), dialect=builder.dialect_name)
 
         if sub_expr is None:
             msg = "Could not parse subquery for EXISTS"
@@ -414,10 +415,10 @@ class WhereClauseMixin:
                 for p_name, p_value in subquery_builder_parameters.items():
                     builder.add_parameter(p_value, name=p_name)
             sub_sql_obj = subquery.build()  # pyright: ignore
-            sql_str = getattr(sub_sql_obj, "sql", str(sub_sql_obj))
-            sub_expr = exp.maybe_parse(sql_str, dialect=getattr(builder, "dialect_name", None))
+            # Trust the protocol - sub_sql_obj has .sql attribute
+            sub_expr = exp.maybe_parse(sub_sql_obj.sql, dialect=builder.dialect_name)  # pyright: ignore
         else:
-            sub_expr = exp.maybe_parse(str(subquery), dialect=getattr(builder, "dialect_name", None))
+            sub_expr = exp.maybe_parse(str(subquery), dialect=builder.dialect_name)
 
         if sub_expr is None:
             msg = "Could not parse subquery for NOT EXISTS"
@@ -434,8 +435,8 @@ class WhereClauseMixin:
             subquery_exp: exp.Expression
             if has_query_builder_parameters(values):
                 subquery = values.build()  # pyright: ignore
-                sql_str = getattr(subquery, "sql", str(subquery))
-                subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(builder, "dialect_name", None)))
+                # Trust that subquery follows the expected protocol with .sql attribute
+                subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=builder.dialect_name))  # pyright: ignore
             else:
                 subquery_exp = values  # type: ignore[assignment]
             condition = exp.EQ(this=col_expr, expression=exp.Any(this=subquery_exp))
@@ -470,8 +471,8 @@ class WhereClauseMixin:
             subquery_exp: exp.Expression
             if has_query_builder_parameters(values):
                 subquery = values.build()  # pyright: ignore
-                sql_str = getattr(subquery, "sql", str(subquery))
-                subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(builder, "dialect_name", None)))
+                # Trust that subquery follows the expected protocol with .sql attribute
+                subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=builder.dialect_name))  # pyright: ignore
             else:
                 subquery_exp = values  # type: ignore[assignment]
             condition = exp.NEQ(this=col_expr, expression=exp.Any(this=subquery_exp))

@@ -1,6 +1,6 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
-from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, AsyncContextManager, ContextManager, Optional, cast
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 import oracledb
 from oracledb import AsyncCursor, Cursor
@@ -12,6 +12,8 @@ from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.statement.sql import StatementConfig
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.driver._common import ExecutionResult
@@ -116,11 +118,12 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         """Commit the current transaction."""
         self.connection.commit()
 
-    def handle_database_exceptions(self) -> "ContextManager[None]":
+    def handle_database_exceptions(self) -> "Generator[None, None, None]":
         """Handle Oracle-specific exceptions and wrap them appropriately."""
-        return contextmanager(self._handle_database_exceptions_impl)()
+        return cast("Generator[None, None, None]", self._handle_database_exceptions_impl())
 
-    def _handle_database_exceptions_impl(self) -> Any:
+    @contextmanager
+    def _handle_database_exceptions_impl(self) -> "Generator[None, None, None]":
         """Implementation of database exception handling without decorator."""
         try:
             yield
@@ -218,11 +221,13 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         """Commit the current transaction."""
         await self.connection.commit()
 
-    def handle_database_exceptions(self) -> "AsyncContextManager[None]":
+    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
         """Handle Oracle-specific exceptions and wrap them appropriately."""
-        return asynccontextmanager(self._handle_database_exceptions_impl)()
+        return self._handle_database_exceptions_impl()
 
+    @asynccontextmanager
     async def _handle_database_exceptions_impl(self) -> Any:
+        """Implementation of database exception handling without decorator."""
         try:
             yield
         except oracledb.Error as e:

@@ -67,6 +67,31 @@ class StatementFilter(ABC):
         """
         return [], {}
 
+    def _resolve_parameter_conflicts(self, statement: "SQL", proposed_names: list[str]) -> list[str]:
+        """Resolve parameter name conflicts by generating unique names if needed.
+
+        Args:
+            statement: The SQL statement to check for existing parameters
+            proposed_names: List of proposed parameter names
+
+        Returns:
+            List of resolved parameter names (same length as proposed_names)
+        """
+        existing_params = set(statement._named_parameters.keys())
+        existing_params.update(statement.parameters.keys() if isinstance(statement.parameters, dict) else [])
+
+        resolved_names = []
+        for name in proposed_names:
+            if name in existing_params:
+                unique_suffix = str(uuid.uuid4()).replace("-", "")[:8]
+                resolved_name = f"{name}_{unique_suffix}"
+            else:
+                resolved_name = name
+            resolved_names.append(resolved_name)
+            existing_params.add(resolved_name)  # Prevent conflicts within this filter
+
+        return resolved_names
+
     @abstractmethod
     def get_cache_key(self) -> tuple[Any, ...]:
         """Return a tuple of stable, hashable components that uniquely represent the filter's configuration.
@@ -127,22 +152,35 @@ class BeforeAfterFilter(StatementFilter):
         conditions: list[Condition] = []
         col_expr = exp.column(self.field_name)
 
+        # Resolve parameter name conflicts
+        proposed_names = []
         if self.before and self._param_name_before:
-            conditions.append(exp.LT(this=col_expr, expression=exp.Placeholder(this=self._param_name_before)))
+            proposed_names.append(self._param_name_before)
         if self.after and self._param_name_after:
-            conditions.append(exp.GT(this=col_expr, expression=exp.Placeholder(this=self._param_name_after)))
+            proposed_names.append(self._param_name_after)
 
-        if not conditions:
+        if not proposed_names:
             return statement
+
+        resolved_names = self._resolve_parameter_conflicts(statement, proposed_names)
+
+        param_idx = 0
+        result = statement
+        if self.before and self._param_name_before:
+            before_param_name = resolved_names[param_idx]
+            param_idx += 1
+            conditions.append(exp.LT(this=col_expr, expression=exp.Placeholder(this=before_param_name)))
+            result = result.add_named_parameter(before_param_name, self.before)
+
+        if self.after and self._param_name_after:
+            after_param_name = resolved_names[param_idx]
+            conditions.append(exp.GT(this=col_expr, expression=exp.Placeholder(this=after_param_name)))
+            result = result.add_named_parameter(after_param_name, self.after)
 
         final_condition = conditions[0]
         for cond in conditions[1:]:
             final_condition = exp.And(this=final_condition, expression=cond)
-        result = statement.where(final_condition)
-        _, named_parameters = self.extract_parameters()
-        for name, value in named_parameters.items():
-            result = result.add_named_parameter(name, value)
-        return result
+        return result.where(final_condition)
 
     def get_cache_key(self) -> tuple[Any, ...]:
         """Return cache key for this filter configuration."""
@@ -192,28 +230,39 @@ class OnBeforeAfterFilter(StatementFilter):
     def append_to_statement(self, statement: "SQL") -> "SQL":
         conditions: list[Condition] = []
 
+        # Resolve parameter name conflicts
+        proposed_names = []
         if self.on_or_before and self._param_name_on_or_before:
-            conditions.append(
-                exp.LTE(
-                    this=exp.column(self.field_name), expression=exp.Placeholder(this=self._param_name_on_or_before)
-                )
-            )
+            proposed_names.append(self._param_name_on_or_before)
         if self.on_or_after and self._param_name_on_or_after:
-            conditions.append(
-                exp.GTE(this=exp.column(self.field_name), expression=exp.Placeholder(this=self._param_name_on_or_after))
-            )
+            proposed_names.append(self._param_name_on_or_after)
 
-        if not conditions:
+        if not proposed_names:
             return statement
+
+        resolved_names = self._resolve_parameter_conflicts(statement, proposed_names)
+
+        param_idx = 0
+        result = statement
+        if self.on_or_before and self._param_name_on_or_before:
+            before_param_name = resolved_names[param_idx]
+            param_idx += 1
+            conditions.append(
+                exp.LTE(this=exp.column(self.field_name), expression=exp.Placeholder(this=before_param_name))
+            )
+            result = result.add_named_parameter(before_param_name, self.on_or_before)
+
+        if self.on_or_after and self._param_name_on_or_after:
+            after_param_name = resolved_names[param_idx]
+            conditions.append(
+                exp.GTE(this=exp.column(self.field_name), expression=exp.Placeholder(this=after_param_name))
+            )
+            result = result.add_named_parameter(after_param_name, self.on_or_after)
 
         final_condition = conditions[0]
         for cond in conditions[1:]:
             final_condition = exp.And(this=final_condition, expression=cond)
-        result = statement.where(final_condition)
-        _, named_parameters = self.extract_parameters()
-        for name, value in named_parameters.items():
-            result = result.add_named_parameter(name, value)
-        return result
+        return result.where(final_condition)
 
     def get_cache_key(self) -> tuple[Any, ...]:
         """Return cache key for this filter configuration."""
@@ -272,14 +321,18 @@ class InCollectionFilter(InAnyFilter[T]):
         if not self.values:
             return statement.where(exp.false())
 
+        # Resolve parameter name conflicts
+        resolved_names = self._resolve_parameter_conflicts(statement, self._param_names)
+
         placeholder_expressions: list[exp.Placeholder] = [
-            exp.Placeholder(this=param_name) for param_name in self._param_names
+            exp.Placeholder(this=param_name) for param_name in resolved_names
         ]
 
         result = statement.where(exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions))
-        _, named_parameters = self.extract_parameters()
-        for name, value in named_parameters.items():
-            result = result.add_named_parameter(name, value)
+
+        # Add parameters with resolved names
+        for _i, (resolved_name, value) in enumerate(zip(resolved_names, self.values)):
+            result = result.add_named_parameter(resolved_name, value)
         return result
 
     def get_cache_key(self) -> tuple[Any, ...]:
@@ -323,16 +376,20 @@ class NotInCollectionFilter(InAnyFilter[T]):
         if self.values is None or not self.values:
             return statement
 
+        # Resolve parameter name conflicts
+        resolved_names = self._resolve_parameter_conflicts(statement, self._param_names)
+
         placeholder_expressions: list[exp.Placeholder] = [
-            exp.Placeholder(this=param_name) for param_name in self._param_names
+            exp.Placeholder(this=param_name) for param_name in resolved_names
         ]
 
         result = statement.where(
             exp.Not(this=exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions))
         )
-        _, named_parameters = self.extract_parameters()
-        for name, value in named_parameters.items():
-            result = result.add_named_parameter(name, value)
+
+        # Add parameters with resolved names
+        for resolved_name, value in zip(resolved_names, self.values):
+            result = result.add_named_parameter(resolved_name, value)
         return result
 
     def get_cache_key(self) -> tuple[Any, ...]:
@@ -381,15 +438,19 @@ class AnyCollectionFilter(InAnyFilter[T]):
         if not self.values:
             return statement.where(exp.false())
 
+        # Resolve parameter name conflicts
+        resolved_names = self._resolve_parameter_conflicts(statement, self._param_names)
+
         placeholder_expressions: list[exp.Expression] = [
-            exp.Placeholder(this=param_name) for param_name in self._param_names
+            exp.Placeholder(this=param_name) for param_name in resolved_names
         ]
 
         array_expr = exp.Array(expressions=placeholder_expressions)
         result = statement.where(exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr)))
-        _, named_parameters = self.extract_parameters()
-        for name, value in named_parameters.items():
-            result = result.add_named_parameter(name, value)
+
+        # Add parameters with resolved names
+        for resolved_name, value in zip(resolved_names, self.values):
+            result = result.add_named_parameter(resolved_name, value)
         return result
 
     def get_cache_key(self) -> tuple[Any, ...]:
@@ -432,16 +493,20 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
         if self.values is None or not self.values:
             return statement
 
+        # Resolve parameter name conflicts
+        resolved_names = self._resolve_parameter_conflicts(statement, self._param_names)
+
         placeholder_expressions: list[exp.Expression] = [
-            exp.Placeholder(this=param_name) for param_name in self._param_names
+            exp.Placeholder(this=param_name) for param_name in resolved_names
         ]
 
         array_expr = exp.Array(expressions=placeholder_expressions)
         condition = exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr))
         result = statement.where(exp.Not(this=condition))
-        _, named_parameters = self.extract_parameters()
-        for name, value in named_parameters.items():
-            result = result.add_named_parameter(name, value)
+
+        # Add parameters with resolved names
+        for resolved_name, value in zip(resolved_names, self.values):
+            result = result.add_named_parameter(resolved_name, value)
         return result
 
     def get_cache_key(self) -> tuple[Any, ...]:
@@ -478,9 +543,9 @@ class LimitOffsetFilter(PaginationFilter):
         self.limit = limit
         self.offset = offset
 
-        unique_suffix = str(uuid.uuid4()).replace("-", "")[:8]
-        self._limit_param_name = f"limit_{unique_suffix}"
-        self._offset_param_name = f"offset_{unique_suffix}"
+        # Use simple names by default, will generate unique names if conflicts are detected
+        self._limit_param_name = "limit"
+        self._offset_param_name = "offset"
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Extract filter parameters."""
@@ -489,8 +554,12 @@ class LimitOffsetFilter(PaginationFilter):
     def append_to_statement(self, statement: "SQL") -> "SQL":
         from sqlglot import exp
 
-        limit_placeholder = exp.Placeholder(this=self._limit_param_name)
-        offset_placeholder = exp.Placeholder(this=self._offset_param_name)
+        # Resolve parameter name conflicts
+        resolved_names = self._resolve_parameter_conflicts(statement, [self._limit_param_name, self._offset_param_name])
+        limit_param_name, offset_param_name = resolved_names
+
+        limit_placeholder = exp.Placeholder(this=limit_param_name)
+        offset_placeholder = exp.Placeholder(this=offset_param_name)
 
         new_statement = (
             statement._statement.limit(limit_placeholder)
@@ -503,10 +572,9 @@ class LimitOffsetFilter(PaginationFilter):
 
         result = statement.copy(statement=new_statement)
 
-        _, named_parameters = self.extract_parameters()
-        for name, value in named_parameters.items():
-            result = result.add_named_parameter(name, value)
-        return result.filter(self)
+        # Add parameters with the (possibly unique) names
+        result = result.add_named_parameter(limit_param_name, self.limit)
+        return result.add_named_parameter(offset_param_name, self.offset)
 
     def get_cache_key(self) -> tuple[Any, ...]:
         """Return cache key for this filter configuration."""
@@ -599,7 +667,11 @@ class SearchFilter(StatementFilter):
         if not self.value or not self._param_name:
             return statement
 
-        pattern_expr = exp.Placeholder(this=self._param_name)
+        # Resolve parameter name conflicts
+        resolved_names = self._resolve_parameter_conflicts(statement, [self._param_name])
+        param_name = resolved_names[0]
+
+        pattern_expr = exp.Placeholder(this=param_name)
         like_op = exp.ILike if self.ignore_case else exp.Like
 
         if isinstance(self.field_name, str):
@@ -618,10 +690,9 @@ class SearchFilter(StatementFilter):
         else:
             result = statement
 
-        _, named_parameters = self.extract_parameters()
-        for name, value in named_parameters.items():
-            result = result.add_named_parameter(name, value)
-        return result
+        # Add parameter with resolved name
+        search_value_with_wildcards = f"%{self.value}%"
+        return result.add_named_parameter(param_name, search_value_with_wildcards)
 
     def get_cache_key(self) -> tuple[Any, ...]:
         """Return cache key for this filter configuration."""
@@ -663,7 +734,11 @@ class NotInSearchFilter(SearchFilter):
         if not self.value or not self._param_name:
             return statement
 
-        pattern_expr = exp.Placeholder(this=self._param_name)
+        # Resolve parameter name conflicts
+        resolved_names = self._resolve_parameter_conflicts(statement, [self._param_name])
+        param_name = resolved_names[0]
+
+        pattern_expr = exp.Placeholder(this=param_name)
         like_op = exp.ILike if self.ignore_case else exp.Like
 
         result = statement
@@ -682,10 +757,9 @@ class NotInSearchFilter(SearchFilter):
                     final_condition = exp.And(this=final_condition, expression=cond)
             result = statement.where(final_condition)
 
-        _, named_parameters = self.extract_parameters()
-        for name, value in named_parameters.items():
-            result = result.add_named_parameter(name, value)
-        return result
+        # Add parameter with resolved name
+        search_value_with_wildcards = f"%{self.value}%"
+        return result.add_named_parameter(param_name, search_value_with_wildcards)
 
     def get_cache_key(self) -> tuple[Any, ...]:
         """Return cache key for this filter configuration."""

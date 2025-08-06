@@ -1,6 +1,6 @@
 # pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
-from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, AsyncContextManager, Optional, Union
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import asyncmy
 import asyncmy.errors
@@ -119,7 +119,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         row_count = cursor.rowcount if cursor.rowcount is not None else -1
         return self.create_execution_result(cursor, rowcount_override=row_count)
 
-    def handle_database_exceptions(self) -> "AsyncContextManager[None]":
+    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
         """Handle AsyncMy-specific exceptions and wrap them appropriately."""
 
         @asynccontextmanager

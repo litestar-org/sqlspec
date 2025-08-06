@@ -22,39 +22,24 @@ __all__ = ("AiosqliteConfig", "AiosqliteConnectionParams", "AiosqliteConnectionP
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MIN_POOL: Final[int] = 5
-DEFAULT_MAX_POOL: Final[int] = 20
+DEFAULT_MIN_POOL: Final[int] = 1
+DEFAULT_MAX_POOL: Final[int] = 5
 POOL_TIMEOUT: Final[float] = 30.0
 POOL_RECYCLE: Final[int] = 86400
+# Core PRAGMAs only - simplified from 6 to 3 based on consensus
 WAL_PRAGMA_SQL: Final[str] = "PRAGMA journal_mode = WAL"
 FOREIGN_KEYS_SQL: Final[str] = "PRAGMA foreign_keys = ON"
 SYNC_NORMAL_SQL: Final[str] = "PRAGMA synchronous = NORMAL"
-CACHE_SIZE_SQL: Final[str] = "PRAGMA cache_size = -64000"
-TEMP_STORE_SQL: Final[str] = "PRAGMA temp_store = MEMORY"
-MMAP_SIZE_SQL: Final[str] = "PRAGMA mmap_size = 268435456"
 
 
 class AiosqliteConnectionPool:
-    """Async connection pool for Aiosqlite with performance optimizations.
+    """Simplified async connection pool for Aiosqlite.
 
-    Implements async connection pooling to achieve performance improvements
-    similar to the sync SQLite pool.
+    Uses a basic asyncio.Queue for connection pooling with minimal complexity.
+    Focuses on the three core PRAGMAs for performance optimization.
     """
 
-    __slots__ = (
-        "_checked_out",
-        "_connection_parameters",
-        "_connection_times",
-        "_created_connections",
-        "_initialized",
-        "_lock",
-        "_max_pool",
-        "_min_pool",
-        "_pool",
-        "_recycle",
-        "_semaphore",
-        "_timeout",
-    )
+    __slots__ = ("_connection_parameters", "_connection_times", "_lock", "_max_pool", "_pool", "_recycle", "_timeout")
 
     def __init__(
         self,
@@ -64,58 +49,39 @@ class AiosqliteConnectionPool:
         pool_timeout: float = POOL_TIMEOUT,
         pool_recycle_seconds: int = POOL_RECYCLE,
     ) -> None:
-        self._pool: "asyncio.Queue[AiosqliteConnection]" = asyncio.Queue(maxsize=pool_max_size)  # noqa: UP037
+        """Initialize simplified async connection pool.
+
+        Args:
+            connection_parameters: SQLite connection parameters
+            pool_min_size: Minimum pool size (ignored, kept for compatibility)
+            pool_max_size: Maximum pool size
+            pool_timeout: Timeout for acquiring connections
+            pool_recycle_seconds: Connection recycle time
+        """
+        self._pool: asyncio.Queue[AiosqliteConnection] = asyncio.Queue(maxsize=pool_max_size)
         self._lock = asyncio.Lock()
-        self._semaphore = asyncio.Semaphore(pool_max_size)
-        self._min_pool = pool_min_size
         self._max_pool = pool_max_size
         self._timeout = pool_timeout
         self._recycle = pool_recycle_seconds
         self._connection_parameters = connection_parameters
-        self._created_connections = 0
-        self._checked_out = 0
-        self._connection_times: "dict[int, float]" = {}  # noqa: UP037
-        self._initialized = False
+        self._connection_times: dict[int, float] = {}
 
     async def _create_connection(self) -> "AiosqliteConnection":
-        """Create a new Aiosqlite connection with performance optimizations."""
+        """Create a new Aiosqlite connection with core optimizations."""
         connection = await aiosqlite.connect(**self._connection_parameters)
 
+        # Apply only the 3 core PRAGMAs based on consensus
         await connection.execute(WAL_PRAGMA_SQL)
         await connection.execute(FOREIGN_KEYS_SQL)
         await connection.execute(SYNC_NORMAL_SQL)
-        await connection.execute(CACHE_SIZE_SQL)
-        await connection.execute(TEMP_STORE_SQL)
-        await connection.execute(MMAP_SIZE_SQL)
         await connection.commit()
 
+        # Track connection creation time for recycling
         conn_id = id(connection)
         async with self._lock:
-            self._created_connections += 1
             self._connection_times[conn_id] = time.time()
 
         return connection
-
-    async def _ensure_initialized(self) -> None:
-        """Ensure the pool is initialized with minimum connections (async thread-safe).
-
-        This method is called lazily on first connection request to avoid
-        connecting to non-existent database files during pool creation.
-        """
-        if self._initialized:
-            return
-
-        async with self._lock:
-            # Double-check pattern for async thread safety
-            if self._initialized:
-                return
-
-            # No eager initialization - connections created on demand
-            self._initialized = True
-
-    async def initialize(self) -> None:
-        """Pre-populate the pool with minimum connections."""
-        await self._ensure_initialized()
 
     def _should_recycle(self, connection: "AiosqliteConnection") -> bool:
         """Check if connection should be recycled based on age."""
@@ -148,16 +114,13 @@ class AiosqliteConnectionPool:
         Yields:
             An Aiosqlite connection instance.
         """
-        # Ensure pool is initialized on first request
-        await self._ensure_initialized()
-
         connection = None
-        acquired = False
 
         try:
-            acquired = await asyncio.wait_for(self._semaphore.acquire(), timeout=self._timeout)
+            # Try to get existing connection from pool
             try:
                 connection = self._pool.get_nowait()
+                # Check if connection needs recycling
                 if self._should_recycle(connection) or not await self._is_connection_alive(connection):
                     conn_id = id(connection)
                     with suppress(Exception):
@@ -165,7 +128,6 @@ class AiosqliteConnectionPool:
                     async with self._lock:
                         self._connection_times.pop(conn_id, None)
                     connection = None
-
             except asyncio.QueueEmpty:
                 connection = None
 
@@ -173,34 +135,28 @@ class AiosqliteConnectionPool:
             if connection is None:
                 connection = await self._create_connection()
 
-            async with self._lock:
-                self._checked_out += 1
-
             yield connection
-
-        except asyncio.TimeoutError:
-            msg = f"Connection pool timeout after {self._timeout} seconds"
-            raise RuntimeError(msg) from None
 
         finally:
             if connection is not None:
-                async with self._lock:
-                    self._checked_out -= 1
-
                 # Validate connection before returning to pool
                 if await self._is_connection_alive(connection):
                     try:
                         self._pool.put_nowait(connection)
                     except asyncio.QueueFull:
+                        # Pool is full, close the connection
                         with suppress(Exception):
                             await connection.close()
+                        conn_id = id(connection)
+                        async with self._lock:
+                            self._connection_times.pop(conn_id, None)
                 else:
                     # Connection is dead, close it
                     with suppress(Exception):
                         await connection.close()
-
-            if acquired:
-                self._semaphore.release()
+                    conn_id = id(connection)
+                    async with self._lock:
+                        self._connection_times.pop(conn_id, None)
 
     async def close(self) -> None:
         """Close all connections in the pool."""
@@ -217,8 +173,8 @@ class AiosqliteConnectionPool:
         return self._pool.qsize()
 
     def checked_out(self) -> int:
-        """Get number of checked out connections."""
-        return self._checked_out
+        """Get number of checked out connections (always 0 for simplified pool)."""
+        return 0
 
     async def acquire(self) -> "AiosqliteConnection":
         """Acquire a connection from the pool without a context manager.
@@ -228,25 +184,14 @@ class AiosqliteConnectionPool:
 
         Returns:
             AiosqliteConnection: A connection from the pool
-
-        Raises:
-            RuntimeError: If pool limit is reached and timeout expires
         """
-        # Ensure pool is initialized on first request
-        await self._ensure_initialized()
-
         connection = None
-        acquired = False
 
         try:
-            # Acquire semaphore with timeout
-            acquired = await asyncio.wait_for(self._semaphore.acquire(), timeout=self._timeout)
-
-            # Try to get existing connection from pool
+            # Try to get existing connection from pool with timeout
             try:
-                connection = self._pool.get_nowait()
-
-                # Check if connection should be recycled based on age
+                connection = await asyncio.wait_for(self._pool.get(), timeout=self._timeout)
+                # Check if connection needs recycling
                 if self._should_recycle(connection) or not await self._is_connection_alive(connection):
                     conn_id = id(connection)
                     with suppress(Exception):
@@ -254,29 +199,49 @@ class AiosqliteConnectionPool:
                     async with self._lock:
                         self._connection_times.pop(conn_id, None)
                     connection = None
-
             except asyncio.QueueEmpty:
+                connection = None
+            except asyncio.TimeoutError:
                 connection = None
 
             # Create new connection if needed
             if connection is None:
                 connection = await self._create_connection()
 
-            async with self._lock:
-                self._checked_out += 1
-
-        except asyncio.TimeoutError:
-            msg = f"Connection pool timeout after {self._timeout} seconds"
-            raise RuntimeError(msg) from None
         except Exception:
             # If we got a connection but failed somewhere, return it to pool
             if connection is not None:
                 with suppress(asyncio.QueueFull):
                     self._pool.put_nowait(connection)
-            if acquired:
-                self._semaphore.release()
             raise
+
         return connection
+
+    async def release(self, connection: "AiosqliteConnection") -> None:
+        """Release a connection back to the pool.
+
+        Args:
+            connection: The connection to release
+        """
+        if connection is not None:
+            # Validate connection before returning to pool
+            if await self._is_connection_alive(connection):
+                try:
+                    self._pool.put_nowait(connection)
+                except asyncio.QueueFull:
+                    # Pool is full, close the connection
+                    with suppress(Exception):
+                        await connection.close()
+                    conn_id = id(connection)
+                    async with self._lock:
+                        self._connection_times.pop(conn_id, None)
+            else:
+                # Connection is dead, close it
+                with suppress(Exception):
+                    await connection.close()
+                conn_id = id(connection)
+                async with self._lock:
+                    self._connection_times.pop(conn_id, None)
 
 
 class AiosqliteConnectionParams(TypedDict, total=False):

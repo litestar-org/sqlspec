@@ -93,21 +93,21 @@ def test_before_after_filter(
 
         assert hasattr(result, "parameters")
         if result.parameters:
-            assert isinstance(result.parameters, dict)
-            if before:
+            # After refactoring, parameters can be dict or list depending on SQL config
+            if isinstance(result.parameters, dict):
                 parameters_dict = result.parameters
                 if "parameters" in parameters_dict and isinstance(parameters_dict["parameters"], dict):
                     parameters_dict = parameters_dict["parameters"]
                     if "parameters" in parameters_dict:
                         parameters_dict = parameters_dict["parameters"]
-                assert any("before" in k for k in parameters_dict.keys())
-            if after:
-                parameters_dict = result.parameters
-                if "parameters" in parameters_dict and isinstance(parameters_dict["parameters"], dict):
-                    parameters_dict = parameters_dict["parameters"]
-                    if "parameters" in parameters_dict:
-                        parameters_dict = parameters_dict["parameters"]
-                assert any("after" in k for k in parameters_dict.keys())
+                if before:
+                    assert any("before" in k for k in parameters_dict.keys())
+                if after:
+                    assert any("after" in k for k in parameters_dict.keys())
+            else:
+                # Positional parameters - just check count
+                expected_count = (1 if before else 0) + (1 if after else 0)
+                assert len(result.parameters) == expected_count
     else:
         assert result.sql == statement.sql
 
@@ -122,9 +122,13 @@ def test_before_after_filter_parameter_uniqueness() -> None:
     result2 = filter2.append_to_statement(result1)
 
     if result2.parameters:
-        assert isinstance(result2.parameters, dict)
-        param_names = list(result2.parameters.keys())
-        assert len(param_names) == len(set(param_names))
+        # After refactoring, parameters can be dict or list
+        if isinstance(result2.parameters, dict):
+            param_names = list(result2.parameters.keys())
+            assert len(param_names) == len(set(param_names))
+        else:
+            # For positional parameters, just check we have 2 values
+            assert len(result2.parameters) == 2
 
 
 @pytest.mark.parametrize(
@@ -175,9 +179,13 @@ def test_in_collection_filter(values: Optional[Collection[Any]], expected_behavi
         assert "status" in result.sql
         assert "IN" in result.sql.upper()
         if result.parameters:
-            assert isinstance(result.parameters, dict)
-            status_parameters = [k for k in result.parameters.keys() if "status_in_" in k]
-            assert len(status_parameters) == len(values) if values else 0
+            # After refactoring, parameters can be dict or list
+            if isinstance(result.parameters, dict):
+                status_parameters = [k for k in result.parameters.keys() if "status_in_" in k]
+                assert len(status_parameters) == len(values) if values else 0
+            else:
+                # For positional parameters
+                assert len(result.parameters) == len(values) if values else 0
     elif expected_behavior == "false_condition":
         assert "FALSE" in result.sql.upper() or "0 = 1" in result.sql
     else:
@@ -193,10 +201,14 @@ def test_in_collection_filter_preserves_values() -> None:
     result = filter_obj.append_to_statement(statement)
 
     if result.parameters:
-        assert isinstance(result.parameters, dict)
-        category_parameters = {k: v for k, v in result.parameters.items() if "category_in_" in k}
-        param_values = set(category_parameters.values())
-        assert param_values == set(values)
+        # After refactoring, parameters can be dict or list
+        if isinstance(result.parameters, dict):
+            category_parameters = {k: v for k, v in result.parameters.items() if "category_in_" in k}
+            param_values = set(category_parameters.values())
+            assert param_values == set(values)
+        else:
+            # For positional parameters
+            assert set(result.parameters) == set(values)
 
 
 @pytest.mark.parametrize(
@@ -273,11 +285,17 @@ def test_limit_offset_filter(limit: int, offset: int) -> None:
     assert "OFFSET" in result.sql.upper()
 
     if result.parameters:
-        assert isinstance(result.parameters, dict)
-        param_values = list(result.parameters.values())
-        assert limit in param_values
-        if offset > 0:
-            assert offset in param_values
+        # After refactoring, parameters can be dict or list
+        if isinstance(result.parameters, dict):
+            param_values = list(result.parameters.values())
+            assert limit in param_values
+            if offset > 0:
+                assert offset in param_values
+        else:
+            # For positional parameters
+            assert limit in result.parameters
+            if offset > 0:
+                assert offset in result.parameters
 
 
 @pytest.mark.parametrize(
@@ -341,10 +359,15 @@ def test_search_filter_wildcard_wrapping() -> None:
     result = filter_obj.append_to_statement(statement)
 
     if result.parameters:
-        assert isinstance(result.parameters, dict)
-        search_parameters = [v for k, v in result.parameters.items() if "search" in k and "_not_" not in k]
-        assert len(search_parameters) == 1
-        assert search_parameters[0] == "%john%"
+        # After refactoring, parameters can be dict or list
+        if isinstance(result.parameters, dict):
+            search_parameters = [v for k, v in result.parameters.items() if "search" in k and "_not_" not in k]
+            assert len(search_parameters) == 1
+            assert search_parameters[0] == "%john%"
+        else:
+            # For positional parameters
+            assert len(result.parameters) == 1
+            assert result.parameters[0] == "%john%"
 
 
 @pytest.mark.parametrize(
@@ -438,10 +461,16 @@ def test_filters_with_special_characters() -> None:
     result = search_filter.append_to_statement(statement)
 
     if result.parameters:
-        assert isinstance(result.parameters, dict)
-        search_parameters = [v for v in result.parameters.values() if isinstance(v, str) and "john" in v]
-        assert len(search_parameters) == 1
-        assert search_parameters[0] == "%john%_doe%"
+        # After refactoring, parameters can be dict or list
+        if isinstance(result.parameters, dict):
+            search_parameters = [v for v in result.parameters.values() if isinstance(v, str) and "john" in v]
+            assert len(search_parameters) == 1
+            assert search_parameters[0] == "%john%_doe%"
+        else:
+            # For positional parameters
+            search_parameters = [v for v in result.parameters if isinstance(v, str) and "john" in v]
+            assert len(search_parameters) == 1
+            assert search_parameters[0] == "%john%_doe%"
 
 
 @pytest.mark.parametrize(

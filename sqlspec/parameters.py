@@ -6,7 +6,10 @@ in a single file for better maintainability and performance.
 
 import re
 from collections.abc import Mapping
+from datetime import date, datetime
+from decimal import Decimal
 from enum import Enum
+from functools import singledispatch
 from typing import TYPE_CHECKING, Any, Callable, Final, Optional
 
 from mypy_extensions import mypyc_attr
@@ -125,6 +128,115 @@ class TypedParameter:
     def __repr__(self) -> str:
         """String representation compatible with dataclass.__repr__."""
         return f"{type(self).__name__}({', '.join([f'semantic_name={self.semantic_name!r}', f'data_type={self.data_type!r}', f'type_hint={self.type_hint!r}', f'value={self.value!r}'])})"
+
+
+# Singledispatch implementation for type wrapping
+@singledispatch
+def _wrap_parameter_by_type(value: Any, semantic_name: Optional[str] = None) -> Any:
+    """Wrap parameter with type information based on its type.
+
+    Default handler for types that don't need special wrapping.
+    """
+    return value
+
+
+@_wrap_parameter_by_type.register(type(None))
+def _wrap_none(value: None, semantic_name: Optional[str] = None) -> TypedParameter:
+    """Wrap None type value."""
+    import sqlglot.expressions as exp
+
+    return TypedParameter(
+        value=None, data_type=exp.DataType.build("NULL"), type_hint="null", semantic_name=semantic_name
+    )
+
+
+@_wrap_parameter_by_type.register(bool)
+def _wrap_bool(value: bool, semantic_name: Optional[str] = None) -> TypedParameter:
+    """Wrap boolean type value."""
+    import sqlglot.expressions as exp
+
+    return TypedParameter(
+        value=value, data_type=exp.DataType.build("BOOLEAN"), type_hint="boolean", semantic_name=semantic_name
+    )
+
+
+@_wrap_parameter_by_type.register(int)
+def _wrap_int(value: int, semantic_name: Optional[str] = None) -> Any:
+    """Wrap integer type value, only if it's a bigint."""
+    if abs(value) > MAX_32BIT_INT:
+        import sqlglot.expressions as exp
+
+        return TypedParameter(
+            value=value, data_type=exp.DataType.build("BIGINT"), type_hint="bigint", semantic_name=semantic_name
+        )
+    return value  # Small integers don't need wrapping
+
+
+@_wrap_parameter_by_type.register(Decimal)
+def _wrap_decimal(value: Decimal, semantic_name: Optional[str] = None) -> TypedParameter:
+    """Wrap Decimal type value."""
+    import sqlglot.expressions as exp
+
+    return TypedParameter(
+        value=value, data_type=exp.DataType.build("DECIMAL"), type_hint="decimal", semantic_name=semantic_name
+    )
+
+
+@_wrap_parameter_by_type.register(date)
+def _wrap_date(value: date, semantic_name: Optional[str] = None) -> Any:
+    """Wrap date type value, but not datetime."""
+    if not isinstance(value, datetime):  # Only wrap pure date, not datetime
+        import sqlglot.expressions as exp
+
+        return TypedParameter(
+            value=value, data_type=exp.DataType.build("DATE"), type_hint="date", semantic_name=semantic_name
+        )
+    # Datetime will be handled by its own handler
+    return _wrap_parameter_by_type.registry[datetime](value, semantic_name)
+
+
+@_wrap_parameter_by_type.register(datetime)
+def _wrap_datetime(value: datetime, semantic_name: Optional[str] = None) -> TypedParameter:
+    """Wrap datetime type value."""
+    import sqlglot.expressions as exp
+
+    return TypedParameter(
+        value=value, data_type=exp.DataType.build("TIMESTAMP"), type_hint="timestamp", semantic_name=semantic_name
+    )
+
+
+@_wrap_parameter_by_type.register(bytes)
+@_wrap_parameter_by_type.register(bytearray)
+def _wrap_binary(value: Any, semantic_name: Optional[str] = None) -> TypedParameter:
+    """Wrap binary type value (bytes/bytearray)."""
+    import sqlglot.expressions as exp
+
+    return TypedParameter(
+        value=value, data_type=exp.DataType.build("BINARY"), type_hint="binary", semantic_name=semantic_name
+    )
+
+
+@_wrap_parameter_by_type.register(list)
+@_wrap_parameter_by_type.register(tuple)
+def _wrap_array(value: Any, semantic_name: Optional[str] = None) -> Any:
+    """Wrap array type value (list/tuple), but not strings."""
+    if not isinstance(value, str):
+        import sqlglot.expressions as exp
+
+        return TypedParameter(
+            value=value, data_type=exp.DataType.build("ARRAY"), type_hint="array", semantic_name=semantic_name
+        )
+    return value  # Strings don't need wrapping
+
+
+@_wrap_parameter_by_type.register(dict)
+def _wrap_json(value: dict, semantic_name: Optional[str] = None) -> TypedParameter:
+    """Wrap JSON type value (dict)."""
+    import sqlglot.expressions as exp
+
+    return TypedParameter(
+        value=value, data_type=exp.DataType.build("JSON"), type_hint="json", semantic_name=semantic_name
+    )
 
 
 class ParameterStyleConfig:
@@ -502,8 +614,7 @@ class ParameterConverter:
             ParameterStyle.NAMED_PYFORMAT: self._convert_to_named_pyformat_format,
         }
 
-        # Performance optimization: Type dispatch for O(1) type wrapping
-        self._type_wrappers = self._build_type_wrapper_dispatch()
+        # Type wrapping is now handled by singledispatch (see wrap_with_type)
 
     def convert_placeholders(
         self, sql: str, target_style: ParameterStyle, parameter_info: Optional[list[ParameterInfo]] = None
@@ -570,63 +681,13 @@ class ParameterConverter:
         return self._wrap_single_parameter(parameters, None)
 
     def _wrap_single_parameter(self, value: Any, semantic_name: Optional[str] = None) -> Any:
-        """Wrap a single parameter value if it needs type information."""
-        from datetime import date, datetime
-        from decimal import Decimal
+        """Wrap a single parameter value if it needs type information.
 
-        import sqlglot.expressions as exp
-
+        Uses singledispatch internally for clean type-based dispatch.
+        """
         if isinstance(value, TypedParameter):
             return value
-        if value is None:
-            return TypedParameter(
-                value=None, data_type=exp.DataType.build("NULL"), type_hint="null", semantic_name=semantic_name
-            )
-
-        if isinstance(value, bool):
-            return TypedParameter(
-                value=value, data_type=exp.DataType.build("BOOLEAN"), type_hint="boolean", semantic_name=semantic_name
-            )
-
-        if isinstance(value, int) and abs(value) > MAX_32BIT_INT:
-            return TypedParameter(
-                value=value, data_type=exp.DataType.build("BIGINT"), type_hint="bigint", semantic_name=semantic_name
-            )
-
-        if isinstance(value, Decimal):
-            return TypedParameter(
-                value=value, data_type=exp.DataType.build("DECIMAL"), type_hint="decimal", semantic_name=semantic_name
-            )
-
-        if isinstance(value, date) and not isinstance(value, datetime):
-            return TypedParameter(
-                value=value, data_type=exp.DataType.build("DATE"), type_hint="date", semantic_name=semantic_name
-            )
-
-        if isinstance(value, datetime):
-            return TypedParameter(
-                value=value,
-                data_type=exp.DataType.build("TIMESTAMP"),
-                type_hint="timestamp",
-                semantic_name=semantic_name,
-            )
-
-        if isinstance(value, (bytes, bytearray)):
-            return TypedParameter(
-                value=value, data_type=exp.DataType.build("BINARY"), type_hint="binary", semantic_name=semantic_name
-            )
-
-        if isinstance(value, (list, tuple)) and not isinstance(value, str):
-            return TypedParameter(
-                value=value, data_type=exp.DataType.build("ARRAY"), type_hint="array", semantic_name=semantic_name
-            )
-
-        if isinstance(value, dict):
-            return TypedParameter(
-                value=value, data_type=exp.DataType.build("JSON"), type_hint="json", semantic_name=semantic_name
-            )
-
-        return value
+        return _wrap_parameter_by_type(value, semantic_name)
 
     def _convert_to_sqlglot_compatible(self, sql: str, param_info: list[ParameterInfo]) -> str:
         """Convert SQL with SQLGlot-incompatible parameters to compatible named colon style.
@@ -642,7 +703,12 @@ class ParameterConverter:
         for i, param in enumerate(param_info):
             result_parts.append(sql[current_pos : param.position])
 
-            new_placeholder = f":param_{i}"
+            # For POSITIONAL_COLON parameters, preserve the numeric name
+            # e.g., :1 -> :param_1 (not :param_0)
+            if param.style == ParameterStyle.POSITIONAL_COLON and param.name:
+                new_placeholder = f":param_{param.name}"
+            else:
+                new_placeholder = f":param_{i}"
             result_parts.append(new_placeholder)
             current_pos = param.position + len(param.placeholder_text)
 
@@ -774,6 +840,20 @@ class ParameterConverter:
     def _convert_to_positional_colon_format(self, parameters: Any, param_info: list[ParameterInfo]) -> dict[str, Any]:
         """Convert parameters to positional colon format (Oracle :1, :2, :3)."""
         if isinstance(parameters, dict):
+            # Check if the dict has param_N keys that need to be converted to numeric keys
+            needs_conversion = any(
+                key.startswith("param_") and key[6:].isdigit()
+                for key in parameters
+            )
+            if needs_conversion:
+                result = {}
+                for key, value in parameters.items():
+                    if key.startswith("param_") and key[6:].isdigit():
+                        # Extract numeric part from param_N
+                        result[key[6:]] = value
+                    else:
+                        result[key] = value
+                return result
             return parameters
         if isinstance(parameters, (list, tuple)):
             return self._convert_list_to_colon_dict(parameters, param_info)
@@ -849,8 +929,18 @@ class ParameterConverter:
 
             all_numeric = all(p.name and p.name.isdigit() for p in param_info)
             if all_numeric:
+                # For numeric parameters, map by numeric order, not SQL position order
+                # Sort parameters by their numeric names (1, 2, 3, etc.)
+                sorted_param_info = sorted(param_info, key=lambda p: int(p.name) if p.name and p.name.isdigit() else 0)
                 for i, value in enumerate(parameters):
-                    result_dict[str(i + 1)] = value
+                    if i < len(sorted_param_info):
+                        param_name = sorted_param_info[i].name
+                        if param_name is not None:
+                            result_dict[param_name] = value
+                        else:
+                            result_dict[str(i + 1)] = value
+                    else:
+                        result_dict[str(i + 1)] = value
             else:
                 for i, value in enumerate(parameters):
                     if i < len(param_info):
@@ -925,104 +1015,8 @@ class ParameterConverter:
             name = param.name or f"param_{i}"
         return f"${name}"
 
-    def _build_type_wrapper_dispatch(self) -> dict[type, Any]:
-        """Build type dispatch map for O(1) type wrapping decisions."""
-        from datetime import date, datetime
-        from decimal import Decimal
-
-        return {
-            type(None): self._wrap_none_type,
-            bool: self._wrap_bool_type,
-            int: self._wrap_int_type,
-            Decimal: self._wrap_decimal_type,
-            date: self._wrap_date_type,
-            datetime: self._wrap_datetime_type,
-            bytes: self._wrap_binary_type,
-            bytearray: self._wrap_binary_type,
-            list: self._wrap_array_type,
-            tuple: self._wrap_array_type,
-            dict: self._wrap_json_type,
-        }
-
-    def _wrap_none_type(self, _value: None, semantic_name: Optional[str]) -> TypedParameter:
-        """Wrap None type value."""
-        import sqlglot.expressions as exp
-
-        return TypedParameter(
-            value=None, data_type=exp.DataType.build("NULL"), type_hint="null", semantic_name=semantic_name
-        )
-
-    def _wrap_bool_type(self, value: bool, semantic_name: Optional[str]) -> TypedParameter:
-        """Wrap boolean type value."""
-        import sqlglot.expressions as exp
-
-        return TypedParameter(
-            value=value, data_type=exp.DataType.build("BOOLEAN"), type_hint="boolean", semantic_name=semantic_name
-        )
-
-    def _wrap_int_type(self, value: int, semantic_name: Optional[str]) -> Any:
-        """Wrap integer type value, only if it's a bigint."""
-        if abs(value) > MAX_32BIT_INT:
-            import sqlglot.expressions as exp
-
-            return TypedParameter(
-                value=value, data_type=exp.DataType.build("BIGINT"), type_hint="bigint", semantic_name=semantic_name
-            )
-        return value  # Small integers don't need wrapping
-
-    def _wrap_decimal_type(self, value: Any, semantic_name: Optional[str]) -> TypedParameter:
-        """Wrap Decimal type value."""
-        import sqlglot.expressions as exp
-
-        return TypedParameter(
-            value=value, data_type=exp.DataType.build("DECIMAL"), type_hint="decimal", semantic_name=semantic_name
-        )
-
-    def _wrap_date_type(self, value: Any, semantic_name: Optional[str]) -> Any:
-        """Wrap date type value, but not datetime."""
-        from datetime import datetime
-
-        if not isinstance(value, datetime):  # Only wrap pure date, not datetime
-            import sqlglot.expressions as exp
-
-            return TypedParameter(
-                value=value, data_type=exp.DataType.build("DATE"), type_hint="date", semantic_name=semantic_name
-            )
-        return self._wrap_datetime_type(value, semantic_name)
-
-    def _wrap_datetime_type(self, value: Any, semantic_name: Optional[str]) -> TypedParameter:
-        """Wrap datetime type value."""
-        import sqlglot.expressions as exp
-
-        return TypedParameter(
-            value=value, data_type=exp.DataType.build("TIMESTAMP"), type_hint="timestamp", semantic_name=semantic_name
-        )
-
-    def _wrap_binary_type(self, value: Any, semantic_name: Optional[str]) -> TypedParameter:
-        """Wrap binary type value (bytes/bytearray)."""
-        import sqlglot.expressions as exp
-
-        return TypedParameter(
-            value=value, data_type=exp.DataType.build("BINARY"), type_hint="binary", semantic_name=semantic_name
-        )
-
-    def _wrap_array_type(self, value: Any, semantic_name: Optional[str]) -> Any:
-        """Wrap array type value (list/tuple), but not strings."""
-        if not isinstance(value, str):
-            import sqlglot.expressions as exp
-
-            return TypedParameter(
-                value=value, data_type=exp.DataType.build("ARRAY"), type_hint="array", semantic_name=semantic_name
-            )
-        return value  # Strings don't need wrapping
-
-    def _wrap_json_type(self, value: dict, semantic_name: Optional[str]) -> TypedParameter:
-        """Wrap JSON type value (dict)."""
-        import sqlglot.expressions as exp
-
-        return TypedParameter(
-            value=value, data_type=exp.DataType.build("JSON"), type_hint="json", semantic_name=semantic_name
-        )
+    # Note: Old type wrapper methods removed in favor of singledispatch.
+    # See wrap_with_type() function above for the new implementation
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
