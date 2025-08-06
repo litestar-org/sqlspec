@@ -75,7 +75,11 @@ def test_sql_initialization_with_parameters() -> None:
     "sql,parameters,expected_sql",
     [
         ("SELECT * FROM users WHERE id = ?", (1,), "SELECT * FROM users WHERE id = ?"),
-        ("SELECT * FROM users WHERE id = :id", {"id": 1}, "SELECT * FROM users WHERE id = :id"),  # Preserved when compatible
+        (
+            "SELECT * FROM users WHERE id = :id",
+            {"id": 1},
+            "SELECT * FROM users WHERE id = :id",
+        ),  # Preserved when compatible
         ("SELECT * FROM users WHERE id = $1", (1,), "SELECT * FROM users WHERE id = $1"),  # Preserved when compatible
     ],
 )

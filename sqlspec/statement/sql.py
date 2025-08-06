@@ -330,7 +330,7 @@ class SQL:
         if isinstance(statement, SQL):
             self._init_from_sql_object(statement, _dialect, statement_config or StatementConfig(), _builder_result_type)
         else:
-            self._init_from_str_or_expression(statement)
+            self._init_from_str_or_expression(statement, parameters)
 
         if not isinstance(statement, SQL):
             self._set_original_parameters(*parameters)
@@ -412,11 +412,11 @@ class SQL:
         self._named_parameters.update(statement._named_parameters)
         self._filters.extend(statement._filters)
 
-    def _init_from_str_or_expression(self, statement: "Union[str, exp.Expression]") -> None:
+    def _init_from_str_or_expression(self, statement: "Union[str, exp.Expression]", parameters: Any = None) -> None:
         """Initialize from a string or expression."""
         if isinstance(statement, str):
             self._raw_sql = statement
-            self._statement = self._to_expression(statement)
+            self._statement = self._to_expression(statement, parameters)
         else:
             self._raw_sql = statement.sql(dialect=self._dialect, copy=False, comments=False)
             self._statement = statement
@@ -487,9 +487,8 @@ class SQL:
         """Process a single item from the parameters list."""
         if is_statement_filter(item):
             self._filters.append(item)
-            pos_parameters, named_parameters = self._extract_filter_parameters(item)
-            self._positional_parameters.extend(pos_parameters)
-            self._named_parameters.update(named_parameters)
+            # Don't extract parameters from filters during initial processing
+            # They will be added when the filter is applied in _build_final_state
         elif isinstance(item, list):
             # Check if this is a single array parameter (for PostgreSQL arrays etc.)
             # Don't flatten lists that are meant to be single array parameters
@@ -516,9 +515,8 @@ class SQL:
         for item in parameters:
             if is_statement_filter(item):
                 self._filters.append(item)
-                pos_parameters, named_parameters = self._extract_filter_parameters(item)
-                self._positional_parameters.extend(pos_parameters)
-                self._named_parameters.update(named_parameters)
+                # Don't extract parameters from filters during initial processing
+                # They will be added when the filter is applied in _build_final_state
             elif isinstance(item, (tuple, list)) or is_dict(item):
                 self._positional_parameters.append(item)
             else:
@@ -590,7 +588,7 @@ class SQL:
             transformation_results={},
         )
 
-    def _to_expression(self, statement: "Union[str, exp.Expression]") -> exp.Expression:
+    def _to_expression(self, statement: "Union[str, exp.Expression]", parameters: Any = None) -> exp.Expression:
         """Convert string to sqlglot expression."""
         if is_expression(statement):
             return statement
@@ -615,8 +613,9 @@ class SQL:
         converted_sql = statement
 
         # Only convert if we have incompatible styles AND we have parameters
-        # If no parameters are provided, don't convert - they might be added later via as_many()
-        if needs_conversion and (self._positional_parameters or self._named_parameters):
+        # Check both instance parameters and passed parameters
+        has_parameters = self._positional_parameters or self._named_parameters or (parameters and len(parameters) > 0)
+        if needs_conversion and has_parameters:
             converter = self.statement_config.parameter_converter
             converted_sql = converter._convert_to_sqlglot_compatible(statement, param_info)
             self._original_sql = statement
@@ -814,7 +813,7 @@ class SQL:
 
     def where(self, condition: "Union[str, exp.Expression, exp.Condition]") -> "SQL":
         """Apply WHERE clause and return new SQL instance."""
-        condition_expr = self._to_expression(condition) if isinstance(condition, str) else condition
+        condition_expr = self._to_expression(condition, None) if isinstance(condition, str) else condition
 
         if supports_where(self._statement):
             new_statement = self._statement.where(condition_expr)  # pyright: ignore
@@ -1005,7 +1004,9 @@ class SQL:
                     if all(p.style == ParameterStyle.POSITIONAL_COLON for p in param_info):
                         result = {}
                         # Map positional params to their numeric placeholders
-                        sorted_params = sorted(param_info, key=lambda p: int(p.name) if p.name and p.name.isdigit() else 0)
+                        sorted_params = sorted(
+                            param_info, key=lambda p: int(p.name) if p.name and p.name.isdigit() else 0
+                        )
                         for i, param in enumerate(sorted_params):
                             if i < len(self._original_parameters) and param.name:
                                 result[param.name] = self._original_parameters[i]
@@ -1337,9 +1338,6 @@ class SQL:
             parameters = self._flatten_single_parameters(sql, parameters)
 
         return sql, parameters
-
-    # REMOVED: sql_for_many() and parameters_for_many() methods
-    # All drivers should now use statement.sql and statement.parameters
 
     def _flatten_single_parameters(self, sql: str, parameters: Any) -> Any:
         """Flatten single-element lists for scalar parameters.

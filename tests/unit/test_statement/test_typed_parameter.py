@@ -159,15 +159,18 @@ def test_sql_with_typed_parameters() -> None:
     assert sql._processed_state is not None
     internal_parameters = sql._processed_state.merged_parameters
 
+    # For QMARK style, parameters are stored as a list, not dict
+    assert isinstance(internal_parameters, list)
+
     # First param should be wrapped as TypedParameter internally
-    assert isinstance(internal_parameters["param_0"], TypedParameter)
-    assert internal_parameters["param_0"].value == datetime(2024, 1, 1)
-    assert internal_parameters["param_0"].type_hint == "timestamp"
+    assert isinstance(internal_parameters[0], TypedParameter)
+    assert internal_parameters[0].value == datetime(2024, 1, 1)
+    assert internal_parameters[0].type_hint == "timestamp"
 
     # Second param (boolean) should be wrapped since it's a special type
-    assert isinstance(internal_parameters["param_1"], TypedParameter)
-    assert internal_parameters["param_1"].value is True
-    assert internal_parameters["param_1"].type_hint == "boolean"
+    assert isinstance(internal_parameters[1], TypedParameter)
+    assert internal_parameters[1].value is True
+    assert internal_parameters[1].type_hint == "boolean"
 
     # The final output parameters should be unwrapped and in QMARK format (tuple)
     assert isinstance(parameters, tuple)

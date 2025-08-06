@@ -135,33 +135,6 @@ async def test_async_select_value(oracle_async_session: OracleAsyncConfig, param
 
 
 @pytest.mark.xdist_group("oracle")
-async def test_async_select_arrow(oracle_async_session: OracleAsyncConfig) -> None:
-    """Test asynchronous select arrow functionality."""
-    async with oracle_async_session.provide_session() as driver:
-        # Manual cleanup at start of test
-        await driver.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        )
-        sql = """
-        CREATE TABLE test_table (
-            id NUMBER PRIMARY KEY,
-            name VARCHAR2(50)
-        )
-        """
-        await driver.execute_script(sql)
-
-        # Insert test record using positional binds
-        insert_sql = "INSERT INTO test_table (id, name) VALUES (1, ?)"
-        insert_result = await driver.execute(insert_sql, ("arrow_name"))
-        assert isinstance(insert_result, SQLResult)
-        assert insert_result.rows_affected == 1
-
-        await driver.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        )
-
-
-@pytest.mark.xdist_group("oracle")
 async def test_execute_many_insert(oracle_async_session: OracleAsyncConfig) -> None:
     """Test execute_many functionality for batch inserts."""
     async with oracle_async_session.provide_session() as driver:

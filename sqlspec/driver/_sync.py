@@ -10,7 +10,8 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_dict_row, is_indexable_row
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Sequence
+    from collections.abc import Sequence
+    from contextlib import AbstractContextManager
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.statement.filters import StatementFilter
@@ -72,7 +73,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         """
 
     @abstractmethod
-    def handle_database_exceptions(self) -> "Generator[None, None, None]":
+    def handle_database_exceptions(self) -> "AbstractContextManager[None]":
         """MANDATORY: Handle database-specific exceptions and wrap them appropriately.
 
         This context manager is the ONLY place where exceptions should be caught

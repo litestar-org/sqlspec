@@ -78,8 +78,8 @@ def test_basic_sql_operations(
 )
 def test_parameter_style_normalization(sql: str, parameters: Any, expected_sql: str) -> None:
     """Test that parameter styles are normalized to the config's default execution style when needed."""
-    from sqlspec.statement.sql import StatementConfig
     from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
+    from sqlspec.statement.sql import StatementConfig
 
     # Create config that explicitly requires QMARK for execution
     config = StatementConfig(
@@ -148,7 +148,7 @@ def test_parameter_format_conversion(
 def test_sql_transformer_integration() -> None:
     """Test complete SQLTransformer integration with SQL class."""
     from sqlspec.statement.sql import StatementConfig
-    
+
     # Test case that previously failed with SQLGlot parsing
     sql = "SELECT * FROM users WHERE id = %(id)s AND name = %(name)s"
     parameters = {"id": 123, "name": "test_user"}

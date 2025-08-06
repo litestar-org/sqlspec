@@ -250,6 +250,7 @@ class ParameterStyleConfig:
         "needs_static_script_compilation",
         "output_transformer",
         "preserve_parameter_format",
+        "remove_null_parameters",
         "supported_execution_parameter_styles",
         "supported_parameter_styles",
         "type_coercion_map",
@@ -267,6 +268,7 @@ class ParameterStyleConfig:
         needs_static_script_compilation: bool = True,
         allow_mixed_parameter_styles: bool = False,
         preserve_parameter_format: bool = False,
+        remove_null_parameters: bool = False,
     ) -> None:
         """Initialize driver parameter configuration."""
         self.supported_parameter_styles = supported_parameter_styles or {default_parameter_style}
@@ -279,6 +281,7 @@ class ParameterStyleConfig:
         self.needs_static_script_compilation = needs_static_script_compilation
         self.allow_mixed_parameter_styles = allow_mixed_parameter_styles
         self.preserve_parameter_format = preserve_parameter_format
+        self.remove_null_parameters = remove_null_parameters
 
     def hash(self) -> int:
         """Generate hash for cache key generation."""

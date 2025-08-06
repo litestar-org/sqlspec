@@ -6,6 +6,8 @@ import logging
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional, cast
 
+import sqlglot
+
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
@@ -27,7 +29,6 @@ __all__ = ("AdbcCursor", "AdbcDriver", "get_adbc_statement_config")
 
 def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
     """Create ADBC statement configuration for the specified dialect."""
-    logger.debug("Creating ADBC statement config for dialect: %s", detected_dialect)
     default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
         detected_dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
     )
@@ -40,6 +41,7 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
         type_coercion_map=type_map,
         has_native_list_expansion=True,
         needs_static_script_compilation=True,
+        remove_null_parameters=True,  # ADBC cannot handle NULL parameters
     )
 
     post_process_steps = None
@@ -59,7 +61,9 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
 def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
     """Get type coercion map for Arrow/ADBC type handling."""
     type_map = {
-        type(None): lambda _: None,
+        # NOTE: NoneType is excluded from type map to force NULL handling at SQL level
+        # ADBC cannot handle NULL parameters in parameter arrays - they must be
+        # replaced with literal NULL in SQL and removed from parameter list
         datetime.datetime: lambda x: x,
         datetime.date: lambda x: x,
         datetime.time: lambda x: x,
@@ -226,7 +230,19 @@ class AdbcDriver(SyncDriverAdapterBase):
                 cursor._rowcount = 0
                 row_count = 0
             else:
-                cursor.executemany(sql, prepared_parameters)
+                if isinstance(prepared_parameters, list) and prepared_parameters:
+                    processed_params = []
+                    for param_set in prepared_parameters:
+                        postgres_compatible = self._handle_postgres_empty_parameters(param_set)
+                        formatted_params = self.prepare_driver_parameters(
+                            postgres_compatible, self.statement_config, is_many=False
+                        )
+                        processed_params.append(formatted_params)
+
+                    cursor.executemany(sql, processed_params)
+                else:
+                    cursor.executemany(sql, prepared_parameters)
+
                 row_count = cursor.rowcount if cursor.rowcount is not None else -1
 
         except Exception as e:
@@ -237,13 +253,14 @@ class AdbcDriver(SyncDriverAdapterBase):
 
     def _execute_statement(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
         """ADBC single execution."""
-        sql = statement.sql
-        prepared_parameters = statement.parameters
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         try:
-            parameters = self._handle_single_param_list(
-                sql, self._handle_postgres_empty_parameters(prepared_parameters)
+            postgres_compatible_params = self._handle_postgres_empty_parameters(prepared_parameters)
+            parameters = self.prepare_driver_parameters(
+                postgres_compatible_params, self.statement_config, is_many=False
             )
-            cursor.execute(sql, parameters=parameters)
+            final_parameters = self._handle_single_param_list(sql, parameters)
+            cursor.execute(sql, parameters=final_parameters)
 
         except Exception as e:
             self._handle_postgres_rollback(cursor)
@@ -287,8 +304,6 @@ class AdbcDriver(SyncDriverAdapterBase):
     def _handle_single_param_list(self, sql: str, parameters: "list[Any]") -> "list[Any]":
         """Handle single parameter list edge cases for ADBC compatibility."""
         try:
-            import sqlglot
-
             parsed = sqlglot.parse_one(sql, dialect=self.dialect)
             param_placeholders = set()
             for node in parsed.walk():

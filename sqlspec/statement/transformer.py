@@ -11,7 +11,7 @@ import sqlglot
 import sqlglot.expressions as exp
 from mypy_extensions import mypyc_attr
 
-from sqlspec.parameters import ParameterConverter, ParameterStyle
+from sqlspec.parameters import ParameterConverter, ParameterStyle, ParameterValidator
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -103,14 +103,14 @@ class SQLTransformer:
 
         # Core parameter processing
         if isinstance(node, exp.Placeholder):
-            # ADBC NULL parameter handling for PostgreSQL-style placeholders ($1, $2, etc.)
-            if self.dialect == "postgres":
+            # Check if NULL parameter removal is enabled for this adapter
+            if self.config.parameter_config.remove_null_parameters:
                 null_replacement = self._replace_null_placeholder(node)
                 node = null_replacement if null_replacement is not None else self._process_placeholder(node)
             else:
                 node = self._process_placeholder(node)
-        elif isinstance(node, exp.Parameter) and self.dialect == "postgres":
-            # ADBC NULL parameter handling for generic parameter nodes
+        elif isinstance(node, exp.Parameter) and self.config.parameter_config.remove_null_parameters:
+            # Handle NULL parameters if removal is enabled
             null_replacement = self._replace_null_parameter(node)
             if null_replacement is not None:
                 node = null_replacement
@@ -201,17 +201,18 @@ class SQLTransformer:
             # which always converts to :param_N format
             converted_sql = converter._convert_to_sqlglot_compatible(raw_sql, param_info)
 
-            # For parameter conversion, we need to handle dict to list conversion
-            # when the original params are dict but we're converting to positional style
+            # For parameter conversion, preserve the original format but update keys if needed
             if isinstance(self.parameters, dict) and param_info:
-                # Convert dict to list based on parameter order in SQL
-                converted_params = []
-                for p in param_info:
+                # For dict parameters, create a new dict with param_N keys
+                # Always use ordinal-based keys for consistency
+                converted_params = {}
+                for i, p in enumerate(param_info):
+                    param_key = f"param_{i}"
                     if p.name and p.name in self.parameters:
-                        converted_params.append(self.parameters[p.name])
+                        converted_params[param_key] = self.parameters[p.name]
                     else:
                         # Fallback for unnamed parameters
-                        converted_params.append(None)
+                        converted_params[param_key] = None
                 self._parameter_map["converted_params"] = converted_params
             else:
                 self._parameter_map["converted_params"] = self.parameters
@@ -263,7 +264,6 @@ class SQLTransformer:
         Returns:
             Tuple of (final_sql, final_parameters)
         """
-        from sqlspec.parameters import ParameterConverter, ParameterValidator
 
         # Check current parameter styles in the SQL
         validator = ParameterValidator()
@@ -299,16 +299,16 @@ class SQLTransformer:
                 # Update parameter map with execution-converted params
                 self._parameter_map["execution_params"] = converted_params
                 final_params = self._finalize_parameters(converted_sql)
-                return converted_sql, final_params
+
             except Exception:
                 # Conversion failed, use original
                 final_params = self._finalize_parameters(sql)
                 return sql, final_params
-        else:
-            # No specific execution styles defined, driver should handle any style
-            # This is the default case for drivers that auto-detect parameter styles
-            final_params = self._finalize_parameters(sql)
-            return sql, final_params
+            return converted_sql, final_params
+        # No specific execution styles defined, driver should handle any style
+        # This is the default case for drivers that auto-detect parameter styles
+        final_params = self._finalize_parameters(sql)
+        return sql, final_params
 
     def compile(self, raw_sql: str) -> "tuple[str, Any]":
         """Single compilation method replacing entire pipeline.
@@ -565,7 +565,6 @@ class SQLTransformer:
         self, execution_style: "ParameterStyle", parameters: Any, sql: Optional[str] = None
     ) -> Any:
         """Convert parameters to match the execution style format."""
-        from sqlspec.parameters import ParameterStyle, ParameterValidator
 
         named_styles = {
             ParameterStyle.NAMED_COLON,
@@ -634,7 +633,6 @@ class SQLTransformer:
 
         Returns the ParameterStyle enum value that matches the SQL, or None if no parameters.
         """
-        from sqlspec.parameters import ParameterValidator
 
         try:
             validator = ParameterValidator()

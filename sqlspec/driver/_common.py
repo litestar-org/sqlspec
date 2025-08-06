@@ -485,15 +485,17 @@ class CommonDriverAttributesMixin:
         that affect SQL compilation, preventing cache contamination between
         different compilation contexts.
         """
-        context_hash = hash((
-            config.parameter_config.hash(),
-            config.dialect,
-            statement.is_script,
-            statement.is_many,
-            flatten_single_parameters,
-            bool(config.parameter_config.output_transformer),
-            bool(config.parameter_config.needs_static_script_compilation),
-        ))
+        context_hash = hash(
+            (
+                config.parameter_config.hash(),
+                config.dialect,
+                statement.is_script,
+                statement.is_many,
+                flatten_single_parameters,
+                bool(config.parameter_config.output_transformer),
+                bool(config.parameter_config.needs_static_script_compilation),
+            )
+        )
 
         base_hash = hash_sql_statement(statement)
         return f"compiled:{base_hash}:{context_hash}"
