@@ -1,328 +1,848 @@
-"""Preserved filter system with exact same interfaces.
+"""Enhanced filter system with complete backward compatibility.
 
-This module preserves the existing StatementFilter system completely unchanged,
-as it already works correctly and drivers depend on the exact interfaces.
+This module provides the enhanced filter system that maintains 100% backward
+compatibility while integrating with the CORE_ROUND_3 architecture.
 
-CRITICAL: NO CHANGES to filter classes - they provide essential functionality
-for dynamic SQL construction and drivers use them extensively.
+All filter classes preserve their exact same interfaces and behavior as the
+existing implementation to ensure full compatibility with dynamic SQL construction
+and driver integrations.
 
-Classes Preserved:
-- StatementFilter: Base ABC for all filters
-- WhereFilter: WHERE clause filtering
-- LimitFilter: LIMIT/OFFSET filtering  
-- OrderByFilter: ORDER BY clause filtering
-- GroupByFilter: GROUP BY clause filtering
-- HavingFilter: HAVING clause filtering
+Architecture:
+- Complete copy of all existing filter classes from statement/filters.py
+- Same class hierarchy, method signatures, and behavior patterns
+- Integration with enhanced SQL statement system in core module
+- Performance optimizations through __slots__ and caching
+- Full interface preservation for all filter types
 
-The filter system is already well-designed and performant. Making changes
-would only introduce risk without meaningful benefit for the core optimization goals.
-
-Preservation Strategy:
-- Exact copy from current statement/filters.py
-- Same class hierarchy and inheritance
-- Same method signatures and behavior  
-- Same integration with SQL class
-- Same builder pattern interfaces
+Critical Compatibility:
+- Same __slots__ and class structures
+- Same method signatures and return types
+- Same parameter handling and validation
+- Same SQL generation and parameter binding
+- Complete preservation of all existing filter functionality
 """
 
+import uuid
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Optional, Union
+from collections import abc
+from collections.abc import Sequence
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Generic, Literal, Optional, Union
+
+from sqlglot import exp
+from typing_extensions import TypeAlias, TypeVar
 
 if TYPE_CHECKING:
+    from sqlglot.expressions import Condition
+
     from sqlspec.core.statement import SQL
 
 __all__ = (
-    "StatementFilter", "WhereFilter", "LimitFilter", 
-    "OrderByFilter", "GroupByFilter", "HavingFilter"
+    "AnyCollectionFilter",
+    "BeforeAfterFilter",
+    "FilterTypeT",
+    "FilterTypes",
+    "InAnyFilter",
+    "InCollectionFilter",
+    "LimitOffsetFilter",
+    "NotAnyCollectionFilter",
+    "NotInCollectionFilter",
+    "NotInSearchFilter",
+    "OffsetPagination",
+    "OnBeforeAfterFilter",
+    "OrderByFilter",
+    "PaginationFilter",
+    "SearchFilter",
+    "StatementFilter",
+    "apply_filter",
 )
+
+T = TypeVar("T")
+FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
 
 
 class StatementFilter(ABC):
-    """Base class for SQL statement filters - PRESERVED EXACTLY.
-    
-    This abstract base class defines the interface for all SQL statement filters
-    used for dynamic SQL construction. The interface and behavior must remain
-    identical to ensure compatibility with existing code that builds dynamic queries.
-    
-    CRITICAL: This class is preserved exactly as-is from current implementation.
-    Any changes could break dynamic query construction patterns used throughout
-    the codebase and in driver integrations.
-    """
-    
+    """Abstract base class for filters that can be appended to a statement."""
+
     __slots__ = ()
-    
+
     @abstractmethod
-    def apply(self, sql: "SQL") -> "SQL":
-        """Apply filter to SQL statement - PRESERVED EXACTLY.
-        
-        Args:
-            sql: SQL statement to filter
-            
-        Returns:
-            New SQL statement with filter applied
+    def append_to_statement(self, statement: "SQL") -> "SQL":
+        """Append the filter to the statement.
+
+        This method should modify the SQL expression only, not the parameters.
+        Parameters should be provided via extract_parameters().
         """
-        # PLACEHOLDER - Will copy exact implementation during BUILD phase
-        raise NotImplementedError("BUILD phase - will copy exact apply implementation")
-    
+
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract parameters that this filter contributes.
+
+        Returns:
+            Tuple of (positional_parameters, named_parameters) where:
+            - positional_parameters: List of positional parameter values
+            - named_parameters: Dict of parameter name to value
+        """
+        return [], {}
+
+    def _resolve_parameter_conflicts(self, statement: "SQL", proposed_names: list[str]) -> list[str]:
+        """Resolve parameter name conflicts by generating unique names if needed.
+
+        Args:
+            statement: The SQL statement to check for existing parameters
+            proposed_names: List of proposed parameter names
+
+        Returns:
+            List of resolved parameter names (same length as proposed_names)
+        """
+        existing_params = set(statement._named_parameters.keys())
+        existing_params.update(statement.parameters.keys() if isinstance(statement.parameters, dict) else [])
+
+        resolved_names = []
+        for name in proposed_names:
+            if name in existing_params:
+                unique_suffix = str(uuid.uuid4()).replace("-", "")[:8]
+                resolved_name = f"{name}_{unique_suffix}"
+            else:
+                resolved_name = name
+            resolved_names.append(resolved_name)
+            existing_params.add(resolved_name)  # Prevent conflicts within this filter
+
+        return resolved_names
+
     @abstractmethod
-    def __str__(self) -> str:
-        """String representation - PRESERVED EXACTLY."""
-        # PLACEHOLDER - Will copy exact implementation during BUILD phase
-        raise NotImplementedError("BUILD phase - will copy exact __str__ implementation")
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return a tuple of stable, hashable components that uniquely represent the filter's configuration.
 
+        The cache key should include all parameters that affect the filter's behavior.
+        For example, a LimitOffsetFilter would return (limit, offset).
 
-class WhereFilter(StatementFilter):
-    """WHERE clause filter - PRESERVED EXACTLY.
-    
-    Handles dynamic WHERE clause construction with parameter binding.
-    This is heavily used for building dynamic queries and must remain unchanged.
-    
-    CRITICAL: This class is preserved exactly as-is from current implementation.
-    WHERE clause filtering is complex and any changes could break query logic.
-    """
-    
-    __slots__ = ('condition', 'parameters')
-    
-    def __init__(self, condition: str, parameters: Any = None) -> None:
-        """Initialize WHERE filter - PRESERVED EXACTLY.
-        
-        Args:
-            condition: WHERE condition string
-            parameters: Parameters for the condition
-        """
-        # PLACEHOLDER - Will copy exact implementation during BUILD phase
-        raise NotImplementedError("BUILD phase - will copy exact WhereFilter implementation")
-    
-    def apply(self, sql: "SQL") -> "SQL":
-        """Apply WHERE filter to SQL - PRESERVED EXACTLY.
-        
-        Args:
-            sql: SQL statement to filter
-            
         Returns:
-            New SQL statement with WHERE clause applied
+            Tuple of hashable values representing the filter's configuration
         """
-        # PLACEHOLDER - Will copy exact implementation during BUILD phase
-        raise NotImplementedError("BUILD phase - will copy exact WHERE apply implementation")
-    
-    def __str__(self) -> str:
-        """String representation - PRESERVED EXACTLY."""
-        # PLACEHOLDER - Will copy exact implementation during BUILD phase
-        raise NotImplementedError("BUILD phase - will copy exact WHERE __str__ implementation")
 
 
-class LimitFilter(StatementFilter):
-    """LIMIT/OFFSET filter - PRESERVED EXACTLY.
-    
-    Handles pagination with LIMIT and OFFSET clauses.
-    This is essential for pagination patterns and must remain unchanged.
-    
-    CRITICAL: This class is preserved exactly as-is from current implementation.
-    Pagination logic is used throughout the system and must work identically.
+class BeforeAfterFilter(StatementFilter):
+    """Data required to filter a query on a ``datetime`` column.
+
+    Note:
+        After applying this filter, only the filter's parameters (e.g., before/after) will be present in the resulting SQL statement's parameters. Original parameters from the statement are not preserved in the result.
     """
-    
-    __slots__ = ('limit', 'offset')
-    
-    def __init__(self, limit: Optional[int] = None, offset: Optional[int] = None) -> None:
-        """Initialize LIMIT filter - PRESERVED EXACTLY.
-        
+
+    __slots__ = ("_param_name_after", "_param_name_before", "after", "before", "field_name")
+
+    field_name: str
+    before: Optional[datetime]
+    after: Optional[datetime]
+
+    def __init__(self, field_name: str, before: Optional[datetime] = None, after: Optional[datetime] = None) -> None:
+        """Initialize the BeforeAfterFilter.
+
         Args:
-            limit: Maximum number of rows to return
-            offset: Number of rows to skip
+            field_name: Name of the model attribute to filter on.
+            before: Filter results where field earlier than this.
+            after: Filter results where field later than this.
         """
-        # PLACEHOLDER - Will copy exact implementation during BUILD phase
-        raise NotImplementedError("BUILD phase - will copy exact LimitFilter implementation")
-    
-    def apply(self, sql: "SQL") -> "SQL":
-        """Apply LIMIT filter to SQL - PRESERVED EXACTLY.
-        
+        self.field_name = field_name
+        self.before = before
+        self.after = after
+
+        self._param_name_before: Optional[str] = None
+        self._param_name_after: Optional[str] = None
+
+        if self.before:
+            self._param_name_before = f"{self.field_name}_before"
+        if self.after:
+            self._param_name_after = f"{self.field_name}_after"
+
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        named_parameters = {}
+        if self.before and self._param_name_before:
+            named_parameters[self._param_name_before] = self.before
+        if self.after and self._param_name_after:
+            named_parameters[self._param_name_after] = self.after
+        return [], named_parameters
+
+    def append_to_statement(self, statement: "SQL") -> "SQL":
+        """Apply filter to SQL expression only."""
+        conditions: list[Condition] = []
+        col_expr = exp.column(self.field_name)
+
+        # Resolve parameter name conflicts
+        proposed_names = []
+        if self.before and self._param_name_before:
+            proposed_names.append(self._param_name_before)
+        if self.after and self._param_name_after:
+            proposed_names.append(self._param_name_after)
+
+        if not proposed_names:
+            return statement
+
+        resolved_names = self._resolve_parameter_conflicts(statement, proposed_names)
+
+        param_idx = 0
+        result = statement
+        if self.before and self._param_name_before:
+            before_param_name = resolved_names[param_idx]
+            param_idx += 1
+            conditions.append(exp.LT(this=col_expr, expression=exp.Placeholder(this=before_param_name)))
+            result = result.add_named_parameter(before_param_name, self.before)
+
+        if self.after and self._param_name_after:
+            after_param_name = resolved_names[param_idx]
+            conditions.append(exp.GT(this=col_expr, expression=exp.Placeholder(this=after_param_name)))
+            result = result.add_named_parameter(after_param_name, self.after)
+
+        final_condition = conditions[0]
+        for cond in conditions[1:]:
+            final_condition = exp.And(this=final_condition, expression=cond)
+        return result.where(final_condition)
+
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        return ("BeforeAfterFilter", self.field_name, self.before, self.after)
+
+
+class OnBeforeAfterFilter(StatementFilter):
+    """Data required to filter a query on a ``datetime`` column."""
+
+    __slots__ = ("_param_name_on_or_after", "_param_name_on_or_before", "field_name", "on_or_after", "on_or_before")
+
+    field_name: str
+    on_or_before: Optional[datetime]
+    on_or_after: Optional[datetime]
+
+    def __init__(
+        self, field_name: str, on_or_before: Optional[datetime] = None, on_or_after: Optional[datetime] = None
+    ) -> None:
+        """Initialize the OnBeforeAfterFilter.
+
         Args:
-            sql: SQL statement to filter
-            
-        Returns:
-            New SQL statement with LIMIT/OFFSET applied
+            field_name: Name of the model attribute to filter on.
+            on_or_before: Filter results where field is on or earlier than this.
+            on_or_after: Filter results where field on or later than this.
         """
-        # PLACEHOLDER - Will copy exact implementation during BUILD phase
-        raise NotImplementedError("BUILD phase - will copy exact LIMIT apply implementation")
-    
-    def __str__(self) -> str:
-        """String representation - PRESERVED EXACTLY."""
-        # PLACEHOLDER - Will copy exact implementation during BUILD phase
-        raise NotImplementedError("BUILD phase - will copy exact LIMIT __str__ implementation")
+        self.field_name = field_name
+        self.on_or_before = on_or_before
+        self.on_or_after = on_or_after
+
+        self._param_name_on_or_before: Optional[str] = None
+        self._param_name_on_or_after: Optional[str] = None
+
+        if self.on_or_before:
+            self._param_name_on_or_before = f"{self.field_name}_on_or_before"
+        if self.on_or_after:
+            self._param_name_on_or_after = f"{self.field_name}_on_or_after"
+
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        named_parameters = {}
+        if self.on_or_before and self._param_name_on_or_before:
+            named_parameters[self._param_name_on_or_before] = self.on_or_before
+        if self.on_or_after and self._param_name_on_or_after:
+            named_parameters[self._param_name_on_or_after] = self.on_or_after
+        return [], named_parameters
+
+    def append_to_statement(self, statement: "SQL") -> "SQL":
+        conditions: list[Condition] = []
+
+        # Resolve parameter name conflicts
+        proposed_names = []
+        if self.on_or_before and self._param_name_on_or_before:
+            proposed_names.append(self._param_name_on_or_before)
+        if self.on_or_after and self._param_name_on_or_after:
+            proposed_names.append(self._param_name_on_or_after)
+
+        if not proposed_names:
+            return statement
+
+        resolved_names = self._resolve_parameter_conflicts(statement, proposed_names)
+
+        param_idx = 0
+        result = statement
+        if self.on_or_before and self._param_name_on_or_before:
+            before_param_name = resolved_names[param_idx]
+            param_idx += 1
+            conditions.append(
+                exp.LTE(this=exp.column(self.field_name), expression=exp.Placeholder(this=before_param_name))
+            )
+            result = result.add_named_parameter(before_param_name, self.on_or_before)
+
+        if self.on_or_after and self._param_name_on_or_after:
+            after_param_name = resolved_names[param_idx]
+            conditions.append(
+                exp.GTE(this=exp.column(self.field_name), expression=exp.Placeholder(this=after_param_name))
+            )
+            result = result.add_named_parameter(after_param_name, self.on_or_after)
+
+        final_condition = conditions[0]
+        for cond in conditions[1:]:
+            final_condition = exp.And(this=final_condition, expression=cond)
+        return result.where(final_condition)
+
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        return ("OnBeforeAfterFilter", self.field_name, self.on_or_before, self.on_or_after)
+
+
+class InAnyFilter(StatementFilter, ABC, Generic[T]):
+    """Subclass for methods that have a `prefer_any` attribute."""
+
+    __slots__ = ()
+
+    def append_to_statement(self, statement: "SQL") -> "SQL":
+        raise NotImplementedError
+
+
+class InCollectionFilter(InAnyFilter[T]):
+    """Data required to construct a ``WHERE ... IN (...)`` clause.
+
+    Note:
+        After applying this filter, only the filter's parameters (e.g., the generated IN parameters) will be present in the resulting SQL statement's parameters. Original parameters from the statement are not preserved in the result.
+    """
+
+    __slots__ = ("_param_names", "field_name", "values")
+
+    field_name: str
+    values: Optional[abc.Collection[T]]
+
+    def __init__(self, field_name: str, values: Optional[abc.Collection[T]]) -> None:
+        """Initialize the InCollectionFilter.
+
+        Args:
+            field_name: Name of the model attribute to filter on.
+            values: Values for ``IN`` clause. An empty list will return an empty result set,
+                however, if ``None``, the filter is not applied to the query, and all rows are returned.
+        """
+        self.field_name = field_name
+        self.values = values
+
+        self._param_names: list[str] = []
+        if self.values:
+            for i, _ in enumerate(self.values):
+                self._param_names.append(f"{self.field_name}_in_{i}")
+
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        named_parameters = {}
+        if self.values:
+            for i, value in enumerate(self.values):
+                named_parameters[self._param_names[i]] = value
+        return [], named_parameters
+
+    def append_to_statement(self, statement: "SQL") -> "SQL":
+        if self.values is None:
+            return statement
+
+        if not self.values:
+            return statement.where(exp.false())
+
+        # Resolve parameter name conflicts
+        resolved_names = self._resolve_parameter_conflicts(statement, self._param_names)
+
+        placeholder_expressions: list[exp.Placeholder] = [
+            exp.Placeholder(this=param_name) for param_name in resolved_names
+        ]
+
+        result = statement.where(exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions))
+
+        # Add parameters with resolved names
+        for resolved_name, value in zip(resolved_names, self.values):
+            result = result.add_named_parameter(resolved_name, value)
+        return result
+
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        values_tuple = tuple(self.values) if self.values is not None else None
+        return ("InCollectionFilter", self.field_name, values_tuple)
+
+
+class NotInCollectionFilter(InAnyFilter[T]):
+    """Data required to construct a ``WHERE ... NOT IN (...)`` clause."""
+
+    __slots__ = ("_param_names", "field_name", "values")
+
+    field_name: str
+    values: Optional[abc.Collection[T]]
+
+    def __init__(self, field_name: str, values: Optional[abc.Collection[T]]) -> None:
+        """Initialize the NotInCollectionFilter.
+
+        Args:
+            field_name: Name of the model attribute to filter on.
+            values: Values for ``NOT IN`` clause. An empty list or ``None`` will return all rows.
+        """
+        self.field_name = field_name
+        self.values = values
+
+        self._param_names: list[str] = []
+        if self.values:
+            for i, _ in enumerate(self.values):
+                self._param_names.append(f"{self.field_name}_notin_{i}_{id(self)}")
+
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        named_parameters = {}
+        if self.values:
+            for i, value in enumerate(self.values):
+                named_parameters[self._param_names[i]] = value
+        return [], named_parameters
+
+    def append_to_statement(self, statement: "SQL") -> "SQL":
+        if self.values is None or not self.values:
+            return statement
+
+        # Resolve parameter name conflicts
+        resolved_names = self._resolve_parameter_conflicts(statement, self._param_names)
+
+        placeholder_expressions: list[exp.Placeholder] = [
+            exp.Placeholder(this=param_name) for param_name in resolved_names
+        ]
+
+        result = statement.where(
+            exp.Not(this=exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions))
+        )
+
+        # Add parameters with resolved names
+        for resolved_name, value in zip(resolved_names, self.values):
+            result = result.add_named_parameter(resolved_name, value)
+        return result
+
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        values_tuple = tuple(self.values) if self.values is not None else None
+        return ("NotInCollectionFilter", self.field_name, values_tuple)
+
+
+class AnyCollectionFilter(InAnyFilter[T]):
+    """Data required to construct a ``WHERE column_name = ANY (array_expression)`` clause."""
+
+    __slots__ = ("_param_names", "field_name", "values")
+
+    field_name: str
+    values: Optional[abc.Collection[T]]
+
+    def __init__(self, field_name: str, values: Optional[abc.Collection[T]]) -> None:
+        """Initialize the AnyCollectionFilter.
+
+        Args:
+            field_name: Name of the model attribute to filter on.
+            values: Values for ``= ANY (...)`` clause. An empty list will result in a condition
+                that is always false (no rows returned). If ``None``, the filter is not applied
+                to the query, and all rows are returned.
+        """
+        self.field_name = field_name
+        self.values = values
+
+        self._param_names: list[str] = []
+        if self.values:
+            for i, _ in enumerate(self.values):
+                self._param_names.append(f"{self.field_name}_any_{i}")
+
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        named_parameters = {}
+        if self.values:
+            for i, value in enumerate(self.values):
+                named_parameters[self._param_names[i]] = value
+        return [], named_parameters
+
+    def append_to_statement(self, statement: "SQL") -> "SQL":
+        if self.values is None:
+            return statement
+
+        if not self.values:
+            return statement.where(exp.false())
+
+        # Resolve parameter name conflicts
+        resolved_names = self._resolve_parameter_conflicts(statement, self._param_names)
+
+        placeholder_expressions: list[exp.Expression] = [
+            exp.Placeholder(this=param_name) for param_name in resolved_names
+        ]
+
+        array_expr = exp.Array(expressions=placeholder_expressions)
+        result = statement.where(exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr)))
+
+        # Add parameters with resolved names
+        for resolved_name, value in zip(resolved_names, self.values):
+            result = result.add_named_parameter(resolved_name, value)
+        return result
+
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        values_tuple = tuple(self.values) if self.values is not None else None
+        return ("AnyCollectionFilter", self.field_name, values_tuple)
+
+
+class NotAnyCollectionFilter(InAnyFilter[T]):
+    """Data required to construct a ``WHERE NOT (column_name = ANY (array_expression))`` clause."""
+
+    __slots__ = ("_param_names", "field_name", "values")
+
+    def __init__(self, field_name: str, values: Optional[abc.Collection[T]]) -> None:
+        """Initialize the NotAnyCollectionFilter.
+
+        Args:
+            field_name: Name of the model attribute to filter on.
+            values: Values for ``NOT (... = ANY (...))`` clause. An empty list will result in a
+                condition that is always true (all rows returned, filter effectively ignored).
+                If ``None``, the filter is not applied to the query, and all rows are returned.
+        """
+        self.field_name = field_name
+        self.values = values
+
+        self._param_names: list[str] = []
+        if self.values:
+            for i, _ in enumerate(self.values):
+                self._param_names.append(f"{self.field_name}_not_any_{i}")
+
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        named_parameters = {}
+        if self.values:
+            for i, value in enumerate(self.values):
+                named_parameters[self._param_names[i]] = value
+        return [], named_parameters
+
+    def append_to_statement(self, statement: "SQL") -> "SQL":
+        if self.values is None or not self.values:
+            return statement
+
+        # Resolve parameter name conflicts
+        resolved_names = self._resolve_parameter_conflicts(statement, self._param_names)
+
+        placeholder_expressions: list[exp.Expression] = [
+            exp.Placeholder(this=param_name) for param_name in resolved_names
+        ]
+
+        array_expr = exp.Array(expressions=placeholder_expressions)
+        condition = exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr))
+        result = statement.where(exp.Not(this=condition))
+
+        # Add parameters with resolved names
+        for resolved_name, value in zip(resolved_names, self.values):
+            result = result.add_named_parameter(resolved_name, value)
+        return result
+
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        values_tuple = tuple(self.values) if self.values is not None else None
+        return ("NotAnyCollectionFilter", self.field_name, values_tuple)
+
+
+class PaginationFilter(StatementFilter, ABC):
+    """Subclass for methods that function as a pagination type."""
+
+    __slots__ = ()
+
+    @abstractmethod
+    def append_to_statement(self, statement: "SQL") -> "SQL":
+        raise NotImplementedError
+
+
+class LimitOffsetFilter(PaginationFilter):
+    """Data required to add limit/offset filtering to a query."""
+
+    __slots__ = ("_limit_param_name", "_offset_param_name", "limit", "offset")
+
+    limit: int
+    offset: int
+
+    def __init__(self, limit: int, offset: int) -> None:
+        """Initialize the LimitOffsetFilter.
+
+        Args:
+            limit: Value for ``LIMIT`` clause of query.
+            offset: Value for ``OFFSET`` clause of query.
+        """
+        self.limit = limit
+        self.offset = offset
+
+        # Use simple names by default, will generate unique names if conflicts are detected
+        self._limit_param_name = "limit"
+        self._offset_param_name = "offset"
+
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        return [], {self._limit_param_name: self.limit, self._offset_param_name: self.offset}
+
+    def append_to_statement(self, statement: "SQL") -> "SQL":
+        from sqlglot import exp
+
+        # Resolve parameter name conflicts
+        resolved_names = self._resolve_parameter_conflicts(statement, [self._limit_param_name, self._offset_param_name])
+        limit_param_name, offset_param_name = resolved_names
+
+        limit_placeholder = exp.Placeholder(this=limit_param_name)
+        offset_placeholder = exp.Placeholder(this=offset_param_name)
+
+        # Handle None case for statement._statement
+        if statement._statement is None:
+            new_statement = exp.Select().limit(limit_placeholder)
+        else:
+            new_statement = (
+                statement._statement.limit(limit_placeholder)
+                if isinstance(statement._statement, exp.Select)
+                else exp.Select().from_(statement._statement).limit(limit_placeholder)
+            )
+
+        if isinstance(new_statement, exp.Select):
+            new_statement = new_statement.offset(offset_placeholder)
+
+        result = statement.copy(statement=new_statement)
+
+        # Add parameters with the (possibly unique) names
+        result = result.add_named_parameter(limit_param_name, self.limit)
+        return result.add_named_parameter(offset_param_name, self.offset)
+
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        return ("LimitOffsetFilter", self.limit, self.offset)
 
 
 class OrderByFilter(StatementFilter):
-    """ORDER BY filter - PRESERVED EXACTLY.
-    
-    Handles dynamic ORDER BY clause construction with multiple columns and directions.
-    This is used for sorting and must remain unchanged.
-    
-    CRITICAL: This class is preserved exactly as-is from current implementation.
-    Sorting logic is complex with multiple column support and direction handling.
+    """Data required to construct a ``ORDER BY ...`` clause."""
+
+    __slots__ = ("field_name", "sort_order")
+
+    field_name: str
+    sort_order: Literal["asc", "desc"]
+
+    def __init__(self, field_name: str, sort_order: Literal["asc", "desc"] = "asc") -> None:
+        """Initialize the OrderByFilter.
+
+        Args:
+            field_name: Name of the model attribute to sort on.
+            sort_order: Sort ascending or descending.
+        """
+        self.field_name = field_name
+        self.sort_order = sort_order
+
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        return [], {}
+
+    def append_to_statement(self, statement: "SQL") -> "SQL":
+        converted_sort_order = self.sort_order.lower()
+        if converted_sort_order not in {"asc", "desc"}:
+            converted_sort_order = "asc"
+
+        col_expr = exp.column(self.field_name)
+        order_expr = col_expr.desc() if converted_sort_order == "desc" else col_expr.asc()
+
+        # Handle None case for statement._statement
+        if statement._statement is None:
+            new_statement = exp.Select().order_by(order_expr)
+        elif isinstance(statement._statement, exp.Select):
+            new_statement = statement._statement.order_by(order_expr)
+        else:
+            new_statement = exp.Select().from_(statement._statement).order_by(order_expr)
+
+        return statement.copy(statement=new_statement)
+
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        return ("OrderByFilter", self.field_name, self.sort_order)
+
+
+class SearchFilter(StatementFilter):
+    """Data required to construct a ``WHERE field_name LIKE '%' || :value || '%'`` clause.
+
+    Note:
+        After applying this filter, only the filter's parameters (e.g., the generated search parameter) will be present in the resulting SQL statement's parameters. Original parameters from the statement are not preserved in the result.
     """
-    
-    __slots__ = ('columns', 'directions')
-    
-    def __init__(self, columns: Union[str, list[str]], directions: Optional[Union[str, list[str]]] = None) -> None:
-        """Initialize ORDER BY filter - PRESERVED EXACTLY.
-        
+
+    __slots__ = ("_param_name", "field_name", "ignore_case", "value")
+
+    field_name: Union[str, set[str]]
+    value: str
+    ignore_case: Optional[bool]
+
+    def __init__(self, field_name: Union[str, set[str]], value: str, ignore_case: Optional[bool] = False) -> None:
+        """Initialize the SearchFilter.
+
         Args:
-            columns: Column(s) to order by
-            directions: Sort direction(s) (ASC/DESC)
+            field_name: Name of the model attribute to search on.
+            value: Search value.
+            ignore_case: Should the search be case insensitive.
         """
-        # PLACEHOLDER - Will copy exact implementation during BUILD phase
-        raise NotImplementedError("BUILD phase - will copy exact OrderByFilter implementation")
-    
-    def apply(self, sql: "SQL") -> "SQL":
-        """Apply ORDER BY filter to SQL - PRESERVED EXACTLY.
-        
-        Args:
-            sql: SQL statement to filter
-            
-        Returns:
-            New SQL statement with ORDER BY applied
-        """
-        # PLACEHOLDER - Will copy exact implementation during BUILD phase
-        raise NotImplementedError("BUILD phase - will copy exact ORDER BY apply implementation")
-    
-    def __str__(self) -> str:
-        """String representation - PRESERVED EXACTLY."""
-        # PLACEHOLDER - Will copy exact implementation during BUILD phase
-        raise NotImplementedError("BUILD phase - will copy exact ORDER BY __str__ implementation")
+        self.field_name = field_name
+        self.value = value
+        self.ignore_case = ignore_case
+
+        self._param_name: Optional[str] = None
+        if self.value:
+            if isinstance(self.field_name, str):
+                self._param_name = f"{self.field_name}_search"
+            else:
+                self._param_name = "search_value"
+
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        named_parameters = {}
+        if self.value and self._param_name:
+            search_value_with_wildcards = f"%{self.value}%"
+            named_parameters[self._param_name] = search_value_with_wildcards
+        return [], named_parameters
+
+    def append_to_statement(self, statement: "SQL") -> "SQL":
+        if not self.value or not self._param_name:
+            return statement
+
+        # Resolve parameter name conflicts
+        resolved_names = self._resolve_parameter_conflicts(statement, [self._param_name])
+        param_name = resolved_names[0]
+
+        pattern_expr = exp.Placeholder(this=param_name)
+        like_op = exp.ILike if self.ignore_case else exp.Like
+
+        if isinstance(self.field_name, str):
+            result = statement.where(like_op(this=exp.column(self.field_name), expression=pattern_expr))
+        elif isinstance(self.field_name, set) and self.field_name:
+            field_conditions: list[Condition] = [
+                like_op(this=exp.column(field), expression=pattern_expr) for field in self.field_name
+            ]
+            if not field_conditions:
+                return statement
+
+            final_condition: Condition = field_conditions[0]
+            for cond in field_conditions[1:]:
+                final_condition = exp.Or(this=final_condition, expression=cond)
+            result = statement.where(final_condition)
+        else:
+            result = statement
+
+        # Add parameter with resolved name
+        search_value_with_wildcards = f"%{self.value}%"
+        return result.add_named_parameter(param_name, search_value_with_wildcards)
+
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        field_names = tuple(sorted(self.field_name)) if isinstance(self.field_name, set) else self.field_name
+        return ("SearchFilter", field_names, self.value, self.ignore_case)
 
 
-class GroupByFilter(StatementFilter):
-    """GROUP BY filter - PRESERVED EXACTLY.
-    
-    Handles GROUP BY clause construction for aggregation queries.
-    This is used for reporting and analytics and must remain unchanged.
-    
-    CRITICAL: This class is preserved exactly as-is from current implementation.
-    GROUP BY logic affects query semantics and must work identically.
-    """
-    
-    __slots__ = ('columns',)
-    
-    def __init__(self, columns: Union[str, list[str]]) -> None:
-        """Initialize GROUP BY filter - PRESERVED EXACTLY.
-        
+class NotInSearchFilter(SearchFilter):
+    """Data required to construct a ``WHERE field_name NOT LIKE '%' || :value || '%'`` clause."""
+
+    __slots__ = ()
+
+    def __init__(self, field_name: Union[str, set[str]], value: str, ignore_case: Optional[bool] = False) -> None:
+        """Initialize the NotInSearchFilter.
+
         Args:
-            columns: Column(s) to group by
+            field_name: Name of the model attribute to search on.
+            value: Search value.
+            ignore_case: Should the search be case insensitive.
         """
-        # PLACEHOLDER - Will copy exact implementation during BUILD phase
-        raise NotImplementedError("BUILD phase - will copy exact GroupByFilter implementation")
-    
-    def apply(self, sql: "SQL") -> "SQL":
-        """Apply GROUP BY filter to SQL - PRESERVED EXACTLY.
-        
-        Args:
-            sql: SQL statement to filter
-            
-        Returns:
-            New SQL statement with GROUP BY applied
-        """
-        # PLACEHOLDER - Will copy exact implementation during BUILD phase
-        raise NotImplementedError("BUILD phase - will copy exact GROUP BY apply implementation")
-    
-    def __str__(self) -> str:
-        """String representation - PRESERVED EXACTLY."""
-        # PLACEHOLDER - Will copy exact implementation during BUILD phase
-        raise NotImplementedError("BUILD phase - will copy exact GROUP BY __str__ implementation")
+        super().__init__(field_name, value, ignore_case)
+
+        self._param_name: Optional[str] = None
+        if self.value:
+            if isinstance(self.field_name, str):
+                self._param_name = f"{self.field_name}_not_search"
+            else:
+                self._param_name = "not_search_value"
+
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Extract filter parameters."""
+        named_parameters = {}
+        if self.value and self._param_name:
+            search_value_with_wildcards = f"%{self.value}%"
+            named_parameters[self._param_name] = search_value_with_wildcards
+        return [], named_parameters
+
+    def append_to_statement(self, statement: "SQL") -> "SQL":
+        if not self.value or not self._param_name:
+            return statement
+
+        # Resolve parameter name conflicts
+        resolved_names = self._resolve_parameter_conflicts(statement, [self._param_name])
+        param_name = resolved_names[0]
+
+        pattern_expr = exp.Placeholder(this=param_name)
+        like_op = exp.ILike if self.ignore_case else exp.Like
+
+        result = statement
+        if isinstance(self.field_name, str):
+            result = statement.where(exp.Not(this=like_op(this=exp.column(self.field_name), expression=pattern_expr)))
+        elif isinstance(self.field_name, set) and self.field_name:
+            field_conditions: list[Condition] = [
+                exp.Not(this=like_op(this=exp.column(field), expression=pattern_expr)) for field in self.field_name
+            ]
+            if not field_conditions:
+                return statement
+
+            final_condition: Condition = field_conditions[0]
+            if len(field_conditions) > 1:
+                for cond in field_conditions[1:]:
+                    final_condition = exp.And(this=final_condition, expression=cond)
+            result = statement.where(final_condition)
+
+        # Add parameter with resolved name
+        search_value_with_wildcards = f"%{self.value}%"
+        return result.add_named_parameter(param_name, search_value_with_wildcards)
+
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return cache key for this filter configuration."""
+        field_names = tuple(sorted(self.field_name)) if isinstance(self.field_name, set) else self.field_name
+        return ("NotInSearchFilter", field_names, self.value, self.ignore_case)
 
 
-class HavingFilter(StatementFilter):
-    """HAVING filter - PRESERVED EXACTLY.
-    
-    Handles HAVING clause construction for filtered aggregation.
-    This works with GROUP BY for complex reporting and must remain unchanged.
-    
-    CRITICAL: This class is preserved exactly as-is from current implementation.
-    HAVING clauses are complex and interact with GROUP BY logic.
-    """
-    
-    __slots__ = ('condition', 'parameters')
-    
-    def __init__(self, condition: str, parameters: Any = None) -> None:
-        """Initialize HAVING filter - PRESERVED EXACTLY.
-        
+class OffsetPagination(Generic[T]):
+    """Container for data returned using limit/offset pagination."""
+
+    __slots__ = ("items", "limit", "offset", "total")
+
+    items: Sequence[T]
+    limit: int
+    offset: int
+    total: int
+
+    def __init__(self, items: Sequence[T], limit: int, offset: int, total: int) -> None:
+        """Initialize OffsetPagination.
+
         Args:
-            condition: HAVING condition string
-            parameters: Parameters for the condition
+            items: List of data being sent as part of the response.
+            limit: Maximal number of items to send.
+            offset: Offset from the beginning of the query. Identical to an index.
+            total: Total number of items.
         """
-        # PLACEHOLDER - Will copy exact implementation during BUILD phase
-        raise NotImplementedError("BUILD phase - will copy exact HavingFilter implementation")
-    
-    def apply(self, sql: "SQL") -> "SQL":
-        """Apply HAVING filter to SQL - PRESERVED EXACTLY.
-        
-        Args:
-            sql: SQL statement to filter
-            
-        Returns:
-            New SQL statement with HAVING clause applied
-        """
-        # PLACEHOLDER - Will copy exact implementation during BUILD phase
-        raise NotImplementedError("BUILD phase - will copy exact HAVING apply implementation")
-    
-    def __str__(self) -> str:
-        """String representation - PRESERVED EXACTLY."""
-        # PLACEHOLDER - Will copy exact implementation during BUILD phase
-        raise NotImplementedError("BUILD phase - will copy exact HAVING __str__ implementation")
+        self.items = items
+        self.limit = limit
+        self.offset = offset
+        self.total = total
 
 
-# Utility functions for filter creation - PRESERVED EXACTLY
-def create_where_filter(condition: str, parameters: Any = None) -> WhereFilter:
-    """Create WHERE filter - PRESERVED EXACTLY.
-    
-    Factory function for creating WHERE filters with consistent interface.
-    
+def apply_filter(statement: "SQL", filter_obj: StatementFilter) -> "SQL":
+    """Apply a statement filter to a SQL query object.
+
     Args:
-        condition: WHERE condition string
-        parameters: Parameters for the condition
-        
+        statement: The SQL query object to modify.
+        filter_obj: The filter to apply.
+
     Returns:
-        WhereFilter instance
+        The modified query object.
     """
-    # PLACEHOLDER - Will copy exact implementation during BUILD phase
-    raise NotImplementedError("BUILD phase - will copy exact create_where_filter implementation")
+    return filter_obj.append_to_statement(statement)
 
 
-def create_limit_filter(limit: Optional[int] = None, offset: Optional[int] = None) -> LimitFilter:
-    """Create LIMIT filter - PRESERVED EXACTLY.
-    
-    Factory function for creating LIMIT filters with consistent interface.
-    
-    Args:
-        limit: Maximum number of rows to return
-        offset: Number of rows to skip
-        
-    Returns:
-        LimitFilter instance
-    """
-    # PLACEHOLDER - Will copy exact implementation during BUILD phase
-    raise NotImplementedError("BUILD phase - will copy exact create_limit_filter implementation")
-
-
-def create_order_by_filter(
-    columns: Union[str, list[str]], 
-    directions: Optional[Union[str, list[str]]] = None
-) -> OrderByFilter:
-    """Create ORDER BY filter - PRESERVED EXACTLY.
-    
-    Factory function for creating ORDER BY filters with consistent interface.
-    
-    Args:
-        columns: Column(s) to order by
-        directions: Sort direction(s) (ASC/DESC)
-        
-    Returns:
-        OrderByFilter instance
-    """
-    # PLACEHOLDER - Will copy exact implementation during BUILD phase
-    raise NotImplementedError("BUILD phase - will copy exact create_order_by_filter implementation")
+FilterTypes: TypeAlias = Union[
+    BeforeAfterFilter,
+    OnBeforeAfterFilter,
+    InCollectionFilter[Any],
+    LimitOffsetFilter,
+    OrderByFilter,
+    SearchFilter,
+    NotInCollectionFilter[Any],
+    NotInSearchFilter,
+    AnyCollectionFilter[Any],
+    NotAnyCollectionFilter[Any],
+]
 
 
 # Implementation status tracking
-__module_status__ = "PRESERVATION"  # This module preserves existing implementation
-__compatibility_requirement__ = "100%"  # Must maintain exact compatibility
-__change_policy__ = "NO CHANGES"  # Filter classes must not be modified
+__module_status__ = "IMPLEMENTED"  # PLACEHOLDER → BUILDING → TESTING → COMPLETE
+__compatibility_target__ = "100%"  # Must maintain complete compatibility
+__integration_target__ = "Core pipeline"  # Integration with enhanced SQL system

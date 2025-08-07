@@ -34,7 +34,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from functools import singledispatch
-from typing import Any, Callable, Optional, Set
+from typing import Any, Callable, Optional
 
 # Placeholder imports - will be enabled during BUILD phase
 # from mypy_extensions import mypyc_attr
@@ -265,8 +265,8 @@ class ParameterStyleConfig:
     def __init__(
         self,
         default_parameter_style: ParameterStyle,
-        supported_parameter_styles: Optional[Set[ParameterStyle]] = None,
-        supported_execution_parameter_styles: Optional[Set[ParameterStyle]] = None,
+        supported_parameter_styles: Optional[set[ParameterStyle]] = None,
+        supported_execution_parameter_styles: Optional[set[ParameterStyle]] = None,
         default_execution_parameter_style: Optional[ParameterStyle] = None,
         type_coercion_map: Optional[dict[type, Callable[[Any], Any]]] = None,
         has_native_list_expansion: bool = False,
@@ -452,7 +452,7 @@ class ParameterValidator:
         self._parameter_cache[sql] = parameters
         return parameters
 
-    def get_sqlglot_incompatible_styles(self, dialect: Optional[str] = None) -> "Set[ParameterStyle]":
+    def get_sqlglot_incompatible_styles(self, dialect: Optional[str] = None) -> "set[ParameterStyle]":
         """Get parameter styles incompatible with SQLGlot for specific dialect.
 
         CRITICAL: This determines which parameters need Phase 1 conversion
@@ -583,7 +583,7 @@ class ParameterConverter:
         return converted_sql, param_info
 
     def _convert_to_sqlglot_compatible(
-        self, sql: str, param_info: "list[ParameterInfo]", incompatible_styles: "Set[ParameterStyle]"
+        self, sql: str, param_info: "list[ParameterInfo]", incompatible_styles: "set[ParameterStyle]"
     ) -> str:
         """Convert SQL with incompatible parameter styles to SQLGlot-compatible format."""
         # Work backwards through parameters to maintain position accuracy
@@ -647,7 +647,8 @@ class ParameterConverter:
         """Convert SQL placeholders to target style."""
         generator = self._placeholder_generators.get(target_style)
         if not generator:
-            raise ValueError(f"Unsupported target parameter style: {target_style}")
+            msg = f"Unsupported target parameter style: {target_style}"
+            raise ValueError(msg)
 
         # Work backwards through parameters to maintain position accuracy
         converted_sql = sql

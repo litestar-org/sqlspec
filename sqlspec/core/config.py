@@ -31,31 +31,32 @@ Compatibility Requirements:
 - Complete backward compatibility with existing configuration patterns
 """
 
-import os
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union, Dict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-
-if TYPE_CHECKING:
-    from sqlspec.core.parameters import ParameterStyleConfig
-    from sqlspec.core.cache import UnifiedCache
+from typing import Any, Callable, Optional, Union
 
 # Placeholder imports - will be enabled during BUILD phase
 # from mypy_extensions import mypyc_attr
 
 __all__ = (
-    "CoreConfig", "ConfigManager", "get_global_config", "set_global_config",
-    "load_config_from_env", "validate_config", "create_default_config"
+    "ConfigManager",
+    "CoreConfig",
+    "create_default_config",
+    "get_global_config",
+    "load_config_from_env",
+    "set_global_config",
+    "validate_config",
 )
 
 
 @dataclass(frozen=True)
 class CacheConfiguration:
     """Cache system configuration - enhanced from existing cache settings.
-    
+
     Consolidates all cache-related configuration into a single structure
     for the unified cache system.
     """
+
     enable_caching: bool = True
     max_compilation_cache_size: int = 1000
     max_parameter_cache_size: int = 500
@@ -69,10 +70,11 @@ class CacheConfiguration:
 @dataclass(frozen=True)
 class ProcessingConfiguration:
     """Processing pipeline configuration - enhanced from existing settings.
-    
+
     Controls the behavior of the core processing pipeline with performance
     and compatibility settings.
     """
+
     enable_parsing: bool = True
     enable_validation: bool = True
     enable_single_pass: bool = True
@@ -85,10 +87,11 @@ class ProcessingConfiguration:
 @dataclass(frozen=True)
 class DatabaseConfiguration:
     """Database-specific configuration - consolidated from driver configs.
-    
+
     Provides database-specific settings that affect processing behavior
     across all drivers.
     """
+
     default_dialect: str = "auto"
     enable_dialect_detection: bool = True
     connection_timeout: int = 30
@@ -100,10 +103,11 @@ class DatabaseConfiguration:
 @dataclass(frozen=True)
 class SecurityConfiguration:
     """Security-related configuration - enhanced from existing security settings.
-    
+
     Consolidates security settings including parameter handling, SQL injection
     prevention, and access control.
     """
+
     enable_parameter_validation: bool = True
     enable_sql_injection_detection: bool = True
     max_parameter_count: int = 1000
@@ -115,44 +119,49 @@ class SecurityConfiguration:
 # @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
 class CoreConfig:
     """Enhanced core configuration with complete backward compatibility.
-    
+
     Provides centralized configuration for all SQLSpec components while
     maintaining complete compatibility with existing configuration interfaces.
-    
+
     Configuration Categories:
     - Cache: Unified cache system settings
-    - Processing: SQL processing pipeline settings  
+    - Processing: SQL processing pipeline settings
     - Database: Database connection and execution settings
     - Security: Security and validation settings
-    
+
     Performance Features:
     - __slots__ for memory efficiency
     - Cached property access for O(1) lookups
     - Lazy validation for expensive checks
     - Immutable updates with efficient copying
-    
+
     Compatibility Features:
     - Same configuration attributes as existing StatementConfig
     - Environment variable mapping preservation
     - Same default values and behavior
     - Complete API compatibility for drivers and application code
     """
-    
+
     __slots__ = (
-        '_cache_config', '_processing_config', '_database_config', '_security_config',
-        '_custom_settings', '_config_hash', '_validation_cache'
+        "_cache_config",
+        "_config_hash",
+        "_custom_settings",
+        "_database_config",
+        "_processing_config",
+        "_security_config",
+        "_validation_cache",
     )
-    
+
     def __init__(
         self,
         cache_config: Optional[CacheConfiguration] = None,
         processing_config: Optional[ProcessingConfiguration] = None,
         database_config: Optional[DatabaseConfiguration] = None,
         security_config: Optional[SecurityConfiguration] = None,
-        custom_settings: Optional[Dict[str, Any]] = None
+        custom_settings: Optional[dict[str, Any]] = None,
     ) -> None:
         """Initialize core configuration with all settings.
-        
+
         Args:
             cache_config: Cache system configuration
             processing_config: Processing pipeline configuration
@@ -162,113 +171,126 @@ class CoreConfig:
         """
         # PLACEHOLDER - Will implement during BUILD phase
         # Must create comprehensive configuration with backward compatibility
-        raise NotImplementedError("BUILD phase - will implement core configuration")
-    
+        msg = "BUILD phase - will implement core configuration"
+        raise NotImplementedError(msg)
+
     # Cache Configuration Properties
     @property
     def enable_caching(self) -> bool:
         """Enable caching - preserved interface."""
         # PLACEHOLDER - Will return cache_config.enable_caching
-        raise NotImplementedError("BUILD phase - will return cache setting")
-    
+        msg = "BUILD phase - will return cache setting"
+        raise NotImplementedError(msg)
+
     @property
     def cache_config(self) -> CacheConfiguration:
         """Complete cache configuration."""
         # PLACEHOLDER - Will return self._cache_config
-        raise NotImplementedError("BUILD phase - will return cache configuration")
-    
+        msg = "BUILD phase - will return cache configuration"
+        raise NotImplementedError(msg)
+
     # Processing Configuration Properties
     @property
     def enable_parsing(self) -> bool:
         """Enable parsing - preserved interface."""
         # PLACEHOLDER - Will return processing_config.enable_parsing
-        raise NotImplementedError("BUILD phase - will return parsing setting")
-    
+        msg = "BUILD phase - will return parsing setting"
+        raise NotImplementedError(msg)
+
     @property
     def enable_validation(self) -> bool:
         """Enable validation - preserved interface."""
         # PLACEHOLDER - Will return processing_config.enable_validation
-        raise NotImplementedError("BUILD phase - will return validation setting")
-    
+        msg = "BUILD phase - will return validation setting"
+        raise NotImplementedError(msg)
+
     @property
     def processing_config(self) -> ProcessingConfiguration:
         """Complete processing configuration."""
         # PLACEHOLDER - Will return self._processing_config
-        raise NotImplementedError("BUILD phase - will return processing configuration")
-    
+        msg = "BUILD phase - will return processing configuration"
+        raise NotImplementedError(msg)
+
     # Database Configuration Properties
     @property
     def dialect(self) -> str:
         """SQL dialect - preserved interface."""
         # PLACEHOLDER - Will return database_config.default_dialect
-        raise NotImplementedError("BUILD phase - will return dialect setting")
-    
+        msg = "BUILD phase - will return dialect setting"
+        raise NotImplementedError(msg)
+
     @property
     def database_config(self) -> DatabaseConfiguration:
         """Complete database configuration."""
         # PLACEHOLDER - Will return self._database_config
-        raise NotImplementedError("BUILD phase - will return database configuration")
-    
+        msg = "BUILD phase - will return database configuration"
+        raise NotImplementedError(msg)
+
     # Security Configuration Properties
     @property
     def security_config(self) -> SecurityConfiguration:
         """Complete security configuration."""
         # PLACEHOLDER - Will return self._security_config
-        raise NotImplementedError("BUILD phase - will return security configuration")
-    
+        msg = "BUILD phase - will return security configuration"
+        raise NotImplementedError(msg)
+
     # Custom Settings Access
     def get_setting(self, key: str, default: Any = None) -> Any:
         """Get custom setting value - extensible interface.
-        
+
         Args:
             key: Setting key
             default: Default value if not found
-            
+
         Returns:
             Setting value or default
         """
         # PLACEHOLDER - Will implement during BUILD phase
-        raise NotImplementedError("BUILD phase - will implement custom setting access")
-    
+        msg = "BUILD phase - will implement custom setting access"
+        raise NotImplementedError(msg)
+
     # Configuration Updates (Immutable Pattern)
     def replace(self, **kwargs) -> "CoreConfig":
         """Create new configuration with updated values - preserved pattern.
-        
+
         Provides immutable update pattern compatible with existing StatementConfig.replace().
-        
+
         Args:
             **kwargs: Configuration values to update
-            
+
         Returns:
             New CoreConfig instance with updated values
         """
         # PLACEHOLDER - Will implement during BUILD phase
         # Must preserve exact same behavior as StatementConfig.replace()
-        raise NotImplementedError("BUILD phase - will implement immutable updates")
-    
+        msg = "BUILD phase - will implement immutable updates"
+        raise NotImplementedError(msg)
+
     # Configuration Validation
     def validate(self) -> "list[str]":
         """Validate configuration consistency - enhanced functionality.
-        
+
         Returns:
             List of validation errors (empty if valid)
         """
         # PLACEHOLDER - Will implement during BUILD phase
-        raise NotImplementedError("BUILD phase - will implement configuration validation")
-    
+        msg = "BUILD phase - will implement configuration validation"
+        raise NotImplementedError(msg)
+
     # Performance Optimization
     def __hash__(self) -> int:
         """Cached hash for configuration equality checks."""
         # PLACEHOLDER - Will implement cached hash computation
-        raise NotImplementedError("BUILD phase - will implement efficient hashing")
+        msg = "BUILD phase - will implement efficient hashing"
+        raise NotImplementedError(msg)
 
 
 class ConfigManager:
     """Singleton configuration manager for global configuration access.
-    
+
     Provides thread-safe access to global configuration with change
     notification and validation capabilities.
-    
+
     Features:
     - Thread-safe configuration access and updates
     - Configuration change notifications for component updates
@@ -276,49 +298,54 @@ class ConfigManager:
     - Configuration validation and error reporting
     - Hot configuration reloading for runtime changes
     """
-    
-    __slots__ = ('_config', '_lock', '_change_callbacks')
-    
+
+    __slots__ = ("_change_callbacks", "_config", "_lock")
+
     def __init__(self) -> None:
         """Initialize configuration manager."""
         # PLACEHOLDER - Will implement during BUILD phase
-        raise NotImplementedError("BUILD phase - will implement configuration manager")
-    
+        msg = "BUILD phase - will implement configuration manager"
+        raise NotImplementedError(msg)
+
     def get_config(self) -> CoreConfig:
         """Get current global configuration - thread-safe.
-        
+
         Returns:
             Current CoreConfig instance
         """
         # PLACEHOLDER - Will implement during BUILD phase
-        raise NotImplementedError("BUILD phase - will implement thread-safe config access")
-    
+        msg = "BUILD phase - will implement thread-safe config access"
+        raise NotImplementedError(msg)
+
     def set_config(self, config: CoreConfig) -> None:
         """Set global configuration - thread-safe with notifications.
-        
+
         Args:
             config: New configuration to set
         """
         # PLACEHOLDER - Will implement during BUILD phase
-        raise NotImplementedError("BUILD phase - will implement thread-safe config updates")
-    
+        msg = "BUILD phase - will implement thread-safe config updates"
+        raise NotImplementedError(msg)
+
     def add_change_callback(self, callback: Callable[[CoreConfig], None]) -> None:
         """Add callback for configuration changes.
-        
+
         Args:
             callback: Function to call when configuration changes
         """
         # PLACEHOLDER - Will implement during BUILD phase
-        raise NotImplementedError("BUILD phase - will implement change notifications")
-    
+        msg = "BUILD phase - will implement change notifications"
+        raise NotImplementedError(msg)
+
     def reload_from_env(self) -> None:
         """Reload configuration from environment variables.
-        
+
         Reloads configuration from environment variables while preserving
         any programmatically set values that have higher precedence.
         """
         # PLACEHOLDER - Will implement during BUILD phase
-        raise NotImplementedError("BUILD phase - will implement environment reload")
+        msg = "BUILD phase - will implement environment reload"
+        raise NotImplementedError(msg)
 
 
 # Global configuration manager instance
@@ -327,28 +354,30 @@ _config_manager: Optional[ConfigManager] = None
 
 def get_global_config() -> CoreConfig:
     """Get global configuration instance - preserved interface.
-    
+
     Returns:
         Global CoreConfig instance
     """
     # PLACEHOLDER - Will implement during BUILD phase
     # Must provide same interface as existing get_default_config()
-    raise NotImplementedError("BUILD phase - will implement global config access")
+    msg = "BUILD phase - will implement global config access"
+    raise NotImplementedError(msg)
 
 
 def set_global_config(config: CoreConfig) -> None:
     """Set global configuration - preserved interface.
-    
+
     Args:
         config: New configuration to set globally
     """
     # PLACEHOLDER - Will implement during BUILD phase
-    raise NotImplementedError("BUILD phase - will implement global config setting")
+    msg = "BUILD phase - will implement global config setting"
+    raise NotImplementedError(msg)
 
 
 def load_config_from_env() -> CoreConfig:
     """Load configuration from environment variables - enhanced functionality.
-    
+
     Environment Variables Supported:
     - SQLSPEC_ENABLE_CACHING: Enable/disable caching
     - SQLSPEC_CACHE_SIZE: Max cache size
@@ -356,62 +385,67 @@ def load_config_from_env() -> CoreConfig:
     - SQLSPEC_ENABLE_VALIDATION: Enable parameter validation
     - SQLSPEC_MAX_SQL_LENGTH: Maximum SQL statement length
     - SQLSPEC_CONNECTION_TIMEOUT: Database connection timeout
-    
+
     Returns:
         CoreConfig loaded from environment variables
     """
     # PLACEHOLDER - Will implement during BUILD phase
     # Must support all existing environment variables
-    raise NotImplementedError("BUILD phase - will implement environment loading")
+    msg = "BUILD phase - will implement environment loading"
+    raise NotImplementedError(msg)
 
 
 def validate_config(config: CoreConfig) -> "list[str]":
     """Validate configuration completeness and consistency - enhanced functionality.
-    
+
     Args:
         config: Configuration to validate
-        
+
     Returns:
         List of validation errors (empty if valid)
     """
     # PLACEHOLDER - Will implement during BUILD phase
-    raise NotImplementedError("BUILD phase - will implement configuration validation")
+    msg = "BUILD phase - will implement configuration validation"
+    raise NotImplementedError(msg)
 
 
 def create_default_config() -> CoreConfig:
     """Create default configuration - preserved interface.
-    
+
     Returns:
         CoreConfig with default values for all settings
     """
     # PLACEHOLDER - Will implement during BUILD phase
     # Must provide same defaults as existing configuration system
-    raise NotImplementedError("BUILD phase - will implement default configuration")
+    msg = "BUILD phase - will implement default configuration"
+    raise NotImplementedError(msg)
 
 
 # Configuration file support
 def load_config_from_file(config_path: Union[str, Path]) -> CoreConfig:
     """Load configuration from YAML/JSON file - enhanced functionality.
-    
+
     Args:
         config_path: Path to configuration file
-        
+
     Returns:
         CoreConfig loaded from file
     """
     # PLACEHOLDER - Will implement during BUILD phase
-    raise NotImplementedError("BUILD phase - will implement file-based configuration")
+    msg = "BUILD phase - will implement file-based configuration"
+    raise NotImplementedError(msg)
 
 
 def save_config_to_file(config: CoreConfig, config_path: Union[str, Path]) -> None:
     """Save configuration to YAML/JSON file - enhanced functionality.
-    
+
     Args:
         config: Configuration to save
         config_path: Path to save configuration file
     """
     # PLACEHOLDER - Will implement during BUILD phase
-    raise NotImplementedError("BUILD phase - will implement configuration saving")
+    msg = "BUILD phase - will implement configuration saving"
+    raise NotImplementedError(msg)
 
 
 # Implementation status tracking

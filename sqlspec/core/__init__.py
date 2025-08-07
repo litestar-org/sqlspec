@@ -29,14 +29,10 @@ Performance Targets:
 
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    # Import types when available - placeholder for future implementation
-    pass
-
 __all__ = (
     # Core classes (will be populated during implementation)
     # "SQL",
-    # "StatementConfig", 
+    # "StatementConfig",
     # "SQLResult",
     # "StatementResult",
     # "ArrowResult",

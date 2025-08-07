@@ -89,12 +89,14 @@ class CacheStats:
     def hit_rate(self) -> float:
         """Calculate cache hit rate percentage."""
         # PLACEHOLDER - Will implement during BUILD phase
-        raise NotImplementedError("BUILD phase - will calculate hit rate")
+        msg = "BUILD phase - will calculate hit rate"
+        raise NotImplementedError(msg)
 
     def reset(self) -> None:
         """Reset all statistics to zero."""
         # PLACEHOLDER - Will implement during BUILD phase
-        raise NotImplementedError("BUILD phase - will reset statistics")
+        msg = "BUILD phase - will reset statistics"
+        raise NotImplementedError(msg)
 
 
 # @runtime_checkable
@@ -167,7 +169,8 @@ class UnifiedCache:
         """
         # PLACEHOLDER - Will implement during BUILD phase
         # Must create thread-safe, high-performance cache structure
-        raise NotImplementedError("BUILD phase - will implement unified cache initialization")
+        msg = "BUILD phase - will implement unified cache initialization"
+        raise NotImplementedError(msg)
 
     def get(self, key: CacheKey) -> Optional[Any]:
         """Get cached value with LRU update.
@@ -183,7 +186,8 @@ class UnifiedCache:
         """
         # PLACEHOLDER - Will implement during BUILD phase
         # Must provide O(1) lookup with LRU update and thread safety
-        raise NotImplementedError("BUILD phase - will implement O(1) cache get")
+        msg = "BUILD phase - will implement O(1) cache get"
+        raise NotImplementedError(msg)
 
     def put(self, key: CacheKey, value: Any) -> None:
         """Store value in cache with automatic eviction.
@@ -197,7 +201,8 @@ class UnifiedCache:
         """
         # PLACEHOLDER - Will implement during BUILD phase
         # Must provide O(1) storage with automatic eviction management
-        raise NotImplementedError("BUILD phase - will implement O(1) cache put")
+        msg = "BUILD phase - will implement O(1) cache put"
+        raise NotImplementedError(msg)
 
     def evict(self, cache_type: str, count: int = 1) -> int:
         """Explicitly evict oldest entries from cache type.
@@ -214,7 +219,8 @@ class UnifiedCache:
         """
         # PLACEHOLDER - Will implement during BUILD phase
         # Must provide efficient LRU-based eviction
-        raise NotImplementedError("BUILD phase - will implement LRU eviction")
+        msg = "BUILD phase - will implement LRU eviction"
+        raise NotImplementedError(msg)
 
     def clear(self, cache_type: Optional[str] = None) -> None:
         """Clear cache entries.
@@ -227,7 +233,8 @@ class UnifiedCache:
         """
         # PLACEHOLDER - Will implement during BUILD phase
         # Must provide efficient cache clearing with proper cleanup
-        raise NotImplementedError("BUILD phase - will implement cache clearing")
+        msg = "BUILD phase - will implement cache clearing"
+        raise NotImplementedError(msg)
 
     def get_stats(self, cache_type: Optional[str] = None) -> "dict[str, CacheStats]":
         """Get cache statistics for monitoring.
@@ -243,7 +250,8 @@ class UnifiedCache:
         """
         # PLACEHOLDER - Will implement during BUILD phase
         # Must provide comprehensive cache performance metrics
-        raise NotImplementedError("BUILD phase - will implement statistics reporting")
+        msg = "BUILD phase - will implement statistics reporting"
+        raise NotImplementedError(msg)
 
     def memory_usage(self) -> int:
         """Get total memory usage in bytes.
@@ -253,7 +261,8 @@ class UnifiedCache:
         """
         # PLACEHOLDER - Will implement during BUILD phase
         # Must provide accurate memory usage tracking
-        raise NotImplementedError("BUILD phase - will implement memory tracking")
+        msg = "BUILD phase - will implement memory tracking"
+        raise NotImplementedError(msg)
 
     def optimize(self) -> None:
         """Optimize cache for better performance.
@@ -266,7 +275,8 @@ class UnifiedCache:
         """
         # PLACEHOLDER - Will implement during BUILD phase
         # Must provide cache maintenance and optimization
-        raise NotImplementedError("BUILD phase - will implement cache optimization")
+        msg = "BUILD phase - will implement cache optimization"
+        raise NotImplementedError(msg)
 
 
 # Global cache instance - will be initialized during BUILD phase
@@ -285,7 +295,8 @@ def get_global_cache() -> UnifiedCache:
     """
     # PLACEHOLDER - Will implement during BUILD phase
     # Must provide thread-safe singleton pattern
-    raise NotImplementedError("BUILD phase - will implement global cache access")
+    msg = "BUILD phase - will implement global cache access"
+    raise NotImplementedError(msg)
 
 
 def clear_all_caches() -> None:
@@ -296,7 +307,8 @@ def clear_all_caches() -> None:
     """
     # PLACEHOLDER - Will implement during BUILD phase
     # Must clear all cache types safely
-    raise NotImplementedError("BUILD phase - will implement global cache clearing")
+    msg = "BUILD phase - will implement global cache clearing"
+    raise NotImplementedError(msg)
 
 
 # Cache-aware compilation integration
@@ -317,7 +329,8 @@ def get_compiled_sql(sql: str, config: "StatementConfig", cache: Optional[Unifie
     """
     # PLACEHOLDER - Will implement during BUILD phase
     # Must integrate with SQLProcessor for cached compilation
-    raise NotImplementedError("BUILD phase - will implement cache-aware compilation")
+    msg = "BUILD phase - will implement cache-aware compilation"
+    raise NotImplementedError(msg)
 
 
 # Memory estimation utilities
@@ -337,7 +350,8 @@ def estimate_object_size(obj: Any) -> int:
     """
     # PLACEHOLDER - Will implement during BUILD phase
     # Must provide accurate memory estimation for cache management
-    raise NotImplementedError("BUILD phase - will implement memory estimation")
+    msg = "BUILD phase - will implement memory estimation"
+    raise NotImplementedError(msg)
 
 
 # Cache configuration presets

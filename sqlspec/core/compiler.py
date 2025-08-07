@@ -249,12 +249,7 @@ class SQLProcessor:
         try:
             # Phase 1: Process parameters using integrated processor
             processed_sql, processed_params = self._parameter_processor.process(
-                sql=sql,
-                parameters=parameters,
-                config=self._config.parameter_config,
-                validator=self._config.parameter_validator,
-                converter=self._config.parameter_converter,
-                is_parsed=True,
+                sql=sql, parameters=parameters, config=self._config.parameter_config
             )
 
             # Phase 2: Single SQLGlot parse with dialect
@@ -317,7 +312,7 @@ class SQLProcessor:
             self._config.enable_parsing,
             self._config.enable_transformations,
         )
-        hash_str = hashlib.md5(str(hash_data).encode()).hexdigest()[:16]
+        hash_str = hashlib.sha256(str(hash_data).encode()).hexdigest()[:16]
         return f"sql_{hash_str}"
 
     def _detect_operation_type(self, expression: "exp.Expression") -> str:
@@ -403,14 +398,14 @@ class SQLProcessor:
             Dictionary with cache hit/miss statistics
         """
         total_requests = self._cache_hits + self._cache_misses
-        hit_rate = (self._cache_hits / total_requests) if total_requests > 0 else 0.0
+        hit_rate_pct = int((self._cache_hits / total_requests) * 100) if total_requests > 0 else 0
 
         return {
             "hits": self._cache_hits,
             "misses": self._cache_misses,
             "size": len(self._cache),
             "max_size": self._max_cache_size,
-            "hit_rate": round(hit_rate, 3),
+            "hit_rate_percent": hit_rate_pct,
         }
 
 
@@ -424,9 +419,7 @@ def _is_ddl_operation(expression: "exp.Expression") -> bool:
     Returns:
         True if expression is DDL (CREATE, DROP, ALTER, etc.)
     """
-    return isinstance(
-        expression, (exp.Create, exp.Drop, exp.Alter, exp.Truncate, exp.Comment, exp.Rename, exp.Grant, exp.Revoke)
-    )
+    return isinstance(expression, (exp.Create, exp.Drop, exp.Alter, exp.Comment, exp.Grant))
 
 
 def _is_script_operation(sql: str) -> bool:
@@ -453,7 +446,7 @@ def _is_script_operation(sql: str) -> bool:
             escaped = True
             continue
 
-        if not in_string and char in ("'", '"'):
+        if not in_string and char in {"'", '"'}:
             in_string = True
             quote_char = char
         elif in_string and char == quote_char:
