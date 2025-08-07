@@ -632,12 +632,12 @@ class ParameterConverter:
         current_styles = {p.style for p in param_info}
         if len(current_styles) == 1 and target_style in current_styles:
             # Only parameter format conversion needed (e.g., dict → list)
-            converted_parameters = self._convert_parameter_format(parameters, param_info, target_style)
+            converted_parameters = self._convert_parameter_format(parameters, param_info, target_style, parameters, preserve_parameter_format=True)
             return sql, converted_parameters
 
         # 4. Full SQL placeholder conversion + parameter format conversion
         converted_sql = self._convert_placeholders_to_style(sql, param_info, target_style)
-        converted_parameters = self._convert_parameter_format(parameters, param_info, target_style)
+        converted_parameters = self._convert_parameter_format(parameters, param_info, target_style, parameters, preserve_parameter_format=True)
 
         return converted_sql, converted_parameters
 
@@ -675,9 +675,16 @@ class ParameterConverter:
         return converted_sql
 
     def _convert_parameter_format(
-        self, parameters: Any, param_info: "list[ParameterInfo]", target_style: ParameterStyle
+        self, parameters: Any, param_info: "list[ParameterInfo]", target_style: ParameterStyle, original_parameters: Any = None, preserve_parameter_format: bool = False
     ) -> Any:
-        """Convert parameter format to match target style requirements."""
+        """Convert parameter format to match target style requirements.
+        
+        Args:
+            parameters: Current parameter values
+            param_info: Parameter information extracted from SQL
+            target_style: Target parameter style for conversion
+            original_parameters: Original parameter container for type preservation
+        """
         if not parameters or not param_info:
             return parameters
 
@@ -706,18 +713,34 @@ class ParameterConverter:
             return parameters  # Already in correct format
         elif isinstance(parameters, Mapping):
             # Convert named to positional
-            param_list = []
+            param_values = []
             for param in param_info:
                 if param.name and param.name in parameters:
-                    param_list.append(parameters[param.name])
+                    param_values.append(parameters[param.name])
                 elif f"param_{param.ordinal}" in parameters:
-                    param_list.append(parameters[f"param_{param.ordinal}"])
+                    param_values.append(parameters[f"param_{param.ordinal}"])
                 else:
                     # Try to match by ordinal key
                     ordinal_key = str(param.ordinal + 1)  # 1-based for some styles
                     if ordinal_key in parameters:
-                        param_list.append(parameters[ordinal_key])
-            return param_list
+                        param_values.append(parameters[ordinal_key])
+            
+            # Preserve original container type if preserve_parameter_format=True and we have the original
+            if preserve_parameter_format and original_parameters is not None:
+                if isinstance(original_parameters, tuple):
+                    return tuple(param_values)
+                elif isinstance(original_parameters, list):
+                    return param_values
+                # For other sequence types, try to construct the same type
+                elif hasattr(original_parameters, '__class__') and hasattr(original_parameters.__class__, '__call__'):
+                    try:
+                        return original_parameters.__class__(param_values)
+                    except (TypeError, ValueError):
+                        # Fallback to tuple if construction fails
+                        return tuple(param_values)
+            
+            # Default to list for backward compatibility
+            return param_values
 
         return parameters
 
@@ -775,11 +798,11 @@ class ParameterConverter:
     # Format converter methods for different parameter styles
     def _convert_to_positional_format(self, parameters: Any, param_info: "list[ParameterInfo]") -> Any:
         """Convert parameters to positional format (list/tuple)."""
-        return self._convert_parameter_format(parameters, param_info, ParameterStyle.QMARK)
+        return self._convert_parameter_format(parameters, param_info, ParameterStyle.QMARK, parameters, preserve_parameter_format=False)
 
     def _convert_to_named_colon_format(self, parameters: Any, param_info: "list[ParameterInfo]") -> Any:
         """Convert parameters to named colon format (dict)."""
-        return self._convert_parameter_format(parameters, param_info, ParameterStyle.NAMED_COLON)
+        return self._convert_parameter_format(parameters, param_info, ParameterStyle.NAMED_COLON, parameters, preserve_parameter_format=False)
 
     def _convert_to_positional_colon_format(self, parameters: Any, param_info: "list[ParameterInfo]") -> Any:
         """Convert parameters to positional colon format with 1-based keys."""
@@ -796,7 +819,7 @@ class ParameterConverter:
 
     def _convert_to_named_pyformat_format(self, parameters: Any, param_info: "list[ParameterInfo]") -> Any:
         """Convert parameters to named pyformat format (dict)."""
-        return self._convert_parameter_format(parameters, param_info, ParameterStyle.NAMED_PYFORMAT)
+        return self._convert_parameter_format(parameters, param_info, ParameterStyle.NAMED_PYFORMAT, parameters, preserve_parameter_format=False)
 
 
 # @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
@@ -821,13 +844,16 @@ class ParameterProcessor:
 
     __slots__ = ("_cache", "_cache_size", "_converter", "_validator")
 
+    # Class-level constants
+    DEFAULT_CACHE_SIZE = 1000
+
     def __init__(self) -> None:
         """Initialize processor with caching and component coordination."""
         self._cache: dict[str, tuple[str, Any]] = {}
         self._cache_size = 0
         self._validator = ParameterValidator()
         self._converter = ParameterConverter()
-        self.DEFAULT_CACHE_SIZE = 1000  # Configurable cache limit
+        # Cache size is a class-level constant
 
     def process(
         self,

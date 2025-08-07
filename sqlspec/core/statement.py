@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 import sqlglot
 from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
+from typing_extensions import TypeAlias
 
 from sqlspec.core.parameters import (
     ParameterConverter,
@@ -48,7 +49,14 @@ if TYPE_CHECKING:
 # Enable when MyPyC ready
 # from mypy_extensions import mypyc_attr
 
-__all__ = ("SQL", "ProcessedState", "StatementConfig", "get_default_config", "get_default_parameter_config")
+__all__ = (
+    "SQL",
+    "ProcessedState",
+    "Statement",
+    "StatementConfig",
+    "get_default_config",
+    "get_default_parameter_config",
+)
 
 logger = get_logger("sqlspec.core.statement")
 
@@ -152,7 +160,6 @@ class SQL:
         self,
         statement: "Union[str, exp.Expression, 'SQL']",
         *parameters: "Union[Any, StatementFilter, list[Union[Any, StatementFilter]]]",
-        _dialect: "Optional[DialectType]" = None,
         statement_config: Optional["StatementConfig"] = None,
         is_many: Optional[bool] = None,
         **kwargs: Any,
@@ -162,7 +169,6 @@ class SQL:
         Args:
             statement: SQL string, expression, or existing SQL object
             *parameters: Parameters and filters (same as existing SQL class)
-            _dialect: SQL dialect for parsing and generation
             statement_config: Configuration (same as existing SQL class)
             is_many: Mark as execute_many operation
             **kwargs: Additional parameters (same as existing SQL class)
@@ -171,7 +177,7 @@ class SQL:
         self._statement_config = statement_config or self._create_auto_config(statement, parameters, kwargs)
 
         # Initialize state attributes
-        self._dialect = self._normalize_dialect(_dialect or self._statement_config.dialect)
+        self._dialect = self._normalize_dialect(self._statement_config.dialect)
         self._processed_state = Empty
         self._hash: Optional[int] = None
         self._filters: list[StatementFilter] = []
@@ -254,7 +260,6 @@ class SQL:
                     self._named_parameters.update(param)
                 elif isinstance(param, (list, tuple)):
                     if self._is_many:
-                        # For execute_many, store as-is
                         self._positional_parameters = param
                     else:
                         self._positional_parameters.extend(param)
@@ -348,7 +353,7 @@ class SQL:
     def returns_rows(self) -> bool:
         """Check if statement returns rows - preserved interface."""
         op_type = self.operation_type.upper()
-        return op_type in ("SELECT", "WITH", "VALUES", "TABLE", "SHOW", "DESCRIBE", "PRAGMA")
+        return op_type in {"SELECT", "WITH", "VALUES", "TABLE", "SHOW", "DESCRIBE", "PRAGMA"}
 
     # PRESERVED METHODS - Exact same interface as existing SQL class
     def compile(self) -> tuple[str, Any]:
@@ -360,18 +365,12 @@ class SQL:
 
     def as_many(self, parameters: Any) -> "SQL":
         """Create execute_many version - preserved interface."""
-        return SQL(
-            self._raw_sql, parameters, _dialect=self._dialect, statement_config=self._statement_config, is_many=True
-        )
+        return SQL(self._raw_sql, parameters, statement_config=self._statement_config, is_many=True)
 
     def as_script(self) -> "SQL":
         """Mark as script execution - preserved interface."""
         new_sql = SQL(
-            self._raw_sql,
-            *self._original_parameters,
-            _dialect=self._dialect,
-            statement_config=self._statement_config,
-            is_many=self._is_many,
+            self._raw_sql, *self._original_parameters, statement_config=self._statement_config, is_many=self._is_many
         )
         new_sql._is_script = True
         return new_sql
@@ -383,7 +382,6 @@ class SQL:
         return SQL(
             statement or self._raw_sql,
             *(parameters if parameters is not None else self._original_parameters),
-            _dialect=self._dialect,
             statement_config=self._statement_config,
             is_many=self._is_many,
             **kwargs,
@@ -400,11 +398,7 @@ class SQL:
             New SQL instance with the added parameter
         """
         new_sql = SQL(
-            self._raw_sql,
-            *self._original_parameters,
-            _dialect=self._dialect,
-            statement_config=self._statement_config,
-            is_many=self._is_many,
+            self._raw_sql, *self._original_parameters, statement_config=self._statement_config, is_many=self._is_many
         )
         # Add the new named parameter
         new_sql._named_parameters.update(self._named_parameters)
@@ -458,11 +452,7 @@ class SQL:
         new_sql_text = new_expr.sql(dialect=self._dialect)
 
         return SQL(
-            new_sql_text,
-            *self._original_parameters,
-            _dialect=self._dialect,
-            statement_config=self._statement_config,
-            is_many=self._is_many,
+            new_sql_text, *self._original_parameters, statement_config=self._statement_config, is_many=self._is_many
         )
 
     def _ensure_processed(self) -> None:
@@ -472,8 +462,6 @@ class SQL:
 
         # Use enhanced parameter processor for single-pass processing
         processor = ParameterProcessor()
-        validator = self._statement_config.parameter_validator
-        converter = self._statement_config.parameter_converter
 
         try:
             # Get current parameters for processing
@@ -481,12 +469,7 @@ class SQL:
 
             # Single-pass processing with the enhanced system
             processed_sql, processed_params = processor.process(
-                sql=self._raw_sql,
-                parameters=current_params,
-                config=self._statement_config.parameter_config,
-                validator=validator,
-                converter=converter,
-                is_parsed=True,
+                sql=self._raw_sql, parameters=current_params, config=self._statement_config.parameter_config
             )
 
             # Parse expression for operation type detection
@@ -550,15 +533,13 @@ class SQL:
     def __hash__(self) -> int:
         """Hash for caching and equality."""
         if self._hash is None:
-            self._hash = hash(
-                (
-                    self._raw_sql,
-                    tuple(self._positional_parameters),
-                    tuple(sorted(self._named_parameters.items())),
-                    self._is_many,
-                    self._is_script,
-                )
-            )
+            self._hash = hash((
+                self._raw_sql,
+                tuple(self._positional_parameters),
+                tuple(sorted(self._named_parameters.items())),
+                self._is_many,
+                self._is_script,
+            ))
         return self._hash
 
     def __eq__(self, other: object) -> bool:
@@ -687,18 +668,16 @@ class StatementConfig:
 
     def __hash__(self) -> int:
         """Hash based on key configuration settings."""
-        return hash(
-            (
-                self.enable_parsing,
-                self.enable_validation,
-                self.enable_transformations,
-                self.enable_analysis,
-                self.enable_expression_simplification,
-                self.enable_parameter_type_wrapping,
-                self.enable_caching,
-                str(self.dialect),
-            )
-        )
+        return hash((
+            self.enable_parsing,
+            self.enable_validation,
+            self.enable_transformations,
+            self.enable_analysis,
+            self.enable_expression_simplification,
+            self.enable_parameter_type_wrapping,
+            self.enable_caching,
+            str(self.dialect),
+        ))
 
     def __repr__(self) -> str:
         """String representation of the StatementConfig instance."""
@@ -728,6 +707,7 @@ def get_default_parameter_config() -> ParameterStyleConfig:
     )
 
 
+Statement: TypeAlias = Union[str, exp.Expression, SQL]
 # Implementation status tracking
 __module_status__ = "IMPLEMENTED"  # PLACEHOLDER → BUILDING → TESTING → COMPLETE
 __compatibility_target__ = "100%"  # Must maintain 100% compatibility

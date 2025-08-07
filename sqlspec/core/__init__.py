@@ -29,18 +29,46 @@ Performance Targets:
 
 from typing import TYPE_CHECKING
 
+# Import core classes for public API
+from sqlspec.core.cache import UnifiedCache, get_statement_cache
+from sqlspec.core.compiler import SQLProcessor, create_processor
+from sqlspec.core.config import CoreConfig, get_global_config, set_global_config
+from sqlspec.core.filters import StatementFilter
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.result import ArrowResult, SQLResult, StatementResult
+from sqlspec.core.statement import SQL, StatementConfig
+
 __all__ = (
-    # Core classes (will be populated during implementation)
-    # "SQL",
-    # "StatementConfig",
-    # "SQLResult",
-    # "StatementResult",
-    # "ArrowResult",
-    # "StatementFilter",
-    # "ParameterStyle",
-    # "ParameterStyleConfig",
+    # Core SQL processing
+    "SQL",
+    "StatementConfig",
+    "SQLProcessor",
+    
+    # Results
+    "SQLResult",
+    "StatementResult", 
+    "ArrowResult",
+    
+    # Filters
+    "StatementFilter",
+    
+    # Parameters
+    "ParameterStyle",
+    "ParameterStyleConfig",
+    
+    # Configuration
+    "CoreConfig",
+    "get_global_config",
+    "set_global_config",
+    
+    # Caching
+    "UnifiedCache",
+    "get_statement_cache",
+    
+    # Compiler
+    "create_processor",
 )
 
 # Version tracking for core module implementation
-__core_version__ = "0.1.0-alpha"
-__implementation_phase__ = "SETUP"  # SETUP → RESEARCH → BUILD → MIGRATE → DELETE
+__core_version__ = "0.2.0-beta"
+__implementation_phase__ = "MIGRATE"  # SETUP → RESEARCH → BUILD → MIGRATE → DELETE

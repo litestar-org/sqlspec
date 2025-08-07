@@ -1,372 +1,745 @@
-"""Unified cache system replacing all current cache layers.
+"""Enhanced caching system with unified cache management.
 
-This module implements a single high-performance cache that replaces:
-1. SQL parsing/compilation cache (statement/cache.py)
-2. Driver-specific query caches
-3. Parameter processing caches
-4. AST fragment caches
+This module provides the enhanced caching system that replaces multiple cache
+layers with a unified, high-performance caching infrastructure optimized for
+the CORE_ROUND_3 architecture.
 
-Key Performance Improvements:
-- Single cache eliminates cache coordination overhead
-- LRU eviction with O(1) operations using OrderedDict
-- Cache-aware compilation to avoid redundant processing
-- Memory-efficient storage with shared immutable results
-- Thread-safe operations for concurrent access
+Key Features:
+- Unified cache system replacing statement, AST, and parameter cache layers
+- LRU caching with configurable size and TTL
+- __slots__ optimization for memory efficiency (40-60% reduction target)
+- MyPyC optimization compatibility for critical cache operations
+- Thread-safe cache operations for concurrent access
+- Performance-optimized cache key generation and lookup
+- Integration with enhanced SQL statement system
 
 Architecture:
-- UnifiedCache: Main cache implementation with LRU eviction
-- CacheKey: Composite key generation for different cache types
-- CacheStats: Performance monitoring and metrics
-- Cache-aware integration with SQLProcessor and drivers
+- CacheKey: Immutable cache key with high-performance hashing
+- UnifiedCache: Main cache implementation with LRU eviction and TTL
+- StatementCache: Specialized cache for compiled SQL statements
+- ExpressionCache: Specialized cache for parsed SQLGlot expressions
+- ParameterCache: Specialized cache for processed parameters
 
-Performance Targets:
-- 60% reduction in memory usage from cache consolidation
-- 10x faster cache operations with O(1) LRU implementation
-- Thread-safe concurrent access without lock contention
-- Configurable cache size limits per cache type
+Critical Performance Features:
+- O(1) cache lookup and insertion operations
+- __slots__ for memory efficiency
+- Cached hash values to avoid recomputation
+- Minimal cache key allocation overhead
+- Fast cache key comparison and hashing
 """
 
 import threading
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol
+import time
+from typing import TYPE_CHECKING, Any, Generic, Optional
+
+from typing_extensions import TypeVar
 
 if TYPE_CHECKING:
-    from sqlspec.core.compiler import CompiledSQL
-    from sqlspec.core.statement import StatementConfig
+    import sqlglot.expressions as exp
 
-# Placeholder imports - will be enabled during BUILD phase
-# from mypy_extensions import mypyc_attr
+    from sqlspec.core.statement import SQL
 
-__all__ = ("CacheKey", "CacheStats", "UnifiedCache", "clear_all_caches", "get_global_cache")
+__all__ = (
+    "CacheKey",
+    "CacheStats",
+    "ExpressionCache",
+    "ParameterCache",
+    "StatementCache",
+    "UnifiedCache",
+    "get_cache_config",
+    "get_default_cache",
+    "get_expression_cache",
+    "get_parameter_cache",
+    "get_statement_cache",
+    "sql_cache",
+)
 
+T = TypeVar("T")
+CacheValueT = TypeVar("CacheValueT")
 
-@dataclass(frozen=True)
-class CacheKey:
-    """Composite cache key for different cache types.
+# Cache configuration constants
+DEFAULT_MAX_SIZE = 10000  # LRU cache size limit
+DEFAULT_TTL_SECONDS = 3600  # 1 hour default TTL
+CACHE_STATS_UPDATE_INTERVAL = 100  # Update stats every N operations
 
-    Provides efficient, consistent cache keys across all cache types:
-    - SQL compilation results
-    - Parameter processing results
-    - AST fragment parsing results
-    - Driver-specific query plans
-
-    Performance Features:
-    - Frozen dataclass for immutable hashing
-    - Pre-computed hash for O(1) dictionary operations
-    - Minimal memory footprint with __slots__
-    """
-
-    cache_type: str  # "compilation", "parameters", "ast", "driver"
-    sql_hash: str  # Hash of SQL string
-    config_hash: str  # Hash of relevant configuration
-    extra_hash: Optional[str] = None  # Additional context hash
-
-    def __post_init__(self) -> None:
-        """Pre-compute hash for performance."""
-        # PLACEHOLDER - Will implement during BUILD phase
-        # Must create efficient, collision-resistant cache keys
-
-
-@dataclass
-class CacheStats:
-    """Cache performance statistics for monitoring.
-
-    Tracks cache effectiveness across all cache types:
-    - Hit/miss ratios for performance tuning
-    - Memory usage for capacity planning
-    - Eviction counts for size optimization
-    - Thread safety metrics for concurrent access
-    """
-
-    hits: int = 0
-    misses: int = 0
-    evictions: int = 0
-    current_size: int = 0
-    max_size: int = 0
-    memory_bytes: int = 0
-
-    @property
-    def hit_rate(self) -> float:
-        """Calculate cache hit rate percentage."""
-        # PLACEHOLDER - Will implement during BUILD phase
-        msg = "BUILD phase - will calculate hit rate"
-        raise NotImplementedError(msg)
-
-    def reset(self) -> None:
-        """Reset all statistics to zero."""
-        # PLACEHOLDER - Will implement during BUILD phase
-        msg = "BUILD phase - will reset statistics"
-        raise NotImplementedError(msg)
-
-
-# @runtime_checkable
-class Cacheable(Protocol):
-    """Protocol for objects that can be cached.
-
-    Defines interface for objects that can be stored in the unified cache
-    with proper cache key generation and memory estimation.
-    """
-
-    def cache_key(self) -> CacheKey:
-        """Generate cache key for this object."""
-        ...
-
-    def memory_size(self) -> int:
-        """Estimate memory usage in bytes."""
-        ...
+# Cache slots - optimized structure
+CACHE_KEY_SLOTS = ("_hash", "_key_data")
+CACHE_NODE_SLOTS = ("key", "value", "prev", "next", "timestamp", "access_count")
+UNIFIED_CACHE_SLOTS = ("_cache", "_lock", "_max_size", "_ttl", "_head", "_tail", "_stats")
+CACHE_STATS_SLOTS = ("hits", "misses", "evictions", "total_operations", "memory_usage")
 
 
 # @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
-class UnifiedCache:
-    """High-performance unified cache with LRU eviction.
+class CacheKey:
+    """High-performance immutable cache key with optimized hashing.
 
-    Replaces all existing cache layers with a single efficient implementation
-    that provides O(1) operations and optimal memory usage.
-
-    Cache Types Supported:
-    - "compilation": SQL compilation results (CompiledSQL objects)
-    - "parameters": Parameter processing results
-    - "ast": SQLGlot AST fragments for reuse
-    - "driver": Driver-specific query plans and metadata
+    This class provides an immutable cache key optimized for high-performance
+    lookups and minimal memory overhead. Cache keys are used across all cache
+    types to ensure consistent and fast cache operations.
 
     Performance Features:
-    - O(1) get/put/evict operations using OrderedDict
-    - Thread-safe concurrent access with minimal locking
-    - Memory-aware eviction based on configurable limits
-    - Cache-type partitioning for optimal hit rates
-    - Statistics tracking for performance monitoring
+    - __slots__ for memory efficiency (40-60% reduction target)
+    - Cached hash value to avoid recomputation
+    - Immutable design for safe sharing across threads
+    - Fast equality comparison with short-circuit evaluation
+    - MyPyC optimization compatibility
 
-    Thread Safety:
-    - Read operations are lock-free for maximum performance
-    - Write operations use minimal locking with reader/writer patterns
-    - Cache statistics updated atomically
+    Args:
+        key_data: Tuple of hashable values that uniquely identify the cached item
     """
 
-    __slots__ = (
-        "_caches",
-        "_enable_stats",
-        "_eviction_callback",
-        "_lock",
-        "_max_sizes",
-        "_stats",
-        "_total_memory_limit",
-    )
+    __slots__ = CACHE_KEY_SLOTS
 
-    def __init__(
-        self,
-        max_sizes: Optional[dict[str, int]] = None,
-        total_memory_limit: Optional[int] = None,
-        enable_stats: bool = True,
-        eviction_callback: Optional[Callable[[], None]] = None,
-    ) -> None:
-        """Initialize unified cache with configuration.
+    def __init__(self, key_data: tuple[Any, ...]) -> None:
+        """Initialize cache key with performance optimization.
 
         Args:
-            max_sizes: Maximum entries per cache type
-            total_memory_limit: Total memory limit in bytes
-            enable_stats: Enable performance statistics tracking
-            eviction_callback: Optional callback for cache evictions
+            key_data: Tuple of hashable values for the cache key
         """
-        # PLACEHOLDER - Will implement during BUILD phase
-        # Must create thread-safe, high-performance cache structure
-        msg = "BUILD phase - will implement unified cache initialization"
-        raise NotImplementedError(msg)
+        # Store key data as tuple for immutability and hashing
+        object.__setattr__(self, "_key_data", key_data)
+        object.__setattr__(self, "_hash", hash(key_data))
 
-    def get(self, key: CacheKey) -> Optional[Any]:
-        """Get cached value with LRU update.
+    @property
+    def key_data(self) -> tuple[Any, ...]:
+        """Get the key data tuple."""
+        return self._key_data  # type: ignore[attr-defined]
 
-        Retrieves cached value and updates LRU order for the specific
-        cache type. Thread-safe with minimal locking.
+    def __hash__(self) -> int:
+        """Return cached hash value for O(1) performance."""
+        return self._hash  # type: ignore[attr-defined]
+
+    def __eq__(self, other: object) -> bool:
+        """Fast equality comparison with short-circuit evaluation."""
+        if not isinstance(other, CacheKey):
+            return False
+        if self._hash != other._hash:  # type: ignore[attr-defined]
+            return False
+        return self._key_data == other._key_data  # type: ignore[attr-defined]
+
+    def __repr__(self) -> str:
+        """String representation of the cache key."""
+        return f"CacheKey({self._key_data!r})"  # type: ignore[attr-defined]
+
+    def __setattr__(self, name: str, _: Any) -> None:
+        """Prevent modification after initialization (immutable)."""
+        msg = f"'{type(self).__name__}' object attribute '{name}' is read-only"
+        raise AttributeError(msg)
+
+
+class CacheStats:
+    """Cache statistics tracking with performance monitoring.
+
+    Tracks cache performance metrics including hit rates, evictions,
+    and memory usage for monitoring and optimization.
+    """
+
+    __slots__ = CACHE_STATS_SLOTS
+
+    def __init__(self) -> None:
+        """Initialize cache statistics."""
+        self.hits = 0
+        self.misses = 0
+        self.evictions = 0
+        self.total_operations = 0
+        self.memory_usage = 0
+
+    @property
+    def hit_rate(self) -> float:
+        """Calculate cache hit rate as percentage."""
+        total = self.hits + self.misses
+        return (self.hits / total * 100) if total > 0 else 0.0
+
+    @property
+    def miss_rate(self) -> float:
+        """Calculate cache miss rate as percentage."""
+        return 100.0 - self.hit_rate
+
+    def record_hit(self) -> None:
+        """Record a cache hit."""
+        self.hits += 1
+        self.total_operations += 1
+
+    def record_miss(self) -> None:
+        """Record a cache miss."""
+        self.misses += 1
+        self.total_operations += 1
+
+    def record_eviction(self) -> None:
+        """Record a cache eviction."""
+        self.evictions += 1
+
+    def reset(self) -> None:
+        """Reset all statistics."""
+        self.hits = 0
+        self.misses = 0
+        self.evictions = 0
+        self.total_operations = 0
+        self.memory_usage = 0
+
+    def __repr__(self) -> str:
+        """String representation of cache statistics."""
+        return (
+            f"CacheStats(hit_rate={self.hit_rate:.1f}%, "
+            f"hits={self.hits}, misses={self.misses}, "
+            f"evictions={self.evictions}, ops={self.total_operations})"
+        )
+
+
+class CacheNode:
+    """Internal cache node for LRU linked list implementation.
+
+    This class represents a node in the doubly-linked list used for
+    LRU cache implementation with O(1) operations.
+    """
+
+    __slots__ = CACHE_NODE_SLOTS
+
+    def __init__(self, key: CacheKey, value: Any) -> None:
+        """Initialize cache node.
 
         Args:
-            key: Composite cache key
+            key: Cache key for this node
+            value: Cached value
+        """
+        self.key = key
+        self.value = value
+        self.prev: Optional[CacheNode] = None
+        self.next: Optional[CacheNode] = None
+        self.timestamp = time.time()
+        self.access_count = 1
+
+
+# @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+class UnifiedCache(Generic[CacheValueT]):
+    """Unified high-performance cache with LRU eviction and TTL support.
+
+    This class provides a thread-safe, high-performance cache implementation
+    that replaces multiple cache layers with a unified system optimized for
+    the CORE_ROUND_3 architecture.
+
+    Performance Features:
+    - O(1) cache lookup, insertion, and deletion operations
+    - LRU eviction policy with configurable size limits
+    - TTL-based expiration for cache entries
+    - Thread-safe operations with minimal lock contention
+    - __slots__ optimization for memory efficiency
+    - MyPyC compatibility for critical cache paths
+
+    Features:
+    - Configurable maximum cache size with LRU eviction
+    - Time-to-live (TTL) support for automatic cache expiration
+    - Comprehensive statistics tracking
+    - Thread-safe concurrent access
+    - Memory usage monitoring and optimization
+
+    Args:
+        max_size: Maximum number of items to cache (LRU eviction when exceeded)
+        ttl_seconds: Time-to-live in seconds (None for no expiration)
+    """
+
+    __slots__ = UNIFIED_CACHE_SLOTS
+
+    def __init__(self, max_size: int = DEFAULT_MAX_SIZE, ttl_seconds: Optional[int] = DEFAULT_TTL_SECONDS) -> None:
+        """Initialize unified cache with performance optimization.
+
+        Args:
+            max_size: Maximum number of cache entries
+            ttl_seconds: Time-to-live in seconds (None for no expiration)
+        """
+        self._cache: dict[CacheKey, CacheNode] = {}
+        self._lock = threading.RLock()
+        self._max_size = max_size
+        self._ttl = ttl_seconds
+        self._stats = CacheStats()
+
+        # Initialize LRU doubly-linked list with sentinel nodes
+        self._head = CacheNode(CacheKey(()), None)
+        self._tail = CacheNode(CacheKey(()), None)
+        self._head.next = self._tail
+        self._tail.prev = self._head
+
+    def get(self, key: CacheKey) -> Optional[CacheValueT]:
+        """Get value from cache with LRU update.
+
+        Args:
+            key: Cache key to lookup
 
         Returns:
-            Cached value if present, None otherwise
+            Cached value or None if not found or expired
         """
-        # PLACEHOLDER - Will implement during BUILD phase
-        # Must provide O(1) lookup with LRU update and thread safety
-        msg = "BUILD phase - will implement O(1) cache get"
-        raise NotImplementedError(msg)
+        with self._lock:
+            node = self._cache.get(key)
+            if node is None:
+                self._stats.record_miss()
+                return None
 
-    def put(self, key: CacheKey, value: Any) -> None:
-        """Store value in cache with automatic eviction.
+            # Check TTL expiration
+            if self._ttl is not None:
+                age = time.time() - node.timestamp
+                if age > self._ttl:
+                    # Remove expired entry
+                    self._remove_node(node)
+                    del self._cache[key]
+                    self._stats.record_miss()
+                    self._stats.record_eviction()
+                    return None
 
-        Stores value and triggers LRU eviction if cache limits are exceeded.
-        Handles memory accounting and statistics updates.
+            # Move to head (most recently used)
+            self._move_to_head(node)
+            node.access_count += 1
+            self._stats.record_hit()
+            return node.value
+
+    def put(self, key: CacheKey, value: CacheValueT) -> None:
+        """Put value in cache with LRU management.
 
         Args:
-            key: Composite cache key
+            key: Cache key
             value: Value to cache
         """
-        # PLACEHOLDER - Will implement during BUILD phase
-        # Must provide O(1) storage with automatic eviction management
-        msg = "BUILD phase - will implement O(1) cache put"
-        raise NotImplementedError(msg)
+        with self._lock:
+            existing_node = self._cache.get(key)
+            if existing_node is not None:
+                # Update existing entry
+                existing_node.value = value
+                existing_node.timestamp = time.time()
+                existing_node.access_count += 1
+                self._move_to_head(existing_node)
+                return
 
-    def evict(self, cache_type: str, count: int = 1) -> int:
-        """Explicitly evict oldest entries from cache type.
+            # Create new entry
+            new_node = CacheNode(key, value)
+            self._cache[key] = new_node
+            self._add_to_head(new_node)
 
-        Removes the oldest entries from the specified cache type.
-        Used for memory pressure relief and cache management.
+            # Check size limit and evict if necessary
+            if len(self._cache) > self._max_size:
+                tail_node = self._tail.prev
+                if tail_node and tail_node != self._head:
+                    self._remove_node(tail_node)
+                    del self._cache[tail_node.key]
+                    self._stats.record_eviction()
 
-        Args:
-            cache_type: Type of cache to evict from
-            count: Number of entries to evict
-
-        Returns:
-            Number of entries actually evicted
-        """
-        # PLACEHOLDER - Will implement during BUILD phase
-        # Must provide efficient LRU-based eviction
-        msg = "BUILD phase - will implement LRU eviction"
-        raise NotImplementedError(msg)
-
-    def clear(self, cache_type: Optional[str] = None) -> None:
-        """Clear cache entries.
-
-        Clears all entries from specified cache type, or all types if None.
-        Updates statistics and calls eviction callbacks.
+    def delete(self, key: CacheKey) -> bool:
+        """Delete entry from cache.
 
         Args:
-            cache_type: Cache type to clear, or None for all types
+            key: Cache key to delete
+
+        Returns:
+            True if key was found and deleted, False otherwise
         """
-        # PLACEHOLDER - Will implement during BUILD phase
-        # Must provide efficient cache clearing with proper cleanup
-        msg = "BUILD phase - will implement cache clearing"
-        raise NotImplementedError(msg)
+        with self._lock:
+            node = self._cache.get(key)
+            if node is None:
+                return False
 
-    def get_stats(self, cache_type: Optional[str] = None) -> "dict[str, CacheStats]":
-        """Get cache statistics for monitoring.
+            self._remove_node(node)
+            del self._cache[key]
+            return True
 
-        Returns detailed statistics for performance monitoring and tuning.
-        Statistics are aggregated across all cache types if cache_type is None.
+    def clear(self) -> None:
+        """Clear all cache entries."""
+        with self._lock:
+            self._cache.clear()
+            self._head.next = self._tail
+            self._tail.prev = self._head
+            self._stats.reset()
+
+    def size(self) -> int:
+        """Get current cache size."""
+        return len(self._cache)
+
+    def is_empty(self) -> bool:
+        """Check if cache is empty."""
+        return len(self._cache) == 0
+
+    def get_stats(self) -> CacheStats:
+        """Get cache statistics."""
+        return self._stats
+
+    def _add_to_head(self, node: CacheNode) -> None:
+        """Add node right after head (most recently used position)."""
+        node.prev = self._head
+        node.next = self._head.next
+        if self._head.next:
+            self._head.next.prev = node
+        self._head.next = node
+
+    def _remove_node(self, node: CacheNode) -> None:
+        """Remove node from linked list."""
+        if node.prev:
+            node.prev.next = node.next
+        if node.next:
+            node.next.prev = node.prev
+
+    def _move_to_head(self, node: CacheNode) -> None:
+        """Move existing node to head (most recently used)."""
+        self._remove_node(node)
+        self._add_to_head(node)
+
+    def __len__(self) -> int:
+        """Get current cache size."""
+        return len(self._cache)
+
+    def __contains__(self, key: CacheKey) -> bool:
+        """Check if key exists in cache (without updating LRU)."""
+        with self._lock:
+            node = self._cache.get(key)
+            if node is None:
+                return False
+
+            # Check TTL expiration
+            if self._ttl is not None:
+                age = time.time() - node.timestamp
+                if age > self._ttl:
+                    return False
+
+            return True
+
+
+class StatementCache:
+    """Specialized cache for compiled SQL statements.
+
+    This cache stores compiled SQL statements and their execution parameters
+    to avoid redundant compilation and parameter processing.
+    """
+
+    def __init__(self, max_size: int = DEFAULT_MAX_SIZE) -> None:
+        """Initialize statement cache.
 
         Args:
-            cache_type: Specific cache type, or None for all types
+            max_size: Maximum number of statements to cache
+        """
+        self._cache: UnifiedCache[tuple[str, Any]] = UnifiedCache(max_size)
+
+    def get_compiled(self, statement: "SQL") -> Optional[tuple[str, Any]]:
+        """Get compiled SQL and parameters from cache.
+
+        Args:
+            statement: SQL statement to lookup
 
         Returns:
-            Dictionary of cache type to statistics
+            Tuple of (compiled_sql, parameters) or None if not cached
         """
-        # PLACEHOLDER - Will implement during BUILD phase
-        # Must provide comprehensive cache performance metrics
-        msg = "BUILD phase - will implement statistics reporting"
-        raise NotImplementedError(msg)
+        cache_key = self._create_statement_key(statement)
+        return self._cache.get(cache_key)
 
-    def memory_usage(self) -> int:
-        """Get total memory usage in bytes.
+    def put_compiled(self, statement: "SQL", compiled_sql: str, parameters: Any) -> None:
+        """Cache compiled SQL and parameters.
+
+        Args:
+            statement: Original SQL statement
+            compiled_sql: Compiled SQL string
+            parameters: Processed parameters
+        """
+        cache_key = self._create_statement_key(statement)
+        self._cache.put(cache_key, (compiled_sql, parameters))
+
+    def _create_statement_key(self, statement: "SQL") -> CacheKey:
+        """Create cache key for SQL statement.
+
+        Args:
+            statement: SQL statement
 
         Returns:
-            Estimated total memory usage across all cache types
+            Cache key for the statement
         """
-        # PLACEHOLDER - Will implement during BUILD phase
-        # Must provide accurate memory usage tracking
-        msg = "BUILD phase - will implement memory tracking"
-        raise NotImplementedError(msg)
+        # Create key from SQL text, parameters, and configuration
+        key_data = (
+            "statement",
+            statement._raw_sql,
+            hash(statement),  # Includes parameters and flags
+            str(statement.dialect) if statement.dialect else None,
+            statement.is_many,
+            statement.is_script,
+        )
+        return CacheKey(key_data)
 
-    def optimize(self) -> None:
-        """Optimize cache for better performance.
+    def clear(self) -> None:
+        """Clear statement cache."""
+        self._cache.clear()
 
-        Performs maintenance operations:
-        - Defragment cache structures
-        - Update memory accounting
-        - Rebalance cache type sizes
-        - Update access pattern statistics
+    def get_stats(self) -> CacheStats:
+        """Get cache statistics."""
+        return self._cache.get_stats()
+
+
+class ExpressionCache:
+    """Specialized cache for parsed SQLGlot expressions.
+
+    This cache stores parsed SQLGlot expressions to avoid redundant parsing
+    operations, which are computationally expensive.
+    """
+
+    def __init__(self, max_size: int = DEFAULT_MAX_SIZE) -> None:
+        """Initialize expression cache.
+
+        Args:
+            max_size: Maximum number of expressions to cache
         """
-        # PLACEHOLDER - Will implement during BUILD phase
-        # Must provide cache maintenance and optimization
-        msg = "BUILD phase - will implement cache optimization"
-        raise NotImplementedError(msg)
+        self._cache: UnifiedCache[exp.Expression] = UnifiedCache(max_size)
+
+    def get_expression(self, sql: str, dialect: Optional[str] = None) -> "Optional[exp.Expression]":
+        """Get parsed expression from cache.
+
+        Args:
+            sql: SQL string
+            dialect: SQL dialect
+
+        Returns:
+            Parsed expression or None if not cached
+        """
+        cache_key = self._create_expression_key(sql, dialect)
+        return self._cache.get(cache_key)
+
+    def put_expression(self, sql: str, expression: "exp.Expression", dialect: Optional[str] = None) -> None:
+        """Cache parsed expression.
+
+        Args:
+            sql: SQL string
+            expression: Parsed SQLGlot expression
+            dialect: SQL dialect
+        """
+        cache_key = self._create_expression_key(sql, dialect)
+        self._cache.put(cache_key, expression)
+
+    def _create_expression_key(self, sql: str, dialect: Optional[str]) -> CacheKey:
+        """Create cache key for expression.
+
+        Args:
+            sql: SQL string
+            dialect: SQL dialect
+
+        Returns:
+            Cache key for the expression
+        """
+        key_data = ("expression", sql, dialect)
+        return CacheKey(key_data)
+
+    def clear(self) -> None:
+        """Clear expression cache."""
+        self._cache.clear()
+
+    def get_stats(self) -> CacheStats:
+        """Get cache statistics."""
+        return self._cache.get_stats()
 
 
-# Global cache instance - will be initialized during BUILD phase
-_global_cache: Optional[UnifiedCache] = None
-_cache_lock = threading.RLock()
+class ParameterCache:
+    """Specialized cache for processed parameters.
+
+    This cache stores processed parameter transformations to avoid redundant
+    parameter processing operations.
+    """
+
+    def __init__(self, max_size: int = DEFAULT_MAX_SIZE) -> None:
+        """Initialize parameter cache.
+
+        Args:
+            max_size: Maximum number of parameter sets to cache
+        """
+        self._cache: UnifiedCache[Any] = UnifiedCache(max_size)
+
+    def get_parameters(self, original_params: Any, config_hash: int) -> Optional[Any]:
+        """Get processed parameters from cache.
+
+        Args:
+            original_params: Original parameters
+            config_hash: Hash of parameter processing configuration
+
+        Returns:
+            Processed parameters or None if not cached
+        """
+        cache_key = self._create_parameter_key(original_params, config_hash)
+        return self._cache.get(cache_key)
+
+    def put_parameters(self, original_params: Any, processed_params: Any, config_hash: int) -> None:
+        """Cache processed parameters.
+
+        Args:
+            original_params: Original parameters
+            processed_params: Processed parameters
+            config_hash: Hash of parameter processing configuration
+        """
+        cache_key = self._create_parameter_key(original_params, config_hash)
+        self._cache.put(cache_key, processed_params)
+
+    def _create_parameter_key(self, params: Any, config_hash: int) -> CacheKey:
+        """Create cache key for parameters.
+
+        Args:
+            params: Parameters to cache
+            config_hash: Configuration hash
+
+        Returns:
+            Cache key for the parameters
+        """
+        # Create stable key from parameters and configuration
+        try:
+            if isinstance(params, dict):
+                param_key = tuple(sorted(params.items()))
+            elif isinstance(params, (list, tuple)):
+                param_key = tuple(params)
+            else:
+                param_key = (params,)
+        except (TypeError, ValueError):
+            # Fallback for unhashable parameters
+            param_key = (str(params), type(params).__name__)
+
+        key_data = ("parameters", param_key, config_hash)
+        return CacheKey(key_data)
+
+    def clear(self) -> None:
+        """Clear parameter cache."""
+        self._cache.clear()
+
+    def get_stats(self) -> CacheStats:
+        """Get cache statistics."""
+        return self._cache.get_stats()
 
 
-def get_global_cache() -> UnifiedCache:
-    """Get singleton global cache instance.
+# Global cache instances for singleton access
+_default_cache: Optional[UnifiedCache[Any]] = None
+_statement_cache: Optional[StatementCache] = None
+_expression_cache: Optional[ExpressionCache] = None
+_parameter_cache: Optional[ParameterCache] = None
+_cache_lock = threading.Lock()
 
-    Provides thread-safe access to the global unified cache instance.
-    Creates the cache if it doesn't exist with default configuration.
+
+def get_default_cache() -> UnifiedCache[Any]:
+    """Get the default unified cache instance.
 
     Returns:
-        Global UnifiedCache instance
+        Singleton default cache instance
     """
-    # PLACEHOLDER - Will implement during BUILD phase
-    # Must provide thread-safe singleton pattern
-    msg = "BUILD phase - will implement global cache access"
-    raise NotImplementedError(msg)
+    global _default_cache  # noqa: PLW0603
+    if _default_cache is None:
+        with _cache_lock:
+            if _default_cache is None:
+                _default_cache = UnifiedCache[Any]()
+    return _default_cache
 
 
+def get_statement_cache() -> StatementCache:
+    """Get the statement cache instance.
+
+    Returns:
+        Singleton statement cache instance
+    """
+    global _statement_cache  # noqa: PLW0603
+    if _statement_cache is None:
+        with _cache_lock:
+            if _statement_cache is None:
+                _statement_cache = StatementCache()
+    return _statement_cache
+
+
+def get_expression_cache() -> ExpressionCache:
+    """Get the expression cache instance.
+
+    Returns:
+        Singleton expression cache instance
+    """
+    global _expression_cache  # noqa: PLW0603
+    if _expression_cache is None:
+        with _cache_lock:
+            if _expression_cache is None:
+                _expression_cache = ExpressionCache()
+    return _expression_cache
+
+
+def get_parameter_cache() -> ParameterCache:
+    """Get the parameter cache instance.
+
+    Returns:
+        Singleton parameter cache instance
+    """
+    global _parameter_cache
+    if _parameter_cache is None:
+        with _cache_lock:
+            if _parameter_cache is None:
+                _parameter_cache = ParameterCache()
+    return _parameter_cache
+
+
+# Cache management functions
 def clear_all_caches() -> None:
-    """Clear all global caches.
+    """Clear all cache instances."""
+    if _default_cache is not None:
+        _default_cache.clear()
+    if _statement_cache is not None:
+        _statement_cache.clear()
+    if _expression_cache is not None:
+        _expression_cache.clear()
+    if _parameter_cache is not None:
+        _parameter_cache.clear()
 
-    Utility function to clear all cached data across the system.
-    Used for testing, memory pressure relief, and cache invalidation.
-    """
-    # PLACEHOLDER - Will implement during BUILD phase
-    # Must clear all cache types safely
-    msg = "BUILD phase - will implement global cache clearing"
-    raise NotImplementedError(msg)
 
-
-# Cache-aware compilation integration
-def get_compiled_sql(sql: str, config: "StatementConfig", cache: Optional[UnifiedCache] = None) -> "CompiledSQL":
-    """Get compiled SQL with cache integration.
-
-    High-level function that integrates with the unified cache for
-    compiled SQL results. Handles cache key generation, retrieval,
-    and storage automatically.
-
-    Args:
-        sql: Raw SQL string
-        config: Statement configuration
-        cache: Cache instance (uses global if None)
+def get_cache_statistics() -> dict[str, CacheStats]:
+    """Get statistics from all cache instances.
 
     Returns:
-        CompiledSQL result (cached or newly compiled)
+        Dictionary mapping cache type to statistics
     """
-    # PLACEHOLDER - Will implement during BUILD phase
-    # Must integrate with SQLProcessor for cached compilation
-    msg = "BUILD phase - will implement cache-aware compilation"
-    raise NotImplementedError(msg)
+    stats = {}
+    if _default_cache is not None:
+        stats["default"] = _default_cache.get_stats()
+    if _statement_cache is not None:
+        stats["statement"] = _statement_cache.get_stats()
+    if _expression_cache is not None:
+        stats["expression"] = _expression_cache.get_stats()
+    if _parameter_cache is not None:
+        stats["parameter"] = _parameter_cache.get_stats()
+    return stats
 
 
-# Memory estimation utilities
-def estimate_object_size(obj: Any) -> int:
-    """Estimate memory size of object for cache accounting.
-
-    Provides reasonable memory usage estimates for different object types:
-    - Strings: character count * average bytes per character
-    - CompiledSQL: SQL length + parameter size + AST size estimate
-    - Collections: recursive size estimation
-
-    Args:
-        obj: Object to estimate size for
+# Compatibility functions for legacy interface used by _common.py
+def get_cache_config() -> "Any":
+    """Get cache configuration from global config system.
 
     Returns:
-        Estimated memory usage in bytes
+        Cache configuration object with compiled_cache_enabled attribute
     """
-    # PLACEHOLDER - Will implement during BUILD phase
-    # Must provide accurate memory estimation for cache management
-    msg = "BUILD phase - will implement memory estimation"
-    raise NotImplementedError(msg)
+    from sqlspec.core.config import get_global_config
+
+    config = get_global_config()
+    # Return object with compiled_cache_enabled attribute that _common.py expects
+
+    class CacheConfig:
+        def __init__(self, enable_caching: bool) -> None:
+            self.compiled_cache_enabled = enable_caching
+
+    return CacheConfig(config.enable_caching)
 
 
-# Cache configuration presets
-DEFAULT_CACHE_SIZES = {
-    "compilation": 1000,  # SQL compilation results
-    "parameters": 500,  # Parameter processing results
-    "ast": 200,  # AST fragment cache
-    "driver": 300,  # Driver-specific caches
-}
+# Global cache instance for SQL compilation caching with compatible interface
+class SQLCompilationCache:
+    """Wrapper around StatementCache to provide compatible interface for _common.py."""
 
-DEFAULT_MEMORY_LIMIT = 50 * 1024 * 1024  # 50MB default memory limit
+    def __init__(self) -> None:
+        self._statement_cache = get_statement_cache()
+        self._unified_cache = get_default_cache()
+
+    def get(self, cache_key: str) -> Optional[tuple[str, Any]]:
+        """Get cached compiled SQL and parameters."""
+        # Use the unified cache with string keys for compatibility
+        key = CacheKey((cache_key,))
+        return self._unified_cache.get(key)
+
+    def set(self, cache_key: str, value: tuple[str, Any]) -> None:
+        """Set cached compiled SQL and parameters."""
+        # Use the unified cache with string keys for compatibility
+        key = CacheKey((cache_key,))
+        self._unified_cache.put(key, value)
+
+
+sql_cache = SQLCompilationCache()
 
 
 # Implementation status tracking
-__module_status__ = "PLACEHOLDER"  # PLACEHOLDER → BUILDING → TESTING → COMPLETE
-__performance_target__ = "O(1) operations"  # Cache operation performance target
-__memory_target__ = "60% reduction"  # Memory usage improvement target
-__concurrency_target__ = "Thread-safe"  # Concurrent access requirement
+__module_status__ = "IMPLEMENTED"  # PLACEHOLDER → BUILDING → TESTING → COMPLETE
+__compatibility_target__ = "100%"  # Must maintain complete compatibility
+__performance_target__ = "O(1) cache operations"  # Cache performance improvement target
+__integration_target__ = "Core pipeline"  # Integration with enhanced SQL system
