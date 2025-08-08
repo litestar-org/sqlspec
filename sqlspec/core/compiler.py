@@ -33,6 +33,7 @@ from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 
 from sqlspec.core.parameters import ParameterProcessor
+from sqlspec.core.statement import OperationType
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -43,8 +44,8 @@ __all__ = ("CompiledSQL", "OperationType", "SQLProcessor")
 
 logger = get_logger("sqlspec.core.compiler")
 
-# Operation type constants - preserve exact same values as current system
-OperationType = {
+# Dictionary for runtime lookup
+_OPERATION_TYPES = {
     "SELECT": "SELECT",
     "INSERT": "INSERT",
     "UPDATE": "UPDATE",
@@ -287,7 +288,7 @@ class SQLProcessor:
             logger.warning("Compilation failed, using fallback: %s", e)
             # Fallback compilation with minimal processing
             return CompiledSQL(
-                compiled_sql=sql, execution_parameters=parameters, operation_type=OperationType["UNKNOWN"]
+                compiled_sql=sql, execution_parameters=parameters, operation_type=_OPERATION_TYPES["UNKNOWN"]
             )
 
     def _make_cache_key(self, sql: str, parameters: Any) -> str:
@@ -338,30 +339,34 @@ class SQLProcessor:
             Operation type string
         """
         if isinstance(expression, exp.Select):
-            return OperationType["SELECT"]
+            return _OPERATION_TYPES["SELECT"]
         if isinstance(expression, exp.Insert):
-            return OperationType["INSERT"]
+            return _OPERATION_TYPES["INSERT"]
         if isinstance(expression, exp.Update):
-            return OperationType["UPDATE"]
+            return _OPERATION_TYPES["UPDATE"]
         if isinstance(expression, exp.Delete):
-            return OperationType["DELETE"]
+            return _OPERATION_TYPES["DELETE"]
         if isinstance(expression, (exp.Create, exp.Drop, exp.Alter)):
-            return OperationType["DDL"]
+            return _OPERATION_TYPES["DDL"]
         if hasattr(expression, "sql") and "COPY" in str(expression).upper():
-            return OperationType["COPY"]
+            return _OPERATION_TYPES["COPY"]
         if hasattr(expression, "sql") and "EXEC" in str(expression).upper():
-            return OperationType["EXECUTE"]
-        return OperationType["UNKNOWN"]
+            return _OPERATION_TYPES["EXECUTE"]
+        return _OPERATION_TYPES["UNKNOWN"]
 
     def _guess_operation_type(self, sql: str) -> str:
         """Fallback operation type detection from SQL string."""
         sql_upper = sql.strip().upper()
 
-        for op_type in ["SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "COPY", "EXECUTE"]:
-            if sql_upper.startswith(op_type):
-                return OperationType.get(op_type, OperationType["UNKNOWN"])
+        # Map DDL operations to DDL type
+        if sql_upper.startswith(("CREATE", "DROP", "ALTER")):
+            return _OPERATION_TYPES["DDL"]
 
-        return OperationType["UNKNOWN"]
+        for op_type in ["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE"]:
+            if sql_upper.startswith(op_type):
+                return _OPERATION_TYPES.get(op_type, _OPERATION_TYPES["UNKNOWN"])
+
+        return _OPERATION_TYPES["UNKNOWN"]
 
     def _apply_final_transformations(self, sql: str, parameters: Any) -> "tuple[str, Any]":
         """Apply final transformations from StatementConfig.
@@ -474,43 +479,43 @@ def get_operation_type(sql: str, expression: Optional["exp.Expression"] = None) 
     if expression is not None:
         # Use AST-based detection if expression provided
         if isinstance(expression, exp.Select):
-            return OperationType["SELECT"]
+            return _OPERATION_TYPES["SELECT"]
         if isinstance(expression, exp.Insert):
-            return OperationType["INSERT"]
+            return _OPERATION_TYPES["INSERT"]
         if isinstance(expression, exp.Update):
-            return OperationType["UPDATE"]
+            return _OPERATION_TYPES["UPDATE"]
         if isinstance(expression, exp.Delete):
-            return OperationType["DELETE"]
+            return _OPERATION_TYPES["DELETE"]
         if _is_ddl_operation(expression):
-            return OperationType["DDL"]
+            return _OPERATION_TYPES["DDL"]
         if hasattr(expression, "sql") and "COPY" in str(expression).upper():
-            return OperationType["COPY"]
+            return _OPERATION_TYPES["COPY"]
         if hasattr(expression, "sql") and "EXEC" in str(expression).upper():
-            return OperationType["EXECUTE"]
-        return OperationType["UNKNOWN"]
+            return _OPERATION_TYPES["EXECUTE"]
+        return _OPERATION_TYPES["UNKNOWN"]
     # Fallback to string-based detection
     if _is_script_operation(sql):
-        return OperationType["SCRIPT"]
+        return _OPERATION_TYPES["SCRIPT"]
 
     sql_upper = sql.strip().upper()
 
     # Direct operation type mapping for string-based detection
     if sql_upper.startswith("SELECT"):
-        return OperationType["SELECT"]
+        return _OPERATION_TYPES["SELECT"]
     if sql_upper.startswith("INSERT"):
-        return OperationType["INSERT"]
+        return _OPERATION_TYPES["INSERT"]
     if sql_upper.startswith("UPDATE"):
-        return OperationType["UPDATE"]
+        return _OPERATION_TYPES["UPDATE"]
     if sql_upper.startswith("DELETE"):
-        return OperationType["DELETE"]
+        return _OPERATION_TYPES["DELETE"]
     if sql_upper.startswith(("CREATE", "DROP", "ALTER")):
-        return OperationType["DDL"]
+        return _OPERATION_TYPES["DDL"]
     if sql_upper.startswith("COPY"):
-        return OperationType["COPY"]
+        return _OPERATION_TYPES["COPY"]
     if sql_upper.startswith("EXECUTE"):
-        return OperationType["EXECUTE"]
+        return _OPERATION_TYPES["EXECUTE"]
 
-    return OperationType["UNKNOWN"]
+    return _OPERATION_TYPES["UNKNOWN"]
 
 
 # Factory function for creating processors

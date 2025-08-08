@@ -51,7 +51,7 @@ __all__ = (
     "get_default_parameter_config",
 )
 # Operation type definition - preserved exactly
-OperationType = Literal["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT"]
+OperationType = Literal["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT", "DDL", "UNKNOWN"]
 logger = get_logger("sqlspec.core.statement")
 
 # Configuration slots - preserved from existing StatementConfig

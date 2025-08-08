@@ -519,7 +519,7 @@ def test_large_file_handling() -> None:
         # Create a large file with many queries
         content = [
             f"""
--- name: query_{{i:03d}}
+-- name: query_{i:03d}
 SELECT {i} as query_number, 'data_{i}' as data
 FROM large_table
 WHERE id > {i * 100}

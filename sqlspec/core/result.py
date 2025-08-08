@@ -24,21 +24,20 @@ Critical Compatibility:
 """
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
 if TYPE_CHECKING:
-    from sqlspec.core.statement import SQL
+    from sqlspec.core.statement import SQL, OperationType
+else:
+    from sqlspec.core.statement import OperationType
 
 
 __all__ = ("ArrowResult", "SQLResult", "StatementResult")
 
 T = TypeVar("T")
-
-# Operation type definition - preserved exactly
-OperationType = Literal["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT"]
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -241,7 +240,7 @@ class SQLResult(StatementResult):
     @property
     def operation_type(self) -> "OperationType":
         """Get operation type for this result."""
-        return self._operation_type
+        return cast("OperationType", self._operation_type)
 
     def get_metadata(self, key: str, default: Any = None) -> Any:
         """Get metadata value by key.
