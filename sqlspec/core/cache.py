@@ -592,11 +592,14 @@ class ParameterCache:
                 param_key = tuple(params)
             else:
                 param_key = (params,)
-        except (TypeError, ValueError):
-            param_key = (str(params), type(params).__name__)  # type: ignore[assignment]
 
-        key_data = ("parameters", param_key, config_hash)
-        return CacheKey(key_data)
+            key_data = ("parameters", param_key, config_hash)
+            return CacheKey(key_data)
+        except (TypeError, ValueError):
+            # Fallback for unhashable parameters
+            param_key = (str(params), type(params).__name__)  # type: ignore[assignment]
+            key_data = ("parameters", param_key, config_hash)
+            return CacheKey(key_data)
 
     def clear(self) -> None:
         """Clear parameter cache."""

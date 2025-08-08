@@ -282,12 +282,11 @@ class SQL:
     @property
     def parameters(self) -> Any:
         """Statement parameters - preserved interface."""
-        self._ensure_processed()
         if self._processed_state is Empty:
             # Return original parameters if not processed
             if self._named_parameters:
                 return self._named_parameters
-            return self._positional_parameters
+            return self._positional_parameters or []
         return self._processed_state.execution_parameters
 
     @property
@@ -460,25 +459,16 @@ class SQL:
         if self._processed_state is not Empty:
             return
 
-        # Use enhanced SQLProcessor for single-pass processing with integrated caching
-        from sqlspec.core.compiler import SQLProcessor
-
-        processor = SQLProcessor(self._statement_config)
-
         try:
-            # Get current parameters for processing
-            current_params = self._named_parameters or self._positional_parameters
+            parsed_expr = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
+            operation_type = self._detect_operation_type(parsed_expr)
 
-            # Single-pass processing with the enhanced SQLProcessor system
-            compiled_result = processor.compile(self._raw_sql, current_params)
-
-            # SQLProcessor already handles parsing and operation type detection
-            # Use the results directly from the compiled result
+            # Create processed state with basic compilation
             self._processed_state = ProcessedState(
-                compiled_sql=compiled_result.compiled_sql,
-                execution_parameters=compiled_result.execution_parameters,
-                parsed_expression=compiled_result.expression,
-                operation_type=compiled_result.operation_type,
+                compiled_sql=self._raw_sql,
+                execution_parameters=self._named_parameters or self._positional_parameters,
+                parsed_expression=parsed_expr,
+                operation_type=operation_type,
                 validation_errors=[],
                 is_many=self._is_many,
             )
@@ -493,18 +483,35 @@ class SQL:
                 is_many=self._is_many,
             )
 
+    def _detect_operation_type(self, expression: Any) -> str:
+        """Detect SQL operation type from SQLGlot expression."""
+        if expression is None:
+            return "UNKNOWN"
+
+        expr_type = type(expression).__name__
+
+        if "Select" in expr_type:
+            return "SELECT"
+        if "Insert" in expr_type:
+            return "INSERT"
+        if "Update" in expr_type:
+            return "UPDATE"
+        if "Delete" in expr_type:
+            return "DELETE"
+        if "Create" in expr_type or "Drop" in expr_type or "Alter" in expr_type:
+            return "DDL"
+        return "UNKNOWN"
+
     def __hash__(self) -> int:
         """Hash for caching and equality."""
         if self._hash is None:
-            self._hash = hash(
-                (
-                    self._raw_sql,
-                    tuple(self._positional_parameters),
-                    tuple(sorted(self._named_parameters.items())),
-                    self._is_many,
-                    self._is_script,
-                )
-            )
+            self._hash = hash((
+                self._raw_sql,
+                tuple(self._positional_parameters),
+                tuple(sorted(self._named_parameters.items())),
+                self._is_many,
+                self._is_script,
+            ))
         return self._hash
 
     def __eq__(self, other: object) -> bool:
@@ -634,18 +641,16 @@ class StatementConfig:
 
     def __hash__(self) -> int:
         """Hash based on key configuration settings."""
-        return hash(
-            (
-                self.enable_parsing,
-                self.enable_validation,
-                self.enable_transformations,
-                self.enable_analysis,
-                self.enable_expression_simplification,
-                self.enable_parameter_type_wrapping,
-                self.enable_caching,
-                str(self.dialect),
-            )
-        )
+        return hash((
+            self.enable_parsing,
+            self.enable_validation,
+            self.enable_transformations,
+            self.enable_analysis,
+            self.enable_expression_simplification,
+            self.enable_parameter_type_wrapping,
+            self.enable_caching,
+            str(self.dialect),
+        ))
 
     def __repr__(self) -> str:
         """String representation of the StatementConfig instance."""
@@ -659,7 +664,40 @@ class StatementConfig:
         """Equality comparison compatible with existing behavior."""
         if not isinstance(other, type(self)):
             return False
-        return all(getattr(self, slot) == getattr(other, slot) for slot in SQL_CONFIG_SLOTS)
+
+        # Compare all slots, but handle object instances specially
+        for slot in SQL_CONFIG_SLOTS:
+            self_val = getattr(self, slot)
+            other_val = getattr(other, slot)
+
+            # For object instances that might not have __eq__, compare type and key attributes
+            if hasattr(self_val, "__class__") and hasattr(other_val, "__class__"):
+                if self_val.__class__ != other_val.__class__:
+                    return False
+                # For parameter config objects, compare their key attributes
+                if slot == "parameter_config":
+                    if not self._compare_parameter_configs(self_val, other_val):
+                        return False
+                elif slot in {"parameter_converter", "parameter_validator"}:
+                    # These are typically default instances, consider them equal if same class
+                    continue
+                elif self_val != other_val:
+                    return False
+            elif self_val != other_val:
+                return False
+        return True
+
+    def _compare_parameter_configs(self, config1: Any, config2: Any) -> bool:
+        """Compare parameter configs by their key attributes."""
+        try:
+            return (
+                config1.default_parameter_style == config2.default_parameter_style
+                and config1.supported_parameter_styles == config2.supported_parameter_styles
+                and getattr(config1, "supported_execution_parameter_styles", None)
+                == getattr(config2, "supported_execution_parameter_styles", None)
+            )
+        except AttributeError:
+            return False
 
 
 # Compatibility functions - preserve exact same interfaces as current code

@@ -424,14 +424,14 @@ def test_statement_cache_key_generation(mock_sql: MagicMock) -> None:
     mock_statement1.dialect = "postgresql"
     mock_statement1.is_many = False
     mock_statement1.is_script = False
-    mock_statement1.__hash__ = lambda: hash("statement1")
+    mock_statement1.__hash__ = lambda self: hash("statement1")  # pyright: ignore[reportAttributeAccessIssue]
 
     mock_statement2 = MagicMock()
     mock_statement2._raw_sql = "SELECT * FROM orders"  # Different SQL
     mock_statement2.dialect = "postgresql"
     mock_statement2.is_many = False
     mock_statement2.is_script = False
-    mock_statement2.__hash__ = lambda: hash("statement2")
+    mock_statement2.__hash__ = lambda self: hash("statement2")  # pyright: ignore[reportAttributeAccessIssue]
 
     # Generate cache keys
     key1 = stmt_cache._create_statement_key(mock_statement1)
@@ -836,7 +836,7 @@ def test_reset_cache_stats_function() -> None:
 
 def test_log_cache_stats_function() -> None:
     """Test logging cache statistics."""
-    with patch("sqlspec.utils.logging.get_logger") as mock_get_logger:
+    with patch("sqlspec.core.cache.get_logger") as mock_get_logger:
         mock_logger = MagicMock()
         mock_get_logger.return_value = mock_logger
 
@@ -973,8 +973,8 @@ def test_unified_cache_very_short_ttl() -> None:
     cache.put(key, "expires_quickly")
     assert cache.get(key) == "expires_quickly"
 
-    # Wait for expiration
-    time.sleep(0.2)
+    # Wait for expiration (1.1 seconds to ensure TTL has passed)
+    time.sleep(1.1)
 
     assert cache.get(key) is None
 

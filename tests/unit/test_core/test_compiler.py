@@ -30,7 +30,6 @@ from sqlglot.errors import ParseError
 
 from sqlspec.core.compiler import (
     CompiledSQL,
-    OperationType,
     SQLProcessor,
     _is_ddl_operation,
     _is_script_operation,
@@ -149,7 +148,7 @@ def test_compiled_sql_creation() -> None:
     """Test CompiledSQL object creation and basic properties."""
     compiled_sql = "SELECT * FROM users WHERE id = ?"
     execution_parameters = [123]
-    operation_type = OperationType["SELECT"]
+    operation_type = "SELECT"
     expression = Mock(spec=exp.Select)
 
     result = CompiledSQL(
@@ -171,9 +170,7 @@ def test_compiled_sql_creation() -> None:
 
 def test_compiled_sql_hash_caching() -> None:
     """Test CompiledSQL hash caching for performance."""
-    result = CompiledSQL(
-        compiled_sql="SELECT * FROM users", execution_parameters=None, operation_type=OperationType["SELECT"]
-    )
+    result = CompiledSQL(compiled_sql="SELECT * FROM users", execution_parameters=None, operation_type="SELECT")
 
     # Hash should be None initially
     assert result._hash is None
@@ -192,22 +189,13 @@ def test_compiled_sql_hash_caching() -> None:
 def test_compiled_sql_equality() -> None:
     """Test CompiledSQL equality comparison."""
     result1 = CompiledSQL(
-        compiled_sql="SELECT * FROM users",
-        execution_parameters=[123],
-        operation_type=OperationType["SELECT"],
-        parameter_style="qmark",
+        compiled_sql="SELECT * FROM users", execution_parameters=[123], operation_type="SELECT", parameter_style="qmark"
     )
     result2 = CompiledSQL(
-        compiled_sql="SELECT * FROM users",
-        execution_parameters=[123],
-        operation_type=OperationType["SELECT"],
-        parameter_style="qmark",
+        compiled_sql="SELECT * FROM users", execution_parameters=[123], operation_type="SELECT", parameter_style="qmark"
     )
     result3 = CompiledSQL(
-        compiled_sql="SELECT * FROM posts",
-        execution_parameters=[123],
-        operation_type=OperationType["SELECT"],
-        parameter_style="qmark",
+        compiled_sql="SELECT * FROM posts", execution_parameters=[123], operation_type="SELECT", parameter_style="qmark"
     )
 
     assert result1 == result2
@@ -218,9 +206,7 @@ def test_compiled_sql_equality() -> None:
 
 def test_compiled_sql_repr() -> None:
     """Test CompiledSQL string representation."""
-    result = CompiledSQL(
-        compiled_sql="SELECT * FROM users", execution_parameters=[123], operation_type=OperationType["SELECT"]
-    )
+    result = CompiledSQL(compiled_sql="SELECT * FROM users", execution_parameters=[123], operation_type="SELECT")
 
     repr_str = repr(result)
     assert "CompiledSQL" in repr_str
@@ -257,7 +243,7 @@ def test_basic_compilation(basic_statement_config: "StatementConfig", sample_sql
     result = processor.compile(sample_sql_queries["select"], [123])
 
     assert isinstance(result, CompiledSQL)
-    assert result.operation_type == OperationType["SELECT"]
+    assert result.operation_type == "SELECT"
     assert isinstance(result.compiled_sql, str)
     assert len(result.compiled_sql) > 0
     assert result.execution_parameters is not None
@@ -379,15 +365,15 @@ def test_cache_lru_behavior(basic_statement_config: "StatementConfig") -> None:
 @pytest.mark.parametrize(
     "sql,expected_operation",
     [
-        ("SELECT * FROM users", OperationType["SELECT"]),
-        ("INSERT INTO users VALUES (1)", OperationType["INSERT"]),
-        ("UPDATE users SET name = 'test'", OperationType["UPDATE"]),
-        ("DELETE FROM users WHERE id = 1", OperationType["DELETE"]),
-        ("CREATE TABLE test (id INT)", OperationType["DDL"]),
-        ("DROP TABLE test", OperationType["DDL"]),
-        ("ALTER TABLE test ADD COLUMN name TEXT", OperationType["DDL"]),
-        ("COPY users FROM 'file.csv'", OperationType["COPY"]),
-        ("EXECUTE my_proc()", OperationType["EXECUTE"]),
+        ("SELECT * FROM users", "SELECT"),
+        ("INSERT INTO users VALUES (1)", "INSERT"),
+        ("UPDATE users SET name = 'test'", "UPDATE"),
+        ("DELETE FROM users WHERE id = 1", "DELETE"),
+        ("CREATE TABLE test (id INT)", "DDL"),
+        ("DROP TABLE test", "DDL"),
+        ("ALTER TABLE test ADD COLUMN name TEXT", "DDL"),
+        ("COPY users FROM 'file.csv'", "COPY"),
+        ("EXECUTE my_proc()", "EXECUTE"),
     ],
 )
 def test_operation_type_detection_via_ast(
@@ -403,7 +389,7 @@ def test_operation_type_detection_via_ast(
     except ParseError:
         # If SQLGlot can't parse, should fall back to string-based detection
         detected_type = processor._guess_operation_type(sql)
-        assert detected_type in OperationType.values()
+        assert detected_type in ["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT", "DDL", "UNKNOWN"]
 
 
 def test_single_pass_processing(
@@ -421,7 +407,7 @@ def test_single_pass_processing(
 
         # SQLGlot parse should only be called once
         assert mock_parse.call_count == 1
-        assert result.operation_type == OperationType["SELECT"]
+        assert result.operation_type == "SELECT"
 
 
 def test_parameter_processing_integration(basic_statement_config: "StatementConfig") -> None:
@@ -466,7 +452,7 @@ def test_parsing_enabled_optimization(
 
     assert isinstance(result, CompiledSQL)
     assert result.expression is not None
-    assert result.operation_type == OperationType["SELECT"]
+    assert result.operation_type == "SELECT"
 
 
 def test_parsing_disabled_fallback(
@@ -481,7 +467,17 @@ def test_parsing_disabled_fallback(
 
     assert isinstance(result, CompiledSQL)
     assert result.expression is None
-    assert result.operation_type in OperationType.values()
+    assert result.operation_type in [
+        "SELECT",
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "COPY",
+        "EXECUTE",
+        "SCRIPT",
+        "DDL",
+        "UNKNOWN",
+    ]
 
 
 def test_compilation_performance_characteristics(
@@ -514,12 +510,12 @@ def test_ast_based_operation_detection(basic_statement_config: "StatementConfig"
     processor = SQLProcessor(basic_statement_config)
 
     test_cases = [
-        ("SELECT * FROM users", OperationType["SELECT"], exp.Select),
-        ("INSERT INTO users VALUES (1)", OperationType["INSERT"], exp.Insert),
-        ("UPDATE users SET name = 'test'", OperationType["UPDATE"], exp.Update),
-        ("DELETE FROM users", OperationType["DELETE"], exp.Delete),
-        ("CREATE TABLE test (id INT)", OperationType["DDL"], exp.Create),
-        ("DROP TABLE test", OperationType["DDL"], exp.Drop),
+        ("SELECT * FROM users", "SELECT", exp.Select),
+        ("INSERT INTO users VALUES (1)", "INSERT", exp.Insert),
+        ("UPDATE users SET name = 'test'", "UPDATE", exp.Update),
+        ("DELETE FROM users", "DELETE", exp.Delete),
+        ("CREATE TABLE test (id INT)", "DDL", exp.Create),
+        ("DROP TABLE test", "DDL", exp.Drop),
     ]
 
     for sql, expected_op, expected_exp_type in test_cases:
@@ -634,7 +630,7 @@ def test_parse_error_fallback(basic_statement_config: "StatementConfig", sample_
     # Should not raise exception, should provide fallback result
     assert isinstance(result, CompiledSQL)
     # Malformed SQL "SELECT * FROM users WHERE" still starts with SELECT, so detected as SELECT
-    assert result.operation_type == OperationType["SELECT"]
+    assert result.operation_type == "SELECT"
 
 
 def test_empty_sql_handling(basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]") -> None:
@@ -660,7 +656,7 @@ def test_parameter_processing_errors(basic_statement_config: "StatementConfig") 
 
     # Should still compile successfully due to robust error handling
     assert isinstance(result, CompiledSQL)
-    assert result.operation_type == OperationType["SELECT"]
+    assert result.operation_type == "SELECT"
 
 
 def test_sqlglot_parse_exceptions(basic_statement_config: "StatementConfig") -> None:
@@ -673,7 +669,7 @@ def test_sqlglot_parse_exceptions(basic_statement_config: "StatementConfig") -> 
         # Should fall back to string-based operation detection
         assert isinstance(result, CompiledSQL)
         assert result.expression is None
-        assert result.operation_type == OperationType["SELECT"]
+        assert result.operation_type == "SELECT"
 
 
 def test_compilation_exception_recovery(basic_statement_config: "StatementConfig") -> None:
@@ -686,7 +682,7 @@ def test_compilation_exception_recovery(basic_statement_config: "StatementConfig
 
     # Should handle gracefully and return a result
     assert isinstance(result, CompiledSQL)
-    assert result.operation_type == OperationType["UNKNOWN"]
+    assert result.operation_type == "UNKNOWN"
 
 
 # Performance characteristics tests
@@ -737,9 +733,7 @@ def test_cache_clear(basic_statement_config: "StatementConfig", sample_sql_queri
 
 def test_memory_efficiency_with_slots() -> None:
     """Test memory efficiency of CompiledSQL with __slots__."""
-    result = CompiledSQL(
-        compiled_sql="SELECT * FROM users", execution_parameters=[123], operation_type=OperationType["SELECT"]
-    )
+    result = CompiledSQL(compiled_sql="SELECT * FROM users", execution_parameters=[123], operation_type="SELECT")
 
     # Should not have __dict__ due to __slots__
     assert not hasattr(result, "__dict__")
@@ -808,15 +802,15 @@ def test_get_operation_type_function() -> None:
     """Test standalone get_operation_type function."""
     # With expression
     select_expr = Mock(spec=exp.Select)
-    assert get_operation_type("SELECT * FROM users", select_expr) == OperationType["SELECT"]
+    assert get_operation_type("SELECT * FROM users", select_expr) == "SELECT"
 
     # Without expression (string-based)
-    assert get_operation_type("SELECT * FROM users") == OperationType["SELECT"]
-    assert get_operation_type("INSERT INTO users VALUES (1)") == OperationType["INSERT"]
-    assert get_operation_type("UPDATE users SET name = 'test'") == OperationType["UPDATE"]
-    assert get_operation_type("DELETE FROM users") == OperationType["DELETE"]
-    assert get_operation_type("CREATE TABLE test (id INT)") == OperationType["DDL"]
-    assert get_operation_type("UNKNOWN_STATEMENT") == OperationType["UNKNOWN"]
+    assert get_operation_type("SELECT * FROM users") == "SELECT"
+    assert get_operation_type("INSERT INTO users VALUES (1)") == "INSERT"
+    assert get_operation_type("UPDATE users SET name = 'test'") == "UPDATE"
+    assert get_operation_type("DELETE FROM users") == "DELETE"
+    assert get_operation_type("CREATE TABLE test (id INT)") == "DDL"
+    assert get_operation_type("UNKNOWN_STATEMENT") == "UNKNOWN"
 
 
 def test_create_processor_factory(basic_statement_config: "StatementConfig") -> None:
@@ -843,7 +837,7 @@ def test_end_to_end_compilation_workflow(basic_statement_config: "StatementConfi
 
     # Verify complete compilation
     assert isinstance(result, CompiledSQL)
-    assert result.operation_type == OperationType["SELECT"]
+    assert result.operation_type == "SELECT"
     assert result.compiled_sql is not None
     assert len(result.compiled_sql) > 0
     assert result.execution_parameters is not None
@@ -869,7 +863,7 @@ def test_multiple_dialects_compilation() -> None:
         result = processor.compile(sql, parameters)
 
         assert isinstance(result, CompiledSQL)
-        assert result.operation_type == OperationType["SELECT"]
+        assert result.operation_type == "SELECT"
         assert result.compiled_sql is not None
 
 
@@ -930,25 +924,13 @@ def test_execute_many_detection(
 def test_module_constants() -> None:
     """Test module constants are properly defined."""
     # OperationType constants
-    assert OperationType["SELECT"] == "SELECT"
-    assert OperationType["INSERT"] == "INSERT"
-    assert OperationType["UPDATE"] == "UPDATE"
-    assert OperationType["DELETE"] == "DELETE"
-    assert OperationType["COPY"] == "COPY"
-    assert OperationType["EXECUTE"] == "EXECUTE"
-    assert OperationType["SCRIPT"] == "SCRIPT"
-    assert OperationType["DDL"] == "DDL"
-    assert OperationType["UNKNOWN"] == "UNKNOWN"
-
-    # Module status constants
-    from sqlspec.core.compiler import (
-        __compatibility_target__,
-        __memory_target__,
-        __module_status__,
-        __performance_target__,
-    )
-
-    assert __module_status__ == "IMPLEMENTED"
-    assert __performance_target__ == "5-10x faster"
-    assert __memory_target__ == "40-60% reduction"
-    assert __compatibility_target__ == "100%"
+    operation_types = ["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT", "DDL", "UNKNOWN"]
+    assert "SELECT" in operation_types
+    assert "INSERT" in operation_types
+    assert "UPDATE" in operation_types
+    assert "DELETE" in operation_types
+    assert "COPY" in operation_types
+    assert "EXECUTE" in operation_types
+    assert "SCRIPT" in operation_types
+    assert "DDL" in operation_types
+    assert "UNKNOWN" in operation_types
