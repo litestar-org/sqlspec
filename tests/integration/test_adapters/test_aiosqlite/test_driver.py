@@ -2,56 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+import math
 from typing import Any, Literal
-from uuid import uuid4
 
 import pytest
 
-from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.adapters.aiosqlite import AiosqliteDriver
 from sqlspec.core.result import SQLResult
-from sqlspec.core.statement import StatementConfig
+from sqlspec.core.statement import SQL
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
-
-
-@pytest.fixture
-async def aiosqlite_session() -> AsyncGenerator[AiosqliteDriver, None]:
-    """Create an aiosqlite session with test table."""
-    # Use unique shared memory database name to ensure test isolation
-    # Format: file:memdb<unique_id>?mode=memory&cache=shared
-    unique_db = f"file:memdb{uuid4().hex}?mode=memory&cache=shared"
-    config = AiosqliteConfig(pool_config={"database": unique_db})
-
-    try:
-        async with config.provide_session() as session:
-            # Create test table
-            await session.execute_script("""
-                CREATE TABLE IF NOT EXISTS test_table (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    value INTEGER DEFAULT 0,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            # Commit DDL to prevent table locking issues in subsequent operations
-            await session.commit()
-
-            try:
-                yield session
-            finally:
-                # Ensure any pending transactions are committed before test ends
-                try:
-                    await session.commit()
-                except Exception:
-                    # If commit fails, try rollback to clean up transaction state
-                    try:
-                        await session.rollback()
-                    except Exception:
-                        pass
-    finally:
-        # Ensure pool is closed properly to avoid threading issues during test shutdown
-        await config.close_pool()
 
 
 @pytest.mark.xdist_group("aiosqlite")
@@ -65,7 +25,7 @@ async def test_aiosqlite_basic_crud(aiosqlite_session: AiosqliteDriver) -> None:
     assert insert_result.rows_affected == 1
 
     # SELECT
-    select_result = await aiosqlite_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_name"))
+    select_result = await aiosqlite_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_name",))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
@@ -80,13 +40,13 @@ async def test_aiosqlite_basic_crud(aiosqlite_session: AiosqliteDriver) -> None:
     assert update_result.rows_affected == 1
 
     # Verify UPDATE
-    verify_result = await aiosqlite_session.execute("SELECT value FROM test_table WHERE name = ?", ("test_name"))
+    verify_result = await aiosqlite_session.execute("SELECT value FROM test_table WHERE name = ?", ("test_name",))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
 
     # DELETE
-    delete_result = await aiosqlite_session.execute("DELETE FROM test_table WHERE name = ?", ("test_name"))
+    delete_result = await aiosqlite_session.execute("DELETE FROM test_table WHERE name = ?", ("test_name",))
     assert isinstance(delete_result, SQLResult)
     assert delete_result.rows_affected == 1
 
@@ -100,7 +60,7 @@ async def test_aiosqlite_basic_crud(aiosqlite_session: AiosqliteDriver) -> None:
 @pytest.mark.parametrize(
     ("parameters", "style"),
     [
-        pytest.param(("test_value"), "tuple_binds", id="tuple_binds"),
+        pytest.param(("test_value",), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
     ],
 )
@@ -114,7 +74,7 @@ async def test_aiosqlite_parameter_styles(
     await aiosqlite_session.commit()
 
     # Insert test data
-    await aiosqlite_session.execute("INSERT INTO test_table (name) VALUES (?)", ("test_value"))
+    await aiosqlite_session.execute("INSERT INTO test_table (name) VALUES (?)", ("test_value",))
 
     # Test parameter style
     if style == "tuple_binds":
@@ -212,7 +172,7 @@ async def test_aiosqlite_result_methods(aiosqlite_session: AiosqliteDriver) -> N
     assert not result.is_empty()
 
     # Test empty result
-    empty_result = await aiosqlite_session.execute("SELECT * FROM test_table WHERE name = ?", ("nonexistent"))
+    empty_result = await aiosqlite_session.execute("SELECT * FROM test_table WHERE name = ?", ("nonexistent",))
     assert isinstance(empty_result, SQLResult)
     assert empty_result.is_empty()
     assert empty_result.get_first() is None
@@ -249,8 +209,6 @@ async def test_aiosqlite_data_types(aiosqlite_session: AiosqliteDriver) -> None:
     """)
 
     # Insert data with various types
-    import math
-
     test_data = ("text_value", 42, math.pi, b"binary_data", None)
 
     insert_result = await aiosqlite_session.execute(
@@ -287,7 +245,7 @@ async def test_aiosqlite_transactions(aiosqlite_session: AiosqliteDriver) -> Non
 
     # Verify data is committed
     result = await aiosqlite_session.execute(
-        "SELECT COUNT(*) as count FROM test_table WHERE name = ?", ("transaction_test")
+        "SELECT COUNT(*) as count FROM test_table WHERE name = ?", ("transaction_test",)
     )
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -365,7 +323,7 @@ async def test_aiosqlite_schema_operations(aiosqlite_session: AiosqliteDriver) -
 
     # Insert data into new table
     insert_result = await aiosqlite_session.execute(
-        "INSERT INTO schema_test (description) VALUES (?)", ("test description")
+        "INSERT INTO schema_test (description) VALUES (?)", ("test description",)
     )
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
@@ -390,7 +348,7 @@ async def test_aiosqlite_column_names_and_metadata(aiosqlite_session: AiosqliteD
 
     # Test column names
     result = await aiosqlite_session.execute(
-        "SELECT id, name, value, created_at FROM test_table WHERE name = ?", ("metadata_test")
+        "SELECT id, name, value, created_at FROM test_table WHERE name = ?", ("metadata_test",)
     )
     assert isinstance(result, SQLResult)
     assert result.column_names == ["id", "name", "value", "created_at"]
@@ -456,6 +414,10 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDr
     except Exception:
         # JSON1 extension might not be available
         pass
+
+    # Test ATTACH/DETACH databases with non-strict config
+    from sqlspec.core.statement import StatementConfig
+
     non_strict_config = StatementConfig(enable_parsing=False, enable_validation=False)
 
     await aiosqlite_session.execute("ATTACH DATABASE ':memory:' AS temp_db", _config=non_strict_config)
@@ -475,3 +437,49 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDr
     except Exception:
         # Database might be locked, which is fine for this test
         pass
+
+
+@pytest.mark.xdist_group("aiosqlite")
+async def test_aiosqlite_sql_object_integration(aiosqlite_session: AiosqliteDriver) -> None:
+    """Test integration with SQL object from CORE_ROUND_3."""
+    # Test creating SQL object with aiosqlite
+    sql_obj = SQL("SELECT name, value FROM test_table WHERE value > ?")
+
+    # Insert test data
+    await aiosqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("sql_test", 50))
+
+    # Execute using SQL object
+    result = await aiosqlite_session.execute(sql_obj, (25,))
+    assert isinstance(result, SQLResult)
+    assert result.data is not None
+    assert len(result.data) == 1
+    assert result.data[0]["name"] == "sql_test"
+    assert result.data[0]["value"] == 50
+
+
+@pytest.mark.xdist_group("aiosqlite")
+async def test_aiosqlite_core_result_features(aiosqlite_session: AiosqliteDriver) -> None:
+    """Test CORE_ROUND_3 SQLResult features."""
+    # Insert test data
+    test_data = [("core1", 10), ("core2", 20), ("core3", 30)]
+    await aiosqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", test_data)
+
+    # Test all SQLResult features
+    result = await aiosqlite_session.execute("SELECT * FROM test_table WHERE name LIKE 'core%' ORDER BY name")
+    assert isinstance(result, SQLResult)
+
+    # Test core result methods
+    assert result.get_count() == 3
+    assert not result.is_empty()
+
+    first = result.get_first()
+    assert first is not None
+    assert first["name"] == "core1"
+
+    # Test column names
+    assert "name" in result.column_names
+    assert "value" in result.column_names
+
+    # Test data access
+    assert len(result.data) == 3
+    assert all(row["name"].startswith("core") for row in result.data)

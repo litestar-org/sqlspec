@@ -1,5 +1,3 @@
-"""Integration tests for sqlspec adapters."""
+"""PostgreSQL (psycopg) adapter integration tests."""
 
-import pytest
-
-pytestmark = [pytest.mark.postgres, pytest.mark.psycopg]
+__all__ = ()

@@ -1,7 +1,5 @@
 """Test DuckDB driver implementation."""
 
-from __future__ import annotations
-
 from collections.abc import Generator
 from typing import Any, Literal
 
@@ -499,8 +497,8 @@ def test_duckdb_error_handling_and_edge_cases(duckdb_session: DuckDBDriver) -> N
 
 @pytest.mark.xdist_group("duckdb")
 def test_duckdb_result_methods_comprehensive(duckdb_session: DuckDBDriver) -> None:
-    """Test comprehensive SelectResult and ExecuteResult methods."""
-    # Test SelectResult methods
+    """Test comprehensive SQLResult methods."""
+    # Test SQLResult methods
     duckdb_session.execute_script("""
         CREATE TABLE result_methods_test (
             id INTEGER,
@@ -515,7 +513,7 @@ def test_duckdb_result_methods_comprehensive(duckdb_session: DuckDBDriver) -> No
             (4, 'C', 40);
     """)
 
-    # Test SelectResult methods
+    # Test SQLResult methods
     select_result = duckdb_session.execute("SELECT * FROM result_methods_test ORDER BY id")
 
     # Test get_count()
@@ -535,10 +533,10 @@ def test_duckdb_result_methods_comprehensive(duckdb_session: DuckDBDriver) -> No
     assert empty_result.get_count() == 0
     assert empty_result.get_first() is None
 
-    # Test ExecuteResult methods
+    # Test SQLResult methods
     update_result = duckdb_session.execute("UPDATE result_methods_test SET value = value * 2 WHERE category = 'A'")
 
-    # Test ExecuteResult methods
+    # Test SQLResult methods
     assert isinstance(update_result, SQLResult)
     assert update_result.get_affected_count() == 2
     assert update_result.was_updated()

@@ -15,6 +15,8 @@ import pytest
 from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, asyncmy_statement_config
+from sqlspec.core.result import SQLResult
+from sqlspec.core.statement import SQL
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 
@@ -399,3 +401,29 @@ async def test_asyncmy_result_metadata(asyncmy_driver: AsyncmyDriver) -> None:
     assert empty_result.num_rows == 0
     assert empty_result.operation_type == "SELECT"
     assert len(empty_result.get_data()) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.xdist_group("mysql")
+async def test_asyncmy_sql_object_execution(asyncmy_driver: AsyncmyDriver) -> None:
+    """Test execution of SQL objects with CORE_ROUND_3 architecture."""
+    driver = asyncmy_driver
+
+    # Test SQL object with positional parameters
+    sql_obj = SQL("INSERT INTO test_table (name, value) VALUES (?, ?)", "sql_obj_test", 999)
+    result = await driver.execute(sql_obj)
+    assert isinstance(result, SQLResult)
+    assert result.num_rows == 1
+
+    # Verify the insert
+    verify_result = await driver.execute("SELECT name, value FROM test_table WHERE name = ?", ("sql_obj_test",))
+    assert len(verify_result.get_data()) == 1
+    assert verify_result.get_data()[0]["name"] == "sql_obj_test"
+    assert verify_result.get_data()[0]["value"] == 999
+
+    # Test SQL object for SELECT
+    select_sql = SQL("SELECT * FROM test_table WHERE value > ?", 500)
+    select_result = await driver.execute(select_sql)
+    assert isinstance(select_result, SQLResult)
+    assert select_result.num_rows >= 1
+    assert select_result.operation_type == "SELECT"

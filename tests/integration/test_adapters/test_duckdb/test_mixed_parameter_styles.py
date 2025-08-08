@@ -5,7 +5,7 @@ from collections.abc import Generator
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
-from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core.statement import SQL
 from tests.integration.test_adapters.test_duckdb.utils import get_unique_table_name
 
 
@@ -16,7 +16,7 @@ def duckdb_test_setup() -> Generator[tuple[DuckDBDriver, str], None, None]:
     Returns:
         A tuple of (session, table_name)
     """
-    config = DuckDBConfig(pool_config={"database": ":memory:shared_db"}, statement_config=StatementConfig())
+    config = DuckDBConfig(pool_config={"database": ":memory:shared_db"})
 
     # Generate unique table name for this test
     table_name = get_unique_table_name("test_table")

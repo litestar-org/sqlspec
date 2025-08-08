@@ -6,15 +6,10 @@ import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBConnection
 from sqlspec.core.result import SQLResult
-from sqlspec.core.statement import StatementConfig
 
 
 def create_permissive_config(**kwargs: Any) -> DuckDBConfig:
     """Create a DuckDB config with permissive SQL settings."""
-    statement_config = StatementConfig(enable_validation=False)
-    if "statement_config" not in kwargs:
-        kwargs["statement_config"] = statement_config
-
     connection_config = kwargs.pop("connection_config", {})
 
     for param in [
@@ -117,8 +112,7 @@ def test_connection_with_data_processing_settings() -> None:
 @pytest.mark.xdist_group("duckdb")
 def test_connection_with_instrumentation() -> None:
     """Test DuckDB connection with instrumentation configuration."""
-    statement_config = StatementConfig(enable_validation=False)
-    config = DuckDBConfig(pool_config={"database": ":memory:"}, statement_config=statement_config)
+    config = DuckDBConfig(pool_config={"database": ":memory:"})
 
     with config.provide_session() as session:
         result = session.execute("SELECT ? as test_value", (42))
@@ -136,11 +130,8 @@ def test_connection_with_hook() -> None:
         hook_executed = True
         conn.execute("SET threads = 1")
 
-    statement_config = StatementConfig(enable_validation=False)
     config = DuckDBConfig(
-        pool_config={"database": ":memory:"},
-        statement_config=statement_config,
-        driver_features={"on_connection_create": connection_hook},
+        pool_config={"database": ":memory:"}, driver_features={"on_connection_create": connection_hook}
     )
 
     with config.provide_session() as session:

@@ -35,8 +35,7 @@ async def test_async_driver_with_custom_config(mock_async_connection: MockAsyncC
     custom_config = StatementConfig(
         dialect="postgresql",
         parameter_config=ParameterStyleConfig(
-            default_parameter_style=ParameterStyle.NUMERIC,
-            supported_parameter_styles={ParameterStyle.NUMERIC},
+            default_parameter_style=ParameterStyle.NUMERIC, supported_parameter_styles={ParameterStyle.NUMERIC}
         ),
     )
 
@@ -124,7 +123,9 @@ async def test_async_driver_execute_many(mock_async_driver: MockAsyncDriver) -> 
 @pytest.mark.asyncio
 async def test_async_driver_execute_many_no_parameters(mock_async_driver: MockAsyncDriver) -> None:
     """Test async _execute_many method fails without parameters."""
-    statement = SQL("INSERT INTO users (name) VALUES (?)", statement_config=mock_async_driver.statement_config, is_many=True)
+    statement = SQL(
+        "INSERT INTO users (name) VALUES (?)", statement_config=mock_async_driver.statement_config, is_many=True
+    )
     cursor = mock_async_driver.with_cursor(mock_async_driver.connection)
 
     with pytest.raises(ValueError, match="execute_many requires parameters"):
@@ -389,16 +390,17 @@ async def test_async_driver_select_value_or_none_no_results(mock_async_driver: M
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("parameter_style,expected_style", [
-    pytest.param(ParameterStyle.QMARK, ParameterStyle.QMARK, id="qmark"),
-    pytest.param(ParameterStyle.NUMERIC, ParameterStyle.NUMERIC, id="numeric"),
-    pytest.param(ParameterStyle.NAMED_COLON, ParameterStyle.NAMED_COLON, id="named_colon"),
-    pytest.param(ParameterStyle.NAMED_PYFORMAT, ParameterStyle.NAMED_PYFORMAT, id="pyformat_named"),
-])
+@pytest.mark.parametrize(
+    "parameter_style,expected_style",
+    [
+        pytest.param(ParameterStyle.QMARK, ParameterStyle.QMARK, id="qmark"),
+        pytest.param(ParameterStyle.NUMERIC, ParameterStyle.NUMERIC, id="numeric"),
+        pytest.param(ParameterStyle.NAMED_COLON, ParameterStyle.NAMED_COLON, id="named_colon"),
+        pytest.param(ParameterStyle.NAMED_PYFORMAT, ParameterStyle.NAMED_PYFORMAT, id="pyformat_named"),
+    ],
+)
 async def test_async_driver_parameter_styles(
-    mock_async_connection: MockAsyncConnection,
-    parameter_style: ParameterStyle,
-    expected_style: ParameterStyle,
+    mock_async_connection: MockAsyncConnection, parameter_style: ParameterStyle, expected_style: ParameterStyle
 ) -> None:
     """Test different parameter styles are handled correctly in async driver."""
     config = StatementConfig(
@@ -435,8 +437,7 @@ async def test_async_driver_different_dialects(mock_async_connection: MockAsyncC
     config = StatementConfig(
         dialect=dialect,
         parameter_config=ParameterStyleConfig(
-            default_parameter_style=ParameterStyle.QMARK,
-            supported_parameter_styles={ParameterStyle.QMARK},
+            default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
         ),
     )
 
@@ -455,11 +456,7 @@ async def test_async_driver_create_execution_result(mock_async_driver: MockAsync
 
     # Test SELECT result
     result = mock_async_driver.create_execution_result(
-        cursor,
-        selected_data=[{"id": 1}, {"id": 2}],
-        column_names=["id"],
-        data_row_count=2,
-        is_select_result=True,
+        cursor, selected_data=[{"id": 1}, {"id": 2}], column_names=["id"], data_row_count=2, is_select_result=True
     )
 
     assert result.is_select_result is True
@@ -474,10 +471,7 @@ async def test_async_driver_create_execution_result(mock_async_driver: MockAsync
 
     # Test script result
     result = mock_async_driver.create_execution_result(
-        cursor,
-        statement_count=3,
-        successful_statements=3,
-        is_script_result=True,
+        cursor, statement_count=3, successful_statements=3, is_script_result=True
     )
     assert result.is_script_result is True
     assert result.statement_count == 3
@@ -492,11 +486,7 @@ async def test_async_driver_build_statement_result(mock_async_driver: MockAsyncD
 
     # Test SELECT result
     execution_result = mock_async_driver.create_execution_result(
-        cursor,
-        selected_data=[{"id": 1}],
-        column_names=["id"],
-        data_row_count=1,
-        is_select_result=True,
+        cursor, selected_data=[{"id": 1}], column_names=["id"], data_row_count=1, is_select_result=True
     )
 
     sql_result = mock_async_driver.build_statement_result(statement, execution_result)
@@ -506,12 +496,11 @@ async def test_async_driver_build_statement_result(mock_async_driver: MockAsyncD
     assert sql_result.column_names == ["id"]
 
     # Test script result
-    script_statement = SQL("INSERT INTO users (name) VALUES ('test');", statement_config=mock_async_driver.statement_config, is_script=True)
+    script_statement = SQL(
+        "INSERT INTO users (name) VALUES ('test');", statement_config=mock_async_driver.statement_config, is_script=True
+    )
     script_execution_result = mock_async_driver.create_execution_result(
-        cursor,
-        statement_count=1,
-        successful_statements=1,
-        is_script_result=True,
+        cursor, statement_count=1, successful_statements=1, is_script_result=True
     )
 
     script_sql_result = mock_async_driver.build_statement_result(script_statement, script_execution_result)
@@ -525,7 +514,9 @@ async def test_async_driver_special_handling_integration(mock_async_driver: Mock
     """Test that async _try_special_handling is called during dispatch."""
     statement = SQL("SELECT * FROM users", statement_config=mock_async_driver.statement_config)
 
-    with patch.object(mock_async_driver, "_try_special_handling", new_callable=AsyncMock, return_value=None) as mock_special:
+    with patch.object(
+        mock_async_driver, "_try_special_handling", new_callable=AsyncMock, return_value=None
+    ) as mock_special:
         result = await mock_async_driver.dispatch_statement_execution(statement, mock_async_driver.connection)
 
         assert isinstance(result, SQLResult)
@@ -538,7 +529,9 @@ async def test_async_driver_error_handling_in_dispatch(mock_async_driver: MockAs
     statement = SQL("SELECT * FROM users", statement_config=mock_async_driver.statement_config)
 
     # Mock an exception during execution
-    with patch.object(mock_async_driver, "_execute_statement", new_callable=AsyncMock, side_effect=ValueError("Test async error")):
+    with patch.object(
+        mock_async_driver, "_execute_statement", new_callable=AsyncMock, side_effect=ValueError("Test async error")
+    ):
         with pytest.raises(SQLSpecError, match="Mock async database error"):
             await mock_async_driver.dispatch_statement_execution(statement, mock_async_driver.connection)
 

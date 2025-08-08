@@ -1,7 +1,14 @@
 """Test parameter conversion and validation for AsyncMy driver.
 
 This test suite validates that the SQLTransformer properly converts different
-input parameter styles to the target QMARK format when necessary.
+input parameter styles to the target MySQL PYFORMAT style when necessary.
+
+AsyncMy Parameter Conversion Requirements:
+- Input: QMARK (?) -> Output: PYFORMAT (%s)
+- Input: NAMED (%(name)s) -> Output: PYFORMAT (%s)
+- Input: PYFORMAT (%s) -> Output: PYFORMAT (%s) (no conversion)
+
+This implements MySQL's 2-phase parameter processing with CORE_ROUND_3 architecture.
 """
 
 from collections.abc import AsyncGenerator
@@ -64,7 +71,7 @@ async def asyncmy_parameter_session(mysql_service: MySQLService) -> AsyncGenerat
 
 @pytest.mark.asyncio
 @pytest.mark.xdist_group("mysql")
-async def test_asyncmy_qmark_style_no_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_asyncmy_qmark_to_pyformat_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test that ? placeholders get converted to %s placeholders."""
     driver = asyncmy_parameter_session
 
@@ -81,7 +88,7 @@ async def test_asyncmy_qmark_style_no_conversion(asyncmy_parameter_session: Asyn
 
 @pytest.mark.asyncio
 @pytest.mark.xdist_group("mysql")
-async def test_asyncmy_pyformat_style_requires_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_asyncmy_pyformat_no_conversion_needed(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test that %s placeholders are used directly without conversion (native format)."""
     driver = asyncmy_parameter_session
 
@@ -101,7 +108,7 @@ async def test_asyncmy_pyformat_style_requires_conversion(asyncmy_parameter_sess
 
 @pytest.mark.asyncio
 @pytest.mark.xdist_group("mysql")
-async def test_asyncmy_named_pyformat_style_requires_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
+async def test_asyncmy_named_to_pyformat_conversion(asyncmy_parameter_session: AsyncmyDriver) -> None:
     """Test that %(name)s placeholders get converted to %s placeholders."""
     driver = asyncmy_parameter_session
 
@@ -186,7 +193,7 @@ async def test_asyncmy_execute_many_parameter_conversion(asyncmy_parameter_sessi
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
 
-    # Verify the data was inserted correctly
+    # Verify the data was inserted correctly with ? conversion
     verify_result = await driver.execute(
         "SELECT COUNT(*) as count FROM test_parameter_conversion WHERE name LIKE ?", ("batch%",)
     )
@@ -282,3 +289,84 @@ async def test_asyncmy_complex_query_parameter_conversion(asyncmy_parameter_sess
     assert result.data is not None
     assert result.data[0]["name"] == "complex2"
     assert result.data[0]["value"] == 250
+
+
+@pytest.mark.asyncio
+@pytest.mark.xdist_group("mysql")
+async def test_asyncmy_mysql_parameter_style_specifics(asyncmy_parameter_session: AsyncmyDriver) -> None:
+    """Test MySQL-specific parameter handling requirements."""
+    driver = asyncmy_parameter_session
+
+    # Test MySQL specific features with parameter conversion
+    # Test LIMIT with parameter conversion (? to %s)
+    result = await driver.execute("SELECT name, value FROM test_parameter_conversion ORDER BY value LIMIT ?", (2,))
+    assert result.rows_affected == 2
+    assert len(result.get_data()) == 2
+
+    # Test MySQL UNION with parameters
+    result2 = await driver.execute(
+        """
+        SELECT name FROM test_parameter_conversion WHERE value = ?
+        UNION
+        SELECT name FROM test_parameter_conversion WHERE value = ?
+        ORDER BY name
+        """,
+        (100, 200),
+    )
+    assert result2.rows_affected == 2
+
+    # Test MySQL specific REPLACE with parameter conversion
+    await driver.execute(
+        "REPLACE INTO test_parameter_conversion (id, name, value, description) VALUES (?, ?, ?, ?)",
+        (999, "replace_test", 888, "Replaced entry"),
+    )
+
+    # Verify REPLACE worked
+    verify_result = await driver.execute("SELECT name, value FROM test_parameter_conversion WHERE id = ?", (999,))
+    assert verify_result.data is not None
+    assert verify_result.data[0]["name"] == "replace_test"
+    assert verify_result.data[0]["value"] == 888
+
+
+@pytest.mark.asyncio
+@pytest.mark.xdist_group("mysql")
+async def test_asyncmy_2phase_parameter_processing(asyncmy_parameter_session: AsyncmyDriver) -> None:
+    """Test the 2-phase parameter processing system specific to AsyncMy/MySQL."""
+    driver = asyncmy_parameter_session
+
+    # Phase 1: Parse and identify parameter style
+    # Phase 2: Convert to MySQL's native PYFORMAT (%s) style
+
+    # Test mixed parameter styles in sequence to verify processing pipeline
+    test_cases = [
+        # (SQL with placeholders, params, expected_name, expected_value)
+        ("SELECT * FROM test_parameter_conversion WHERE name = ? AND value = ?", ("test1", 100), "test1", 100),
+        ("SELECT * FROM test_parameter_conversion WHERE name = %s AND value = %s", ("test2", 200), "test2", 200),
+        (
+            "SELECT * FROM test_parameter_conversion WHERE name = %(n)s AND value = %(v)s",
+            {"n": "test3", "v": 300},
+            "test3",
+            300,
+        ),
+    ]
+
+    for sql_text, params, expected_name, expected_value in test_cases:
+        result = await driver.execute(sql_text, params)
+        assert isinstance(result, SQLResult)
+        assert result.rows_affected == 1
+        assert result.data is not None
+        assert len(result.data) == 1
+        assert result.data[0]["name"] == expected_name
+        assert result.data[0]["value"] == expected_value
+
+    # Test that the parameter processing is consistent across all styles
+    consistent_results = []
+    for sql_text, params, _, _ in test_cases:
+        result = await driver.execute(
+            sql_text.replace("name = ", "name != ").replace("AND", "OR"),  # Modify to get all other records
+            params,
+        )
+        consistent_results.append(len(result.get_data()))
+
+    # All should return the same number of non-matching records (2 in this case)
+    assert all(count == consistent_results[0] for count in consistent_results)

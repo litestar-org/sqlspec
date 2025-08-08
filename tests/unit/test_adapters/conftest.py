@@ -201,8 +201,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
                 dialect="sqlite",
                 enable_caching=False,  # Disable caching to avoid hash issues
                 parameter_config=ParameterStyleConfig(
-                    default_parameter_style=ParameterStyle.QMARK,
-                    supported_parameter_styles={ParameterStyle.QMARK},
+                    default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
                 ),
             )
         super().__init__(connection, statement_config, driver_features)
@@ -239,11 +238,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
             data = [dict(zip(column_names, row)) for row in fetched_data]
 
             return self.create_execution_result(
-                cursor,
-                selected_data=data,
-                column_names=column_names,
-                data_row_count=len(data),
-                is_select_result=True,
+                cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
         return self.create_execution_result(cursor, rowcount_override=cursor.rowcount)
@@ -270,10 +265,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
             successful_count += 1
 
         return self.create_execution_result(
-            cursor,
-            statement_count=len(statements),
-            successful_statements=successful_count,
-            is_script_result=True,
+            cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
     def begin(self) -> None:
@@ -305,8 +297,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
                 dialect="sqlite",
                 enable_caching=False,  # Disable caching to avoid hash issues
                 parameter_config=ParameterStyleConfig(
-                    default_parameter_style=ParameterStyle.QMARK,
-                    supported_parameter_styles={ParameterStyle.QMARK},
+                    default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
                 ),
             )
         super().__init__(connection, statement_config, driver_features)
@@ -343,11 +334,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
             data = [dict(zip(column_names, row)) for row in fetched_data]
 
             return self.create_execution_result(
-                cursor,
-                selected_data=data,
-                column_names=column_names,
-                data_row_count=len(data),
-                is_select_result=True,
+                cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
         return self.create_execution_result(cursor, rowcount_override=cursor.rowcount)
@@ -374,10 +361,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
             successful_count += 1
 
         return self.create_execution_result(
-            cursor,
-            statement_count=len(statements),
-            successful_statements=successful_count,
-            is_script_result=True,
+            cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
     async def begin(self) -> None:

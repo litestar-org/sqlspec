@@ -28,6 +28,7 @@ from sqlspec.core.cache import CacheConfig
 
 # Cache Configuration Tests
 
+
 def test_get_cache_config_returns_default_configuration() -> None:
     """Test that get_cache_config returns default cache configuration."""
     config = SQLSpec.get_cache_config()
@@ -82,10 +83,7 @@ def test_configure_cache_partial_updates() -> None:
     original_config = SQLSpec.get_cache_config()
 
     try:
-        SQLSpec.configure_cache(
-            sql_cache_size=7500,
-            fragment_cache_enabled=False,
-        )
+        SQLSpec.configure_cache(sql_cache_size=7500, fragment_cache_enabled=False)
 
         updated_config = SQLSpec.get_cache_config()
         assert updated_config.sql_cache_size == 7500
@@ -143,6 +141,7 @@ def test_configure_cache_with_no_parameters_does_nothing() -> None:
 
 # Cache Statistics Tests
 
+
 def test_get_cache_stats_returns_statistics() -> None:
     """Test that get_cache_stats returns cache statistics."""
     stats = SQLSpec.get_cache_stats()
@@ -193,6 +192,7 @@ def test_log_cache_stats_logs_to_configured_logger() -> None:
 
 # Global State Propagation Tests
 
+
 @patch("sqlspec.core.cache.get_default_cache")
 @patch("sqlspec.core.cache.get_statement_cache")
 def test_update_cache_config_clears_all_caches(
@@ -238,6 +238,7 @@ def test_multiple_sqlspec_instances_share_cache_configuration() -> None:
 
 
 # Thread Safety Tests
+
 
 def test_concurrent_cache_config_access_is_thread_safe() -> None:
     """Test that concurrent access to cache configuration is thread-safe."""
@@ -286,9 +287,7 @@ def test_concurrent_cache_config_updates_are_atomic() -> None:
     try:
         # Run concurrent updates
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [
-                executor.submit(update_config_worker, 1000 + i) for i in range(5)
-            ]
+            futures = [executor.submit(update_config_worker, 1000 + i) for i in range(5)]
             concurrent.futures.wait(futures)
 
         # Assert no errors and all updates completed
@@ -329,6 +328,7 @@ def test_concurrent_statistics_access_is_thread_safe() -> None:
 
 # Default Configuration Tests
 
+
 def test_default_cache_configuration_values() -> None:
     """Test that default cache configuration has expected values."""
     # Reset to ensure we have fresh defaults
@@ -353,10 +353,7 @@ def test_cache_configuration_persistence_across_instances() -> None:
 
     try:
         # Modify configuration
-        test_config = CacheConfig(
-            sql_cache_size=12345,
-            fragment_cache_enabled=False,
-        )
+        test_config = CacheConfig(sql_cache_size=12345, fragment_cache_enabled=False)
         SQLSpec.update_cache_config(test_config)
 
         # Create new instance and verify it sees the same configuration
@@ -372,17 +369,14 @@ def test_cache_configuration_persistence_across_instances() -> None:
 
 # Configuration Validation Tests
 
+
 def test_cache_config_with_zero_sizes_is_allowed() -> None:
     """Test that cache configuration with zero sizes is allowed."""
     original_config = SQLSpec.get_cache_config()
 
     try:
         # Zero cache sizes should be allowed (disables caching)
-        config = CacheConfig(
-            sql_cache_size=0,
-            fragment_cache_size=0,
-            optimized_cache_size=0,
-        )
+        config = CacheConfig(sql_cache_size=0, fragment_cache_size=0, optimized_cache_size=0)
         SQLSpec.update_cache_config(config)
 
         updated_config = SQLSpec.get_cache_config()
@@ -400,11 +394,7 @@ def test_cache_config_with_negative_sizes_is_handled() -> None:
 
     try:
         # Negative sizes may be allowed (implementation dependent)
-        config = CacheConfig(
-            sql_cache_size=-1,
-            fragment_cache_size=-10,
-            optimized_cache_size=-100,
-        )
+        config = CacheConfig(sql_cache_size=-1, fragment_cache_size=-10, optimized_cache_size=-100)
 
         # Should not raise exception during configuration
         SQLSpec.update_cache_config(config)
@@ -426,11 +416,7 @@ def test_cache_config_with_very_large_sizes() -> None:
     try:
         # Very large cache sizes
         large_size = 10**9  # 1 billion entries
-        config = CacheConfig(
-            sql_cache_size=large_size,
-            fragment_cache_size=large_size,
-            optimized_cache_size=large_size,
-        )
+        config = CacheConfig(sql_cache_size=large_size, fragment_cache_size=large_size, optimized_cache_size=large_size)
 
         SQLSpec.update_cache_config(config)
         updated_config = SQLSpec.get_cache_config()
@@ -444,6 +430,7 @@ def test_cache_config_with_very_large_sizes() -> None:
 
 
 # Instance Configuration Tests
+
 
 def test_sqlspec_instances_use_same_global_cache_config() -> None:
     """Test that all SQLSpec instances use the same global cache configuration."""
@@ -487,6 +474,7 @@ def test_instance_cache_config_state_isolation() -> None:
 
 # Cache Management Integration Tests
 
+
 def test_cache_configuration_affects_cache_clearing() -> None:
     """Test that cache configuration changes trigger cache clearing."""
     original_config = SQLSpec.get_cache_config()
@@ -512,10 +500,7 @@ def test_cache_configuration_logging_integration(mock_get_logger: MagicMock) -> 
     original_config = SQLSpec.get_cache_config()
 
     try:
-        new_config = CacheConfig(
-            sql_cache_size=3333,
-            fragment_cache_enabled=False,
-        )
+        new_config = CacheConfig(sql_cache_size=3333, fragment_cache_enabled=False)
         SQLSpec.update_cache_config(new_config)
 
         # Should log configuration changes
@@ -552,9 +537,7 @@ def test_cache_configuration_size_scenarios(
     try:
         # Act
         config = CacheConfig(
-            sql_cache_size=sql_size,
-            fragment_cache_size=fragment_size,
-            optimized_cache_size=optimized_size,
+            sql_cache_size=sql_size, fragment_cache_size=fragment_size, optimized_cache_size=optimized_size
         )
         SQLSpec.update_cache_config(config)
 
@@ -613,6 +596,7 @@ def test_cache_configuration_enable_scenarios(
 
 # Edge case and stress tests
 # Edge Cases and Stress Tests
+
 
 def test_rapid_configuration_changes() -> None:
     """Test rapid successive configuration changes."""
@@ -676,9 +660,9 @@ def test_logging_during_concurrent_operations() -> None:
 
     # Run concurrent operations
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        futures = [
-            executor.submit(log_stats_worker) for _ in range(2)
-        ] + [executor.submit(config_update_worker) for _ in range(2)]
+        futures = [executor.submit(log_stats_worker) for _ in range(2)] + [
+            executor.submit(config_update_worker) for _ in range(2)
+        ]
         concurrent.futures.wait(futures)
 
     # Assert no errors occurred during concurrent operations

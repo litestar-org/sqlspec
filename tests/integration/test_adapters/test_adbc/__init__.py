@@ -1,5 +1,1 @@
-"""Tests for ADBC adapter with PostgreSQL."""
-
-import pytest
-
-pytestmark = pytest.mark.adbc
+"""ADBC adapter integration tests for CORE_ROUND_3 architecture."""

@@ -6,13 +6,12 @@ import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
 from sqlspec.core.result import SQLResult
-from sqlspec.core.statement import StatementConfig
 
 
 @pytest.fixture
 def duckdb_batch_session() -> "Generator[DuckDBDriver, None, None]":
     """Create a DuckDB session for batch operation testing."""
-    config = DuckDBConfig(pool_config={"database": ":memory:"}, statement_config=StatementConfig())
+    config = DuckDBConfig(pool_config={"database": ":memory:"})
 
     with config.provide_session() as session:
         # Create test table

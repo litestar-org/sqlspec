@@ -45,6 +45,7 @@ from sqlspec.exceptions import (
 
 # Base Exception Tests
 
+
 def test_sqlspec_error_basic_initialization() -> None:
     """Test SQLSpecError basic initialization."""
     error = SQLSpecError("Test message")
@@ -106,6 +107,7 @@ def test_sqlspec_error_detail_from_args() -> None:
 
 # Risk Level Tests
 
+
 def test_risk_level_string_representation() -> None:
     """Test RiskLevel string conversion."""
     assert str(RiskLevel.SKIP) == "skip"
@@ -148,6 +150,7 @@ def test_risk_level_ordering_with_non_risk_level() -> None:
 
 # Missing Dependency Error Tests
 
+
 def test_missing_dependency_error_basic() -> None:
     """Test MissingDependencyError basic functionality."""
     error = MissingDependencyError("redis")
@@ -176,6 +179,7 @@ def test_missing_dependency_error_inheritance() -> None:
 
 # Backend Registration Error Tests
 
+
 def test_backend_not_registered_error() -> None:
     """Test BackendNotRegisteredError functionality."""
     error = BackendNotRegisteredError("s3")
@@ -186,6 +190,7 @@ def test_backend_not_registered_error() -> None:
 
 
 # SQL Loading Error Tests
+
 
 def test_sql_loading_error_default_message() -> None:
     """Test SQLLoadingError with default message."""
@@ -202,6 +207,7 @@ def test_sql_loading_error_custom_message() -> None:
 
 # SQL Parsing Error Tests
 
+
 def test_sql_parsing_error_default_message() -> None:
     """Test SQLParsingError with default message."""
     error = SQLParsingError()
@@ -216,6 +222,7 @@ def test_sql_parsing_error_custom_message() -> None:
 
 
 # SQL File Parsing Error Tests
+
 
 def test_sql_file_parsing_error_default_message() -> None:
     """Test SQLFileParsingError with default message."""
@@ -232,6 +239,7 @@ def test_sql_file_parsing_error_custom_message() -> None:
 
 # SQL Builder Error Tests
 
+
 def test_sql_builder_error_default_message() -> None:
     """Test SQLBuilderError with default message."""
     error = SQLBuilderError()
@@ -246,6 +254,7 @@ def test_sql_builder_error_custom_message() -> None:
 
 
 # SQL Compilation Error Tests
+
 
 def test_sql_compilation_error_default_message() -> None:
     """Test SQLCompilationError with default message."""
@@ -262,6 +271,7 @@ def test_sql_compilation_error_custom_message() -> None:
 
 # SQL Conversion Error Tests
 
+
 def test_sql_conversion_error_default_message() -> None:
     """Test SQLConversionError with default message."""
     error = SQLConversionError()
@@ -276,6 +286,7 @@ def test_sql_conversion_error_custom_message() -> None:
 
 
 # SQL Validation Error Tests
+
 
 def test_sql_validation_error_basic() -> None:
     """Test SQLValidationError basic functionality."""
@@ -310,6 +321,7 @@ def test_sql_validation_error_inheritance() -> None:
 
 # SQL Transformation Error Tests
 
+
 def test_sql_transformation_error_basic() -> None:
     """Test SQLTransformationError basic functionality."""
     error = SQLTransformationError("Transformation failed")
@@ -335,6 +347,7 @@ def test_sql_transformation_error_inheritance() -> None:
 
 
 # SQL Injection Error Tests
+
 
 def test_sql_injection_error_basic() -> None:
     """Test SQLInjectionError basic functionality."""
@@ -372,6 +385,7 @@ def test_sql_injection_error_inheritance() -> None:
 
 # Unsafe SQL Error Tests
 
+
 def test_unsafe_sql_error_basic() -> None:
     """Test UnsafeSQLError basic functionality."""
     error = UnsafeSQLError("Unsafe construct detected")
@@ -397,6 +411,7 @@ def test_unsafe_sql_error_inheritance() -> None:
 
 
 # Parameter Error Tests
+
 
 def test_parameter_error_basic() -> None:
     """Test ParameterError basic functionality."""
@@ -439,6 +454,7 @@ def test_extra_parameter_error() -> None:
 
 # Parameter Style Mismatch Error Tests
 
+
 def test_parameter_style_mismatch_error_default_message() -> None:
     """Test ParameterStyleMismatchError with default message."""
     error = ParameterStyleMismatchError()
@@ -465,6 +481,7 @@ def test_parameter_style_mismatch_error_with_sql() -> None:
 
 
 # Repository Error Hierarchy Tests
+
 
 def test_query_error_inheritance() -> None:
     """Test QueryError inherits from SQLSpecError."""
@@ -503,6 +520,7 @@ def test_multiple_results_found_error_inheritance() -> None:
 
 # Configuration and Serialization Error Tests
 
+
 def test_improper_configuration_error() -> None:
     """Test ImproperConfigurationError inheritance."""
     error = ImproperConfigurationError("Bad config")
@@ -516,6 +534,7 @@ def test_serialization_error() -> None:
 
 
 # Storage Error Tests
+
 
 def test_storage_operation_failed_error() -> None:
     """Test StorageOperationFailedError inheritance."""
@@ -531,6 +550,7 @@ def test_file_not_found_in_storage_error() -> None:
 
 
 # SQL File Error Tests
+
 
 def test_sql_file_not_found_error_basic() -> None:
     """Test SQLFileNotFoundError basic functionality."""
@@ -576,6 +596,7 @@ def test_sql_file_parse_error() -> None:
 
 # Pipeline Execution Error Tests
 
+
 def test_pipeline_execution_error_basic() -> None:
     """Test PipelineExecutionError basic functionality."""
     error = PipelineExecutionError("Pipeline failed")
@@ -618,6 +639,7 @@ def test_pipeline_execution_error_with_all_params() -> None:
 
 def test_pipeline_execution_error_get_failed_sql() -> None:
     """Test PipelineExecutionError get_failed_sql method."""
+
     class MockOperation:
         def __init__(self) -> None:
             self.sql = MockSQL()
@@ -641,6 +663,7 @@ def test_pipeline_execution_error_get_failed_sql_no_operation() -> None:
 
 def test_pipeline_execution_error_get_failed_sql_no_sql_attr() -> None:
     """Test PipelineExecutionError get_failed_sql with operation without sql."""
+
     class MockOperation:
         def __init__(self) -> None:
             pass  # No sql attribute
@@ -652,6 +675,7 @@ def test_pipeline_execution_error_get_failed_sql_no_sql_attr() -> None:
 
 def test_pipeline_execution_error_get_failed_parameters() -> None:
     """Test PipelineExecutionError get_failed_parameters method."""
+
     class MockOperation:
         def __init__(self) -> None:
             self.original_parameters = {"id": 1, "name": "test"}
@@ -671,6 +695,7 @@ def test_pipeline_execution_error_get_failed_parameters_no_operation() -> None:
 
 def test_pipeline_execution_error_get_failed_parameters_no_params_attr() -> None:
     """Test PipelineExecutionError get_failed_parameters with operation without params."""
+
     class MockOperation:
         def __init__(self) -> None:
             pass  # No original_parameters attribute
@@ -687,6 +712,7 @@ def test_pipeline_execution_error_inheritance() -> None:
 
 
 # Exception Wrapping Context Manager Tests
+
 
 def test_wrap_exceptions_no_exception() -> None:
     """Test wrap_exceptions context manager when no exception occurs."""
@@ -764,6 +790,7 @@ def test_wrap_exceptions_chaining() -> None:
 
 # Error Message Formatting Tests
 
+
 @pytest.mark.parametrize(
     "error_class,args,expected_parts",
     [
@@ -801,6 +828,7 @@ def test_error_message_formatting(
 
 
 # Exception Hierarchy Validation Tests
+
 
 def test_exception_hierarchy_validation() -> None:
     """Test that all custom exceptions properly inherit from SQLSpecError."""
@@ -842,6 +870,7 @@ def test_exception_hierarchy_validation() -> None:
 
 # Edge Cases and Error Conditions
 
+
 def test_sql_validation_error_empty_message() -> None:
     """Test SQLValidationError with empty message."""
     error = SQLValidationError("")
@@ -865,6 +894,7 @@ def test_pipeline_execution_error_empty_partial_results() -> None:
 
 def test_complex_exception_chaining() -> None:
     """Test complex exception chaining scenarios."""
+
     def raise_original() -> None:
         raise ValueError("Original error")
 

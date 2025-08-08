@@ -35,6 +35,7 @@ from sqlspec.utils.text import camelize, check_email, slugify, snake_case
 
 # Text Utility Tests
 
+
 def test_check_email_valid() -> None:
     """Test check_email with valid email addresses."""
     assert check_email("test@example.com") == "test@example.com"
@@ -187,6 +188,7 @@ def test_snake_case_caching() -> None:
 
 # Module Loader Tests
 
+
 def test_import_string_basic_module() -> None:
     """Test import_string with basic module import."""
     sys_module = import_string("sys")
@@ -263,6 +265,7 @@ def test_module_to_os_path_file_module() -> None:
 
 # Singleton Pattern Tests
 
+
 class SingletonTestClass(metaclass=SingletonMeta):
     """Test singleton class."""
 
@@ -335,6 +338,7 @@ def test_singleton_with_args() -> None:
 
 
 # Deprecation Tests
+
 
 def test_warn_deprecation_basic() -> None:
     """Test basic deprecation warning."""
@@ -409,6 +413,7 @@ def test_warn_deprecation_kinds(kind: str, expected_prefix: str) -> None:
 
 def test_deprecated_decorator_basic() -> None:
     """Test deprecated decorator basic functionality."""
+
     @deprecated(version="1.0.0")
     def test_function() -> str:
         return "result"
@@ -424,6 +429,7 @@ def test_deprecated_decorator_basic() -> None:
 
 def test_deprecated_decorator_preserves_metadata() -> None:
     """Test deprecated decorator preserves function metadata."""
+
     @deprecated(version="1.0.0")
     def documented_function(param: int) -> str:
         """Test docstring.
@@ -442,6 +448,7 @@ def test_deprecated_decorator_preserves_metadata() -> None:
 
 def test_deprecated_decorator_with_exception() -> None:
     """Test deprecated decorator works when decorated function raises."""
+
     @deprecated(version="1.0.0")
     def failing_function() -> None:
         raise ValueError("Test error")
@@ -457,6 +464,7 @@ def test_deprecated_decorator_with_exception() -> None:
 
 
 # Sync Tools Tests
+
 
 def test_capacity_limiter_basic() -> None:
     """Test CapacityLimiter basic functionality."""
@@ -498,6 +506,7 @@ async def test_capacity_limiter_acquire_release() -> None:
 
 def test_run_basic() -> None:
     """Test run_ decorator basic functionality."""
+
     @run_
     async def async_function(x: int) -> int:
         return x * 2
@@ -508,6 +517,7 @@ def test_run_basic() -> None:
 
 def test_run_with_exception() -> None:
     """Test run_ decorator with exception."""
+
     @run_
     async def async_failing_function() -> None:
         raise ValueError("Async error")
@@ -518,6 +528,7 @@ def test_run_with_exception() -> None:
 
 def test_await_basic() -> None:
     """Test await_ decorator basic functionality."""
+
     async def async_function(x: int) -> int:
         return x * 3
 
@@ -528,6 +539,7 @@ def test_await_basic() -> None:
 
 def test_await_sync_error() -> None:
     """Test await_ decorator raises error when no loop and raise_sync_error=True."""
+
     async def async_function() -> int:
         return 42
 
@@ -549,6 +561,7 @@ def test_await_sync_error() -> None:
 @pytest.mark.asyncio
 async def test_async_basic() -> None:
     """Test async_ decorator basic functionality."""
+
     def sync_function(x: int) -> int:
         return x * 4
 
@@ -573,6 +586,7 @@ async def test_async_with_limiter() -> None:
 @pytest.mark.asyncio
 async def test_ensure_async_with_async_function() -> None:
     """Test ensure_async_ with already async function."""
+
     async def already_async(x: int) -> int:
         return x * 6
 
@@ -584,6 +598,7 @@ async def test_ensure_async_with_async_function() -> None:
 @pytest.mark.asyncio
 async def test_ensure_async_with_sync_function() -> None:
     """Test ensure_async_ with sync function."""
+
     def sync_function(x: int) -> int:
         return x * 7
 
@@ -595,6 +610,7 @@ async def test_ensure_async_with_sync_function() -> None:
 @pytest.mark.asyncio
 async def test_with_ensure_async_context_manager() -> None:
     """Test with_ensure_async_ with sync context manager."""
+
     class SyncContextManager:
         def __init__(self) -> None:
             self.entered = False
@@ -620,6 +636,7 @@ async def test_with_ensure_async_context_manager() -> None:
 @pytest.mark.asyncio
 async def test_with_ensure_async_async_context_manager() -> None:
     """Test with_ensure_async_ with already async context manager."""
+
     class AsyncContextManager:
         def __init__(self) -> None:
             self.entered = False
@@ -645,6 +662,7 @@ async def test_with_ensure_async_async_context_manager() -> None:
 @pytest.mark.asyncio
 async def test_get_next_basic() -> None:
     """Test get_next with async iterator."""
+
     class AsyncIterator:
         def __init__(self, items: list[int]) -> None:
             self.items = items
@@ -672,6 +690,7 @@ async def test_get_next_basic() -> None:
 @pytest.mark.asyncio
 async def test_get_next_with_default() -> None:
     """Test get_next with default value when iterator is exhausted."""
+
     class EmptyAsyncIterator:
         async def __anext__(self) -> int:
             raise StopAsyncIteration
@@ -685,6 +704,7 @@ async def test_get_next_with_default() -> None:
 @pytest.mark.asyncio
 async def test_get_next_no_default_behavior() -> None:
     """Test get_next behavior when iterator is exhausted without default."""
+
     class EmptyAsyncIterator:
         async def __anext__(self) -> int:
             raise StopAsyncIteration
@@ -714,6 +734,7 @@ def test_no_value_class() -> None:
 
 # Fixtures Tests
 
+
 def test_open_fixture_valid_file() -> None:
     """Test open_fixture with valid JSON fixture file."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -724,6 +745,7 @@ def test_open_fixture_valid_file() -> None:
         test_data = {"name": "test", "value": 42, "items": [1, 2, 3]}
         with fixture_file.open("w") as f:
             import json
+
             json.dump(test_data, f)
 
         result = open_fixture(fixtures_path, "test_fixture")
@@ -759,6 +781,7 @@ async def test_open_fixture_async_missing_anyio() -> None:
     """Test open_fixture_async raises error when anyio not available."""
     # Test by patching the import statement inside the function
     import builtins
+
     original_import = builtins.__import__
 
     def mock_import(name: str, *args: Any, **kwargs: Any) -> Any:
@@ -772,6 +795,7 @@ async def test_open_fixture_async_missing_anyio() -> None:
 
 
 # Edge Cases and Integration Tests
+
 
 def test_text_utilities_integration() -> None:
     """Test integration of text utilities."""
@@ -808,6 +832,7 @@ def test_singleton_metaclass_edge_cases() -> None:
 
 def test_sync_tools_error_handling() -> None:
     """Test sync tools handle errors appropriately."""
+
     @run_
     async def async_function_with_error() -> None:
         raise RuntimeError("Async runtime error")
@@ -841,9 +866,7 @@ def test_sync_tools_error_handling() -> None:
         "three_chars",
     ],
 )
-def test_text_transformations_parametrized(
-    input_string: str, expected_snake: str, expected_camel: str
-) -> None:
+def test_text_transformations_parametrized(input_string: str, expected_snake: str, expected_camel: str) -> None:
     """Test various text transformations with parametrized inputs."""
     assert snake_case(input_string) == expected_snake
 
@@ -888,9 +911,10 @@ def test_complex_module_import_scenarios() -> None:
 @pytest.mark.asyncio
 async def test_async_tools_comprehensive() -> None:
     """Test async tools work together comprehensively."""
+
     # Test combining multiple async utilities
     def blocking_operation(x: int) -> int:
-        return x ** 2
+        return x**2
 
     async_op = async_(blocking_operation)
 
@@ -901,7 +925,7 @@ async def test_async_tools_comprehensive() -> None:
     tasks = [async_op(i) for i in range(5)]
     results = await asyncio.gather(*tasks)
 
-    expected = [i ** 2 for i in range(5)]
+    expected = [i**2 for i in range(5)]
     assert results == expected
 
 

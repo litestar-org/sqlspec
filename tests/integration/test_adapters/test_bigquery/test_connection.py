@@ -1,4 +1,4 @@
-from __future__ import annotations
+"""BigQuery connection tests with CORE_ROUND_3 architecture."""
 
 import pytest
 

@@ -33,8 +33,7 @@ def test_sync_driver_with_custom_config(mock_sync_connection: MockSyncConnection
     custom_config = StatementConfig(
         dialect="postgresql",
         parameter_config=ParameterStyleConfig(
-            default_parameter_style=ParameterStyle.NUMERIC,
-            supported_parameter_styles={ParameterStyle.NUMERIC},
+            default_parameter_style=ParameterStyle.NUMERIC, supported_parameter_styles={ParameterStyle.NUMERIC}
         ),
     )
 
@@ -116,7 +115,9 @@ def test_sync_driver_execute_many(mock_sync_driver: MockSyncDriver) -> None:
 
 def test_sync_driver_execute_many_no_parameters(mock_sync_driver: MockSyncDriver) -> None:
     """Test _execute_many method fails without parameters."""
-    statement = SQL("INSERT INTO users (name) VALUES (?)", statement_config=mock_sync_driver.statement_config, is_many=True)
+    statement = SQL(
+        "INSERT INTO users (name) VALUES (?)", statement_config=mock_sync_driver.statement_config, is_many=True
+    )
     cursor = mock_sync_driver.with_cursor(mock_sync_driver.connection)
 
     with pytest.raises(ValueError, match="execute_many requires parameters"):
@@ -360,16 +361,17 @@ def test_sync_driver_select_value_or_none_no_results(mock_sync_driver: MockSyncD
         assert result is None
 
 
-@pytest.mark.parametrize("parameter_style,expected_style", [
-    pytest.param(ParameterStyle.QMARK, ParameterStyle.QMARK, id="qmark"),
-    pytest.param(ParameterStyle.NUMERIC, ParameterStyle.NUMERIC, id="numeric"),
-    pytest.param(ParameterStyle.NAMED_COLON, ParameterStyle.NAMED_COLON, id="named_colon"),
-    pytest.param(ParameterStyle.NAMED_PYFORMAT, ParameterStyle.NAMED_PYFORMAT, id="pyformat_named"),
-])
+@pytest.mark.parametrize(
+    "parameter_style,expected_style",
+    [
+        pytest.param(ParameterStyle.QMARK, ParameterStyle.QMARK, id="qmark"),
+        pytest.param(ParameterStyle.NUMERIC, ParameterStyle.NUMERIC, id="numeric"),
+        pytest.param(ParameterStyle.NAMED_COLON, ParameterStyle.NAMED_COLON, id="named_colon"),
+        pytest.param(ParameterStyle.NAMED_PYFORMAT, ParameterStyle.NAMED_PYFORMAT, id="pyformat_named"),
+    ],
+)
 def test_sync_driver_parameter_styles(
-    mock_sync_connection: MockSyncConnection,
-    parameter_style: ParameterStyle,
-    expected_style: ParameterStyle,
+    mock_sync_connection: MockSyncConnection, parameter_style: ParameterStyle, expected_style: ParameterStyle
 ) -> None:
     """Test different parameter styles are handled correctly."""
     config = StatementConfig(
@@ -405,8 +407,7 @@ def test_sync_driver_different_dialects(mock_sync_connection: MockSyncConnection
     config = StatementConfig(
         dialect=dialect,
         parameter_config=ParameterStyleConfig(
-            default_parameter_style=ParameterStyle.QMARK,
-            supported_parameter_styles={ParameterStyle.QMARK},
+            default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
         ),
     )
 
@@ -424,11 +425,7 @@ def test_sync_driver_create_execution_result(mock_sync_driver: MockSyncDriver) -
 
     # Test SELECT result
     result = mock_sync_driver.create_execution_result(
-        cursor,
-        selected_data=[{"id": 1}, {"id": 2}],
-        column_names=["id"],
-        data_row_count=2,
-        is_select_result=True,
+        cursor, selected_data=[{"id": 1}, {"id": 2}], column_names=["id"], data_row_count=2, is_select_result=True
     )
 
     assert result.is_select_result is True
@@ -443,10 +440,7 @@ def test_sync_driver_create_execution_result(mock_sync_driver: MockSyncDriver) -
 
     # Test script result
     result = mock_sync_driver.create_execution_result(
-        cursor,
-        statement_count=3,
-        successful_statements=3,
-        is_script_result=True,
+        cursor, statement_count=3, successful_statements=3, is_script_result=True
     )
     assert result.is_script_result is True
     assert result.statement_count == 3
@@ -460,11 +454,7 @@ def test_sync_driver_build_statement_result(mock_sync_driver: MockSyncDriver) ->
 
     # Test SELECT result
     execution_result = mock_sync_driver.create_execution_result(
-        cursor,
-        selected_data=[{"id": 1}],
-        column_names=["id"],
-        data_row_count=1,
-        is_select_result=True,
+        cursor, selected_data=[{"id": 1}], column_names=["id"], data_row_count=1, is_select_result=True
     )
 
     sql_result = mock_sync_driver.build_statement_result(statement, execution_result)
@@ -474,12 +464,11 @@ def test_sync_driver_build_statement_result(mock_sync_driver: MockSyncDriver) ->
     assert sql_result.column_names == ["id"]
 
     # Test script result
-    script_statement = SQL("INSERT INTO users (name) VALUES ('test');", statement_config=mock_sync_driver.statement_config, is_script=True)
+    script_statement = SQL(
+        "INSERT INTO users (name) VALUES ('test');", statement_config=mock_sync_driver.statement_config, is_script=True
+    )
     script_execution_result = mock_sync_driver.create_execution_result(
-        cursor,
-        statement_count=1,
-        successful_statements=1,
-        is_script_result=True,
+        cursor, statement_count=1, successful_statements=1, is_script_result=True
     )
 
     script_sql_result = mock_sync_driver.build_statement_result(script_statement, script_execution_result)

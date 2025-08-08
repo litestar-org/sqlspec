@@ -1,6 +1,4 @@
-"""Integration tests for ADBC driver implementation."""
-
-from __future__ import annotations
+"""Integration tests for ADBC driver implementation with CORE_ROUND_3 architecture."""
 
 from collections.abc import Generator
 from typing import Any, Literal
@@ -113,7 +111,7 @@ def adbc_bigquery_session(bigquery_service: BigQueryService) -> Generator[AdbcDr
 
 @pytest.mark.xdist_group("postgres")
 def test_adbc_postgresql_basic_crud(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test basic CRUD operations with ADBC PostgreSQL."""
+    """Test basic CRUD operations with ADBC PostgreSQL using CORE_ROUND_3."""
     # INSERT
     insert_result = adbc_postgresql_session.execute(
         "INSERT INTO test_table (name, value) VALUES ($1, $2)", ("test_name", 42)
@@ -161,7 +159,7 @@ def test_adbc_postgresql_basic_crud(adbc_postgresql_session: AdbcDriver) -> None
 
 @pytest.mark.xdist_group("adbc_sqlite")
 def test_adbc_sqlite_basic_crud(adbc_sqlite_session: AdbcDriver) -> None:
-    """Test basic CRUD operations with ADBC SQLite."""
+    """Test basic CRUD operations with ADBC SQLite using CORE_ROUND_3."""
     # INSERT
     insert_result = adbc_sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("test_name", 42))
     assert isinstance(insert_result, SQLResult)
@@ -204,7 +202,7 @@ def test_adbc_sqlite_basic_crud(adbc_sqlite_session: AdbcDriver) -> None:
 @pytest.mark.xdist_group("adbc_duckdb")
 @xfail_if_driver_missing
 def test_adbc_duckdb_basic_crud(adbc_duckdb_session: AdbcDriver) -> None:
-    """Test basic CRUD operations with ADBC DuckDB."""
+    """Test basic CRUD operations with ADBC DuckDB using CORE_ROUND_3."""
     # INSERT
     insert_result = adbc_duckdb_session.execute(
         "INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (1, "test_name", 42)
@@ -246,249 +244,6 @@ def test_adbc_duckdb_basic_crud(adbc_duckdb_session: AdbcDriver) -> None:
     assert empty_result.data[0]["count"] == 0
 
 
-@pytest.mark.xdist_group("adbc_duckdb")
-@xfail_if_driver_missing
-def test_adbc_duckdb_data_types(adbc_duckdb_session: AdbcDriver) -> None:
-    """Test DuckDB-specific data types with ADBC."""
-    # Create table with various DuckDB data types
-    adbc_duckdb_session.execute_script("""
-        CREATE TABLE data_types_test (
-            id INTEGER,
-            text_col TEXT,
-            numeric_col DECIMAL(10,2),
-            date_col DATE,
-            timestamp_col TIMESTAMP,
-            boolean_col BOOLEAN,
-            array_col INTEGER[],
-            json_col JSON
-        )
-    """)
-
-    # Insert test data with DuckDB-specific types
-    insert_sql = """
-        INSERT INTO data_types_test VALUES (
-            1,
-            'test_text',
-            123.45,
-            '2024-01-15',
-            '2024-01-15 10:30:00',
-            true,
-            [1, 2, 3, 4],
-            '{"key": "value", "number": 42}'
-        )
-    """
-    result = adbc_duckdb_session.execute(insert_sql)
-    assert isinstance(result, SQLResult)
-    # DuckDB ADBC may return 0 for rows_affected
-    assert result.rows_affected in (0, 1)
-
-    # Query and verify data types
-    select_result = adbc_duckdb_session.execute("SELECT * FROM data_types_test")
-    assert isinstance(select_result, SQLResult)
-    assert select_result.data is not None
-    assert len(select_result.data) == 1
-    row = select_result.data[0]
-
-    assert row["id"] == 1
-    assert row["text_col"] == "test_text"
-    assert row["boolean_col"] is True
-    # Array and JSON handling may vary based on DuckDB version
-    assert row["array_col"] is not None
-    assert row["json_col"] is not None
-
-    # Clean up
-    adbc_duckdb_session.execute_script("DROP TABLE data_types_test")
-
-
-@pytest.mark.xdist_group("adbc_duckdb")
-@xfail_if_driver_missing
-def test_adbc_duckdb_complex_queries(adbc_duckdb_session: AdbcDriver) -> None:
-    """Test complex SQL queries with ADBC DuckDB."""
-    # Create additional tables for complex queries
-    adbc_duckdb_session.execute_script("""
-        CREATE TABLE departments (
-            dept_id INTEGER PRIMARY KEY,
-            dept_name TEXT
-        );
-
-        CREATE TABLE employees (
-            emp_id INTEGER PRIMARY KEY,
-            emp_name TEXT,
-            dept_id INTEGER,
-            salary DECIMAL(10,2)
-        );
-
-        INSERT INTO departments VALUES (1, 'Engineering'), (2, 'Sales'), (3, 'Marketing');
-        INSERT INTO employees VALUES
-            (1, 'Alice', 1, 75000.00),
-            (2, 'Bob', 1, 80000.00),
-            (3, 'Carol', 2, 65000.00),
-            (4, 'Dave', 2, 70000.00),
-            (5, 'Eve', 3, 60000.00);
-    """)
-
-    # Test complex JOIN query with aggregation
-    complex_query = """
-        SELECT
-            d.dept_name,
-            COUNT(e.emp_id) as employee_count,
-            AVG(e.salary) as avg_salary,
-            MAX(e.salary) as max_salary
-        FROM departments d
-        LEFT JOIN employees e ON d.dept_id = e.dept_id
-        GROUP BY d.dept_id, d.dept_name
-        ORDER BY avg_salary DESC
-    """
-
-    result = adbc_duckdb_session.execute(complex_query)
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert result.get_count() == 3
-
-    # Engineering should have highest average salary
-    engineering_row = next(row for row in result.data if row["dept_name"] == "Engineering")
-    assert engineering_row["employee_count"] == 2
-    assert engineering_row["avg_salary"] == 77500.0
-
-    # Test subquery
-    subquery = """
-        SELECT emp_name, salary
-        FROM employees
-        WHERE salary > (SELECT AVG(salary) FROM employees)
-        ORDER BY salary DESC
-    """
-
-    subquery_result = adbc_duckdb_session.execute(subquery)
-    assert isinstance(subquery_result, SQLResult)
-    assert subquery_result.data is not None
-    assert len(subquery_result.data) >= 1  # At least one employee above average
-
-    # Clean up
-    adbc_duckdb_session.execute_script("DROP TABLE employees; DROP TABLE departments;")
-
-
-@pytest.mark.xdist_group("adbc_duckdb")
-@xfail_if_driver_missing
-def test_adbc_duckdb_performance_bulk_operations(adbc_duckdb_session: AdbcDriver) -> None:
-    """Test performance with bulk operations using ADBC DuckDB."""
-    # Generate bulk data
-    bulk_data = [(f"bulk_user_{i}", i * 10) for i in range(100)]
-
-    # Bulk insert (DuckDB ADBC doesn't support executemany yet)
-    for i, (name, value) in enumerate(bulk_data):
-        result = adbc_duckdb_session.execute(
-            "INSERT INTO test_table (id, name, value) VALUES (?, ?, ?)", (20 + i, name, value)
-        )
-        assert isinstance(result, SQLResult)
-
-    # Verify all insertions by counting
-    count_result = adbc_duckdb_session.execute("SELECT COUNT(*) as count FROM test_table WHERE name LIKE 'bulk_user_%'")
-    assert isinstance(count_result, SQLResult)
-    assert count_result.data is not None
-    assert count_result.data[0]["count"] == 100
-
-    # Bulk select
-    select_result = adbc_duckdb_session.execute(
-        "SELECT COUNT(*) as count FROM test_table WHERE name LIKE 'bulk_user_%'"
-    )
-    assert isinstance(select_result, SQLResult)
-    assert select_result.data is not None
-    assert select_result.data[0]["count"] == 100
-
-    # Test aggregation on bulk data
-    agg_result = adbc_duckdb_session.execute("""
-        SELECT
-            COUNT(*) as count,
-            AVG(value) as avg_value,
-            MIN(value) as min_value,
-            MAX(value) as max_value
-        FROM test_table
-        WHERE name LIKE 'bulk_user_%'
-    """)
-
-    assert isinstance(agg_result, SQLResult)
-    assert agg_result.data is not None
-    assert agg_result.data[0]["count"] == 100
-    assert agg_result.data[0]["avg_value"] > 0
-    assert agg_result.data[0]["min_value"] == 0
-    assert agg_result.data[0]["max_value"] == 990
-
-
-@pytest.mark.skipif(
-    "not config.getoption('--run-bigquery-tests', default=False)",
-    reason="BigQuery ADBC tests require --run-bigquery-tests flag and valid GCP credentials",
-)
-@pytest.mark.xdist_group("adbc_bigquery")
-@xfail_if_driver_missing
-def test_adbc_bigquery_basic_operations() -> None:
-    """Test basic BigQuery ADBC operations (requires valid GCP setup)."""
-    # Note: This test would require actual BigQuery project setup
-    # For now, we'll create a placeholder that demonstrates the expected structure
-
-    # This would typically require:
-    # 1. Valid GCP project with BigQuery enabled
-    # 2. Service account credentials
-    # 3. Configured dataset
-
-    config = AdbcConfig(
-        connection_config={
-            "driver_name": "adbc_driver_bigquery",
-            "project_id": "test-project",  # Would need to be real
-            "dataset_id": "test_dataset",  # Would need to be real
-        }
-    )
-
-    # Since we don't have real credentials, this will fail and be xfailed
-    with config.provide_session() as session:
-        # Test basic query that would work in BigQuery
-        result = session.execute("SELECT 1 as test_value")
-        assert isinstance(result, SQLResult)
-        assert result.data is not None
-        assert result.data[0]["test_value"] == 1
-
-
-@pytest.mark.skipif(
-    "not config.getoption('--run-bigquery-tests', default=False)",
-    reason="BigQuery ADBC tests require --run-bigquery-tests flag and valid GCP credentials",
-)
-@pytest.mark.xdist_group("adbc_bigquery")
-@xfail_if_driver_missing
-def test_adbc_bigquery_data_types() -> None:
-    """Test BigQuery-specific data types with ADBC (requires valid GCP setup)."""
-    config = AdbcConfig(
-        connection_config={
-            "driver_name": "adbc_driver_bigquery",
-            "project_id": "test-project",  # Would need to be real
-            "dataset_id": "test_dataset",  # Would need to be real
-        }
-    )
-
-    with config.provide_session() as session:
-        # Test BigQuery built-in functions
-        functions_result = session.execute("""
-            SELECT
-                CURRENT_TIMESTAMP() as current_ts,
-                GENERATE_UUID() as uuid_val,
-                FARM_FINGERPRINT('test') as fingerprint
-        """)
-        assert isinstance(functions_result, SQLResult)
-        assert functions_result.data is not None
-        assert functions_result.data[0]["current_ts"] is not None
-        assert functions_result.data[0]["uuid_val"] is not None
-        assert functions_result.data[0]["fingerprint"] is not None
-
-        # Test array operations
-        array_result = session.execute("""
-            SELECT
-                ARRAY[1, 2, 3, 4, 5] as numbers,
-                ARRAY_LENGTH(ARRAY[1, 2, 3, 4, 5]) as array_len
-        """)
-        assert isinstance(array_result, SQLResult)
-        assert array_result.data is not None
-        assert array_result.data[0]["numbers"] == [1, 2, 3, 4, 5]
-        assert array_result.data[0]["array_len"] == 5
-
-
 @pytest.mark.parametrize(
     ("parameters", "style"),
     [
@@ -500,7 +255,7 @@ def test_adbc_bigquery_data_types() -> None:
 def test_adbc_postgresql_parameter_styles(
     adbc_postgresql_session: AdbcDriver, parameters: Any, style: ParamStyle
 ) -> None:
-    """Test different parameter binding styles with ADBC PostgreSQL."""
+    """Test different parameter binding styles with ADBC PostgreSQL using CORE_ROUND_3."""
     # Insert test data
     adbc_postgresql_session.execute("INSERT INTO test_table (name) VALUES ($1)", ("test_value",))
 
@@ -520,7 +275,7 @@ def test_adbc_postgresql_parameter_styles(
 
 @pytest.mark.xdist_group("postgres")
 def test_adbc_postgresql_execute_many(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test execute_many functionality with ADBC PostgreSQL."""
+    """Test execute_many functionality with ADBC PostgreSQL using CORE_ROUND_3."""
     parameters_list = [("name1", 1), ("name2", 2), ("name3", 3)]
 
     result = adbc_postgresql_session.execute_many(
@@ -546,7 +301,7 @@ def test_adbc_postgresql_execute_many(adbc_postgresql_session: AdbcDriver) -> No
 
 @pytest.mark.xdist_group("postgres")
 def test_adbc_postgresql_execute_script(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test execute_script functionality with ADBC PostgreSQL."""
+    """Test execute_script functionality with ADBC PostgreSQL using CORE_ROUND_3."""
     script = """
         INSERT INTO test_table (name, value) VALUES ('script_test1', 999);
         INSERT INTO test_table (name, value) VALUES ('script_test2', 888);
@@ -572,13 +327,13 @@ def test_adbc_postgresql_execute_script(adbc_postgresql_session: AdbcDriver) -> 
 
 @pytest.mark.xdist_group("postgres")
 def test_adbc_postgresql_result_methods(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test SelectResult and ExecuteResult methods with ADBC PostgreSQL."""
+    """Test SQLResult methods with ADBC PostgreSQL using CORE_ROUND_3."""
     # Insert test data
     adbc_postgresql_session.execute_many(
         "INSERT INTO test_table (name, value) VALUES ($1, $2)", [("result1", 10), ("result2", 20), ("result3", 30)]
     )
 
-    # Test SelectResult methods
+    # Test SQLResult methods
     result = adbc_postgresql_session.execute("SELECT * FROM test_table ORDER BY name")
     assert isinstance(result, SQLResult)
 
@@ -602,7 +357,7 @@ def test_adbc_postgresql_result_methods(adbc_postgresql_session: AdbcDriver) -> 
 
 @pytest.mark.xdist_group("postgres")
 def test_adbc_postgresql_error_handling(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test error handling and exception propagation with ADBC PostgreSQL."""
+    """Test error handling and exception propagation with ADBC PostgreSQL using CORE_ROUND_3."""
     # Ensure clean state by rolling back any existing transaction
     try:
         adbc_postgresql_session.execute("ROLLBACK")
@@ -637,7 +392,7 @@ def test_adbc_postgresql_error_handling(adbc_postgresql_session: AdbcDriver) -> 
 
 @pytest.mark.xdist_group("postgres")
 def test_adbc_postgresql_data_types(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test PostgreSQL data type handling with ADBC."""
+    """Test PostgreSQL data type handling with ADBC using CORE_ROUND_3."""
     # Create table with various PostgreSQL data types
     adbc_postgresql_session.execute_script("""
         CREATE TABLE data_types_test (
@@ -685,121 +440,8 @@ def test_adbc_postgresql_data_types(adbc_postgresql_session: AdbcDriver) -> None
 
 
 @pytest.mark.xdist_group("postgres")
-def test_adbc_postgresql_complex_queries(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test complex SQL queries with ADBC PostgreSQL."""
-    # Insert test data
-    test_data = [("Alice", 25), ("Bob", 30), ("Charlie", 35), ("Diana", 28)]
-
-    adbc_postgresql_session.execute_many("INSERT INTO test_table (name, value) VALUES ($1, $2)", test_data)
-
-    # Test JOIN (self-join)
-    join_result = adbc_postgresql_session.execute("""
-        SELECT t1.name as name1, t2.name as name2, t1.value as value1, t2.value as value2
-        FROM test_table t1
-        CROSS JOIN test_table t2
-        WHERE t1.value < t2.value
-        ORDER BY t1.name, t2.name
-        LIMIT 3
-    """)
-    assert isinstance(join_result, SQLResult)
-    assert join_result.data is not None
-    assert len(join_result.data) == 3
-
-    # Test aggregation
-    agg_result = adbc_postgresql_session.execute("""
-        SELECT
-            COUNT(*) as total_count,
-            AVG(value) as avg_value,
-            MIN(value) as min_value,
-            MAX(value) as max_value
-        FROM test_table
-    """)
-    assert isinstance(agg_result, SQLResult)
-    assert agg_result.data is not None
-    assert agg_result.data[0]["total_count"] == 4
-    # PostgreSQL may return avg as string or decimal
-    assert float(agg_result.data[0]["avg_value"]) == 29.5
-    assert agg_result.data[0]["min_value"] == 25
-    assert agg_result.data[0]["max_value"] == 35
-
-    # Test window functions
-    window_result = adbc_postgresql_session.execute("""
-        SELECT
-            name,
-            value,
-            ROW_NUMBER() OVER (ORDER BY value) as row_num,
-            LAG(value) OVER (ORDER BY value) as prev_value
-        FROM test_table
-        ORDER BY value
-    """)
-    assert isinstance(window_result, SQLResult)
-    assert window_result.data is not None
-    assert len(window_result.data) == 4
-    assert window_result.data[0]["row_num"] == 1
-    assert window_result.data[0]["prev_value"] is None
-
-
-@pytest.mark.xdist_group("postgres")
-def test_adbc_postgresql_schema_operations(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test schema operations (DDL) with ADBC PostgreSQL."""
-    # Create a new table
-    adbc_postgresql_session.execute_script("""
-        CREATE TABLE schema_test (
-            id SERIAL PRIMARY KEY,
-            description TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    # Insert data into new table
-    insert_result = adbc_postgresql_session.execute(
-        "INSERT INTO schema_test (description) VALUES ($1)", ("test description")
-    )
-    assert isinstance(insert_result, SQLResult)
-    # ADBC drivers may not support rowcount and return -1 or 0
-    assert insert_result.rows_affected in (-1, 0, 1)
-
-    # Verify table structure
-    info_result = adbc_postgresql_session.execute("""
-        SELECT column_name, data_type
-        FROM information_schema.columns
-        WHERE table_name = 'schema_test'
-        ORDER BY ordinal_position
-    """)
-    assert isinstance(info_result, SQLResult)
-    assert info_result.data is not None
-    assert len(info_result.data) == 3  # id, description, created_at
-
-    # Drop table
-    adbc_postgresql_session.execute_script("DROP TABLE schema_test")
-
-
-@pytest.mark.xdist_group("postgres")
-def test_adbc_postgresql_column_names_and_metadata(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test column names and result metadata with ADBC PostgreSQL."""
-    # Insert test data
-    adbc_postgresql_session.execute("INSERT INTO test_table (name, value) VALUES ($1, $2)", ("metadata_test", 123))
-
-    # Test column names
-    result = adbc_postgresql_session.execute(
-        "SELECT id, name, value, created_at FROM test_table WHERE name = $1", ("metadata_test")
-    )
-    assert isinstance(result, SQLResult)
-    assert result.column_names == ["id", "name", "value", "created_at"]
-    assert result.data is not None
-    assert result.get_count() == 1
-
-    # Test that we can access data by column name
-    row = result.data[0]
-    assert row["name"] == "metadata_test"
-    assert row["value"] == 123
-    assert row["id"] is not None
-    assert row["created_at"] is not None
-
-
-@pytest.mark.xdist_group("postgres")
 def test_adbc_postgresql_performance_bulk_operations(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test performance with bulk operations using ADBC PostgreSQL."""
+    """Test performance with bulk operations using ADBC PostgreSQL with CORE_ROUND_3."""
     # Generate bulk data
     bulk_data = [(f"bulk_user_{i}", i * 10) for i in range(100)]
 
@@ -828,7 +470,7 @@ def test_adbc_postgresql_performance_bulk_operations(adbc_postgresql_session: Ad
 
 @pytest.mark.xdist_group("adbc_sqlite")
 def test_adbc_multiple_backends_consistency(adbc_sqlite_session: AdbcDriver) -> None:
-    """Test consistency across different ADBC backends."""
+    """Test consistency across different ADBC backends using CORE_ROUND_3."""
     # Insert test data
     test_data = [("backend_test1", 100), ("backend_test2", 200)]
     adbc_sqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", test_data)

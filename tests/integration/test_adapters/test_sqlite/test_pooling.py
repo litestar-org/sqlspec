@@ -1,17 +1,15 @@
-"""Integration tests for SQLite connection pooling."""
+"""Integration tests for SQLite connection pooling with CORE_ROUND_3 architecture."""
 
 import pytest
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
+from sqlspec.core.result import SQLResult
 
 
 @pytest.mark.xdist_group("sqlite")
-def test_shared_memory_pooling() -> None:
+def test_shared_memory_pooling(sqlite_config_shared_memory: SqliteConfig) -> None:
     """Test that shared memory databases allow pooling."""
-    # Create config with shared memory database
-    config = SqliteConfig(
-        pool_config={"database": "file::memory:?cache=shared", "uri": True, "pool_min_size": 2, "pool_max_size": 5}
-    )
+    config = sqlite_config_shared_memory
 
     # Verify pooling configuration
     assert config.pool_config["pool_min_size"] == 2
@@ -32,16 +30,19 @@ def test_shared_memory_pooling() -> None:
     # Get data from another session in the pool
     with config.provide_session() as session2:
         result = session2.execute("SELECT value FROM shared_test WHERE id = 1")
-        data = result.get_data()
-        assert len(data) == 1
-        assert data[0]["value"] == "shared_data"
+        assert isinstance(result, SQLResult)
+        assert result.data is not None
+        assert len(result.data) == 1
+        assert result.data[0]["value"] == "shared_data"
+
+    # Clean up
+    config.close_pool()
 
 
 @pytest.mark.xdist_group("sqlite")
-def test_regular_memory_auto_conversion() -> None:
+def test_regular_memory_auto_conversion(sqlite_config_regular_memory: SqliteConfig) -> None:
     """Test that regular memory databases are auto-converted to shared memory with pooling enabled."""
-    # Create config with regular memory database
-    config = SqliteConfig(pool_config={"database": ":memory:", "pool_min_size": 5, "pool_max_size": 10})
+    config = sqlite_config_regular_memory
 
     # Verify pooling configuration
     assert config.pool_config["pool_min_size"] == 5
@@ -66,48 +67,173 @@ def test_regular_memory_auto_conversion() -> None:
     # Get data from another session in the pool
     with config.provide_session() as session2:
         result = session2.execute("SELECT value FROM auto_shared_test WHERE id = 1")
-        data = result.get_data()
-        assert len(data) == 1
-        assert data[0]["value"] == "auto_converted_data"
+        assert isinstance(result, SQLResult)
+        assert result.data is not None
+        assert len(result.data) == 1
+        assert result.data[0]["value"] == "auto_converted_data"
+
+    # Clean up
+    config.close_pool()
 
 
 @pytest.mark.xdist_group("sqlite")
-def test_file_database_pooling_enabled() -> None:
+def test_file_database_pooling_enabled(sqlite_temp_file_config: SqliteConfig) -> None:
     """Test that file-based databases allow pooling."""
-    import tempfile
+    config = sqlite_temp_file_config
 
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
+    # Verify pooling configuration
+    assert config.pool_config["pool_min_size"] == 3
+    assert config.pool_config["pool_max_size"] == 8
+
+    # Test that multiple connections work
+    with config.provide_session() as session1:
+        session1.execute_script("""
+            CREATE TABLE pool_test (
+                id INTEGER PRIMARY KEY,
+                value TEXT
+            );
+            INSERT INTO pool_test (value) VALUES ('test_data');
+        """)
+        session1.commit()  # Commit to persist data
+
+    # Data persists across connections
+    with config.provide_session() as session2:
+        result = session2.execute("SELECT value FROM pool_test WHERE id = 1")
+        assert isinstance(result, SQLResult)
+        assert result.data is not None
+        assert len(result.data) == 1
+        assert result.data[0]["value"] == "test_data"
+
+    # Clean up
+    config.close_pool()
+
+
+@pytest.mark.xdist_group("sqlite")
+def test_pool_session_isolation(sqlite_config_shared_memory: SqliteConfig) -> None:
+    """Test that sessions from the pool maintain proper isolation."""
+    config = sqlite_config_shared_memory
 
     try:
-        # Create config with file database
-        config = SqliteConfig(pool_config={"database": db_path, "pool_min_size": 3, "pool_max_size": 8})
-
-        # Verify pooling configuration
-        assert config.pool_config["pool_min_size"] == 3
-        assert config.pool_config["pool_max_size"] == 8
-
-        # Test that multiple connections work
-        with config.provide_session() as session1:
-            session1.execute_script("""
-                CREATE TABLE pool_test (
+        # Create base table
+        with config.provide_session() as session:
+            session.execute_script("""
+                CREATE TABLE isolation_test (
                     id INTEGER PRIMARY KEY,
                     value TEXT
                 );
-                INSERT INTO pool_test (value) VALUES ('test_data');
+                INSERT INTO isolation_test (value) VALUES ('base_data');
             """)
-            session1.commit()  # Commit to persist data
+            session.commit()
 
-        # Data persists across connections
-        with config.provide_session() as session2:
-            result = session2.execute("SELECT value FROM pool_test WHERE id = 1")
-            data = result.get_data()
-            assert len(data) == 1
-            assert data[0]["value"] == "test_data"
+        # Test concurrent access with different sessions
+        with config.provide_session() as session1, config.provide_session() as session2:
+            # Session 1 inserts data
+            session1.execute("INSERT INTO isolation_test (value) VALUES (?)", ("session1_data",))
+
+            # Session 2 should not see uncommitted data from session 1
+            result = session2.execute("SELECT COUNT(*) as count FROM isolation_test")
+            assert isinstance(result, SQLResult)
+            assert result.data is not None
+            assert result.data[0]["count"] == 1  # Only base_data
+
+            # After session1 commits, session2 should see the data
+            session1.commit()
+
+            result = session2.execute("SELECT COUNT(*) as count FROM isolation_test")
+            assert isinstance(result, SQLResult)
+            assert result.data is not None
+            assert result.data[0]["count"] == 2  # base_data + session1_data
+
     finally:
-        import os
+        config.close_pool()
 
-        try:
-            os.unlink(db_path)
-        except Exception:
-            pass
+
+@pytest.mark.xdist_group("sqlite")
+def test_pool_error_handling(sqlite_config_shared_memory: SqliteConfig) -> None:
+    """Test pool behavior with errors and exceptions."""
+    config = sqlite_config_shared_memory
+
+    try:
+        # Create test table
+        with config.provide_session() as session:
+            session.execute_script("""
+                CREATE TABLE error_test (
+                    id INTEGER PRIMARY KEY,
+                    unique_value TEXT UNIQUE
+                );
+            """)
+            session.commit()
+
+        # Test that errors don't break the pool
+        with config.provide_session() as session:
+            # Insert initial data
+            session.execute("INSERT INTO error_test (unique_value) VALUES (?)", ("unique1",))
+            session.commit()
+
+            # Try to insert duplicate (should fail)
+            with pytest.raises(Exception):  # sqlite3.IntegrityError
+                session.execute("INSERT INTO error_test (unique_value) VALUES (?)", ("unique1",))
+
+            # Session should still be usable after error
+            result = session.execute("SELECT COUNT(*) as count FROM error_test")
+            assert isinstance(result, SQLResult)
+            assert result.data is not None
+            assert result.data[0]["count"] == 1
+
+        # Pool should still work after error in previous session
+        with config.provide_session() as session:
+            result = session.execute("SELECT COUNT(*) as count FROM error_test")
+            assert isinstance(result, SQLResult)
+            assert result.data is not None
+            assert result.data[0]["count"] == 1
+
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.xdist_group("sqlite")
+def test_pool_transaction_rollback(sqlite_config_shared_memory: SqliteConfig) -> None:
+    """Test transaction rollback behavior with pooled connections."""
+    config = sqlite_config_shared_memory
+
+    try:
+        # Create test table
+        with config.provide_session() as session:
+            session.execute_script("""
+                CREATE TABLE transaction_test (
+                    id INTEGER PRIMARY KEY,
+                    value TEXT
+                );
+                INSERT INTO transaction_test (value) VALUES ('initial_data');
+            """)
+            session.commit()
+
+        # Test rollback behavior
+        with config.provide_session() as session:
+            # Insert data but don't commit
+            session.execute("INSERT INTO transaction_test (value) VALUES (?)", ("uncommitted_data",))
+
+            # Verify data is visible within the same session
+            result = session.execute("SELECT COUNT(*) as count FROM transaction_test")
+            assert isinstance(result, SQLResult)
+            assert result.data is not None
+            assert result.data[0]["count"] == 2
+
+            # Rollback the transaction
+            session.rollback()
+
+            # Verify data was rolled back
+            result = session.execute("SELECT COUNT(*) as count FROM transaction_test")
+            assert isinstance(result, SQLResult)
+            assert result.data is not None
+            assert result.data[0]["count"] == 1
+
+        # Verify rollback persisted across sessions
+        with config.provide_session() as session:
+            result = session.execute("SELECT COUNT(*) as count FROM transaction_test")
+            assert isinstance(result, SQLResult)
+            assert result.data is not None
+            assert result.data[0]["count"] == 1
+
+    finally:
+        config.close_pool()

@@ -1,0 +1,1 @@
+# BigQuery integration tests package

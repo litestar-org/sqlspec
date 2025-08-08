@@ -510,7 +510,20 @@ class CommonDriverAttributesMixin:
         )
 
         # Create simple hash for core.statement.SQL (different from old SQL type)
-        base_hash = hash((statement.sql, statement.parameters, statement.is_many, statement.is_script))
+        # Convert parameters to hashable representation safely
+        params = statement.parameters
+        try:
+            if isinstance(params, dict):
+                params_key = tuple(sorted(params.items()))
+            elif isinstance(params, (list, tuple)):
+                params_key = tuple(params) if params else ()
+            else:
+                params_key = params
+        except TypeError:
+            # If parameters contain unhashable elements, use string representation
+            params_key = str(params)
+
+        base_hash = hash((statement.sql, params_key, statement.is_many, statement.is_script))
         return f"compiled:{base_hash}:{context_hash}"
 
     def _get_dominant_parameter_style(self, parameters: "list[Any]") -> "Optional[ParameterStyle]":

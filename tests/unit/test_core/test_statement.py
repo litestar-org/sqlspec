@@ -36,13 +36,13 @@ if TYPE_CHECKING:
 
 # Test fixtures and constants
 DEFAULT_PARAMETER_CONFIG = ParameterStyleConfig(
-    default_parameter_style=ParameterStyle.QMARK,
-    supported_parameter_styles={ParameterStyle.QMARK}
+    default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
 )
 TEST_CONFIG = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
 
 
 # StatementConfig function-based tests
+
 
 @pytest.mark.parametrize(
     "config_kwargs,expected_values",
@@ -56,16 +56,14 @@ TEST_CONFIG = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG)
                 "parameter_config": DEFAULT_PARAMETER_CONFIG,
                 "dialect": "sqlite",
                 "enable_caching": False,
-                "execution_mode": "COPY"
+                "execution_mode": "COPY",
             },
             {"dialect": "sqlite", "enable_caching": False, "execution_mode": "COPY"},
         ),
     ],
     ids=["defaults", "custom"],
 )
-def test_statement_config_initialization(
-    config_kwargs: "dict[str, Any]", expected_values: "dict[str, Any]"
-) -> None:
+def test_statement_config_initialization(config_kwargs: "dict[str, Any]", expected_values: "dict[str, Any]") -> None:
     """Test StatementConfig initialization with different parameters."""
     config = StatementConfig(**config_kwargs)
 
@@ -79,11 +77,7 @@ def test_statement_config_initialization(
 
 def test_statement_config_replace_immutable_update() -> None:
     """Test StatementConfig.replace() method for immutable updates."""
-    original_config = StatementConfig(
-        parameter_config=DEFAULT_PARAMETER_CONFIG,
-        dialect="sqlite",
-        enable_caching=True
-    )
+    original_config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, dialect="sqlite", enable_caching=True)
 
     # Test replacing multiple attributes
     updated_config = original_config.replace(dialect="postgres", enable_caching=False)
@@ -135,7 +129,7 @@ def test_statement_config_driver_required_attributes() -> None:
         parameter_config=DEFAULT_PARAMETER_CONFIG,
         dialect="postgres",
         execution_mode="COPY",
-        execution_args={"format": "csv"}
+        execution_args={"format": "csv"},
     )
 
     # Driver-accessed attributes must be available
@@ -155,6 +149,7 @@ def test_statement_config_driver_required_attributes() -> None:
 
 # ProcessedState function-based tests
 
+
 def test_processed_state_initialization() -> None:
     """Test ProcessedState initialization with all parameters."""
     compiled_sql = "SELECT * FROM users WHERE id = ?"
@@ -162,10 +157,7 @@ def test_processed_state_initialization() -> None:
     operation_type = "SELECT"
 
     state = ProcessedState(
-        compiled_sql=compiled_sql,
-        execution_parameters=execution_params,
-        operation_type=operation_type,
-        is_many=False
+        compiled_sql=compiled_sql, execution_parameters=execution_params, operation_type=operation_type, is_many=False
     )
 
     assert state.compiled_sql == compiled_sql
@@ -189,6 +181,7 @@ def test_processed_state_hash_equality() -> None:
 
 
 # SQL class basic functionality function-based tests
+
 
 def test_sql_initialization_with_string() -> None:
     """Test SQL initialization with string input."""
@@ -268,6 +261,7 @@ def test_sql_auto_detect_many_from_parameters() -> None:
 
 # SQL single-pass processing function-based tests
 
+
 def test_sql_lazy_processing_not_triggered_initially() -> None:
     """Test SQL processing is done lazily - not triggered on initialization."""
     stmt = SQL("SELECT * FROM users")
@@ -287,11 +281,12 @@ def test_sql_single_pass_processing_triggered_by_sql_property() -> None:
 
         # Mock the compiled result
         from sqlspec.core.compiler import CompiledSQL
+
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users",
             execution_parameters=[],
             operation_type="SELECT",
-            expression=exp.select("*").from_("users")
+            expression=exp.select("*").from_("users"),
         )
         mock_processor.compile.return_value = mock_compiled
 
@@ -324,11 +319,12 @@ def test_sql_single_pass_processing_triggered_by_parameters_property() -> None:
         mock_processor_class.return_value = mock_processor
 
         from sqlspec.core.compiler import CompiledSQL
+
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users WHERE id = ?",
             execution_parameters=[1],
             operation_type="SELECT",
-            expression=exp.select("*").from_("users")
+            expression=exp.select("*").from_("users"),
         )
         mock_processor.compile.return_value = mock_compiled
 
@@ -348,11 +344,12 @@ def test_sql_single_pass_processing_triggered_by_operation_type_property() -> No
         mock_processor_class.return_value = mock_processor
 
         from sqlspec.core.compiler import CompiledSQL
+
         mock_compiled = CompiledSQL(
             compiled_sql="INSERT INTO users (name) VALUES ('john')",
             execution_parameters={},
             operation_type="INSERT",
-            expression=MagicMock()  # Use MagicMock for the expression
+            expression=MagicMock(),  # Use MagicMock for the expression
         )
         mock_processor.compile.return_value = mock_compiled
 
@@ -383,6 +380,7 @@ def test_sql_processing_fallback_on_error() -> None:
 
 # SQL expression caching function-based tests
 
+
 def test_sql_expression_caching_enabled() -> None:
     """Test SQL expression caching when enabled."""
     config = StatementConfig(parameter_config=DEFAULT_PARAMETER_CONFIG, enable_caching=True)
@@ -395,11 +393,9 @@ def test_sql_expression_caching_enabled() -> None:
 
         expr = exp.select("*").from_("users")
         from sqlspec.core.compiler import CompiledSQL
+
         mock_compiled = CompiledSQL(
-            compiled_sql="SELECT * FROM users",
-            execution_parameters={},
-            operation_type="SELECT",
-            expression=expr
+            compiled_sql="SELECT * FROM users", execution_parameters={}, operation_type="SELECT", expression=expr
         )
         mock_processor.compile.return_value = mock_compiled
 
@@ -427,11 +423,9 @@ def test_sql_expression_caching_disabled() -> None:
 
         expr = exp.select("*").from_("users")
         from sqlspec.core.compiler import CompiledSQL
+
         mock_compiled = CompiledSQL(
-            compiled_sql="SELECT * FROM users",
-            execution_parameters={},
-            operation_type="SELECT",
-            expression=expr
+            compiled_sql="SELECT * FROM users", execution_parameters={}, operation_type="SELECT", expression=expr
         )
         mock_processor.compile.return_value = mock_compiled
 
@@ -443,6 +437,7 @@ def test_sql_expression_caching_disabled() -> None:
 
 
 # SQL parameter integration function-based tests
+
 
 def test_sql_parameter_processing_named_parameters() -> None:
     """Test SQL parameter processing with named parameters."""
@@ -505,11 +500,12 @@ def test_sql_parameters_property_returns_processed_parameters() -> None:
         mock_processor_class.return_value = mock_processor
 
         from sqlspec.core.compiler import CompiledSQL
+
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users WHERE id = ?",
             execution_parameters=[1],  # Processed parameters
             operation_type="SELECT",
-            expression=exp.select("*").from_("users")
+            expression=exp.select("*").from_("users"),
         )
         mock_processor.compile.return_value = mock_compiled
 
@@ -531,6 +527,7 @@ def test_sql_parameters_property_fallback_to_original() -> None:
 
 # SQL operation type detection function-based tests
 
+
 @pytest.mark.parametrize(
     "sql_statement,expected_operation_type",
     [
@@ -543,7 +540,7 @@ def test_sql_parameters_property_fallback_to_original() -> None:
         ("DROP TABLE users", "DROP"),
         ("EXECUTE sp_procedure", "EXECUTE"),
     ],
-    ids=["select", "insert", "update", "delete", "cte", "create", "drop", "execute"]
+    ids=["select", "insert", "update", "delete", "cte", "create", "drop", "execute"],
 )
 def test_sql_operation_type_detection(sql_statement: str, expected_operation_type: str) -> None:
     """Test SQL operation type detection for various statement types."""
@@ -554,11 +551,12 @@ def test_sql_operation_type_detection(sql_statement: str, expected_operation_typ
         mock_processor_class.return_value = mock_processor
 
         from sqlspec.core.compiler import CompiledSQL
+
         mock_compiled = CompiledSQL(
             compiled_sql=sql_statement,
             execution_parameters={},
             operation_type=expected_operation_type,
-            expression=MagicMock()
+            expression=MagicMock(),
         )
         mock_processor.compile.return_value = mock_compiled
 
@@ -573,18 +571,14 @@ def test_sql_returns_rows_detection() -> None:
     # SELECT statements return rows
     select_stmt = SQL("SELECT * FROM users")
     select_stmt._processed_state = ProcessedState(
-        compiled_sql="SELECT * FROM users",
-        execution_parameters=[],
-        operation_type="SELECT"
+        compiled_sql="SELECT * FROM users", execution_parameters=[], operation_type="SELECT"
     )
     assert select_stmt.returns_rows() is True
 
     # INSERT statements don't return rows
     insert_stmt = SQL("INSERT INTO users (name) VALUES ('john')")
     insert_stmt._processed_state = ProcessedState(
-        compiled_sql="INSERT INTO users (name) VALUES ('john')",
-        execution_parameters=[],
-        operation_type="INSERT"
+        compiled_sql="INSERT INTO users (name) VALUES ('john')", execution_parameters=[], operation_type="INSERT"
     )
     assert insert_stmt.returns_rows() is False
 
@@ -593,21 +587,20 @@ def test_sql_returns_rows_detection() -> None:
     with_stmt._processed_state = ProcessedState(
         compiled_sql="WITH cte AS (SELECT * FROM users) SELECT * FROM cte",
         execution_parameters=[],
-        operation_type="WITH"
+        operation_type="WITH",
     )
     assert with_stmt.returns_rows() is True
 
     # SHOW statements return rows
     show_stmt = SQL("SHOW TABLES")
     show_stmt._processed_state = ProcessedState(
-        compiled_sql="SHOW TABLES",
-        execution_parameters=[],
-        operation_type="SHOW"
+        compiled_sql="SHOW TABLES", execution_parameters=[], operation_type="SHOW"
     )
     assert show_stmt.returns_rows() is True
 
 
 # SQL immutability guarantees function-based tests
+
 
 def test_sql_slots_prevent_new_attributes() -> None:
     """Test SQL __slots__ prevent adding new attributes."""
@@ -696,6 +689,7 @@ def test_sql_add_named_parameter_creates_new_instance() -> None:
 
 # SQL API compatibility function-based tests
 
+
 def test_sql_compile_method_compatibility() -> None:
     """Test SQL.compile() method returns same format as old API."""
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
@@ -705,11 +699,12 @@ def test_sql_compile_method_compatibility() -> None:
         mock_processor_class.return_value = mock_processor
 
         from sqlspec.core.compiler import CompiledSQL
+
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users WHERE id = ?",
             execution_parameters=[1],
             operation_type="SELECT",
-            expression=exp.select("*").from_("users")
+            expression=exp.select("*").from_("users"),
         )
         mock_processor.compile.return_value = mock_compiled
 
@@ -768,18 +763,19 @@ def test_sql_validation_errors_property_compatibility() -> None:
         mock_processor_class.return_value = mock_processor
 
         from sqlspec.core.compiler import CompiledSQL
+
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users",
             execution_parameters={},
             operation_type="SELECT",
-            expression=exp.select("*").from_("users")
+            expression=exp.select("*").from_("users"),
         )
         # Add validation errors to processed state
         state = ProcessedState(
             compiled_sql="SELECT * FROM users",
             execution_parameters={},
             operation_type="SELECT",
-            validation_errors=["Warning: Missing index"]
+            validation_errors=["Warning: Missing index"],
         )
         mock_processor.compile.return_value = mock_compiled
         stmt._processed_state = state
@@ -797,10 +793,7 @@ def test_sql_has_errors_property_compatibility() -> None:
 
     # Mock processed state with no errors
     stmt._processed_state = ProcessedState(
-        compiled_sql="SELECT * FROM users",
-        execution_parameters={},
-        operation_type="SELECT",
-        validation_errors=[]
+        compiled_sql="SELECT * FROM users", execution_parameters={}, operation_type="SELECT", validation_errors=[]
     )
     assert stmt.has_errors is False
 
@@ -809,12 +802,13 @@ def test_sql_has_errors_property_compatibility() -> None:
         compiled_sql="SELECT * FROM users",
         execution_parameters={},
         operation_type="SELECT",
-        validation_errors=["Error: Invalid syntax"]
+        validation_errors=["Error: Invalid syntax"],
     )
     assert stmt.has_errors is True
 
 
 # SQL performance characteristics function-based tests
+
 
 def test_sql_single_parse_guarantee() -> None:
     """Test SQL guarantees single parse operation."""
@@ -825,11 +819,12 @@ def test_sql_single_parse_guarantee() -> None:
         mock_processor_class.return_value = mock_processor
 
         from sqlspec.core.compiler import CompiledSQL
+
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users WHERE id = ?",
             execution_parameters=[1],
             operation_type="SELECT",
-            expression=exp.select("*").from_("users")
+            expression=exp.select("*").from_("users"),
         )
         mock_processor.compile.return_value = mock_compiled
 
@@ -869,11 +864,12 @@ def test_sql_processing_caching_performance() -> None:
         mock_processor_class.return_value = mock_processor
 
         from sqlspec.core.compiler import CompiledSQL
+
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users",
             execution_parameters={},
             operation_type="SELECT",
-            expression=exp.select("*").from_("users")
+            expression=exp.select("*").from_("users"),
         )
         mock_processor.compile.return_value = mock_compiled
 
@@ -891,6 +887,7 @@ def test_sql_processing_caching_performance() -> None:
 
 
 # SQL edge cases function-based tests
+
 
 @pytest.mark.parametrize(
     "complex_sql",
@@ -911,7 +908,7 @@ def test_sql_processing_caching_performance() -> None:
         ORDER BY u.name
         """,
     ],
-    ids=["join", "cte", "group_by", "insert", "update", "delete", "multiline"]
+    ids=["join", "cte", "group_by", "insert", "update", "delete", "multiline"],
 )
 def test_sql_complex_queries(complex_sql: str) -> None:
     """Test SQL handles complex queries correctly."""
@@ -1030,6 +1027,7 @@ def test_sql_repr_format() -> None:
 
 # Configuration functions tests
 
+
 def test_get_default_config() -> None:
     """Test get_default_config() returns valid StatementConfig."""
     config = get_default_config()
@@ -1092,6 +1090,7 @@ def test_sql_consistent_behavior_across_multiple_instances(sample_sqls: "list[st
 
 # SQL thread safety function-based tests
 
+
 def test_sql_immutable_after_creation() -> None:
     """Test SQL objects are effectively immutable after creation."""
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
@@ -1120,11 +1119,12 @@ def test_sql_processing_state_stability() -> None:
         mock_processor_class.return_value = mock_processor
 
         from sqlspec.core.compiler import CompiledSQL
+
         mock_compiled = CompiledSQL(
             compiled_sql="SELECT * FROM users",
             execution_parameters={},
             operation_type="SELECT",
-            expression=exp.select("*").from_("users")
+            expression=exp.select("*").from_("users"),
         )
         mock_processor.compile.return_value = mock_compiled
 

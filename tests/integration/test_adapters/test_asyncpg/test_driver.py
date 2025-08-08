@@ -55,7 +55,7 @@ async def test_asyncpg_basic_crud(asyncpg_session: AsyncpgDriver) -> None:
     assert insert_result.rows_affected == 1
 
     # SELECT
-    select_result = await asyncpg_session.execute("SELECT name, value FROM test_table WHERE name = $1", ("test_name"))
+    select_result = await asyncpg_session.execute("SELECT name, value FROM test_table WHERE name = $1", ("test_name",))
     assert isinstance(select_result, SQLResult)
     assert select_result is not None
     assert len(select_result) == 1
@@ -70,13 +70,13 @@ async def test_asyncpg_basic_crud(asyncpg_session: AsyncpgDriver) -> None:
     assert update_result.rows_affected == 1
 
     # Verify UPDATE
-    verify_result = await asyncpg_session.execute("SELECT value FROM test_table WHERE name = $1", ("test_name"))
+    verify_result = await asyncpg_session.execute("SELECT value FROM test_table WHERE name = $1", ("test_name",))
     assert isinstance(verify_result, SQLResult)
     assert verify_result is not None
     assert verify_result[0]["value"] == 100
 
     # DELETE
-    delete_result = await asyncpg_session.execute("DELETE FROM test_table WHERE name = $1", ("test_name"))
+    delete_result = await asyncpg_session.execute("DELETE FROM test_table WHERE name = $1", ("test_name",))
     assert isinstance(delete_result, SQLResult)
     assert delete_result.rows_affected == 1
 
@@ -90,7 +90,7 @@ async def test_asyncpg_basic_crud(asyncpg_session: AsyncpgDriver) -> None:
 @pytest.mark.parametrize(
     ("parameters", "style"),
     [
-        pytest.param(("test_value"), "tuple_binds", id="tuple_binds"),
+        pytest.param(("test_value",), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
     ],
 )
@@ -98,7 +98,7 @@ async def test_asyncpg_basic_crud(asyncpg_session: AsyncpgDriver) -> None:
 async def test_asyncpg_parameter_styles(asyncpg_session: AsyncpgDriver, parameters: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles."""
     # Insert test data
-    await asyncpg_session.execute("INSERT INTO test_table (name) VALUES ($1)", ("test_value"))
+    await asyncpg_session.execute("INSERT INTO test_table (name) VALUES ($1)", ("test_value",))
 
     # Test parameter style
     if style == "tuple_binds":
@@ -109,7 +109,7 @@ async def test_asyncpg_parameter_styles(asyncpg_session: AsyncpgDriver, paramete
         # The driver should handle the conversion from dict to positional
         sql = "SELECT name FROM test_table WHERE name = $1"
         # Convert dict to tuple for AsyncPG
-        result = await asyncpg_session.execute(sql, (parameters["name"]))
+        result = await asyncpg_session.execute(sql, (parameters["name"],))
     assert isinstance(result, SQLResult)
     assert result is not None
     assert len(result) == 1
@@ -183,13 +183,13 @@ async def test_asyncpg_execute_script(asyncpg_session: AsyncpgDriver) -> None:
 
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_result_methods(asyncpg_session: AsyncpgDriver) -> None:
-    """Test SelectResult and ExecuteResult methods."""
+    """Test SQLResult methods."""
     # Insert test data
     await asyncpg_session.execute_many(
         "INSERT INTO test_table (name, value) VALUES ($1, $2)", [("result1", 10), ("result2", 20), ("result3", 30)]
     )
 
-    # Test SelectResult methods
+    # Test SQLResult methods
     result = await asyncpg_session.execute("SELECT * FROM test_table ORDER BY name")
     assert isinstance(result, SQLResult)
 
@@ -205,7 +205,7 @@ async def test_asyncpg_result_methods(asyncpg_session: AsyncpgDriver) -> None:
     assert not result.is_empty()
 
     # Test empty result
-    empty_result = await asyncpg_session.execute("SELECT * FROM test_table WHERE name = $1", ("nonexistent"))
+    empty_result = await asyncpg_session.execute("SELECT * FROM test_table WHERE name = $1", ("nonexistent",))
     assert isinstance(empty_result, SQLResult)
     assert empty_result.is_empty()
     assert empty_result.get_first() is None
@@ -297,7 +297,7 @@ async def test_asyncpg_transactions(asyncpg_session: AsyncpgDriver) -> None:
 
     # Verify data is committed
     result = await asyncpg_session.execute(
-        "SELECT COUNT(*) as count FROM test_table WHERE name = $1", ("transaction_test")
+        "SELECT COUNT(*) as count FROM test_table WHERE name = $1", ("transaction_test",)
     )
     assert isinstance(result, SQLResult)
     assert result is not None
@@ -369,7 +369,7 @@ async def test_asyncpg_schema_operations(asyncpg_session: AsyncpgDriver) -> None
 
     # Insert data into new table
     insert_result = await asyncpg_session.execute(
-        "INSERT INTO schema_test (description) VALUES ($1)", ("test description")
+        "INSERT INTO schema_test (description) VALUES ($1)", ("test description",)
     )
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
@@ -397,7 +397,7 @@ async def test_asyncpg_column_names_and_metadata(asyncpg_session: AsyncpgDriver)
 
     # Test column names
     result = await asyncpg_session.execute(
-        "SELECT id, name, value, created_at FROM test_table WHERE name = $1", ("metadata_test")
+        "SELECT id, name, value, created_at FROM test_table WHERE name = $1", ("metadata_test",)
     )
     assert isinstance(result, SQLResult)
     assert result.column_names == ["id", "name", "value", "created_at"]
@@ -488,7 +488,7 @@ async def test_asyncpg_json_operations(asyncpg_session: AsyncpgDriver) -> None:
 
     # Insert JSON data
     json_data = '{"name": "test", "age": 30, "tags": ["postgres", "json"]}'
-    await asyncpg_session.execute("INSERT INTO json_test (data) VALUES ($1)", (json_data))
+    await asyncpg_session.execute("INSERT INTO json_test (data) VALUES ($1)", (json_data,))
 
     # Test JSON queries
     json_result = await asyncpg_session.execute("SELECT data->>'name' as name, data->>'age' as age FROM json_test")
@@ -557,7 +557,7 @@ async def test_asset_maintenance_alert_complex_query(asyncpg_session: AsyncpgDri
     """)
 
     # Insert test data
-    await asyncpg_session.execute(f"INSERT INTO {alert_def_table} (name) VALUES ($1)", ("maintenances_today"))
+    await asyncpg_session.execute(f"INSERT INTO {alert_def_table} (name) VALUES ($1)", ("maintenances_today",))
 
     # Insert users
     await asyncpg_session.execute_many(

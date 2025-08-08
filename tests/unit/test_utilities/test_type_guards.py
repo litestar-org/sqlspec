@@ -59,6 +59,7 @@ from sqlspec.utils.type_guards import (
 
 # Test fixtures for different schema types
 
+
 @dataclass
 class SampleDataclass:
     """Sample dataclass for testing."""
@@ -125,6 +126,7 @@ class MockValueWrapper:
 
 
 # Dataclass Type Guard Tests
+
 
 def test_is_dataclass_instance_with_valid_dataclass() -> None:
     """Test is_dataclass_instance returns True for dataclass instances."""
@@ -199,6 +201,7 @@ def test_is_dataclass_without_field_non_dataclass() -> None:
 
 # Dictionary Type Guard Tests
 
+
 def test_is_dict_with_dictionary() -> None:
     """Test is_dict returns True for dictionaries."""
     assert is_dict({}) is True
@@ -262,6 +265,7 @@ def test_is_dict_row_with_non_dictionary() -> None:
 
 # Pydantic Model Tests (when available)
 
+
 def test_is_pydantic_model_when_not_installed() -> None:
     """Test is_pydantic_model returns False when pydantic not available."""
     # This test assumes pydantic is not installed or mocked appropriately
@@ -281,6 +285,7 @@ def test_is_pydantic_model_without_field_when_not_installed() -> None:
 
 # MsgSpec Struct Tests (when available)
 
+
 def test_is_msgspec_struct_when_not_installed() -> None:
     """Test is_msgspec_struct returns False when msgspec not available."""
     assert is_msgspec_struct("not a struct") is False
@@ -298,6 +303,7 @@ def test_is_msgspec_struct_without_field_when_not_installed() -> None:
 
 
 # Attrs Tests (when available)
+
 
 def test_is_attrs_instance_when_not_installed() -> None:
     """Test is_attrs_instance returns False when attrs not available."""
@@ -322,6 +328,7 @@ def test_is_attrs_instance_without_field_when_not_installed() -> None:
 
 
 # Schema Type Guards Tests
+
 
 def test_is_schema_with_dataclass() -> None:
     """Test is_schema returns True for dataclass instances."""
@@ -397,6 +404,7 @@ def test_is_schema_or_dict_without_field_combined() -> None:
 
 # Iterable Parameters Tests
 
+
 def test_is_iterable_parameters_with_list() -> None:
     """Test is_iterable_parameters returns True for lists."""
     assert is_iterable_parameters([1, 2, 3]) is True
@@ -435,6 +443,7 @@ def test_is_iterable_parameters_with_non_iterable() -> None:
 
 # DTO Data Tests
 
+
 def test_is_dto_data_when_litestar_not_installed() -> None:
     """Test is_dto_data returns False when litestar not available."""
     assert is_dto_data("not dto data") is False
@@ -442,6 +451,7 @@ def test_is_dto_data_when_litestar_not_installed() -> None:
 
 
 # Expression Tests
+
 
 def test_is_expression_with_mock() -> None:
     """Test is_expression with mock SQLGlot expressions."""
@@ -461,6 +471,7 @@ def test_is_expression_with_non_expression() -> None:
 
 # Protocol Helper Tests
 
+
 def test_has_attr_with_existing_attribute() -> None:
     """Test has_attr returns True when attribute exists."""
     obj = MockValueWrapper("test")
@@ -479,6 +490,7 @@ def test_has_attr_with_none() -> None:
 
 
 # SQLGlot Node Helper Tests
+
 
 def test_get_node_this_with_this_attribute() -> None:
     """Test get_node_this returns this attribute when present."""
@@ -559,6 +571,7 @@ def test_has_parent_attribute_without_attribute() -> None:
 
 # Literal Type Tests
 
+
 def test_is_string_literal_with_string_flag() -> None:
     """Test is_string_literal returns True when is_string is True."""
     literal = MockLiteral(is_string=True)
@@ -599,6 +612,7 @@ def test_is_number_literal_with_non_number_this() -> None:
 
 # Parameter Helper Tests
 
+
 def test_get_param_style_and_name_with_attributes() -> None:
     """Test get_param_style_and_name returns style and name when present."""
     param = MockParameterProtocol(style="named", name="test_param")
@@ -628,6 +642,7 @@ def test_get_value_attribute_without_value() -> None:
 
 
 # Expression Context Tests
+
 
 def test_get_initial_expression_with_attribute() -> None:
     """Test get_initial_expression returns expression when present."""
@@ -672,6 +687,7 @@ def test_expression_has_limit_without_args() -> None:
 
 # COPY Statement Tests
 
+
 def test_is_copy_statement_with_none() -> None:
     """Test is_copy_statement returns False for None."""
     assert is_copy_statement(None) is False
@@ -684,6 +700,7 @@ def test_is_copy_statement_with_non_expression() -> None:
 
 
 # Dataclass Utility Function Tests
+
 
 def test_extract_dataclass_fields_basic() -> None:
     """Test extract_dataclass_fields returns correct fields."""
@@ -763,6 +780,7 @@ def test_dataclass_to_dict_exclude_none() -> None:
 
 def test_dataclass_to_dict_nested() -> None:
     """Test dataclass_to_dict handles nested dataclasses."""
+
     @dataclass
     class NestedDataclass:
         inner: SampleDataclass
@@ -772,14 +790,13 @@ def test_dataclass_to_dict_nested() -> None:
 
     result = dataclass_to_dict(outer, convert_nested=True)
 
-    expected = {
-        "inner": {"name": "inner", "age": 30, "optional_field": None}
-    }
+    expected = {"inner": {"name": "inner", "age": 30, "optional_field": None}}
     assert result == expected
 
 
 def test_dataclass_to_dict_nested_disabled() -> None:
     """Test dataclass_to_dict doesn't convert nested when disabled."""
+
     @dataclass
     class NestedDataclass:
         inner: SampleDataclass
@@ -793,6 +810,7 @@ def test_dataclass_to_dict_nested_disabled() -> None:
 
 
 # Schema Dump Tests
+
 
 def test_schema_dump_with_dict() -> None:
     """Test schema_dump returns dict as-is."""
@@ -823,6 +841,7 @@ def test_schema_dump_exclude_unset() -> None:
 
 def test_schema_dump_with_dict_attribute() -> None:
     """Test schema_dump falls back to __dict__ for objects with dict attribute."""
+
     class ObjectWithDict:
         def __init__(self) -> None:
             self.name = "test"
@@ -836,6 +855,7 @@ def test_schema_dump_with_dict_attribute() -> None:
 
 
 # Performance Tests
+
 
 @pytest.mark.parametrize(
     "guard_func,test_obj,expected",
@@ -870,6 +890,7 @@ def test_multiple_type_guards_chain() -> None:
 
 
 # Edge Cases
+
 
 def test_type_guards_with_none() -> None:
     """Test type guards handle None gracefully."""

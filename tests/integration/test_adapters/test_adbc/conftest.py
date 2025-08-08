@@ -1,6 +1,5 @@
-from __future__ import annotations
+"""Test fixtures and configuration for ADBC integration tests with CORE_ROUND_3 architecture."""
 
-# Import necessary modules for the decorator
 import functools
 from typing import Any, Callable, TypeVar, cast
 

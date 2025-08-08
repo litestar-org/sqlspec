@@ -50,6 +50,7 @@ from sqlspec.core.cache import (
 
 # CacheKey Tests
 
+
 def test_cache_key_creation_and_immutability() -> None:
     """Test CacheKey creation and immutable behavior."""
     key_data = ("test", "key", 123)
@@ -109,6 +110,7 @@ def test_cache_key_string_representation() -> None:
 
 
 # CacheStats Tests
+
 
 def test_cache_stats_initialization() -> None:
     """Test CacheStats initialization with zero values."""
@@ -194,6 +196,7 @@ def test_cache_stats_string_representation() -> None:
 
 
 # UnifiedCache Tests
+
 
 def test_unified_cache_initialization() -> None:
     """Test UnifiedCache initialization with default parameters."""
@@ -374,6 +377,7 @@ def test_unified_cache_statistics_tracking() -> None:
 
 # StatementCache Tests
 
+
 def test_statement_cache_initialization() -> None:
     """Test StatementCache initialization."""
     stmt_cache = StatementCache(max_size=100)
@@ -456,6 +460,7 @@ def test_statement_cache_clear_operation() -> None:
 
 # ExpressionCache Tests
 
+
 def test_expression_cache_initialization() -> None:
     """Test ExpressionCache initialization."""
     expr_cache = ExpressionCache(max_size=50)
@@ -524,6 +529,7 @@ def test_expression_cache_clear_operation() -> None:
 
 
 # ParameterCache Tests
+
 
 def test_parameter_cache_initialization() -> None:
     """Test ParameterCache initialization."""
@@ -620,6 +626,7 @@ def test_parameter_cache_clear_operation() -> None:
 
 # Global Cache Management Tests
 
+
 def test_get_default_cache_singleton() -> None:
     """Test that get_default_cache returns the same instance."""
     cache1 = get_default_cache()
@@ -711,6 +718,7 @@ def test_get_cache_statistics_function() -> None:
 
 # Cache Configuration Tests
 
+
 def test_cache_config_initialization() -> None:
     """Test CacheConfig initialization with defaults."""
     config = CacheConfig()
@@ -726,11 +734,7 @@ def test_cache_config_initialization() -> None:
 
 def test_cache_config_custom_values() -> None:
     """Test CacheConfig with custom values."""
-    config = CacheConfig(
-        sql_cache_enabled=False,
-        fragment_cache_size=10000,
-        optimized_cache_enabled=False,
-    )
+    config = CacheConfig(sql_cache_enabled=False, fragment_cache_size=10000, optimized_cache_enabled=False)
 
     assert config.sql_cache_enabled is False
     assert config.fragment_cache_size == 10000
@@ -755,10 +759,7 @@ def test_update_cache_config_function() -> None:
 
     try:
         # Create new configuration
-        new_config = CacheConfig(
-            sql_cache_size=9999,
-            fragment_cache_enabled=False,
-        )
+        new_config = CacheConfig(sql_cache_size=9999, fragment_cache_enabled=False)
 
         # Update configuration
         update_cache_config(new_config)
@@ -775,6 +776,7 @@ def test_update_cache_config_function() -> None:
 
 
 # Cache Statistics Aggregation Tests
+
 
 def test_cache_stats_aggregate_initialization() -> None:
     """Test CacheStatsAggregate initialization."""
@@ -848,6 +850,7 @@ def test_log_cache_stats_function() -> None:
 
 # SQL Compilation Cache Tests
 
+
 def test_sql_cache_interface() -> None:
     """Test SQL compilation cache interface for compatibility."""
     cache_key = "test_sql_cache_key"
@@ -866,6 +869,7 @@ def test_sql_cache_interface() -> None:
 
 
 # Thread Safety Tests
+
 
 def test_unified_cache_thread_safety() -> None:
     """Test UnifiedCache thread safety with concurrent operations."""
@@ -937,6 +941,7 @@ def test_cache_statistics_thread_safety() -> None:
 
 # Performance and Edge Case Tests
 
+
 def test_cache_key_performance_with_large_data() -> None:
     """Test CacheKey performance with large key data."""
     large_key_data = tuple(range(1000))  # Large tuple
@@ -974,11 +979,14 @@ def test_unified_cache_very_short_ttl() -> None:
     assert cache.get(key) is None
 
 
-@pytest.mark.parametrize("cache_size,num_items", [
-    (10, 15),      # More items than cache size
-    (100, 50),     # Less items than cache size
-    (1, 10),       # Much more items than cache size
-])
+@pytest.mark.parametrize(
+    "cache_size,num_items",
+    [
+        (10, 15),  # More items than cache size
+        (100, 50),  # Less items than cache size
+        (1, 10),  # Much more items than cache size
+    ],
+)
 def test_unified_cache_various_sizes(cache_size: int, num_items: int) -> None:
     """Test UnifiedCache with various size configurations."""
     cache: UnifiedCache[int] = UnifiedCache(max_size=cache_size)

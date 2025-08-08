@@ -1,52 +1,14 @@
-"""Integration tests for SQLite driver implementation."""
+"""Integration tests for SQLite driver implementation with CORE_ROUND_3 architecture."""
 
 import math
-from collections.abc import Generator
 from typing import Any, Literal
 
 import pytest
 
-from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.core.result import SQLResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
-
-
-@pytest.fixture
-def sqlite_session() -> Generator[SqliteDriver, None, None]:
-    """Create a SQLite session with test table."""
-    config = SqliteConfig(pool_config={"database": ":memory:"})
-
-    try:
-        with config.provide_session() as session:
-            # Create test table
-            session.execute_script("""
-                CREATE TABLE IF NOT EXISTS test_table (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    value INTEGER DEFAULT 0,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            # Commit DDL to prevent table locking issues in subsequent operations
-            session.commit()
-
-            try:
-                yield session
-            finally:
-                # Ensure any pending transactions are committed before test ends
-                try:
-                    session.commit()
-                except Exception:
-                    # If commit fails, try rollback to clean up transaction state
-                    try:
-                        session.rollback()
-                    except Exception:
-                        pass
-            # Cleanup is automatic with in-memory database
-    finally:
-        # Ensure pool is closed properly to avoid threading issues during test shutdown
-        config.close_pool()
 
 
 @pytest.mark.xdist_group("sqlite")

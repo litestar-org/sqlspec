@@ -92,6 +92,7 @@ __all__ = (
 # 1. CONFIGURATION FIXTURES - Mock StatementConfig, CacheConfig, and database configurations
 # =============================================================================
 
+
 @pytest.fixture
 def parameter_style_config_basic() -> ParameterStyleConfig:
     """Basic parameter style configuration for simple test cases."""
@@ -111,6 +112,7 @@ def parameter_style_config_basic() -> ParameterStyleConfig:
 @pytest.fixture
 def parameter_style_config_advanced() -> ParameterStyleConfig:
     """Advanced parameter style configuration with type coercions and transformations."""
+
     def bool_coercion(value: bool) -> int:
         return 1 if value else 0
 
@@ -130,11 +132,7 @@ def parameter_style_config_advanced() -> ParameterStyleConfig:
         },
         supported_execution_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
         default_execution_parameter_style=ParameterStyle.NUMERIC,
-        type_coercion_map={
-            bool: bool_coercion,
-            Decimal: decimal_coercion,
-            list: list_coercion,
-        },
+        type_coercion_map={bool: bool_coercion, Decimal: decimal_coercion, list: list_coercion},
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
         allow_mixed_parameter_styles=True,
@@ -181,11 +179,7 @@ def statement_config_mysql() -> StatementConfig:
         default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
     )
     return StatementConfig(
-        dialect="mysql",
-        parameter_config=mysql_config,
-        enable_caching=True,
-        enable_parsing=True,
-        enable_validation=True,
+        dialect="mysql", parameter_config=mysql_config, enable_caching=True, enable_parsing=True, enable_validation=True
     )
 
 
@@ -217,11 +211,13 @@ def cache_config_disabled() -> dict[str, Any]:
 # 2. CACHE FIXTURES - Mock cache instances and cache statistics
 # =============================================================================
 
+
 @pytest.fixture
 def mock_unified_cache() -> UnifiedCache:
     """Mock unified cache for testing cache behavior."""
     # Create cache using the actual factory method
     from sqlspec.core.cache import get_default_cache
+
     return get_default_cache()
 
     # Note: The actual UnifiedCache may have different methods
@@ -231,13 +227,7 @@ def mock_unified_cache() -> UnifiedCache:
 @pytest.fixture
 def cache_statistics_tracker() -> dict[str, Any]:
     """Cache statistics tracker for monitoring cache performance during tests."""
-    return {
-        "hits": 0,
-        "misses": 0,
-        "evictions": 0,
-        "cache_sizes": defaultdict(int),
-        "hit_rates": [],
-    }
+    return {"hits": 0, "misses": 0, "evictions": 0, "cache_sizes": defaultdict(int), "hit_rates": []}
 
 
 @pytest.fixture(autouse=True)
@@ -254,6 +244,7 @@ def reset_cache_state() -> "Generator[None, None, None]":
 # =============================================================================
 # 3. SQL FIXTURES - Sample SQL statements, parameters, and test data
 # =============================================================================
+
 
 @pytest.fixture
 def sample_select_sql() -> str:
@@ -293,7 +284,7 @@ def sample_parameters_named() -> dict[str, Any]:
         "name": "John Doe",
         "email": "john@example.com",
         "active": True,
-        "created_at": "2023-01-01 00:00:00"
+        "created_at": "2023-01-01 00:00:00",
     }
 
 
@@ -338,6 +329,7 @@ def sql_with_typed_parameters(statement_config_sqlite: StatementConfig) -> SQL:
 # =============================================================================
 # 4. MOCK DATABASE FIXTURES - Mock connections, cursors, and drivers
 # =============================================================================
+
 
 class MockSyncConnection:
     """Enhanced mock sync connection with comprehensive database simulation."""
@@ -620,6 +612,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
     ) -> None:
         if statement_config is None:
             from sqlspec.core.parameters import ParameterStyleConfig
+
             parameter_config = ParameterStyleConfig(
                 default_parameter_style=ParameterStyle.QMARK,
                 supported_parameter_styles={ParameterStyle.QMARK},
@@ -665,11 +658,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
             data = [dict(zip(column_names, row)) for row in fetched_data]
 
             return self.create_execution_result(
-                cursor,
-                selected_data=data,
-                column_names=column_names,
-                data_row_count=len(data),
-                is_select_result=True,
+                cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
         return self.create_execution_result(cursor, rowcount_override=cursor.rowcount)
@@ -696,10 +685,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
             successful_count += 1
 
         return self.create_execution_result(
-            cursor,
-            statement_count=len(statements),
-            successful_statements=successful_count,
-            is_script_result=True,
+            cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
     def begin(self) -> None:
@@ -728,6 +714,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
     ) -> None:
         if statement_config is None:
             from sqlspec.core.parameters import ParameterStyleConfig
+
             parameter_config = ParameterStyleConfig(
                 default_parameter_style=ParameterStyle.QMARK,
                 supported_parameter_styles={ParameterStyle.QMARK},
@@ -773,11 +760,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
             data = [dict(zip(column_names, row)) for row in fetched_data]
 
             return self.create_execution_result(
-                cursor,
-                selected_data=data,
-                column_names=column_names,
-                data_row_count=len(data),
-                is_select_result=True,
+                cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
         return self.create_execution_result(cursor, rowcount_override=cursor.rowcount)
@@ -804,10 +787,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
             successful_count += 1
 
         return self.create_execution_result(
-            cursor,
-            statement_count=len(statements),
-            successful_statements=successful_count,
-            is_script_result=True,
+            cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
     async def begin(self) -> None:
@@ -859,11 +839,7 @@ def mock_sqlite_connection() -> MockSyncConnection:
 def mock_postgres_connection() -> MockAsyncConnection:
     """Mock PostgreSQL connection with Postgres-specific behavior."""
     conn = MockAsyncConnection("postgres_connection", "postgres")
-    conn.connection_info.update({
-        "server_version": "14.0",
-        "supports_returning": True,
-        "supports_arrays": True,
-    })
+    conn.connection_info.update({"server_version": "14.0", "supports_returning": True, "supports_arrays": True})
     return conn
 
 
@@ -871,11 +847,7 @@ def mock_postgres_connection() -> MockAsyncConnection:
 def mock_mysql_connection() -> MockSyncConnection:
     """Mock MySQL connection with MySQL-specific behavior."""
     conn = MockSyncConnection("mysql_connection", "mysql")
-    conn.connection_info.update({
-        "server_version": "8.0.0",
-        "supports_json": True,
-        "charset": "utf8mb4",
-    })
+    conn.connection_info.update({"server_version": "8.0.0", "supports_json": True, "charset": "utf8mb4"})
     return conn
 
 
@@ -883,18 +855,16 @@ def mock_mysql_connection() -> MockSyncConnection:
 def mock_bigquery_connection() -> MockSyncConnection:
     """Mock BigQuery connection with BigQuery-specific behavior."""
     conn = MockSyncConnection("bigquery_connection", "bigquery")
-    conn.connection_info.update({
-        "project_id": "test-project",
-        "dataset_id": "test_dataset",
-        "supports_arrays": True,
-        "supports_structs": True,
-    })
+    conn.connection_info.update(
+        {"project_id": "test-project", "dataset_id": "test_dataset", "supports_arrays": True, "supports_structs": True}
+    )
     return conn
 
 
 # =============================================================================
 # 5. CLEANUP FIXTURES - Test isolation and cleanup functions
 # =============================================================================
+
 
 @pytest.fixture(autouse=True)
 def test_isolation() -> "Generator[None, None, None]":
@@ -939,6 +909,7 @@ def reset_global_state() -> "Generator[None, None, None]":
 # 6. PERFORMANCE FIXTURES - Timing and benchmark utilities
 # =============================================================================
 
+
 @pytest.fixture
 def performance_timer() -> "Generator[callable, None, None]":
     """Performance timer fixture for measuring execution time during tests."""
@@ -976,6 +947,7 @@ def memory_profiler() -> "Generator[callable, None, None]":
         import os
 
         import psutil
+
         process = psutil.Process(os.getpid())
 
         def get_memory_usage() -> dict[str, Any]:
@@ -1010,10 +982,7 @@ def compilation_metrics() -> "Generator[callable, None, None]":
     }
 
     def record_compilation(
-        parse_time: float,
-        transform_time: float,
-        total_time: float,
-        was_cached: bool = False
+        parse_time: float, transform_time: float, total_time: float, was_cached: bool = False
     ) -> None:
         """Record compilation metrics."""
         metrics["compilation_count"] += 1
@@ -1032,6 +1001,7 @@ def compilation_metrics() -> "Generator[callable, None, None]":
 # =============================================================================
 # PYTEST CONFIGURATION AND MARKERS
 # =============================================================================
+
 
 def pytest_configure(config: Any) -> None:
     """Configure pytest with custom markers for fixture categories."""

@@ -215,7 +215,7 @@ async def test_asyncpg_execute_many_with_sql_object(asyncpg_batch_session: Async
 
     # Verify data
     check_result = await asyncpg_batch_session.execute(
-        "SELECT COUNT(*) as count FROM test_batch WHERE category = $1", ("SOB")
+        "SELECT COUNT(*) as count FROM test_batch WHERE category = $1", ("SOB",)
     )
     assert check_result[0]["count"] == 3
 
@@ -247,7 +247,7 @@ async def test_asyncpg_execute_many_with_returning(asyncpg_batch_session: Asyncp
         )
 
         check_result = await asyncpg_batch_session.execute(
-            "SELECT COUNT(*) as count FROM test_batch WHERE category = $1", ("RET")
+            "SELECT COUNT(*) as count FROM test_batch WHERE category = $1", ("RET",)
         )
         assert check_result[0]["count"] == 3
 

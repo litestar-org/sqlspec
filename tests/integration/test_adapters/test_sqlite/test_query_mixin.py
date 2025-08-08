@@ -1,6 +1,5 @@
-"""Integration tests for SQLite driver with query mixin functionality."""
+"""Integration tests for SQLite driver with query mixin functionality using CORE_ROUND_3."""
 
-from collections.abc import Generator
 from typing import Any
 
 import pytest
@@ -10,41 +9,8 @@ from sqlspec.core.statement import SQL
 from sqlspec.exceptions import NotFoundError
 
 
-@pytest.fixture
-def sqlite_driver() -> Generator[SqliteDriver, None, None]:
-    """Create a SQLite driver with a test table."""
-    import sqlite3
-
-    # Create in-memory database
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-
-    driver = SqliteDriver(conn)
-
-    # Create test table
-    driver.execute_script("""
-        CREATE TABLE users (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            email TEXT UNIQUE,
-            age INTEGER
-        );
-
-        INSERT INTO users (name, email, age) VALUES
-            ('John Doe', 'john@example.com', 30),
-            ('Jane Smith', 'jane@example.com', 25),
-            ('Bob Johnson', 'bob@example.com', 35),
-            ('Alice Brown', 'alice@example.com', 28),
-            ('Charlie Davis', 'charlie@example.com', 32);
-    """)
-
-    yield driver
-
-    conn.close()
-
-
 class TestSqliteQueryMixin:
-    """Test query mixin methods with SQLite driver."""
+    """Test query mixin methods with SQLite driver and CORE_ROUND_3 architecture."""
 
     def test_select_one_success(self, sqlite_driver: SqliteDriver) -> None:
         """Test select_one returns exactly one row."""
@@ -122,13 +88,13 @@ class TestSqliteQueryMixin:
 
     def test_select_with_parameters(self, sqlite_driver: SqliteDriver) -> None:
         """Test select methods with parameterized queries."""
-        # Test with named parameters
+        # Test with named parameters using SQL object
         result: dict[str, Any] = sqlite_driver.select_one(
             SQL("SELECT * FROM users WHERE email = :email", email="bob@example.com")
         )
         assert result["name"] == "Bob Johnson"
 
-        # Test with positional parameters
+        # Test with positional parameters using SQL object
         results: list[dict[str, Any]] = sqlite_driver.select(SQL("SELECT * FROM users WHERE age > ? ORDER BY age", 30))
         assert len(results) == 2
         assert results[0]["age"] == 32
@@ -160,3 +126,108 @@ class TestSqliteQueryMixin:
             WHERE o.total > 100
         """)
         assert result == 2  # Users 1 and 3 have orders > 100
+
+    def test_query_mixin_with_core_round_3_sql_object(self, sqlite_driver: SqliteDriver) -> None:
+        """Test query mixin methods work properly with CORE_ROUND_3 SQL objects."""
+        # Test select_one with SQL object containing complex parameters
+        sql_obj = SQL(
+            "SELECT * FROM users WHERE age BETWEEN :min_age AND :max_age ORDER BY age LIMIT 1", min_age=25, max_age=32
+        )
+        result: dict[str, Any] = sqlite_driver.select_one(sql_obj)
+        assert result["name"] == "Jane Smith"  # Age 25, first in order
+        assert result["age"] == 25
+
+    def test_query_mixin_error_handling_with_core_sql(self, sqlite_driver: SqliteDriver) -> None:
+        """Test error handling in query mixin methods with CORE_ROUND_3 SQL objects."""
+        # Test select_one with SQL that returns no rows
+        sql_no_rows = SQL("SELECT * FROM users WHERE age > :max_age", max_age=100)
+        with pytest.raises(NotFoundError):
+            sqlite_driver.select_one(sql_no_rows)
+
+        # Test select_one_or_none with no rows
+        result = sqlite_driver.select_one_or_none(sql_no_rows)
+        assert result is None
+
+        # Test select_value with no rows
+        sql_no_value = SQL("SELECT name FROM users WHERE age > :max_age", max_age=100)
+        with pytest.raises(NotFoundError):
+            sqlite_driver.select_value(sql_no_value)
+
+        # Test select_value_or_none with no rows
+        result = sqlite_driver.select_value_or_none(sql_no_value)
+        assert result is None
+
+    def test_query_mixin_with_aggregations(self, sqlite_driver: SqliteDriver) -> None:
+        """Test query mixin methods with aggregation queries."""
+        # Test COUNT
+        count_result = sqlite_driver.select_value("SELECT COUNT(*) FROM users WHERE age >= 30")
+        assert count_result == 3
+
+        # Test AVG
+        avg_result = sqlite_driver.select_value("SELECT AVG(age) FROM users")
+        assert avg_result == 30.0  # (30 + 25 + 35 + 28 + 32) / 5
+
+        # Test MIN/MAX in one query returning a row
+        minmax_result: dict[str, Any] = sqlite_driver.select_one(
+            "SELECT MIN(age) as min_age, MAX(age) as max_age FROM users"
+        )
+        assert minmax_result["min_age"] == 25
+        assert minmax_result["max_age"] == 35
+
+    def test_query_mixin_with_sql_functions(self, sqlite_driver: SqliteDriver) -> None:
+        """Test query mixin methods with SQLite-specific functions."""
+        # Test LENGTH function
+        result = sqlite_driver.select_value("SELECT LENGTH(name) FROM users WHERE id = 1")
+        assert result == 8  # "John Doe" has 8 characters
+
+        # Test UPPER function
+        result = sqlite_driver.select_value("SELECT UPPER(name) FROM users WHERE id = 2")
+        assert result == "JANE SMITH"
+
+        # Test SUBSTR function with select_one
+        result: dict[str, Any] = sqlite_driver.select_one(
+            "SELECT name, SUBSTR(name, 1, 4) as name_prefix FROM users WHERE id = 3"
+        )
+        assert result["name"] == "Bob Johnson"
+        assert result["name_prefix"] == "Bob "
+
+    @pytest.mark.parametrize(
+        "query,expected_count",
+        [
+            ("SELECT * FROM users WHERE age > 30", 2),
+            ("SELECT * FROM users WHERE name LIKE '%o%'", 3),  # John Doe, Bob Johnson, Charlie Davis
+            ("SELECT * FROM users WHERE email LIKE '%.com'", 5),  # All users
+        ],
+    )
+    def test_query_mixin_parameterized_patterns(
+        self, sqlite_driver: SqliteDriver, query: str, expected_count: int
+    ) -> None:
+        """Test query mixin with various SQL patterns."""
+        results: list[dict[str, Any]] = sqlite_driver.select(query)
+        assert len(results) == expected_count
+
+    def test_query_mixin_transaction_behavior(self, sqlite_driver: SqliteDriver) -> None:
+        """Test query mixin methods work correctly within transactions."""
+        # Start a transaction by executing an INSERT without commit
+        sqlite_driver.execute(
+            "INSERT INTO users (name, email, age) VALUES (?, ?, ?)", ("Test User", "test@example.com", 40)
+        )
+
+        # Query should see the uncommitted data in the same session
+        result = sqlite_driver.select_value("SELECT COUNT(*) FROM users WHERE name = 'Test User'")
+        assert result == 1
+
+        # Query all users should now show 6
+        all_users: list[dict[str, Any]] = sqlite_driver.select("SELECT * FROM users")
+        assert len(all_users) == 6
+
+        # Test rollback (if supported by the driver)
+        try:
+            sqlite_driver.connection.rollback()
+            # After rollback, should be back to 5 users
+            result = sqlite_driver.select_value("SELECT COUNT(*) FROM users")
+            assert result == 5
+        except AttributeError:
+            # If rollback is not available, just ensure we still have the data
+            result = sqlite_driver.select_value("SELECT COUNT(*) FROM users")
+            assert result == 6

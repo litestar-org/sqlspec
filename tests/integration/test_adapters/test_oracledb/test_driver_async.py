@@ -1,265 +1,319 @@
-"""Test OracleDB driver implementation - Asynchronous Tests."""
+"""Test OracleDB async driver implementation with CORE_ROUND_3 architecture."""
 
-from __future__ import annotations
-
-from collections.abc import AsyncGenerator
 from typing import Any, Literal
 
 import pytest
-from pytest_databases.docker.oracle import OracleService
 
-from sqlspec.adapters.oracledb import OracleAsyncConfig
+from sqlspec.adapters.oracledb import OracleAsyncDriver
 from sqlspec.core.result import SQLResult
 
 ParamStyle = Literal["positional_binds", "dict_binds"]
 
 pytestmark = pytest.mark.asyncio(loop_scope="function")
 
-# --- Async Fixtures ---
 
-
-@pytest.fixture
-async def oracle_async_session(oracle_23ai_service: OracleService) -> AsyncGenerator[OracleAsyncConfig, None]:
-    """Create an Oracle asynchronous session."""
-    config = OracleAsyncConfig(
-        pool_config={
-            "host": oracle_23ai_service.host,
-            "port": oracle_23ai_service.port,
-            "service_name": oracle_23ai_service.service_name,
-            "user": oracle_23ai_service.user,
-            "password": oracle_23ai_service.password,
-            "min": 1,
-            "max": 5,
-        }
+@pytest.mark.parametrize(
+    ("parameters", "style"),
+    [
+        pytest.param(("test_name",), "positional_binds", id="positional_binds"),
+        pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
+    ],
+)
+@pytest.mark.xdist_group("oracle")
+async def test_async_select(oracle_async_session: OracleAsyncDriver, parameters: Any, style: ParamStyle) -> None:
+    """Test async select functionality with Oracle parameter styles."""
+    # Manual cleanup at start of test
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
 
-    try:
-        yield config
-    finally:
-        # Ensure pool is closed properly to avoid threading issues during test shutdown
-        await config.close_pool()
+    sql = """
+    CREATE TABLE test_table (
+        id NUMBER PRIMARY KEY,
+        name VARCHAR2(50)
+    )
+    """
+    await oracle_async_session.execute_script(sql)
+
+    if style == "positional_binds":
+        insert_sql = "INSERT INTO test_table (id, name) VALUES (1, :1)"
+        select_sql = "SELECT name FROM test_table WHERE name = :1"
+    else:  # dict_binds
+        insert_sql = "INSERT INTO test_table (id, name) VALUES (1, :name)"
+        select_sql = "SELECT name FROM test_table WHERE name = :name"
+
+    insert_result = await oracle_async_session.execute(insert_sql, parameters)
+    assert isinstance(insert_result, SQLResult)
+    assert insert_result.rows_affected == 1
+
+    select_result = await oracle_async_session.execute(select_sql, parameters)
+    assert isinstance(select_result, SQLResult)
+    assert select_result.data is not None
+    assert len(select_result.data) == 1
+    assert select_result.data[0]["NAME"] == "test_name"  # Oracle returns uppercase column names
+
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
 
 
 @pytest.mark.parametrize(
     ("parameters", "style"),
     [
-        pytest.param(("test_name"), "positional_binds", id="positional_binds"),
+        pytest.param(("test_name",), "positional_binds", id="positional_binds"),
         pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
     ],
 )
 @pytest.mark.xdist_group("oracle")
-async def test_async_select(oracle_async_session: OracleAsyncConfig, parameters: Any, style: ParamStyle) -> None:
-    """Test async select functionality with Oracle parameter styles."""
-    async with oracle_async_session.provide_session() as driver:
-        # Manual cleanup at start of test
-        await driver.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        )
-        sql = """
-        CREATE TABLE test_table (
-            id NUMBER PRIMARY KEY,
-            name VARCHAR2(50)
-        )
-        """
-        await driver.execute_script(sql)
-
-        if style == "positional_binds":
-            insert_sql = "INSERT INTO test_table (id, name) VALUES (1, ?)"
-            select_sql = "SELECT name FROM test_table WHERE name = ?"
-        else:  # dict_binds
-            insert_sql = "INSERT INTO test_table (id, name) VALUES (1, :name)"
-            select_sql = "SELECT name FROM test_table WHERE name = :name"
-
-        insert_result = await driver.execute(insert_sql, parameters)
-        assert isinstance(insert_result, SQLResult)
-        assert insert_result.rows_affected == 1
-
-        select_result = await driver.execute(select_sql, parameters)
-        assert isinstance(select_result, SQLResult)
-        assert select_result.data is not None
-        assert len(select_result.data) == 1
-        assert select_result.data[0]["NAME"] == "test_name"  # Oracle returns uppercase column names
-
-        await driver.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        )
-
-
-@pytest.mark.parametrize(
-    ("parameters", "style"),  # Keep parametrization for structure
-    [
-        pytest.param(("test_name"), "positional_binds", id="positional_binds"),
-        pytest.param({"name": "test_name"}, "dict_binds", id="dict_binds"),
-    ],
-)
-@pytest.mark.xdist_group("oracle")
-async def test_async_select_value(oracle_async_session: OracleAsyncConfig, parameters: Any, style: ParamStyle) -> None:
+async def test_async_select_value(oracle_async_session: OracleAsyncDriver, parameters: Any, style: ParamStyle) -> None:
     """Test async select value functionality with Oracle parameter styles."""
-    async with oracle_async_session.provide_session() as driver:
-        # Manual cleanup at start of test
-        await driver.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        )
-        sql = """
+    # Manual cleanup at start of test
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+
+    sql = """
+    CREATE TABLE test_table (
+        id NUMBER PRIMARY KEY,
+        name VARCHAR2(50)
+    )
+    """
+    await oracle_async_session.execute_script(sql)
+
+    # Insert a test record first
+    if style == "positional_binds":
+        insert_sql = "INSERT INTO test_table (id, name) VALUES (1, :1)"
+    else:  # dict_binds
+        insert_sql = "INSERT INTO test_table (id, name) VALUES (1, :name)"
+
+    insert_result = await oracle_async_session.execute(insert_sql, parameters)
+    assert isinstance(insert_result, SQLResult)
+    assert insert_result.rows_affected == 1
+
+    # Test select value using dual
+    select_sql = "SELECT 'test_value' FROM dual"
+    value_result = await oracle_async_session.execute(select_sql)
+    assert isinstance(value_result, SQLResult)
+    assert value_result.data is not None
+    assert len(value_result.data) == 1
+
+    # Extract single value using column name
+    value = value_result.data[0][value_result.column_names[0]]
+    assert value == "test_value"
+
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+
+
+@pytest.mark.xdist_group("oracle")
+async def test_async_insert_with_sequence(oracle_async_session: OracleAsyncDriver) -> None:
+    """Test Oracle's sequences and NEXTVAL/CURRVAL functionality."""
+    # Clean up any existing sequence and table
+    await oracle_async_session.execute_script("""
+        BEGIN
+            EXECUTE IMMEDIATE 'DROP SEQUENCE test_seq';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -2289 THEN RAISE; END IF;
+        END;
+        """)
+    await oracle_async_session.execute_script("""
+        BEGIN
+            EXECUTE IMMEDIATE 'DROP TABLE test_table';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -942 THEN RAISE; END IF;
+        END;
+        """)
+
+    # Create sequence and table
+    await oracle_async_session.execute_script("""
+        CREATE SEQUENCE test_seq START WITH 1 INCREMENT BY 1;
         CREATE TABLE test_table (
             id NUMBER PRIMARY KEY,
             name VARCHAR2(50)
         )
-        """
-        await driver.execute_script(sql)
+    """)
 
-        # Insert a test record first
-        if style == "positional_binds":
-            insert_sql = "INSERT INTO test_table (id, name) VALUES (1, ?)"
-        else:  # dict_binds
-            insert_sql = "INSERT INTO test_table (id, name) VALUES (1, :name)"
+    # Insert using sequence
+    await oracle_async_session.execute(
+        "INSERT INTO test_table (id, name) VALUES (test_seq.NEXTVAL, :1)", ("test_name",)
+    )
 
-        insert_result = await driver.execute(insert_sql, parameters)
-        assert isinstance(insert_result, SQLResult)
-        assert insert_result.rows_affected == 1
+    # Get the last inserted ID using CURRVAL
+    result = await oracle_async_session.execute("SELECT test_seq.CURRVAL as last_id FROM dual")
+    assert isinstance(result, SQLResult)
+    assert result.data is not None
+    assert len(result.data) == 1
+    last_id = result.data[0]["LAST_ID"]
 
-        # Test select value using dual
-        select_sql = "SELECT 'test_value' FROM dual"
-        value_result = await driver.execute(select_sql)
-        assert isinstance(value_result, SQLResult)
-        assert value_result.data is not None
-        assert len(value_result.data) == 1
+    # Verify the inserted record
+    verify_result = await oracle_async_session.execute("SELECT id, name FROM test_table WHERE id = :1", (last_id,))
+    assert isinstance(verify_result, SQLResult)
+    assert verify_result.data is not None
+    assert len(verify_result.data) == 1
+    assert verify_result.data[0]["NAME"] == "test_name"
+    assert verify_result.data[0]["ID"] == last_id
 
-        # Extract single value using column name
-        value = value_result.data[0][value_result.column_names[0]]
-        assert value == "test_value"
-
-        await driver.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        )
+    # Cleanup
+    await oracle_async_session.execute_script("""
+        BEGIN
+            EXECUTE IMMEDIATE 'DROP TABLE test_table';
+            EXECUTE IMMEDIATE 'DROP SEQUENCE test_seq';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -942 AND SQLCODE != -2289 THEN RAISE; END IF;
+        END;
+    """)
 
 
 @pytest.mark.xdist_group("oracle")
-async def test_execute_many_insert(oracle_async_session: OracleAsyncConfig) -> None:
+async def test_async_execute_many_insert(oracle_async_session: OracleAsyncDriver) -> None:
     """Test execute_many functionality for batch inserts."""
-    async with oracle_async_session.provide_session() as driver:
-        # Manual cleanup at start of test
-        await driver.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_many_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        )
+    # Manual cleanup at start of test
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_many_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
 
-        sql_create = """
-        CREATE TABLE test_many_table (
-            id NUMBER PRIMARY KEY,
-            name VARCHAR2(50)
-        )
-        """
-        await driver.execute_script(sql_create)
+    sql_create = """
+    CREATE TABLE test_many_table (
+        id NUMBER PRIMARY KEY,
+        name VARCHAR2(50)
+    )
+    """
+    await oracle_async_session.execute_script(sql_create)
 
-        insert_sql = "INSERT INTO test_many_table (id, name) VALUES (:1, :2)"
-        parameters_list = [(1, "name1"), (2, "name2"), (3, "name3")]
+    insert_sql = "INSERT INTO test_many_table (id, name) VALUES (:1, :2)"
+    parameters_list = [(1, "name1"), (2, "name2"), (3, "name3")]
 
-        result = await driver.execute_many(insert_sql, parameters=parameters_list)
-        assert isinstance(result, SQLResult)
-        assert result.rows_affected == len(parameters_list)
+    result = await oracle_async_session.execute_many(insert_sql, parameters=parameters_list)
+    assert isinstance(result, SQLResult)
+    assert result.rows_affected == len(parameters_list)
 
-        select_sql = "SELECT COUNT(*) as count FROM test_many_table"
-        count_result = await driver.execute(select_sql)
-        assert isinstance(count_result, SQLResult)
-        assert count_result.data is not None
-        assert count_result.data[0]["COUNT"] == len(parameters_list)  # Oracle returns uppercase column names
+    select_sql = "SELECT COUNT(*) as count FROM test_many_table"
+    count_result = await oracle_async_session.execute(select_sql)
+    assert isinstance(count_result, SQLResult)
+    assert count_result.data is not None
+    assert count_result.data[0]["COUNT"] == len(parameters_list)  # Oracle returns uppercase column names
+
+    # Cleanup
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_many_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
 
 
 @pytest.mark.xdist_group("oracle")
-async def test_execute_script(oracle_async_session: OracleAsyncConfig) -> None:
+async def test_async_execute_script(oracle_async_session: OracleAsyncDriver) -> None:
     """Test execute_script functionality for multi-statement scripts."""
-    async with oracle_async_session.provide_session() as driver:
-        # Manual cleanup at start of test
-        await driver.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE TEST_SCRIPT_TABLE'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        )
+    # Manual cleanup at start of test
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_script_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
 
-        script = """
-        CREATE TABLE test_script_table (
-            id NUMBER PRIMARY KEY,
-            name VARCHAR2(50)
-        );
-        INSERT INTO test_script_table (id, name) VALUES (1, 'script_name1');
-        INSERT INTO test_script_table (id, name) VALUES (2, 'script_name2');
-        """
+    script = """
+    CREATE TABLE test_script_table (
+        id NUMBER PRIMARY KEY,
+        name VARCHAR2(50)
+    );
+    INSERT INTO test_script_table (id, name) VALUES (1, 'script_name1');
+    INSERT INTO test_script_table (id, name) VALUES (2, 'script_name2');
+    """
 
-        result = await driver.execute_script(script)
-        assert isinstance(result, SQLResult)
+    result = await oracle_async_session.execute_script(script)
+    assert isinstance(result, SQLResult)
 
-        # Verify script executed successfully
-        select_result = await driver.execute("SELECT COUNT(*) as count FROM TEST_SCRIPT_TABLE")
-        assert isinstance(select_result, SQLResult)
-        assert select_result.data is not None
-        assert select_result.data[0]["COUNT"] == 2  # Oracle returns uppercase column names
+    # Verify script executed successfully
+    select_result = await oracle_async_session.execute("SELECT COUNT(*) as count FROM test_script_table")
+    assert isinstance(select_result, SQLResult)
+    assert select_result.data is not None
+    assert select_result.data[0]["COUNT"] == 2  # Oracle returns uppercase column names
+
+    # Cleanup
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_script_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
 
 
 @pytest.mark.xdist_group("oracle")
-async def test_update_operation(oracle_async_session: OracleAsyncConfig) -> None:
+async def test_async_update_operation(oracle_async_session: OracleAsyncDriver) -> None:
     """Test UPDATE operations."""
-    async with oracle_async_session.provide_session() as driver:
-        # Manual cleanup at start of test
-        await driver.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        )
+    # Manual cleanup at start of test
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
 
-        # Create test table
-        sql = """
-        CREATE TABLE test_table (
-            id NUMBER PRIMARY KEY,
-            name VARCHAR2(50)
-        )
-        """
-        await driver.execute_script(sql)
+    # Create test table
+    sql = """
+    CREATE TABLE test_table (
+        id NUMBER PRIMARY KEY,
+        name VARCHAR2(50)
+    )
+    """
+    await oracle_async_session.execute_script(sql)
 
-        # Insert a record first
-        insert_result = await driver.execute("INSERT INTO test_table (id, name) VALUES (1, ?)", ("original_name"))
-        assert isinstance(insert_result, SQLResult)
-        assert insert_result.rows_affected == 1
+    # Insert a record first
+    insert_result = await oracle_async_session.execute(
+        "INSERT INTO test_table (id, name) VALUES (1, :1)", ("original_name",)
+    )
+    assert isinstance(insert_result, SQLResult)
+    assert insert_result.rows_affected == 1
 
-        # Update the record
-        update_result = await driver.execute(
-            "UPDATE test_table SET name = ? WHERE name = ?", ("updated_name", "original_name")
-        )
-        assert isinstance(update_result, SQLResult)
-        assert update_result.rows_affected == 1
+    # Update the record
+    update_result = await oracle_async_session.execute(
+        "UPDATE test_table SET name = :1 WHERE name = :2", ("updated_name", "original_name")
+    )
+    assert isinstance(update_result, SQLResult)
+    assert update_result.rows_affected == 1
 
-        # Verify the update
-        select_result = await driver.execute("SELECT name FROM test_table WHERE name = ?", ("updated_name"))
-        assert isinstance(select_result, SQLResult)
-        assert select_result.data is not None
-        assert select_result.data[0]["NAME"] == "updated_name"  # Oracle returns uppercase column names
+    # Verify the update
+    select_result = await oracle_async_session.execute("SELECT name FROM test_table WHERE name = :1", ("updated_name",))
+    assert isinstance(select_result, SQLResult)
+    assert select_result.data is not None
+    assert select_result.data[0]["NAME"] == "updated_name"  # Oracle returns uppercase column names
+
+    # Cleanup
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
 
 
 @pytest.mark.xdist_group("oracle")
-async def test_delete_operation(oracle_async_session: OracleAsyncConfig) -> None:
+async def test_async_delete_operation(oracle_async_session: OracleAsyncDriver) -> None:
     """Test DELETE operations."""
-    async with oracle_async_session.provide_session() as driver:
-        # Manual cleanup at start of test
-        await driver.execute_script(
-            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
-        )
+    # Manual cleanup at start of test
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
 
-        # Create test table
-        sql = """
-        CREATE TABLE test_table (
-            id NUMBER PRIMARY KEY,
-            name VARCHAR2(50)
-        )
-        """
-        await driver.execute_script(sql)
+    # Create test table
+    sql = """
+    CREATE TABLE test_table (
+        id NUMBER PRIMARY KEY,
+        name VARCHAR2(50)
+    )
+    """
+    await oracle_async_session.execute_script(sql)
 
-        # Insert a record first
-        insert_result = await driver.execute("INSERT INTO test_table (id, name) VALUES (1, ?)", ("to_delete"))
-        assert isinstance(insert_result, SQLResult)
-        assert insert_result.rows_affected == 1
+    # Insert a record first
+    insert_result = await oracle_async_session.execute(
+        "INSERT INTO test_table (id, name) VALUES (1, :1)", ("to_delete",)
+    )
+    assert isinstance(insert_result, SQLResult)
+    assert insert_result.rows_affected == 1
 
-        # Delete the record
-        delete_result = await driver.execute("DELETE FROM test_table WHERE name = ?", ("to_delete"))
-        assert isinstance(delete_result, SQLResult)
-        assert delete_result.rows_affected == 1
+    # Delete the record
+    delete_result = await oracle_async_session.execute("DELETE FROM test_table WHERE name = :1", ("to_delete",))
+    assert isinstance(delete_result, SQLResult)
+    assert delete_result.rows_affected == 1
 
-        # Verify the deletion
-        select_result = await driver.execute("SELECT COUNT(*) as count FROM test_table")
-        assert isinstance(select_result, SQLResult)
-        assert select_result.data is not None
-        assert select_result.data[0]["COUNT"] == 0
+    # Verify the deletion
+    select_result = await oracle_async_session.execute("SELECT COUNT(*) as count FROM test_table")
+    assert isinstance(select_result, SQLResult)
+    assert select_result.data is not None
+    assert select_result.data[0]["COUNT"] == 0
+
+    # Cleanup
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
