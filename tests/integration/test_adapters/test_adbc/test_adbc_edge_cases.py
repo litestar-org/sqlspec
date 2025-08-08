@@ -60,10 +60,13 @@ def test_null_parameter_handling(adbc_postgresql_session: AdbcDriver) -> None:
 
     # Insert test data with NULL parameters
     for text_val, int_val, bool_val, required_val in test_cases:
-        result = adbc_postgresql_session.execute("""
+        result = adbc_postgresql_session.execute(
+            """
             INSERT INTO null_param_test (nullable_text, nullable_int, nullable_bool, required_text)
             VALUES ($1, $2, $3, $4)
-        """, (text_val, int_val, bool_val, required_val))
+        """,
+            (text_val, int_val, bool_val, required_val),
+        )
 
         assert isinstance(result, SQLResult)
         assert result.rows_affected in (-1, 0, 1)  # ADBC may return -1
@@ -77,23 +80,25 @@ def test_null_parameter_handling(adbc_postgresql_session: AdbcDriver) -> None:
     assert len(null_text_result.data) == 2  # Two rows with NULL text
 
     # Test NULL in WHERE clause parameters
-    null_where_result = adbc_postgresql_session.execute("""
+    null_where_result = adbc_postgresql_session.execute(
+        """
         SELECT * FROM null_param_test
         WHERE (nullable_text = $1 OR ($1 IS NULL AND nullable_text IS NULL))
-    """, (None,))
+    """,
+        (None,),
+    )
     assert isinstance(null_where_result, SQLResult)
 
     # Test executemany with NULL parameters
-    null_many_data = [
-        (None, 1, "batch1"),
-        ("text", None, "batch2"),
-        (None, None, "batch3"),
-    ]
+    null_many_data = [(None, 1, "batch1"), ("text", None, "batch2"), (None, None, "batch3")]
 
-    many_result = adbc_postgresql_session.execute_many("""
+    many_result = adbc_postgresql_session.execute_many(
+        """
         INSERT INTO null_param_test (nullable_text, nullable_int, required_text)
         VALUES ($1, $2, $3)
-    """, null_many_data)
+    """,
+        null_many_data,
+    )
     assert isinstance(many_result, SQLResult)
     assert many_result.rows_affected == 3
 
@@ -115,26 +120,36 @@ def test_parameter_style_variations(adbc_postgresql_session: AdbcDriver) -> None
     """)
 
     # Test numbered parameters (PostgreSQL style)
-    result1 = adbc_postgresql_session.execute("""
+    result1 = adbc_postgresql_session.execute(
+        """
         INSERT INTO param_style_test (name, value, flag) VALUES ($1, $2, $3)
-    """, ("param_test1", 100, True))
+    """,
+        ("param_test1", 100, True),
+    )
     assert isinstance(result1, SQLResult)
 
     # Test with different parameter counts
-    result2 = adbc_postgresql_session.execute("""
+    result2 = adbc_postgresql_session.execute(
+        """
         INSERT INTO param_style_test (name) VALUES ($1)
-    """, ("single_param",))
+    """,
+        ("single_param",),
+    )
     assert isinstance(result2, SQLResult)
 
     # Test with repeated parameter references
-    result3 = adbc_postgresql_session.execute("""
+    result3 = adbc_postgresql_session.execute(
+        """
         INSERT INTO param_style_test (name, value, flag)
         VALUES ($1, $2, $2 > 0)  -- $2 used twice in different contexts
-    """, ("repeat_param", 42))
+    """,
+        ("repeat_param", 42),
+    )
     assert isinstance(result3, SQLResult)
 
     # Test complex parameter patterns
-    complex_result = adbc_postgresql_session.execute("""
+    complex_result = adbc_postgresql_session.execute(
+        """
         SELECT
             name,
             value,
@@ -142,7 +157,9 @@ def test_parameter_style_variations(adbc_postgresql_session: AdbcDriver) -> None
         FROM param_style_test
         WHERE name LIKE $2 || '%' AND value IS NOT NULL
         ORDER BY id
-    """, (42, "param"))
+    """,
+        (42, "param"),
+    )
     assert isinstance(complex_result, SQLResult)
     assert complex_result.data is not None
 
@@ -229,9 +246,12 @@ def test_returning_clause_support(adbc_postgresql_session: AdbcDriver) -> None:
     """)
 
     # Test INSERT with RETURNING
-    insert_returning = adbc_postgresql_session.execute("""
+    insert_returning = adbc_postgresql_session.execute(
+        """
         INSERT INTO returning_test (name) VALUES ($1) RETURNING id, name, created_at
-    """, ("returning_test1",))
+    """,
+        ("returning_test1",),
+    )
 
     assert isinstance(insert_returning, SQLResult)
     assert insert_returning.data is not None
@@ -243,12 +263,15 @@ def test_returning_clause_support(adbc_postgresql_session: AdbcDriver) -> None:
     assert returned_row["created_at"] is not None
 
     # Test UPDATE with RETURNING
-    update_returning = adbc_postgresql_session.execute("""
+    update_returning = adbc_postgresql_session.execute(
+        """
         UPDATE returning_test
         SET name = $1
         WHERE name = $2
         RETURNING id, name
-    """, ("updated_name", "returning_test1"))
+    """,
+        ("updated_name", "returning_test1"),
+    )
 
     assert isinstance(update_returning, SQLResult)
     assert update_returning.data is not None
@@ -256,11 +279,14 @@ def test_returning_clause_support(adbc_postgresql_session: AdbcDriver) -> None:
     assert update_returning.data[0]["name"] == "updated_name"
 
     # Test DELETE with RETURNING
-    delete_returning = adbc_postgresql_session.execute("""
+    delete_returning = adbc_postgresql_session.execute(
+        """
         DELETE FROM returning_test
         WHERE name = $1
         RETURNING id, name
-    """, ("updated_name",))
+    """,
+        ("updated_name",),
+    )
 
     assert isinstance(delete_returning, SQLResult)
     assert delete_returning.data is not None
@@ -300,17 +326,38 @@ def test_data_type_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
     # Test edge values
     edge_cases = [
         # (big_int, small_int, real_val, double_val, char_val, varchar_val, text_val, bytea_val)
-        (9223372036854775807, 32767, 3.4028235e+38, 1.7976931348623157e+308, "CHAR_TEST", "VARCHAR_TEST", "TEXT_TEST", b"\\x48656c6c6f"),
-        (-9223372036854775808, -32768, -3.4028235e+38, -1.7976931348623157e+308, "MIN_VALUES", "MIN_VARCHAR", "MIN_TEXT", b"\\x576f726c64"),
+        (
+            9223372036854775807,
+            32767,
+            3.4028235e38,
+            1.7976931348623157e308,
+            "CHAR_TEST",
+            "VARCHAR_TEST",
+            "TEXT_TEST",
+            b"\\x48656c6c6f",
+        ),
+        (
+            -9223372036854775808,
+            -32768,
+            -3.4028235e38,
+            -1.7976931348623157e308,
+            "MIN_VALUES",
+            "MIN_VARCHAR",
+            "MIN_TEXT",
+            b"\\x576f726c64",
+        ),
         (0, 0, 0.0, 0.0, "ZERO_VAL", "", "", b""),
     ]
 
     for big_int, small_int, real_val, double_val, char_val, varchar_val, text_val, bytea_val in edge_cases:
-        result = adbc_postgresql_session.execute("""
+        result = adbc_postgresql_session.execute(
+            """
             INSERT INTO data_type_edge_test
             (big_integer, small_integer, real_number, double_number, char_fixed, varchar_var, text_unlimited, bytea_binary)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        """, (big_int, small_int, real_val, double_val, char_val, varchar_val, text_val, bytea_val))
+        """,
+            (big_int, small_int, real_val, double_val, char_val, varchar_val, text_val, bytea_val),
+        )
 
         assert isinstance(result, SQLResult)
 
@@ -345,18 +392,15 @@ def test_sqlite_specific_edge_cases(adbc_sqlite_session: AdbcDriver) -> None:
     """)
 
     # Insert different types into the same column
-    flexible_data = [
-        (1, "text_value"),
-        (2, 42),
-        (3, 3.14159),
-        (4, b"binary_data"),
-        (5, None),
-    ]
+    flexible_data = [(1, "text_value"), (2, 42), (3, 3.14159), (4, b"binary_data"), (5, None)]
 
     for row_id, value in flexible_data:
-        result = adbc_sqlite_session.execute("""
+        result = adbc_sqlite_session.execute(
+            """
             INSERT INTO dynamic_type_test (id, flexible_column) VALUES (?, ?)
-        """, (row_id, value))
+        """,
+            (row_id, value),
+        )
         assert isinstance(result, SQLResult)
 
     # Query and verify dynamic typing

@@ -59,9 +59,12 @@ def test_bulk_insert_performance(adbc_postgresql_session: AdbcDriver) -> None:
 
     # Measure bulk insert performance
     start_time = time.time()
-    result = adbc_postgresql_session.execute_many("""
+    result = adbc_postgresql_session.execute_many(
+        """
         INSERT INTO bulk_insert_test (name, value, description) VALUES ($1, $2, $3)
-    """, test_data)
+    """,
+        test_data,
+    )
     insert_time = time.time() - start_time
 
     assert isinstance(result, SQLResult)
@@ -75,7 +78,6 @@ def test_bulk_insert_performance(adbc_postgresql_session: AdbcDriver) -> None:
 
     # Performance assertion (should complete within reasonable time)
     assert insert_time < 10.0, f"Bulk insert took {insert_time:.2f}s, expected < 10s"
-
 
     # Clean up
     adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS bulk_insert_test")
@@ -107,9 +109,12 @@ def test_large_result_set_performance(adbc_postgresql_session: AdbcDriver) -> No
             data = f"Data row {i} with category {category}"
             batch_data.append((category, value, data))
 
-        adbc_postgresql_session.execute_many("""
+        adbc_postgresql_session.execute_many(
+            """
             INSERT INTO large_result_test (category, value, data) VALUES ($1, $2, $3)
-        """, batch_data)
+        """,
+            batch_data,
+        )
 
     # Test large result set retrieval
     start_time = time.time()
@@ -122,7 +127,6 @@ def test_large_result_set_performance(adbc_postgresql_session: AdbcDriver) -> No
 
     # Performance assertion
     assert query_time < 5.0, f"Large result query took {query_time:.2f}s, expected < 5s"
-
 
     # Test aggregation performance on large dataset
     start_time = time.time()
@@ -146,7 +150,6 @@ def test_large_result_set_performance(adbc_postgresql_session: AdbcDriver) -> No
 
     # Performance assertion for aggregation
     assert agg_time < 2.0, f"Aggregation query took {agg_time:.2f}s, expected < 2s"
-
 
     # Clean up
     adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS large_result_test")
@@ -176,9 +179,12 @@ def test_sqlite_memory_performance(adbc_sqlite_session: AdbcDriver) -> None:
 
     # Test batch insert performance
     start_time = time.time()
-    adbc_sqlite_session.execute_many("""
+    adbc_sqlite_session.execute_many(
+        """
         INSERT INTO performance_test (name, value, binary_data) VALUES (?, ?, ?)
-    """, test_data)
+    """,
+        test_data,
+    )
     time.time() - start_time
 
     # Verify insertion
@@ -187,10 +193,10 @@ def test_sqlite_memory_performance(adbc_sqlite_session: AdbcDriver) -> None:
     assert count_result.data is not None
     assert count_result.data[0]["count"] == test_size
 
-
     # Test query performance with binary data
     start_time = time.time()
-    binary_query_result = adbc_sqlite_session.execute("""
+    binary_query_result = adbc_sqlite_session.execute(
+        """
         SELECT
             name,
             value,
@@ -200,12 +206,13 @@ def test_sqlite_memory_performance(adbc_sqlite_session: AdbcDriver) -> None:
         WHERE value > ? AND length(binary_data) > ?
         ORDER BY value
         LIMIT 100
-    """, (1000.0, 50))
+    """,
+        (1000.0, 50),
+    )
     time.time() - start_time
 
     assert isinstance(binary_query_result, SQLResult)
     assert binary_query_result.data is not None
-
 
     # Test complex aggregation
     start_time = time.time()
@@ -226,7 +233,6 @@ def test_sqlite_memory_performance(adbc_sqlite_session: AdbcDriver) -> None:
     row = agg_result.data[0]
     assert row["total_count"] == test_size
     assert row["total_binary_bytes"] > 0
-
 
 
 @pytest.mark.xdist_group("adbc_duckdb")
@@ -264,9 +270,12 @@ def test_duckdb_analytical_performance() -> None:
                 metadata = f'{{"id": {i}, "batch": {batch_start // batch_size}}}'
                 batch_data.append((i, timestamp, category, value, dimensions, metadata))
 
-            session.execute_many("""
+            session.execute_many(
+                """
                 INSERT INTO analytical_perf_test VALUES (?, ?, ?, ?, ?, ?)
-            """, batch_data)
+            """,
+                batch_data,
+            )
 
         # Test complex analytical query performance
         start_time = time.time()
@@ -292,7 +301,6 @@ def test_duckdb_analytical_performance() -> None:
         assert isinstance(complex_query_result, SQLResult)
         assert complex_query_result.data is not None
 
-
         # Test window function performance
         start_time = time.time()
         window_result = session.execute("""
@@ -311,7 +319,6 @@ def test_duckdb_analytical_performance() -> None:
 
         assert isinstance(window_result, SQLResult)
         assert window_result.data is not None
-
 
         # Test array operations performance
         start_time = time.time()
@@ -333,7 +340,6 @@ def test_duckdb_analytical_performance() -> None:
         assert len(array_ops_result.data) == len(categories)
 
 
-
 @pytest.mark.xdist_group("postgres")
 def test_prepared_statement_performance(adbc_postgresql_session: AdbcDriver) -> None:
     """Test prepared statement performance benefits with ADBC using CORE_ROUND_3."""
@@ -349,19 +355,16 @@ def test_prepared_statement_performance(adbc_postgresql_session: AdbcDriver) -> 
 
     # Insert initial data
     initial_data = [(f"item_{i}", i * 5, f"cat_{i % 5}") for i in range(100)]
-    adbc_postgresql_session.execute_many("""
+    adbc_postgresql_session.execute_many(
+        """
         INSERT INTO prepared_stmt_test (name, value, category) VALUES ($1, $2, $3)
-    """, initial_data)
+    """,
+        initial_data,
+    )
 
     # Test repeated query execution (simulating prepared statement reuse)
     query_sql = "SELECT * FROM prepared_stmt_test WHERE category = $1 AND value > $2 ORDER BY value LIMIT 10"
-    test_parameters = [
-        ("cat_0", 25),
-        ("cat_1", 50),
-        ("cat_2", 75),
-        ("cat_0", 100),
-        ("cat_3", 125),
-    ]
+    test_parameters = [("cat_0", 25), ("cat_1", 50), ("cat_2", 75), ("cat_0", 100), ("cat_3", 125)]
 
     # Measure repeated query performance
     start_time = time.time()
@@ -376,7 +379,6 @@ def test_prepared_statement_performance(adbc_postgresql_session: AdbcDriver) -> 
     # Verify all queries returned results
     total_results = sum(len(result.data or []) for result in results)
     assert total_results > 0
-
 
     # Test single complex query vs multiple simple queries
     start_time = time.time()
@@ -396,7 +398,6 @@ def test_prepared_statement_performance(adbc_postgresql_session: AdbcDriver) -> 
 
     assert isinstance(complex_result, SQLResult)
     assert complex_result.data is not None
-
 
     # Clean up
     adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS prepared_stmt_test")
@@ -426,22 +427,27 @@ def test_connection_pooling_simulation(adbc_postgresql_session: AdbcDriver) -> N
 
         # Simulate multiple operations per session
         for op_count in range(operations_per_session):
-            adbc_postgresql_session.execute("""
+            adbc_postgresql_session.execute(
+                """
                 INSERT INTO connection_test (session_id, operation_count)
                 VALUES ($1, $2)
-            """, (session_name, op_count))
+            """,
+                (session_name, op_count),
+            )
 
             # Occasionally query data (read operation)
             if op_count % 5 == 0:
-                query_result = adbc_postgresql_session.execute("""
+                query_result = adbc_postgresql_session.execute(
+                    """
                     SELECT COUNT(*) as count FROM connection_test
                     WHERE session_id = $1
-                """, (session_name,))
+                """,
+                    (session_name,),
+                )
                 assert isinstance(query_result, SQLResult)
 
     time.time() - start_time
     session_count * operations_per_session * 1.2  # Including reads
-
 
     # Verify all data was inserted correctly
     final_count_result = adbc_postgresql_session.execute("SELECT COUNT(*) as total FROM connection_test")

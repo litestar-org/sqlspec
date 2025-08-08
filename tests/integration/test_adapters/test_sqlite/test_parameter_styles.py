@@ -17,17 +17,13 @@ def test_qmark_parameter_style(sqlite_session: SqliteDriver) -> None:
     sqlite_session.commit()
 
     # Insert test data with qmark style
-    result = sqlite_session.execute(
-        "INSERT INTO test_table (name, value) VALUES (?, ?)",
-        ("qmark_test", 42)
-    )
+    result = sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("qmark_test", 42))
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 1
 
     # Select with qmark style
     select_result = sqlite_session.execute(
-        "SELECT name, value FROM test_table WHERE name = ? AND value = ?",
-        ("qmark_test", 42)
+        "SELECT name, value FROM test_table WHERE name = ? AND value = ?", ("qmark_test", 42)
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -45,16 +41,14 @@ def test_named_colon_parameter_style(sqlite_session: SqliteDriver) -> None:
 
     # Insert test data with named parameters
     result = sqlite_session.execute(
-        "INSERT INTO test_table (name, value) VALUES (:name, :value)",
-        {"name": "named_test", "value": 123}
+        "INSERT INTO test_table (name, value) VALUES (:name, :value)", {"name": "named_test", "value": 123}
     )
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 1
 
     # Select with named parameters
     select_result = sqlite_session.execute(
-        "SELECT name, value FROM test_table WHERE name = :target_name",
-        {"target_name": "named_test"}
+        "SELECT name, value FROM test_table WHERE name = :target_name", {"target_name": "named_test"}
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -71,20 +65,13 @@ def test_mixed_parameter_scenarios(sqlite_session: SqliteDriver) -> None:
     sqlite_session.commit()
 
     # Test with SQL object and parameters
-    sql_obj = SQL(
-        "INSERT INTO test_table (name, value) VALUES (:name, :value)",
-        name="sql_object_test",
-        value=999
-    )
+    sql_obj = SQL("INSERT INTO test_table (name, value) VALUES (:name, :value)", name="sql_object_test", value=999)
     result = sqlite_session.execute(sql_obj)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 1
 
     # Verify data was inserted correctly
-    verify_result = sqlite_session.execute(
-        "SELECT * FROM test_table WHERE name = ?",
-        ("sql_object_test",)
-    )
+    verify_result = sqlite_session.execute("SELECT * FROM test_table WHERE name = ?", ("sql_object_test",))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert len(verify_result.data) == 1
@@ -109,17 +96,12 @@ def test_parameter_type_coercion(sqlite_session: SqliteDriver) -> None:
     ]
 
     for name, value in test_cases:
-        result = sqlite_session.execute(
-            "INSERT INTO test_table (name, value) VALUES (?, ?)",
-            (name, value)
-        )
+        result = sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", (name, value))
         assert isinstance(result, SQLResult)
         assert result.rows_affected == 1
 
     # Verify all data was inserted and types handled correctly
-    select_result = sqlite_session.execute(
-        "SELECT name, value FROM test_table ORDER BY name"
-    )
+    select_result = sqlite_session.execute("SELECT name, value FROM test_table ORDER BY name")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 5
@@ -140,16 +122,9 @@ def test_execute_many_parameter_styles(sqlite_session: SqliteDriver) -> None:
     sqlite_session.commit()
 
     # Test execute_many with tuple parameters (qmark style)
-    tuple_params: list[tuple[str, int]] = [
-        ("batch1", 10),
-        ("batch2", 20),
-        ("batch3", 30),
-    ]
+    tuple_params: list[tuple[str, int]] = [("batch1", 10), ("batch2", 20), ("batch3", 30)]
 
-    result = sqlite_session.execute_many(
-        "INSERT INTO test_table (name, value) VALUES (?, ?)",
-        tuple_params
-    )
+    result = sqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", tuple_params)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
 
@@ -160,10 +135,7 @@ def test_execute_many_parameter_styles(sqlite_session: SqliteDriver) -> None:
         {"name": "dict3", "value": 300},
     ]
 
-    result = sqlite_session.execute_many(
-        "INSERT INTO test_table (name, value) VALUES (:name, :value)",
-        dict_params
-    )
+    result = sqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (:name, :value)", dict_params)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
 
@@ -189,17 +161,13 @@ def test_parameter_edge_cases(sqlite_session: SqliteDriver) -> None:
 
     # Test duplicate parameter names in named style
     result = sqlite_session.execute(
-        "INSERT INTO test_table (name, value) VALUES (:param, :param)",
-        {"param": "duplicate_param_test"}
+        "INSERT INTO test_table (name, value) VALUES (:param, :param)", {"param": "duplicate_param_test"}
     )
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 1
 
     # Verify the data
-    select_result = sqlite_session.execute(
-        "SELECT * FROM test_table WHERE name = ?",
-        ("duplicate_param_test",)
-    )
+    select_result = sqlite_session.execute("SELECT * FROM test_table WHERE name = ?", ("duplicate_param_test",))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
@@ -213,18 +181,12 @@ def test_parameter_escaping_and_sql_injection_protection(sqlite_session: SqliteD
     sqlite_session.commit()
 
     # Insert some test data
-    sqlite_session.execute(
-        "INSERT INTO test_table (name, value) VALUES (?, ?)",
-        ("safe_data", 42)
-    )
+    sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("safe_data", 42))
 
     # Test SQL injection attempt via parameters (should be safely escaped)
     malicious_input = "'; DROP TABLE test_table; --"
 
-    result = sqlite_session.execute(
-        "SELECT * FROM test_table WHERE name = ?",
-        (malicious_input,)
-    )
+    result = sqlite_session.execute("SELECT * FROM test_table WHERE name = ?", (malicious_input,))
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 0  # No matches, but table should still exist
@@ -249,10 +211,7 @@ def test_parameter_escaping_and_sql_injection_protection(sqlite_session: SqliteD
 )
 @pytest.mark.xdist_group("sqlite")
 def test_parameterized_query_patterns(
-    sqlite_session: SqliteDriver,
-    sql_template: str,
-    params: Any,
-    expected_count: int,
+    sqlite_session: SqliteDriver, sql_template: str, params: Any, expected_count: int
 ) -> None:
     """Test various parameterized query patterns."""
     # Clear and setup test data
@@ -261,10 +220,7 @@ def test_parameterized_query_patterns(
 
     # Insert test data
     test_data = [("test1", 10), ("test2", 20), ("test3", 30), ("other", 40)]
-    sqlite_session.execute_many(
-        "INSERT INTO test_table (name, value) VALUES (?, ?)",
-        test_data
-    )
+    sqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", test_data)
 
     # Execute parameterized query
     result = sqlite_session.execute(sql_template, params)

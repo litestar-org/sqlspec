@@ -31,7 +31,7 @@ async def asyncmy_pooled_session(mysql_service: MySQLService) -> AsyncGenerator[
             "database": mysql_service.db,
             "autocommit": True,
             "minsize": 2,  # Minimum pool size
-            "maxsize": 10, # Maximum pool size
+            "maxsize": 10,  # Maximum pool size
             "echo": False,
         },
         statement_config=asyncmy_statement_config,
@@ -64,17 +64,10 @@ async def test_asyncmy_connection_pooling(asyncmy_pooled_session: AsyncmyDriver)
     async def insert_data(thread_id: str, count: int) -> None:
         """Insert data from a specific thread."""
         for i in range(count):
-            await driver.execute(
-                "INSERT INTO concurrent_test (thread_id, value) VALUES (?, ?)",
-                (thread_id, i)
-            )
+            await driver.execute("INSERT INTO concurrent_test (thread_id, value) VALUES (?, ?)", (thread_id, i))
 
     # Run concurrent inserts to test pooling
-    tasks = [
-        insert_data("thread_1", 5),
-        insert_data("thread_2", 5),
-        insert_data("thread_3", 5),
-    ]
+    tasks = [insert_data("thread_1", 5), insert_data("thread_2", 5), insert_data("thread_3", 5)]
 
     await asyncio.gather(*tasks)
 
@@ -85,8 +78,7 @@ async def test_asyncmy_connection_pooling(asyncmy_pooled_session: AsyncmyDriver)
     # Verify data from each thread
     for thread_id in ["thread_1", "thread_2", "thread_3"]:
         thread_result = await driver.execute(
-            "SELECT COUNT(*) as count FROM concurrent_test WHERE thread_id = ?",
-            (thread_id,)
+            "SELECT COUNT(*) as count FROM concurrent_test WHERE thread_id = ?", (thread_id,)
         )
         assert thread_result.get_data()[0]["count"] == 5
 
@@ -110,16 +102,13 @@ async def test_asyncmy_mysql_json_operations(asyncmy_pooled_session: AsyncmyDriv
     json_data = '{"name": "test", "values": [1, 2, 3], "nested": {"key": "value"}}'
     metadata = '{"created_by": "test_suite", "version": 1}'
 
-    result = await driver.execute(
-        "INSERT INTO json_test (data, metadata) VALUES (?, ?)",
-        (json_data, metadata)
-    )
+    result = await driver.execute("INSERT INTO json_test (data, metadata) VALUES (?, ?)", (json_data, metadata))
     assert result.num_rows == 1
 
     # Query JSON data using MySQL JSON functions
     json_result = await driver.execute(
         "SELECT data->>'$.name' as name, JSON_EXTRACT(data, '$.values[1]') as second_value FROM json_test WHERE id = ?",
-        (result.last_insert_id,)  # Use the inserted ID
+        (result.last_insert_id,),  # Use the inserted ID
     )
 
     assert len(json_result.get_data()) == 1
@@ -130,7 +119,7 @@ async def test_asyncmy_mysql_json_operations(asyncmy_pooled_session: AsyncmyDriv
     # Test JSON_CONTAINS function
     contains_result = await driver.execute(
         "SELECT COUNT(*) as count FROM json_test WHERE JSON_CONTAINS(data, ?, '$.values')",
-        ("2",)  # Search for value 2 in the array
+        ("2",),  # Search for value 2 in the array
     )
     assert contains_result.get_data()[0]["count"] == 1
 
@@ -155,13 +144,13 @@ async def test_asyncmy_mysql_specific_sql_features(asyncmy_pooled_session: Async
     # Test INSERT ... ON DUPLICATE KEY UPDATE
     await driver.execute(
         "INSERT INTO mysql_features (id, name, value, status) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value) + ?",
-        (1, "duplicate_test", 100, "active", 50)
+        (1, "duplicate_test", 100, "active", 50),
     )
 
     # Insert same ID again to trigger the ON DUPLICATE KEY UPDATE
     await driver.execute(
         "INSERT INTO mysql_features (id, name, value, status) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value) + ?",
-        (1, "duplicate_test_updated", 200, "inactive", 50)
+        (1, "duplicate_test_updated", 200, "inactive", 50),
     )
 
     # Verify the update occurred (200 + 50 = 250)
@@ -173,13 +162,10 @@ async def test_asyncmy_mysql_specific_sql_features(asyncmy_pooled_session: Async
     # Test ENUM and SET types
     await driver.execute(
         "INSERT INTO mysql_features (name, value, status, tags) VALUES (?, ?, ?, ?)",
-        ("enum_set_test", 300, "active", "urgent,important")
+        ("enum_set_test", 300, "active", "urgent,important"),
     )
 
-    enum_result = await driver.execute(
-        "SELECT status, tags FROM mysql_features WHERE name = ?",
-        ("enum_set_test",)
-    )
+    enum_result = await driver.execute("SELECT status, tags FROM mysql_features WHERE name = ?", ("enum_set_test",))
     enum_row = enum_result.get_data()[0]
     assert enum_row["status"] == "active"
     assert "urgent" in enum_row["tags"]
@@ -207,10 +193,7 @@ async def test_asyncmy_transaction_isolation_levels(asyncmy_pooled_session: Asyn
     await driver.begin()
 
     # Insert data in transaction
-    await driver.execute(
-        "INSERT INTO isolation_test (id, value) VALUES (?, ?)",
-        (1, "transaction_data")
-    )
+    await driver.execute("INSERT INTO isolation_test (id, value) VALUES (?, ?)", (1, "transaction_data"))
 
     # Verify data exists in current transaction
     result = await driver.execute("SELECT COUNT(*) as count FROM isolation_test WHERE id = ?", (1,))
@@ -278,30 +261,22 @@ async def test_asyncmy_bulk_operations_performance(asyncmy_pooled_session: Async
 
     # Prepare large dataset for bulk insert
     batch_size = 100
-    batch_data = [
-        ("batch_001", i, f"data_item_{i:04d}")
-        for i in range(batch_size)
-    ]
+    batch_data = [("batch_001", i, f"data_item_{i:04d}") for i in range(batch_size)]
 
     # Test execute_many performance
     result = await driver.execute_many(
-        "INSERT INTO bulk_test (batch_id, sequence_num, data) VALUES (?, ?, ?)",
-        batch_data
+        "INSERT INTO bulk_test (batch_id, sequence_num, data) VALUES (?, ?, ?)", batch_data
     )
 
     assert result.num_rows == batch_size
 
     # Verify all data was inserted correctly
-    count_result = await driver.execute(
-        "SELECT COUNT(*) as total FROM bulk_test WHERE batch_id = ?",
-        ("batch_001",)
-    )
+    count_result = await driver.execute("SELECT COUNT(*) as total FROM bulk_test WHERE batch_id = ?", ("batch_001",))
     assert count_result.get_data()[0]["total"] == batch_size
 
     # Test bulk SELECT performance
     select_result = await driver.execute(
-        "SELECT sequence_num, data FROM bulk_test WHERE batch_id = ? ORDER BY sequence_num",
-        ("batch_001",)
+        "SELECT sequence_num, data FROM bulk_test WHERE batch_id = ? ORDER BY sequence_num", ("batch_001",)
     )
 
     assert len(select_result.get_data()) == batch_size
@@ -371,7 +346,7 @@ async def test_asyncmy_sql_object_advanced_features(asyncmy_pooled_session: Asyn
         "complex_test",
         '{"type": "advanced", "priority": 1}',
         95.5,
-        10.0
+        10.0,
     )
 
     result = await driver.execute(complex_sql)
@@ -380,8 +355,7 @@ async def test_asyncmy_sql_object_advanced_features(asyncmy_pooled_session: Asyn
 
     # Verify the insert with JSON query
     verify_sql = SQL(
-        "SELECT name, metadata->>'$.type' as type, score FROM advanced_test WHERE name = ?",
-        "complex_test"
+        "SELECT name, metadata->>'$.type' as type, score FROM advanced_test WHERE name = ?", "complex_test"
     )
 
     verify_result = await driver.execute(verify_sql)

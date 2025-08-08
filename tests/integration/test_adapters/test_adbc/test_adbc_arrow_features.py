@@ -42,14 +42,13 @@ def test_arrow_table_metadata_handling(adbc_postgresql_session: AdbcDriver) -> N
     """)
 
     # Insert test data
-    adbc_postgresql_session.execute("""
+    adbc_postgresql_session.execute(
+        """
         INSERT INTO arrow_metadata_test (name, age, salary, is_active, tags, metadata)
         VALUES ($1, $2, $3, $4, $5, $6)
-    """, (
-        "John Doe", 30, 75000.50, True,
-        ["developer", "senior"],
-        '{"department": "engineering", "level": "senior"}'
-    ))
+    """,
+        ("John Doe", 30, 75000.50, True, ["developer", "senior"], '{"department": "engineering", "level": "senior"}'),
+    )
 
     # Query with column metadata
     result = adbc_postgresql_session.execute("SELECT * FROM arrow_metadata_test")
@@ -97,11 +96,14 @@ def test_arrow_null_value_handling(adbc_postgresql_session: AdbcDriver) -> None:
     ]
 
     for case in test_cases:
-        adbc_postgresql_session.execute("""
+        adbc_postgresql_session.execute(
+            """
             INSERT INTO arrow_null_test
             (nullable_text, nullable_int, nullable_bool, nullable_decimal, nullable_array)
             VALUES ($1, $2, $3, $4, $5)
-        """, case)
+        """,
+            case,
+        )
 
     # Query and verify NULL handling
     result = adbc_postgresql_session.execute("SELECT * FROM arrow_null_test ORDER BY id")
@@ -149,15 +151,20 @@ def test_arrow_large_dataset_handling(adbc_postgresql_session: AdbcDriver) -> No
     for batch_start in range(0, total_rows, batch_size):
         batch_data = []
         for i in range(batch_start, min(batch_start + batch_size, total_rows)):
-            batch_data.append((
-                f"name_{i:04d}",
-                i * 10,
-                f"data_string_{i}_" + "x" * 50  # Longer strings to test memory handling
-            ))
+            batch_data.append(
+                (
+                    f"name_{i:04d}",
+                    i * 10,
+                    f"data_string_{i}_" + "x" * 50,  # Longer strings to test memory handling
+                )
+            )
 
-        adbc_postgresql_session.execute_many("""
+        adbc_postgresql_session.execute_many(
+            """
             INSERT INTO arrow_large_test (name, value, data) VALUES ($1, $2, $3)
-        """, batch_data)
+        """,
+            batch_data,
+        )
 
     # Query entire dataset
     result = adbc_postgresql_session.execute("SELECT COUNT(*) as total_count FROM arrow_large_test")
@@ -167,11 +174,14 @@ def test_arrow_large_dataset_handling(adbc_postgresql_session: AdbcDriver) -> No
 
     # Query with pagination to test Arrow streaming
     page_size = 50
-    page_result = adbc_postgresql_session.execute("""
+    page_result = adbc_postgresql_session.execute(
+        """
         SELECT * FROM arrow_large_test
         ORDER BY id
         LIMIT $1 OFFSET $2
-    """, (page_size, 100))
+    """,
+        (page_size, 100),
+    )
 
     assert isinstance(page_result, SQLResult)
     assert page_result.data is not None
@@ -180,8 +190,8 @@ def test_arrow_large_dataset_handling(adbc_postgresql_session: AdbcDriver) -> No
     # Verify ordering and data integrity
     for i, row in enumerate(page_result.data):
         expected_id = 101 + i  # OFFSET 100 means starting from ID 101
-        assert row["name"] == f"name_{expected_id-1:04d}"
-        assert row["value"] == (expected_id-1) * 10
+        assert row["name"] == f"name_{expected_id - 1:04d}"
+        assert row["value"] == (expected_id - 1) * 10
 
     # Test aggregation on large dataset
     agg_result = adbc_postgresql_session.execute("""
@@ -235,9 +245,12 @@ def test_arrow_duckdb_advanced_analytics() -> None:
             (5, "B", 250.8, "2024-01-01 14:00:00", ["tag2"]),
         ]
 
-        session.execute_many("""
+        session.execute_many(
+            """
             INSERT INTO analytics_test VALUES (?, ?, ?, ?, ?)
-        """, analytical_data)
+        """,
+            analytical_data,
+        )
 
         # Test DuckDB analytical functions with Arrow
         analytical_query = session.execute("""
@@ -308,9 +321,12 @@ def test_arrow_sqlite_binary_data() -> None:
         ]
 
         for name, binary_data, size in binary_test_cases:
-            session.execute("""
+            session.execute(
+                """
                 INSERT INTO binary_test (name, binary_data, binary_size) VALUES (?, ?, ?)
-            """, (name, binary_data, size))
+            """,
+                (name, binary_data, size),
+            )
 
         # Query and verify binary data handling
         result = session.execute("SELECT * FROM binary_test ORDER BY name")
@@ -363,10 +379,13 @@ def test_arrow_postgresql_array_operations(adbc_postgresql_session: AdbcDriver) 
     ]
 
     for name, int_arr, text_arr, nested_arr in array_test_data:
-        adbc_postgresql_session.execute("""
+        adbc_postgresql_session.execute(
+            """
             INSERT INTO array_operations_test (name, int_array, text_array, nested_array)
             VALUES ($1, $2, $3, $4)
-        """, (name, int_arr, text_arr, nested_arr))
+        """,
+            (name, int_arr, text_arr, nested_arr),
+        )
 
     # Test array operations and functions
     array_ops_result = adbc_postgresql_session.execute("""

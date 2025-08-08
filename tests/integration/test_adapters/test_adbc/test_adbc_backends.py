@@ -61,15 +61,18 @@ def test_postgresql_specific_features(postgresql_session: AdbcDriver) -> None:
     """)
 
     # Insert data with PostgreSQL-specific types
-    postgresql_session.execute("""
+    postgresql_session.execute(
+        """
         INSERT INTO pg_test (jsonb_col, array_col, inet_col, tsvector_col)
         VALUES ($1, $2, $3, to_tsvector($4))
-    """, (
-        '{"name": "John", "age": 30, "tags": ["developer", "python"]}',
-        [1, 2, 3, 4, 5],
-        "192.168.1.1",
-        "PostgreSQL full text search"
-    ))
+    """,
+        (
+            '{"name": "John", "age": 30, "tags": ["developer", "python"]}',
+            [1, 2, 3, 4, 5],
+            "192.168.1.1",
+            "PostgreSQL full text search",
+        ),
+    )
 
     # Query and verify data
     result = postgresql_session.execute("SELECT * FROM pg_test")
@@ -118,13 +121,12 @@ def test_sqlite_specific_features(sqlite_session: AdbcDriver) -> None:
 
     # Insert test data including binary data
     test_blob = b"SQLite binary data test"
-    sqlite_session.execute_many("""
+    sqlite_session.execute_many(
+        """
         INSERT INTO sqlite_test (name, data, value) VALUES (?, ?, ?)
-    """, [
-        ("test1", test_blob, 3.14159),
-        ("test2", None, 2.71828),
-        ("test3", b"another blob", 1.41421),
-    ])
+    """,
+        [("test1", test_blob, 3.14159), ("test2", None, 2.71828), ("test3", b"another blob", 1.41421)],
+    )
 
     # Test SQLite-specific queries
     result = sqlite_session.execute("""
@@ -255,13 +257,19 @@ def test_backend_consistency_across_adapters(postgresql_session: AdbcDriver, sql
     test_data_pg = [("postgres_item1", 100, True), ("postgres_item2", 200, False)]
     test_data_sqlite = [("sqlite_item1", 100, True), ("sqlite_item2", 200, False)]
 
-    postgresql_session.execute_many("""
+    postgresql_session.execute_many(
+        """
         INSERT INTO consistency_test (name, value, is_active) VALUES ($1, $2, $3)
-    """, test_data_pg)
+    """,
+        test_data_pg,
+    )
 
-    sqlite_session.execute_many("""
+    sqlite_session.execute_many(
+        """
         INSERT INTO consistency_test (name, value, is_active) VALUES (?, ?, ?)
-    """, test_data_sqlite)
+    """,
+        test_data_sqlite,
+    )
 
     # Test similar queries on both backends
     pg_result = postgresql_session.execute("""
@@ -291,10 +299,9 @@ def test_backend_consistency_across_adapters(postgresql_session: AdbcDriver, sql
     # SQLite cleanup automatic with in-memory database
 
 
-@pytest.mark.parametrize("backend_name,session_fixture", [
-    ("PostgreSQL", "postgresql_session"),
-    ("SQLite", "sqlite_session"),
-])
+@pytest.mark.parametrize(
+    "backend_name,session_fixture", [("PostgreSQL", "postgresql_session"), ("SQLite", "sqlite_session")]
+)
 def test_parameter_style_consistency(backend_name: str, session_fixture: str, request: Any) -> None:
     """Test parameter style consistency across ADBC backends using CORE_ROUND_3."""
     session = request.getfixturevalue(session_fixture)
@@ -419,13 +426,19 @@ def test_cross_backend_data_type_handling(postgresql_session: AdbcDriver, sqlite
     for name, value in common_types_data:
         str_value = str(value) if value is not None else None
 
-        postgresql_session.execute("""
+        postgresql_session.execute(
+            """
             INSERT INTO type_test (test_name, test_value) VALUES ($1, $2)
-        """, (name, str_value))
+        """,
+            (name, str_value),
+        )
 
-        sqlite_session.execute("""
+        sqlite_session.execute(
+            """
             INSERT INTO type_test (test_name, test_value) VALUES (?, ?)
-        """, (name, str_value))
+        """,
+            (name, str_value),
+        )
 
     # Query and compare results
     pg_result = postgresql_session.execute("SELECT * FROM type_test ORDER BY test_name")

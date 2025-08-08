@@ -113,7 +113,7 @@ class TypedParameter:
         self.value = value
         self.original_type = original_type or type(value)
         self.semantic_name = semantic_name
-        self._hash = None
+        self._hash: Optional[int] = None
 
     def __hash__(self) -> int:
         """Cached hash for efficient dictionary operations."""
@@ -323,7 +323,7 @@ class ParameterStyleConfig:
                 else None
             ),
             self.default_execution_parameter_style.value,
-            tuple(sorted(self.type_coercion_map.keys())) if self.type_coercion_map else None,
+            tuple(sorted(self.type_coercion_map.keys(), key=str)) if self.type_coercion_map else None,
             self.has_native_list_expansion,
             bool(self.output_transformer),  # Can't hash function, just presence
             self.needs_static_script_compilation,

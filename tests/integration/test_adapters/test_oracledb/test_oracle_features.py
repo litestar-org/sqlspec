@@ -62,9 +62,7 @@ def test_sync_plsql_block_execution(oracle_sync_session: OracleSyncDriver) -> No
     assert isinstance(result, SQLResult)
 
     # Verify the PL/SQL block executed correctly
-    select_result = oracle_sync_session.execute(
-        "SELECT id, name, calculated_value FROM test_plsql_table ORDER BY id"
-    )
+    select_result = oracle_sync_session.execute("SELECT id, name, calculated_value FROM test_plsql_table ORDER BY id")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 3  # Records 1, 2, 3, 4 - but we expect 3 from the loop
@@ -188,17 +186,13 @@ def test_sync_oracle_data_types(oracle_sync_session: OracleSyncDriver) -> None:
 
     description_text = "This is a long description that would be stored as CLOB data type in Oracle. " * 10
 
-    result = oracle_sync_session.execute(
-        insert_sql,
-        (1, "Test Product", description_text, 99.99, 1)
-    )
+    result = oracle_sync_session.execute(insert_sql, (1, "Test Product", description_text, 99.99, 1))
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 1
 
     # Query the data back
     select_result = oracle_sync_session.execute(
-        "SELECT id, name, description, price, is_active FROM test_datatypes_table WHERE id = :1",
-        (1,)
+        "SELECT id, name, description, price, is_active FROM test_datatypes_table WHERE id = :1", (1,)
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -379,9 +373,7 @@ async def test_async_oracle_exception_handling(oracle_async_session: OracleAsync
     assert isinstance(result, SQLResult)
 
     # Verify exception was handled properly
-    select_result = await oracle_async_session.execute(
-        "SELECT id, name FROM test_exception_table ORDER BY id"
-    )
+    select_result = await oracle_async_session.execute("SELECT id, name FROM test_exception_table ORDER BY id")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 3

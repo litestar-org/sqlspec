@@ -26,6 +26,7 @@ class TestMigrationRunnerInitialization:
 
     def test_migration_runner_initialization(self) -> None:
         """Test basic MigrationRunner initialization."""
+
         class TestMigrationRunner(BaseMigrationRunner):
             def __init__(self, migrations_path: Path) -> None:
                 super().__init__(migrations_path)
@@ -54,6 +55,7 @@ class TestMigrationRunnerInitialization:
 
     def test_migration_runner_with_project_root(self) -> None:
         """Test MigrationRunner with project root set."""
+
         class TestMigrationRunner(BaseMigrationRunner):
             def __init__(self, migrations_path: Path, project_root: Path) -> None:
                 super().__init__(migrations_path)
@@ -87,6 +89,7 @@ class TestMigrationRunnerFileDiscovery:
 
     def test_get_migration_files_sorting(self) -> None:
         """Test that migration files are properly sorted by version."""
+
         class TestMigrationRunner(BaseMigrationRunner):
             def __init__(self, migrations_path: Path) -> None:
                 super().__init__(migrations_path)
@@ -127,6 +130,7 @@ class TestMigrationRunnerFileDiscovery:
 
     def test_get_migration_files_mixed_extensions(self) -> None:
         """Test migration file discovery with mixed SQL and Python files."""
+
         class TestMigrationRunner(BaseMigrationRunner):
             def __init__(self, migrations_path: Path) -> None:
                 super().__init__(migrations_path)
@@ -175,6 +179,7 @@ class TestMigrationRunnerMetadataLoading:
 
     def test_load_migration_metadata_integration(self) -> None:
         """Test full migration metadata loading process."""
+
         class TestMigrationRunner(BaseMigrationRunner):
             def __init__(self, migrations_path: Path) -> None:
                 super().__init__(migrations_path)
@@ -238,6 +243,7 @@ DROP TABLE users;
 
     def test_load_migration_metadata_python_file(self) -> None:
         """Test metadata loading for Python migration files."""
+
         class TestMigrationRunner(BaseMigrationRunner):
             def __init__(self, migrations_path: Path) -> None:
                 super().__init__(migrations_path)
@@ -280,9 +286,10 @@ def down():
 
             runner = TestMigrationRunner(migrations_path)
 
-            with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader, \
-                 patch("sqlspec.migrations.base.run_") as mock_run:
-
+            with (
+                patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
+                patch("sqlspec.migrations.base.run_") as mock_run,
+            ):
                 mock_loader = Mock()
                 mock_loader.validate_migration_file = Mock()
                 mock_loader.get_up_sql = Mock()
@@ -305,6 +312,7 @@ class TestMigrationRunnerSQLGeneration:
 
     def test_get_migration_sql_upgrade_success(self) -> None:
         """Test successful upgrade SQL generation."""
+
         class TestMigrationRunner(BaseMigrationRunner):
             def __init__(self) -> None:
                 super().__init__(Path("/test"))
@@ -332,12 +340,10 @@ class TestMigrationRunnerSQLGeneration:
             "has_upgrade": True,
             "has_downgrade": False,
             "file_path": Path("/test/0001_test.sql"),
-            "loader": Mock()
+            "loader": Mock(),
         }
 
-        with patch("sqlspec.migrations.base.run_") as mock_run, \
-             patch("sqlspec.core.statement.SQL") as mock_sql_class:
-
+        with patch("sqlspec.migrations.base.run_") as mock_run, patch("sqlspec.core.statement.SQL") as mock_sql_class:
             # Mock successful SQL generation
             mock_run.return_value = ["CREATE TABLE test (id INTEGER PRIMARY KEY);"]
             mock_sql_instance = Mock(spec=SQL)
@@ -351,6 +357,7 @@ class TestMigrationRunnerSQLGeneration:
 
     def test_get_migration_sql_downgrade_success(self) -> None:
         """Test successful downgrade SQL generation."""
+
         class TestMigrationRunner(BaseMigrationRunner):
             def __init__(self) -> None:
                 super().__init__(Path("/test"))
@@ -377,12 +384,10 @@ class TestMigrationRunnerSQLGeneration:
             "has_upgrade": True,
             "has_downgrade": True,
             "file_path": Path("/test/0001_test.sql"),
-            "loader": Mock()
+            "loader": Mock(),
         }
 
-        with patch("sqlspec.migrations.base.run_") as mock_run, \
-             patch("sqlspec.core.statement.SQL") as mock_sql_class:
-
+        with patch("sqlspec.migrations.base.run_") as mock_run, patch("sqlspec.core.statement.SQL") as mock_sql_class:
             mock_run.return_value = ["DROP TABLE test;"]
             mock_sql_instance = Mock(spec=SQL)
             mock_sql_class.return_value = mock_sql_instance
@@ -394,6 +399,7 @@ class TestMigrationRunnerSQLGeneration:
 
     def test_get_migration_sql_no_downgrade_warning(self) -> None:
         """Test warning when no downgrade is available."""
+
         class TestMigrationRunner(BaseMigrationRunner):
             def __init__(self) -> None:
                 super().__init__(Path("/test"))
@@ -420,7 +426,7 @@ class TestMigrationRunnerSQLGeneration:
             "has_upgrade": True,
             "has_downgrade": False,  # No downgrade available
             "file_path": Path("/test/0001_test.sql"),
-            "loader": Mock()
+            "loader": Mock(),
         }
 
         with patch("sqlspec.migrations.base.logger") as mock_logger:
@@ -428,12 +434,11 @@ class TestMigrationRunnerSQLGeneration:
 
             # Should return None and log warning
             assert result is None
-            mock_logger.warning.assert_called_once_with(
-                "Migration %s has no downgrade query", "0001"
-            )
+            mock_logger.warning.assert_called_once_with("Migration %s has no downgrade query", "0001")
 
     def test_get_migration_sql_no_upgrade_error(self) -> None:
         """Test error when no upgrade is available."""
+
         class TestMigrationRunner(BaseMigrationRunner):
             def __init__(self) -> None:
                 super().__init__(Path("/test"))
@@ -460,7 +465,7 @@ class TestMigrationRunnerSQLGeneration:
             "has_upgrade": False,  # No upgrade available
             "has_downgrade": False,
             "file_path": Path("/test/0001_test.sql"),
-            "loader": Mock()
+            "loader": Mock(),
         }
 
         with pytest.raises(ValueError) as exc_info:
@@ -470,6 +475,7 @@ class TestMigrationRunnerSQLGeneration:
 
     def test_get_migration_sql_loader_exception_upgrade(self) -> None:
         """Test handling of loader exceptions during upgrade SQL generation."""
+
         class TestMigrationRunner(BaseMigrationRunner):
             def __init__(self) -> None:
                 super().__init__(Path("/test"))
@@ -496,7 +502,7 @@ class TestMigrationRunnerSQLGeneration:
             "has_upgrade": True,
             "has_downgrade": False,
             "file_path": Path("/test/0001_test.sql"),
-            "loader": Mock()
+            "loader": Mock(),
         }
 
         with patch("sqlspec.migrations.base.run_") as mock_run:
@@ -510,6 +516,7 @@ class TestMigrationRunnerSQLGeneration:
 
     def test_get_migration_sql_loader_exception_downgrade(self) -> None:
         """Test handling of loader exceptions during downgrade SQL generation."""
+
         class TestMigrationRunner(BaseMigrationRunner):
             def __init__(self) -> None:
                 super().__init__(Path("/test"))
@@ -536,12 +543,10 @@ class TestMigrationRunnerSQLGeneration:
             "has_upgrade": True,
             "has_downgrade": True,
             "file_path": Path("/test/0001_test.sql"),
-            "loader": Mock()
+            "loader": Mock(),
         }
 
-        with patch("sqlspec.migrations.base.run_") as mock_run, \
-             patch("sqlspec.migrations.base.logger") as mock_logger:
-
+        with patch("sqlspec.migrations.base.run_") as mock_run, patch("sqlspec.migrations.base.logger") as mock_logger:
             # Mock loader exception for downgrade
             mock_run.side_effect = Exception("Downgrade loader failed")
 
@@ -556,6 +561,7 @@ class TestMigrationRunnerSQLGeneration:
 
     def test_get_migration_sql_empty_statements(self) -> None:
         """Test handling when migration loader returns empty statements."""
+
         class TestMigrationRunner(BaseMigrationRunner):
             def __init__(self) -> None:
                 super().__init__(Path("/test"))
@@ -582,7 +588,7 @@ class TestMigrationRunnerSQLGeneration:
             "has_upgrade": True,
             "has_downgrade": False,
             "file_path": Path("/test/0001_test.sql"),
-            "loader": Mock()
+            "loader": Mock(),
         }
 
         with patch("sqlspec.migrations.base.run_") as mock_run:
@@ -596,6 +602,7 @@ class TestMigrationRunnerSQLGeneration:
 
     def test_get_migration_sql_none_statements(self) -> None:
         """Test handling when migration loader returns None."""
+
         class TestMigrationRunner(BaseMigrationRunner):
             def __init__(self) -> None:
                 super().__init__(Path("/test"))
@@ -622,7 +629,7 @@ class TestMigrationRunnerSQLGeneration:
             "has_upgrade": True,
             "has_downgrade": False,
             "file_path": Path("/test/0001_test.sql"),
-            "loader": Mock()
+            "loader": Mock(),
         }
 
         with patch("sqlspec.migrations.base.run_") as mock_run:
@@ -640,6 +647,7 @@ class TestMigrationRunnerErrorHandling:
 
     def test_invalid_migration_version_handling(self) -> None:
         """Test handling of invalid migration version formats."""
+
         class TestMigrationRunner(BaseMigrationRunner):
             def __init__(self, migrations_path: Path) -> None:
                 super().__init__(migrations_path)
@@ -674,6 +682,7 @@ class TestMigrationRunnerErrorHandling:
 
     def test_corrupted_migration_file_handling(self) -> None:
         """Test handling of corrupted migration files."""
+
         class TestMigrationRunner(BaseMigrationRunner):
             def __init__(self, migrations_path: Path) -> None:
                 super().__init__(migrations_path)
@@ -713,6 +722,7 @@ class TestMigrationRunnerErrorHandling:
 
     def test_missing_migrations_directory(self) -> None:
         """Test handling when migrations directory is missing."""
+
         class TestMigrationRunner(BaseMigrationRunner):
             def __init__(self, migrations_path: Path) -> None:
                 super().__init__(migrations_path)
@@ -745,6 +755,7 @@ class TestMigrationRunnerPerformance:
 
     def test_large_migration_file_handling(self) -> None:
         """Test handling of large migration files."""
+
         class TestMigrationRunner(BaseMigrationRunner):
             def __init__(self, migrations_path: Path) -> None:
                 super().__init__(migrations_path)
@@ -771,17 +782,18 @@ class TestMigrationRunnerPerformance:
             large_file = migrations_path / "0001_large_migration.sql"
 
             # Generate large content
-            large_content_parts = ["""
+            large_content_parts = [
+                """
 -- name: migrate-0001-up
 CREATE TABLE large_table (
     id INTEGER PRIMARY KEY,
     data TEXT
 );
-"""]
+"""
+            ]
 
             # Add many INSERT statements
-            for i in range(1000):
-                large_content_parts.append(f"INSERT INTO large_table (data) VALUES ('data_{i:04d}');")
+            large_content_parts.extend(f"INSERT INTO large_table (data) VALUES ('data_{i:04d}');" for i in range(1000))
 
             large_content_parts.append("""
 -- name: migrate-0001-down
@@ -812,6 +824,7 @@ DROP TABLE large_table;
 
     def test_many_migration_files_performance(self) -> None:
         """Test performance with many migration files."""
+
         class TestMigrationRunner(BaseMigrationRunner):
             def __init__(self, migrations_path: Path) -> None:
                 super().__init__(migrations_path)
@@ -836,12 +849,12 @@ DROP TABLE large_table;
 
             # Create many migration files
             for i in range(100):
-                migration_file = migrations_path / f"{i+1:04d}_migration_{i}.sql"
+                migration_file = migrations_path / f"{i + 1:04d}_migration_{i}.sql"
                 migration_file.write_text(f"""
--- name: migrate-{i+1:04d}-up
+-- name: migrate-{i + 1:04d}-up
 CREATE TABLE test_table_{i} (id INTEGER PRIMARY KEY);
 
--- name: migrate-{i+1:04d}-down
+-- name: migrate-{i + 1:04d}-down
 DROP TABLE test_table_{i};
 """)
 
@@ -854,5 +867,5 @@ DROP TABLE test_table_{i};
 
             # Verify sorting
             for i, (version, _) in enumerate(files):
-                expected_version = f"{i+1:04d}"
+                expected_version = f"{i + 1:04d}"
                 assert version == expected_version

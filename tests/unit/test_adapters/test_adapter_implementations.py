@@ -1,5 +1,6 @@
 """Parameterized tests for real adapter implementations."""
 
+import operator
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
@@ -56,7 +57,7 @@ ADAPTER_CONFIGS = [
 ]
 
 
-@pytest.fixture(params=ADAPTER_CONFIGS, ids=lambda config: config["name"])
+@pytest.fixture(params=ADAPTER_CONFIGS, ids=operator.itemgetter("name"))
 def adapter_config(request: pytest.FixtureRequest) -> "dict[str, Any]":
     """Parameterized fixture providing different adapter configurations."""
     return request.param
@@ -155,7 +156,6 @@ def test_adapter_query_types(
     """Test different query types for each adapter."""
     config = statement_config_for_adapter
     query = adapter_config["example_queries"][query_type]
-
     if query_type == "select":
         statement = SQL(query, 1, statement_config=config)
         assert statement.returns_rows() is True
@@ -169,8 +169,8 @@ def test_adapter_query_types(
         statement = SQL(query, 1, statement_config=config)
         assert statement.returns_rows() is False
 
-    # Test compilation
-    compiled_sql, compiled_params = statement.compile()
+    assert statement  # pyright: ignore
+    compiled_sql, _compiled_params = statement.compile()
     assert isinstance(compiled_sql, str)
     assert query_type.upper() in compiled_sql.upper()
 

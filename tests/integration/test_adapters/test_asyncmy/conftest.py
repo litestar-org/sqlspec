@@ -50,7 +50,7 @@ async def asyncmy_clean_driver(asyncmy_config: AsyncmyConfig) -> AsyncGenerator[
             "user_profiles",
             "test_parameter_conversion",
             "transaction_test",
-            "concurrent_test"
+            "concurrent_test",
         ]
 
         for table in cleanup_tables:

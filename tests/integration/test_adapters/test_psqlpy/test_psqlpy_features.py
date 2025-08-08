@@ -17,10 +17,7 @@ async def test_psqlpy_performance_features(psqlpy_session: PsqlpyDriver) -> None
     bulk_data = [(f"perf_test_{i}",) for i in range(1000)]
 
     # Large batch insert
-    result = await psqlpy_session.execute_many(
-        "INSERT INTO test_table (name) VALUES ($1)",
-        bulk_data
-    )
+    result = await psqlpy_session.execute_many("INSERT INTO test_table (name) VALUES ($1)", bulk_data)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 1000
 
@@ -39,10 +36,7 @@ async def test_psqlpy_connection_pooling(psqlpy_session: PsqlpyDriver) -> None:
     operations = []
 
     for i in range(10):
-        result = await psqlpy_session.execute(
-            "SELECT $1::int as operation_id",
-            (i,)
-        )
+        result = await psqlpy_session.execute("SELECT $1::int as operation_id", (i,))
         assert isinstance(result, SQLResult)
         assert result.data is not None
         operations.append(result.data[0]["operation_id"])
@@ -67,29 +61,29 @@ async def test_psqlpy_advanced_postgresql_types(psqlpy_session: PsqlpyDriver) ->
     """)
 
     # Insert data with advanced types
-    insert_result = await psqlpy_session.execute("""
+    insert_result = await psqlpy_session.execute(
+        """
         INSERT INTO psqlpy_types_test
         (json_col, jsonb_col, array_col, uuid_col, inet_col, timestamp_col)
         VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id
-    """, (
-        '{"name": "test", "value": 42}',  # JSON
-        '{"type": "jsonb", "fast": true}',  # JSONB
-        [1, 2, 3, 4, 5],  # Array
-        "550e8400-e29b-41d4-a716-446655440000",  # UUID
-        "192.168.1.1/24",  # INET
-        "2023-01-01T12:00:00+00:00"  # Timestamp with timezone
-    ))
+    """,
+        (
+            '{"name": "test", "value": 42}',  # JSON
+            '{"type": "jsonb", "fast": true}',  # JSONB
+            [1, 2, 3, 4, 5],  # Array
+            "550e8400-e29b-41d4-a716-446655440000",  # UUID
+            "192.168.1.1/24",  # INET
+            "2023-01-01T12:00:00+00:00",  # Timestamp with timezone
+        ),
+    )
 
     assert isinstance(insert_result, SQLResult)
     assert insert_result.data is not None
     record_id = insert_result.data[0]["id"]
 
     # Retrieve and verify data
-    select_result = await psqlpy_session.execute(
-        "SELECT * FROM psqlpy_types_test WHERE id = $1",
-        (record_id,)
-    )
+    select_result = await psqlpy_session.execute("SELECT * FROM psqlpy_types_test WHERE id = $1", (record_id,))
 
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -116,10 +110,7 @@ async def test_psqlpy_error_handling(psqlpy_session: PsqlpyDriver) -> None:
     assert "syntax" in str(exc_info.value).lower() or "error" in str(exc_info.value).lower()
 
     # Test constraint violation
-    await psqlpy_session.execute(
-        "INSERT INTO test_table (name) VALUES ($1)",
-        ("constraint_test",)
-    )
+    await psqlpy_session.execute("INSERT INTO test_table (name) VALUES ($1)", ("constraint_test",))
 
     # Try to violate a constraint (if any exist)
     # For now, just test that normal operations still work after error
@@ -133,15 +124,10 @@ async def test_psqlpy_large_result_sets(psqlpy_session: PsqlpyDriver) -> None:
     """Test PSQLPy handling of large result sets."""
     # Insert a moderate amount of data
     bulk_data = [(f"large_result_{i}",) for i in range(100)]
-    await psqlpy_session.execute_many(
-        "INSERT INTO test_table (name) VALUES ($1)",
-        bulk_data
-    )
+    await psqlpy_session.execute_many("INSERT INTO test_table (name) VALUES ($1)", bulk_data)
 
     # Retrieve all data
-    result = await psqlpy_session.execute(
-        "SELECT * FROM test_table WHERE name LIKE 'large_result_%' ORDER BY id"
-    )
+    result = await psqlpy_session.execute("SELECT * FROM test_table WHERE name LIKE 'large_result_%' ORDER BY id")
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -172,10 +158,7 @@ async def test_psqlpy_concurrent_operations() -> None:
             """)
 
             # Insert data
-            await session.execute(
-                f"INSERT INTO task_{task_id}_table (data) VALUES ($1)",
-                (f"task_{task_id}_data",)
-            )
+            await session.execute(f"INSERT INTO task_{task_id}_table (data) VALUES ($1)", (f"task_{task_id}_data",))
 
             # Query data
             result = await session.execute(f"SELECT COUNT(*) as count FROM task_{task_id}_table")
@@ -193,16 +176,12 @@ async def test_psqlpy_transaction_behavior(psqlpy_session: PsqlpyDriver) -> None
     await psqlpy_session.execute("BEGIN")
 
     # Insert data in transaction
-    await psqlpy_session.execute(
-        "INSERT INTO test_table (name) VALUES ($1)",
-        ("transaction_test",)
-    )
+    await psqlpy_session.execute("INSERT INTO test_table (name) VALUES ($1)", ("transaction_test",))
 
     # Data should not be visible in other connections yet
     # But we can see it in this session
     result = await psqlpy_session.execute(
-        "SELECT COUNT(*) as count FROM test_table WHERE name = $1",
-        ("transaction_test",)
+        "SELECT COUNT(*) as count FROM test_table WHERE name = $1", ("transaction_test",)
     )
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -213,8 +192,7 @@ async def test_psqlpy_transaction_behavior(psqlpy_session: PsqlpyDriver) -> None
 
     # Verify data is committed
     committed_result = await psqlpy_session.execute(
-        "SELECT name FROM test_table WHERE name = $1",
-        ("transaction_test",)
+        "SELECT name FROM test_table WHERE name = $1", ("transaction_test",)
     )
     assert isinstance(committed_result, SQLResult)
     assert committed_result.data is not None
@@ -281,10 +259,7 @@ async def test_psqlpy_rust_performance_indicators(psqlpy_session: PsqlpyDriver) 
 
     # Perform many small operations
     for i in range(50):
-        result = await psqlpy_session.execute(
-            "SELECT $1::int + $2::int as sum",
-            (i, i * 2)
-        )
+        result = await psqlpy_session.execute("SELECT $1::int + $2::int as sum", (i, i * 2))
         assert isinstance(result, SQLResult)
         assert result.data is not None
         assert result.data[0]["sum"] == i + (i * 2)
@@ -300,8 +275,7 @@ async def test_psqlpy_rust_performance_indicators(psqlpy_session: PsqlpyDriver) 
 
     bulk_params = [(i, f"bulk_{i}") for i in range(100)]
     await psqlpy_session.execute_many(
-        "INSERT INTO test_table (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
-        bulk_params
+        "INSERT INTO test_table (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING", bulk_params
     )
 
     bulk_elapsed = time.time() - bulk_start

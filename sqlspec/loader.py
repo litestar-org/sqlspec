@@ -29,7 +29,7 @@ logger = get_logger("loader")
 # Matches: -- name: query_name (supports hyphens and special suffixes)
 # We capture the name plus any trailing special characters
 QUERY_NAME_PATTERN = re.compile(r"^\s*--\s*name\s*:\s*([\w-]+[^\w\s]*)\s*$", re.MULTILINE | re.IGNORECASE)
-TRIM_TRAILING_SPECIAL_CHARS = re.compile(r"[^\w-]+$")
+TRIM_SPECIAL_CHARS = re.compile(r"[^\w-]")
 
 # Matches: -- dialect: dialect_name (optional dialect specification)
 DIALECT_PATTERN = re.compile(r"^\s*--\s*dialect\s*:\s*(?P<dialect>[a-zA-Z0-9_]+)\s*$", re.IGNORECASE | re.MULTILINE)
@@ -90,7 +90,7 @@ MIN_QUERY_PARTS = 3
 def _normalize_query_name(name: str) -> str:
     """Normalize query name to be a valid Python identifier.
 
-    - Strips trailing special characters (like $, !, etc from aiosql)
+    - Strips all special characters (like $, !, etc from aiosql)
     - Replaces hyphens with underscores
 
     Args:
@@ -99,8 +99,8 @@ def _normalize_query_name(name: str) -> str:
     Returns:
         converted query name suitable as Python identifier
     """
-    # Strip trailing non-alphanumeric characters (excluding underscore) and replace hyphens
-    return TRIM_TRAILING_SPECIAL_CHARS.sub("", name).replace("-", "_")
+    # Remove all special characters (except word chars and hyphens), then replace hyphens with underscores
+    return TRIM_SPECIAL_CHARS.sub("", name).replace("-", "_")
 
 
 def _normalize_dialect(dialect: str) -> str:
@@ -691,10 +691,9 @@ class SQLFileLoader:
         if parameters is not None:
             sql_kwargs["parameters"] = parameters
 
-        # Set dialect if specified, normalizing for SQLGlot compatibility
+        sqlglot_dialect = None
         if effective_dialect:
             sqlglot_dialect = _normalize_dialect_for_sqlglot(effective_dialect)
-            sql_kwargs["_dialect"] = sqlglot_dialect
 
         # Detect parameter style from the SQL and create appropriate config to preserve it
         # This is important when no dialect is specified - we want to preserve the original style
@@ -716,7 +715,7 @@ class SQLFileLoader:
                         )
                     )
 
-        return SQL(parsed_statement.sql, **sql_kwargs)
+        return SQL(parsed_statement.sql, dialect=sqlglot_dialect, **sql_kwargs)
 
     def get_file(self, path: Union[str, Path]) -> "Optional[SQLFile]":
         """Get a loaded SQLFile object by path.

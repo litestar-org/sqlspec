@@ -226,9 +226,9 @@ def test_parameter_style_config_basic() -> None:
 
 def test_parameter_style_config_advanced() -> None:
     """Test ParameterStyleConfig with advanced options."""
-    coercion_map = {bool: lambda x: 1 if x else 0}
+    coercion_map: dict[type, Any] = {bool: lambda x: 1 if x else 0}
 
-    def output_transformer(sql, params):
+    def output_transformer(sql: str, params: Any) -> tuple[str, Any]:
         return (sql.upper(), params)
 
     config = ParameterStyleConfig(
@@ -547,7 +547,7 @@ def test_convert_parameter_format_preservation(converter: ParameterConverter) ->
 
     # Test tuple preservation
     tuple_params = (123, "john")
-    converted_sql, converted_params = converter.convert_placeholder_style(sql, tuple_params, ParameterStyle.QMARK)
+    _, converted_params = converter.convert_placeholder_style(sql, tuple_params, ParameterStyle.QMARK)
     # Note: Current implementation converts to list, but tests format conversion logic
     assert isinstance(converted_params, (list, tuple))
     assert len(converted_params) == 2
@@ -622,7 +622,7 @@ def test_process_type_coercion(processor: ParameterProcessor, advanced_config: P
     sql = "SELECT * FROM users WHERE active = :active"
     parameters = {"active": True}
 
-    final_sql, final_params = processor.process(sql, parameters, advanced_config, "postgres")
+    _, final_params = processor.process(sql, parameters, advanced_config, "postgres")
 
     # Boolean should be coerced to integer (1) or wrapped in TypedParameter
     # Result might be in different format (tuple vs dict) depending on conversion
@@ -654,7 +654,7 @@ def test_process_output_transformation(processor: ParameterProcessor, advanced_c
 
     final_sql, final_params = processor.process(sql, parameters, advanced_config, "postgres")
 
-    # SQL should be uppercased by output transformer
+    # SQL should be upper-cased by output transformer
     assert final_sql.isupper()
     assert "SELECT" in final_sql
 
@@ -707,7 +707,7 @@ def test_list_parameter_preservation(converter: ParameterConverter) -> None:
     sql = "INSERT INTO users (id, name, active) VALUES (?, ?, ?)"
     parameters = [1, "alice", True]
 
-    converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
+    _, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
 
     assert isinstance(converted_params, list)
     assert converted_params == parameters
@@ -718,7 +718,7 @@ def test_tuple_parameter_handling(converter: ParameterConverter) -> None:
     sql = "INSERT INTO users (id, name) VALUES (?, ?)"
     parameters = (1, "alice")
 
-    converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
+    _, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
 
     # Should maintain sequence type
     assert isinstance(converted_params, (list, tuple))
@@ -730,7 +730,7 @@ def test_dict_parameter_handling(converter: ParameterConverter) -> None:
     sql = "INSERT INTO users (id, name) VALUES (:id, :name)"
     parameters = {"id": 1, "name": "alice"}
 
-    converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NAMED_COLON)
+    _, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.NAMED_COLON)
 
     assert isinstance(converted_params, dict)
     assert converted_params == parameters
@@ -765,6 +765,10 @@ def test_database_specific_parameter_conversion(
     param_pattern: type,
 ) -> None:
     """Test parameter conversion for specific database requirements."""
+    # Ensure parameters are used to avoid unused variable warnings
+    assert database is not None
+    assert param_pattern is not None
+
     sql = "SELECT * FROM users WHERE id = :id"  # Start with named colon
     parameters = {"id": 123}
 
@@ -801,7 +805,7 @@ def test_mixed_style_normalization() -> None:
     converter = ParameterConverter()
     sql = "SELECT * FROM users WHERE id = ? AND name = :name AND status = %(status)s"
 
-    normalized_sql, param_info = converter.normalize_sql_for_parsing(sql, "mysql")
+    normalized_sql, _ = converter.normalize_sql_for_parsing(sql, "mysql")
 
     # Should normalize problematic styles
     assert "?" in normalized_sql  # Qmark should remain
@@ -903,7 +907,7 @@ def test_complex_data_types(converter: ParameterConverter) -> None:
     }
     parameters = [complex_data]
 
-    converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
+    _, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.QMARK)
 
     assert isinstance(converted_params, list)
     assert len(converted_params) == 1
@@ -996,7 +1000,7 @@ def test_oracle_compatibility(validator: ParameterValidator) -> None:
 # Regression cases function-based tests
 
 
-def test_dollar_numeric_vs_named_disambiguation(converter: ParameterConverter) -> None:
+def test_dollar_numeric_vs_named_disambiguation() -> None:
     """Test differentiation between $1 (numeric) and $name (named)."""
     validator = ParameterValidator()
     sql = "SELECT * FROM users WHERE id = $1 AND name = $username"
@@ -1016,7 +1020,7 @@ def test_dollar_numeric_vs_named_disambiguation(converter: ParameterConverter) -
     assert dollar_username_param.name == "username"
 
 
-def test_positional_colon_oracle_style(converter: ParameterConverter) -> None:
+def test_positional_colon_oracle_style() -> None:
     """Test Oracle-style positional colon parameters (:1, :2, :3)."""
     validator = ParameterValidator()
     sql = "SELECT * FROM users WHERE id = :1 AND name = :2 AND active = :3"

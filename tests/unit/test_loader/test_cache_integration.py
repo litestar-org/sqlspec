@@ -142,9 +142,10 @@ class TestCacheHitScenarios:
     @pytest.fixture
     def mock_cache_setup(self) -> Generator[tuple[Mock, Mock, SQLFileLoader], None, None]:
         """Set up mock cache infrastructure for testing."""
-        with patch("sqlspec.loader.get_cache_config") as mock_config, \
-             patch("sqlspec.loader.get_default_cache") as mock_cache_factory:
-
+        with (
+            patch("sqlspec.loader.get_cache_config") as mock_config,
+            patch("sqlspec.loader.get_default_cache") as mock_cache_factory,
+        ):
             # Configure cache as enabled
             mock_cache_config = Mock()
             mock_cache_config.compiled_cache_enabled = True
@@ -349,9 +350,10 @@ SELECT COUNT(*) FROM users;
 
             loader = SQLFileLoader()
 
-            with patch("sqlspec.loader.get_cache_config") as mock_config, \
-                 patch("sqlspec.loader.get_default_cache") as mock_cache_factory:
-
+            with (
+                patch("sqlspec.loader.get_cache_config") as mock_config,
+                patch("sqlspec.loader.get_default_cache") as mock_cache_factory,
+            ):
                 mock_cache_config = Mock()
                 mock_cache_config.compiled_cache_enabled = True
                 mock_config.return_value = mock_cache_config
@@ -391,15 +393,18 @@ SELECT COUNT(*) FROM users WHERE date = CURRENT_DATE;
 
             # Create cached data (without namespace in stored queries)
             cached_sql_file = SQLFile(content, str(sql_file))
-            cached_statements = {"daily_users": NamedStatement("daily_users", "SELECT COUNT(*) FROM users WHERE date = CURRENT_DATE")}
+            cached_statements = {
+                "daily_users": NamedStatement("daily_users", "SELECT COUNT(*) FROM users WHERE date = CURRENT_DATE")
+            }
             cached_file = CachedSQLFile(cached_sql_file, cached_statements)
 
             loader = SQLFileLoader()
 
-            with patch("sqlspec.loader.get_cache_config") as mock_config, \
-                 patch("sqlspec.loader.get_default_cache") as mock_cache_factory, \
-                 patch.object(loader, "_is_file_unchanged", return_value=True):
-
+            with (
+                patch("sqlspec.loader.get_cache_config") as mock_config,
+                patch("sqlspec.loader.get_default_cache") as mock_cache_factory,
+                patch.object(loader, "_is_file_unchanged", return_value=True),
+            ):
                 mock_cache_config = Mock()
                 mock_cache_config.compiled_cache_enabled = True
                 mock_config.return_value = mock_cache_config
@@ -423,9 +428,10 @@ class TestCacheMemoryManagement:
         """Test cache clearing integration."""
         loader = SQLFileLoader()
 
-        with patch("sqlspec.loader.get_cache_config") as mock_config, \
-             patch("sqlspec.loader.get_default_cache") as mock_cache_factory:
-
+        with (
+            patch("sqlspec.loader.get_cache_config") as mock_config,
+            patch("sqlspec.loader.get_default_cache") as mock_cache_factory,
+        ):
             mock_cache_config = Mock()
             mock_cache_config.compiled_cache_enabled = True
             mock_config.return_value = mock_cache_config
@@ -451,9 +457,10 @@ class TestCacheMemoryManagement:
         """Test clearing only file cache while preserving loaded queries."""
         loader = SQLFileLoader()
 
-        with patch("sqlspec.loader.get_cache_config") as mock_config, \
-             patch("sqlspec.loader.get_default_cache") as mock_cache_factory:
-
+        with (
+            patch("sqlspec.loader.get_cache_config") as mock_config,
+            patch("sqlspec.loader.get_default_cache") as mock_cache_factory,
+        ):
             mock_cache_config = Mock()
             mock_cache_config.compiled_cache_enabled = True
             mock_config.return_value = mock_cache_config
@@ -506,9 +513,10 @@ SELECT 'shared between loaders' as message;
             tf.write(content)
             tf.flush()
 
-            with patch("sqlspec.loader.get_cache_config") as mock_config, \
-                 patch("sqlspec.loader.get_default_cache") as mock_cache_factory:
-
+            with (
+                patch("sqlspec.loader.get_cache_config") as mock_config,
+                patch("sqlspec.loader.get_default_cache") as mock_cache_factory,
+            ):
                 mock_cache_config = Mock()
                 mock_cache_config.compiled_cache_enabled = True
                 mock_config.return_value = mock_cache_config
@@ -531,7 +539,9 @@ SELECT 'shared between loaders' as message;
 
                 # Create the cached data that would be stored
                 sql_file = SQLFile(content.strip(), tf.name)
-                statements = {"shared_query": NamedStatement("shared_query", "SELECT 'shared between loaders' as message")}
+                statements = {
+                    "shared_query": NamedStatement("shared_query", "SELECT 'shared between loaders' as message")
+                }
                 cached_file = CachedSQLFile(sql_file, statements)
 
                 shared_cache.get.return_value = cached_file  # Cache hit
@@ -626,23 +636,25 @@ class TestCachePerformanceOptimizations:
         """Test performance benefit of cache hits vs. parsing."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False) as tf:
             # Create file with many queries to make parsing expensive
-            queries = []
-            for i in range(100):
-                queries.append(f"""
+            queries = [
+                f"""
 -- name: perf_query_{i:03d}
 SELECT {i} as query_id, 'performance test {i}' as description
 FROM performance_table
 WHERE id > {i * 10}
 LIMIT 100;
-""")
+"""
+                for i in range(100)
+            ]
             tf.write("\n".join(queries))
             tf.flush()
 
             loader = SQLFileLoader()
 
-            with patch("sqlspec.loader.get_cache_config") as mock_config, \
-                 patch("sqlspec.loader.get_default_cache") as mock_cache_factory:
-
+            with (
+                patch("sqlspec.loader.get_cache_config") as mock_config,
+                patch("sqlspec.loader.get_default_cache") as mock_cache_factory,
+            ):
                 mock_cache_config = Mock()
                 mock_cache_config.compiled_cache_enabled = True
                 mock_config.return_value = mock_cache_config
@@ -661,7 +673,9 @@ LIMIT 100;
 
                 # Create cached data for second load
                 sql_file = SQLFile("dummy content", tf.name)
-                cached_statements = {f"perf_query_{i:03d}": NamedStatement(f"perf_query_{i:03d}", f"SELECT {i}") for i in range(100)}
+                cached_statements = {
+                    f"perf_query_{i:03d}": NamedStatement(f"perf_query_{i:03d}", f"SELECT {i}") for i in range(100)
+                }
                 cached_file = CachedSQLFile(sql_file, cached_statements)
 
                 # Second load - cache hit (should skip parsing)

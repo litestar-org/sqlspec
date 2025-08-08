@@ -516,15 +516,16 @@ class TestLoadingPerformancePatterns:
         """Test handling of large SQL files."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False) as tf:
             # Create a large file with many queries
-            content = []
-            for i in range(100):
-                content.append(f"""
+            content = [
+                f"""
 -- name: query_{i:03d}
 SELECT {i} as query_number, 'data_{i}' as data
 FROM large_table
 WHERE id > {i * 100}
 LIMIT 1000;
-""")
+"""
+                for i in range(100)
+            ]
 
             tf.write("\n".join(content))
             tf.flush()
@@ -572,7 +573,9 @@ SELECT {i} as level_number;
             assert len(queries) == 10
 
             # Verify namespace generation for deep structure
-            deepest_query = "level_0.level_1.level_2.level_3.level_4.level_5.level_6.level_7.level_8.level_9.query_at_level_9"
+            deepest_query = (
+                "level_0.level_1.level_2.level_3.level_4.level_5.level_6.level_7.level_8.level_9.query_at_level_9"
+            )
             assert deepest_query in queries
 
     def test_concurrent_loading_safety(self) -> None:
@@ -666,10 +669,13 @@ SELECT 'lowercase' as extension_type;
             # Create file with Unicode name
             unicode_file = base_path / "测试_файл_query.sql"
             try:
-                unicode_file.write_text("""
+                unicode_file.write_text(
+                    """
 -- name: unicode_filename_query
 SELECT 'Unicode filename support' as message;
-""", encoding="utf-8")
+""",
+                    encoding="utf-8",
+                )
             except OSError:
                 # Skip test if Unicode filenames not supported
                 pytest.skip("Unicode filenames not supported on this system")

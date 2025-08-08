@@ -493,9 +493,22 @@ def get_operation_type(sql: str, expression: Optional["exp.Expression"] = None) 
         return OperationType["SCRIPT"]
 
     sql_upper = sql.strip().upper()
-    for op_type in ["SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "COPY", "EXECUTE"]:
-        if sql_upper.startswith(op_type):
-            return OperationType.get(op_type, OperationType["UNKNOWN"])
+
+    # Direct operation type mapping for string-based detection
+    if sql_upper.startswith("SELECT"):
+        return OperationType["SELECT"]
+    if sql_upper.startswith("INSERT"):
+        return OperationType["INSERT"]
+    if sql_upper.startswith("UPDATE"):
+        return OperationType["UPDATE"]
+    if sql_upper.startswith("DELETE"):
+        return OperationType["DELETE"]
+    if sql_upper.startswith(("CREATE", "DROP", "ALTER")):
+        return OperationType["DDL"]
+    if sql_upper.startswith("COPY"):
+        return OperationType["COPY"]
+    if sql_upper.startswith("EXECUTE"):
+        return OperationType["EXECUTE"]
 
     return OperationType["UNKNOWN"]
 

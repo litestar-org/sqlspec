@@ -238,8 +238,12 @@ class SQL:
                 return True
         return False
 
-    def _process_parameters(self, *parameters: Any, **kwargs: Any) -> None:
+    def _process_parameters(self, *parameters: Any, dialect: Optional[str] = None, **kwargs: Any) -> None:
         """Process parameters using enhanced parameter system."""
+        # Handle special kwargs that affect SQL object state
+        if dialect is not None:
+            self._dialect = self._normalize_dialect(dialect)
+
         # Separate filters from actual parameters
         filters = [p for p in parameters if is_statement_filter(p)]
         actual_params = [p for p in parameters if not is_statement_filter(p)]

@@ -36,14 +36,17 @@ def adbc_postgresql_session(postgres_service: PostgresService) -> AdbcDriver:
         """)
 
         # Insert test data
-        session.execute_many("""
+        session.execute_many(
+            """
             INSERT INTO result_test (name, value, price, is_active, tags, metadata)
             VALUES ($1, $2, $3, $4, $5, $6)
-        """, [
-            ("Product A", 100, 19.99, True, ["electronics", "gadget"], '{"category": "tech", "rating": 4.5}'),
-            ("Product B", 200, 29.99, False, ["home", "kitchen"], '{"category": "home", "rating": 3.8}'),
-            ("Product C", 150, 24.99, True, ["outdoor", "sport"], '{"category": "sports", "rating": 4.2}'),
-        ])
+        """,
+            [
+                ("Product A", 100, 19.99, True, ["electronics", "gadget"], '{"category": "tech", "rating": 4.5}'),
+                ("Product B", 200, 29.99, False, ["home", "kitchen"], '{"category": "home", "rating": 3.8}'),
+                ("Product C", 150, 24.99, True, ["outdoor", "sport"], '{"category": "sports", "rating": 4.2}'),
+            ],
+        )
 
         yield session
 
@@ -84,7 +87,8 @@ def test_sqlresult_basic_operations(adbc_postgresql_session: AdbcDriver) -> None
 @pytest.mark.xdist_group("postgres")
 def test_sqlresult_arrow_data_types(adbc_postgresql_session: AdbcDriver) -> None:
     """Test Arrow data type handling in SQLResult with ADBC using CORE_ROUND_3."""
-    result = adbc_postgresql_session.execute("""
+    result = adbc_postgresql_session.execute(
+        """
         SELECT
             name,
             value,
@@ -95,7 +99,9 @@ def test_sqlresult_arrow_data_types(adbc_postgresql_session: AdbcDriver) -> None
             metadata
         FROM result_test
         WHERE name = $1
-    """, ("Product A",))
+    """,
+        ("Product A",),
+    )
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -151,10 +157,13 @@ def test_sqlresult_empty_results(adbc_postgresql_session: AdbcDriver) -> None:
 def test_sqlresult_null_value_handling(adbc_postgresql_session: AdbcDriver) -> None:
     """Test SQLResult NULL value handling with ADBC using CORE_ROUND_3."""
     # Insert row with NULL values
-    adbc_postgresql_session.execute("""
+    adbc_postgresql_session.execute(
+        """
         INSERT INTO result_test (name, value, price, is_active, tags, metadata)
         VALUES ($1, NULL, NULL, NULL, NULL, NULL)
-    """, ("Null Product",))
+    """,
+        ("Null Product",),
+    )
 
     result = adbc_postgresql_session.execute("SELECT * FROM result_test WHERE name = $1", ("Null Product",))
     assert isinstance(result, SQLResult)
@@ -239,7 +248,8 @@ def test_sqlresult_complex_queries(adbc_postgresql_session: AdbcDriver) -> None:
 @pytest.mark.xdist_group("postgres")
 def test_sqlresult_column_name_handling(adbc_postgresql_session: AdbcDriver) -> None:
     """Test SQLResult column name handling with aliases using ADBC and CORE_ROUND_3."""
-    result = adbc_postgresql_session.execute("""
+    result = adbc_postgresql_session.execute(
+        """
         SELECT
             name as product_name,
             value as product_value,
@@ -247,7 +257,9 @@ def test_sqlresult_column_name_handling(adbc_postgresql_session: AdbcDriver) -> 
             is_active as is_available
         FROM result_test
         WHERE name = $1
-    """, ("Product A",))
+    """,
+        ("Product A",),
+    )
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -270,10 +282,13 @@ def test_sqlresult_large_result_handling(adbc_postgresql_session: AdbcDriver) ->
     """Test SQLResult handling of larger result sets using ADBC and CORE_ROUND_3."""
     # Insert additional test data
     bulk_data = [(f"Bulk Product {i}", i * 10, i * 2.5, i % 2 == 0) for i in range(1, 101)]
-    adbc_postgresql_session.execute_many("""
+    adbc_postgresql_session.execute_many(
+        """
         INSERT INTO result_test (name, value, price, is_active)
         VALUES ($1, $2, $3, $4)
-    """, bulk_data)
+    """,
+        bulk_data,
+    )
 
     # Query all data
     result = adbc_postgresql_session.execute("SELECT * FROM result_test ORDER BY id")
@@ -314,13 +329,16 @@ def adbc_sqlite_session() -> AdbcDriver:
         """)
 
         # Insert test data
-        session.execute_many("""
+        session.execute_many(
+            """
             INSERT INTO arrow_test (name, data) VALUES (?, ?)
-        """, [
-            ("test1", b"binary_data_1"),
-            ("test2", b"binary_data_2"),
-            ("test3", None),  # Test NULL binary data
-        ])
+        """,
+            [
+                ("test1", b"binary_data_1"),
+                ("test2", b"binary_data_2"),
+                ("test3", None),  # Test NULL binary data
+            ],
+        )
 
         yield session
 

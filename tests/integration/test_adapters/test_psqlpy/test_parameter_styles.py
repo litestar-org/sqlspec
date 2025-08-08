@@ -19,43 +19,20 @@ ParamStyle = Literal["positional", "named", "mixed"]
     ("sql", "parameters", "style"),
     [
         # Positional parameters
-        pytest.param(
-            "SELECT $1::text as value",
-            ("test_value",),
-            "positional",
-            id="positional_single"
-        ),
-        pytest.param(
-            "SELECT $1::text as val1, $2::int as val2",
-            ("test", 42),
-            "positional",
-            id="positional_multiple"
-        ),
+        pytest.param("SELECT $1::text as value", ("test_value",), "positional", id="positional_single"),
+        pytest.param("SELECT $1::text as val1, $2::int as val2", ("test", 42), "positional", id="positional_multiple"),
         # Named parameters (converted to positional by SQLSpec)
+        pytest.param("SELECT :value::text as value", {"value": "named_test"}, "named", id="named_single"),
         pytest.param(
-            "SELECT :value::text as value",
-            {"value": "named_test"},
-            "named",
-            id="named_single"
-        ),
-        pytest.param(
-            "SELECT :name::text as name, :age::int as age",
-            {"name": "John", "age": 30},
-            "named",
-            id="named_multiple"
+            "SELECT :name::text as name, :age::int as age", {"name": "John", "age": 30}, "named", id="named_multiple"
         ),
         # Mixed (should be converted appropriately)
         pytest.param(
-            "SELECT :name::text as name, $2::int as age",
-            {"name": "Mixed", "age": 25},
-            "mixed",
-            id="mixed_style"
+            "SELECT :name::text as name, $2::int as age", {"name": "Mixed", "age": 25}, "mixed", id="mixed_style"
         ),
     ],
 )
-async def test_parameter_styles(
-    psqlpy_session: PsqlpyDriver, sql: str, parameters: Any, style: ParamStyle
-) -> None:
+async def test_parameter_styles(psqlpy_session: PsqlpyDriver, sql: str, parameters: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles."""
     result = await psqlpy_session.execute(sql, parameters)
     assert isinstance(result, SQLResult)
@@ -79,11 +56,7 @@ async def test_parameter_styles(
         # Note: Mixed style may not work as expected with psqlpy
 
 
-@pytest.mark.parametrize(
-    "param_count",
-    [1, 5, 10, 20],
-    ids=["single", "few", "medium", "many"]
-)
+@pytest.mark.parametrize("param_count", [1, 5, 10, 20], ids=["single", "few", "medium", "many"])
 async def test_many_parameters(psqlpy_session: PsqlpyDriver, param_count: int) -> None:
     """Test handling of many parameters."""
     # Create SQL with many positional parameters
@@ -98,26 +71,23 @@ async def test_many_parameters(psqlpy_session: PsqlpyDriver, param_count: int) -
 
     # Verify all parameters were bound correctly
     for i in range(param_count):
-        assert result.data[0][f"val{i+1}"] == i
+        assert result.data[0][f"val{i + 1}"] == i
 
 
 async def test_parameter_types(psqlpy_session: PsqlpyDriver) -> None:
     """Test various parameter data types."""
     # Test different PostgreSQL types
-    result = await psqlpy_session.execute("""
+    result = await psqlpy_session.execute(
+        """
         SELECT
             $1::text as text_val,
             $2::int as int_val,
             $3::float as float_val,
             $4::bool as bool_val,
             $5::json as json_val
-    """, (
-        "string_value",
-        42,
-        3.14,
-        True,
-        '{"key": "value"}'
-    ))
+    """,
+        ("string_value", 42, 3.14, True, '{"key": "value"}'),
+    )
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -133,10 +103,7 @@ async def test_parameter_types(psqlpy_session: PsqlpyDriver) -> None:
 
 async def test_null_parameters(psqlpy_session: PsqlpyDriver) -> None:
     """Test NULL parameter handling."""
-    result = await psqlpy_session.execute(
-        "SELECT $1::text as val1, $2::int as val2",
-        (None, None)
-    )
+    result = await psqlpy_session.execute("SELECT $1::text as val1, $2::int as val2", (None, None))
 
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -149,8 +116,7 @@ async def test_parameters_in_crud_operations(psqlpy_session: PsqlpyDriver) -> No
     """Test parameter handling in CRUD operations."""
     # INSERT with parameters
     insert_result = await psqlpy_session.execute(
-        "INSERT INTO test_table (name) VALUES ($1) RETURNING id",
-        ("param_test",)
+        "INSERT INTO test_table (name) VALUES ($1) RETURNING id", ("param_test",)
     )
     assert isinstance(insert_result, SQLResult)
     assert insert_result.data is not None
@@ -158,10 +124,7 @@ async def test_parameters_in_crud_operations(psqlpy_session: PsqlpyDriver) -> No
     record_id = insert_result.data[0]["id"]
 
     # SELECT with parameters
-    select_result = await psqlpy_session.execute(
-        "SELECT name FROM test_table WHERE id = $1",
-        (record_id,)
-    )
+    select_result = await psqlpy_session.execute("SELECT name FROM test_table WHERE id = $1", (record_id,))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
@@ -169,26 +132,19 @@ async def test_parameters_in_crud_operations(psqlpy_session: PsqlpyDriver) -> No
 
     # UPDATE with parameters
     update_result = await psqlpy_session.execute(
-        "UPDATE test_table SET name = $1 WHERE id = $2",
-        ("updated_param", record_id)
+        "UPDATE test_table SET name = $1 WHERE id = $2", ("updated_param", record_id)
     )
     assert isinstance(update_result, SQLResult)
     # psqlpy may not report rows_affected
 
     # Verify update
-    verify_result = await psqlpy_session.execute(
-        "SELECT name FROM test_table WHERE id = $1",
-        (record_id,)
-    )
+    verify_result = await psqlpy_session.execute("SELECT name FROM test_table WHERE id = $1", (record_id,))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["name"] == "updated_param"
 
     # DELETE with parameters
-    delete_result = await psqlpy_session.execute(
-        "DELETE FROM test_table WHERE id = $1",
-        (record_id,)
-    )
+    delete_result = await psqlpy_session.execute("DELETE FROM test_table WHERE id = $1", (record_id,))
     assert isinstance(delete_result, SQLResult)
 
 
@@ -243,10 +199,7 @@ async def test_parameter_conversion_accuracy(psqlpy_session: PsqlpyDriver) -> No
 
     # Test decimal precision
     decimal_val = decimal.Decimal("123.456789")
-    result1 = await psqlpy_session.execute(
-        "SELECT $1::numeric as decimal_val",
-        (str(decimal_val),)
-    )
+    result1 = await psqlpy_session.execute("SELECT $1::numeric as decimal_val", (str(decimal_val),))
     assert isinstance(result1, SQLResult)
     assert result1.data is not None
     # PostgreSQL may return as float or string, verify the value is close
@@ -255,34 +208,21 @@ async def test_parameter_conversion_accuracy(psqlpy_session: PsqlpyDriver) -> No
 
     # Test datetime
     now = datetime.datetime.now()
-    result2 = await psqlpy_session.execute(
-        "SELECT $1::timestamp as datetime_val",
-        (now.isoformat(),)
-    )
+    result2 = await psqlpy_session.execute("SELECT $1::timestamp as datetime_val", (now.isoformat(),))
     assert isinstance(result2, SQLResult)
     assert result2.data is not None
     # Just verify we got a result without error
     assert result2.data[0]["datetime_val"] is not None
 
 
-@pytest.mark.parametrize(
-    "batch_size",
-    [1, 5, 10, 50],
-    ids=["single", "small", "medium", "large"]
-)
-async def test_execute_many_parameter_handling(
-    psqlpy_session: PsqlpyDriver,
-    batch_size: int
-) -> None:
+@pytest.mark.parametrize("batch_size", [1, 5, 10, 50], ids=["single", "small", "medium", "large"])
+async def test_execute_many_parameter_handling(psqlpy_session: PsqlpyDriver, batch_size: int) -> None:
     """Test parameter handling in execute_many operations."""
     # Generate test data
     parameters_list = [(f"batch_item_{i}",) for i in range(batch_size)]
 
     # Execute batch insert
-    result = await psqlpy_session.execute_many(
-        "INSERT INTO test_table (name) VALUES ($1)",
-        parameters_list
-    )
+    result = await psqlpy_session.execute_many("INSERT INTO test_table (name) VALUES ($1)", parameters_list)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == batch_size
 
@@ -294,10 +234,7 @@ async def test_execute_many_parameter_handling(
 
     # Verify data integrity
     for i in range(batch_size):
-        check_result = await psqlpy_session.execute(
-            "SELECT name FROM test_table WHERE name = $1",
-            (f"batch_item_{i}",)
-        )
+        check_result = await psqlpy_session.execute("SELECT name FROM test_table WHERE name = $1", (f"batch_item_{i}",))
         assert isinstance(check_result, SQLResult)
         assert check_result.data is not None
         assert len(check_result.data) == 1

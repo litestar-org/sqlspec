@@ -1,13 +1,13 @@
-"""Integration tests for migration execution.
+"""Unit tests for migration execution.
 
-Tests real migration execution including:
+Tests migration execution including:
 - Migration tracking table creation and management
-- Upgrade and downgrade execution with real databases
+- Upgrade and downgrade execution with mocked dependencies
 - Migration state tracking and version management
-- Transaction handling and rollback scenarios
-- Cross-database compatibility
+- Error handling and validation scenarios
+- Migration file processing
 
-Uses CORE_ROUND_3 architecture with real database operations.
+Uses CORE_ROUND_3 architecture with mocked database operations.
 """
 
 from __future__ import annotations
@@ -234,17 +234,21 @@ DROP TABLE users;
     with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
+        mock_loader.get_up_sql = Mock()
+        mock_loader.get_down_sql = Mock()
         mock_get_loader.return_value = mock_loader
 
         runner.loader.clear_cache = Mock()
         runner.loader.load_sql = Mock()
         runner.loader.has_query = Mock(return_value=True)
+        runner.loader.get_up_sql = Mock()
+        runner.loader.get_down_sql = Mock()
 
         migration = runner.load_migration(migration_file)
 
     # Execute upgrade
     with patch("sqlspec.migrations.base.run_") as mock_run:
-        mock_run.return_value = [
+        mock_run.return_value = lambda file_path: [
             "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL);"
         ]
 
@@ -285,17 +289,21 @@ DROP TABLE users;
     with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
+        mock_loader.get_up_sql = Mock()
+        mock_loader.get_down_sql = Mock()
         mock_get_loader.return_value = mock_loader
 
         runner.loader.clear_cache = Mock()
         runner.loader.load_sql = Mock()
         runner.loader.has_query = Mock(return_value=True)
+        runner.loader.get_up_sql = Mock()
+        runner.loader.get_down_sql = Mock()
 
         migration = runner.load_migration(migration_file)
 
     # Execute downgrade
     with patch("sqlspec.migrations.base.run_") as mock_run:
-        mock_run.return_value = ["DROP TABLE users;"]
+        mock_run.return_value = lambda file_path: ["DROP TABLE users;"]
 
         result = runner.execute_downgrade(mock_driver, migration)
 
@@ -358,11 +366,15 @@ def test_multiple_migrations_execution_order(temp_workspace_with_migrations: Pat
     ):
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
+        mock_loader.get_up_sql = Mock()
+        mock_loader.get_down_sql = Mock()
         mock_get_loader.return_value = mock_loader
 
         runner.loader.clear_cache = Mock()
         runner.loader.load_sql = Mock()
         runner.loader.has_query = Mock(return_value=True)
+        runner.loader.get_up_sql = Mock()
+        runner.loader.get_down_sql = Mock()
 
         # Mock different SQL for each migration
         sql_statements = [
@@ -372,7 +384,7 @@ def test_multiple_migrations_execution_order(temp_workspace_with_migrations: Pat
         ]
 
         for i, (version, file_path) in enumerate(migration_files):
-            mock_run.return_value = [sql_statements[i]]
+            mock_run.return_value = lambda fp: [sql_statements[i]]
 
             migration = runner.load_migration(file_path)
             result = runner.execute_upgrade(mock_driver, migration)
@@ -407,12 +419,16 @@ SELECT DISTINCT column1, column2 FROM legacy_table;
     with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
+        mock_loader.get_up_sql = Mock()
+        mock_loader.get_down_sql = Mock()
         mock_get_loader.return_value = mock_loader
 
         runner.loader.clear_cache = Mock()
         runner.loader.load_sql = Mock()
         # Only upgrade query exists
         runner.loader.has_query = Mock(side_effect=lambda q: q.endswith("-up"))
+        runner.loader.get_up_sql = Mock()
+        runner.loader.get_down_sql = Mock()
 
         migration = runner.load_migration(migration_file)
 
@@ -421,7 +437,7 @@ SELECT DISTINCT column1, column2 FROM legacy_table;
 
     # Execute upgrade should work
     with patch("sqlspec.migrations.base.run_") as mock_run:
-        mock_run.return_value = [
+        mock_run.return_value = lambda file_path: [
             "CREATE TABLE irreversible_data AS SELECT DISTINCT column1, column2 FROM legacy_table;"
         ]
 
@@ -557,11 +573,15 @@ DROP TABLE IF EXISTS nonexistent_table;
     with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
+        mock_loader.get_up_sql = Mock()
+        mock_loader.get_down_sql = Mock()
         mock_get_loader.return_value = mock_loader
 
         runner.loader.clear_cache = Mock()
         runner.loader.load_sql = Mock()
         runner.loader.has_query = Mock(return_value=True)
+        runner.loader.get_up_sql = Mock()
+        runner.loader.get_down_sql = Mock()
 
         migration = runner.load_migration(migration_file)
 
@@ -594,12 +614,16 @@ DROP TABLE legacy_table;
     with patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader:
         mock_loader = Mock()
         mock_loader.validate_migration_file = Mock()
+        mock_loader.get_up_sql = Mock()
+        mock_loader.get_down_sql = Mock()
         mock_get_loader.return_value = mock_loader
 
         runner.loader.clear_cache = Mock()
         runner.loader.load_sql = Mock()
         # Only downgrade query exists
         runner.loader.has_query = Mock(side_effect=lambda q: q.endswith("-down"))
+        runner.loader.get_up_sql = Mock()
+        runner.loader.get_down_sql = Mock()
 
         migration = runner.load_migration(migration_file)
 

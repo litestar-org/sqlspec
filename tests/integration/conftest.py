@@ -20,12 +20,7 @@ def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
 @pytest.fixture
 def sample_data() -> list[tuple[str, int]]:
     """Standard sample data for testing across adapters."""
-    return [
-        ("Alice", 25),
-        ("Bob", 30),
-        ("Charlie", 35),
-        ("Diana", 28),
-    ]
+    return [("Alice", 25), ("Bob", 30), ("Charlie", 35), ("Diana", 28)]
 
 
 @pytest.fixture

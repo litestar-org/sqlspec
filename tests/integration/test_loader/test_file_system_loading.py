@@ -660,10 +660,13 @@ class TestFileSystemUnicodeAndSpecialCharacters:
         """Test handling of Unicode file names."""
         try:
             unicode_file = temp_workspace / "测试_файл_test.sql"
-            unicode_file.write_text("""
+            unicode_file.write_text(
+                """
 -- name: unicode_filename_query
 SELECT 'Unicode filename works' as message;
-""", encoding="utf-8")
+""",
+                encoding="utf-8",
+            )
         except OSError:
             pytest.skip("Unicode filenames not supported on this system")
 
@@ -700,10 +703,13 @@ SELECT 'Unicode: 测试 тест עברית' as multilingual_message,
         """Test handling of different encodings."""
         # Create UTF-8 file
         utf8_file = temp_workspace / "utf8.sql"
-        utf8_file.write_text("""
+        utf8_file.write_text(
+            """
 -- name: utf8_query
 SELECT 'UTF-8: 测试' as message;
-""", encoding="utf-8")
+""",
+            encoding="utf-8",
+        )
 
         # Create Latin-1 file
         latin1_file = temp_workspace / "latin1.sql"

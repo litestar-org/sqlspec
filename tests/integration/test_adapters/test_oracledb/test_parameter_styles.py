@@ -17,37 +17,22 @@ OracleParamData = Union[tuple[Any, ...], list[Any], dict[str, Any]]
     ("sql", "params", "expected_rows"),
     [
         # Test named parameters with dictionary
-        (
-            "SELECT :name as result FROM dual",
-            {"name": "oracle_test"},
-            [{"RESULT": "oracle_test"}]
-        ),
+        ("SELECT :name as result FROM dual", {"name": "oracle_test"}, [{"RESULT": "oracle_test"}]),
         # Test positional parameters with tuple
-        (
-            "SELECT :1 as result FROM dual",
-            ("oracle_positional",),
-            [{"RESULT": "oracle_positional"}]
-        ),
+        ("SELECT :1 as result FROM dual", ("oracle_positional",), [{"RESULT": "oracle_positional"}]),
         # Test multiple named parameters
         (
             "SELECT :first_name || ' ' || :last_name as full_name FROM dual",
             {"first_name": "John", "last_name": "Doe"},
-            [{"FULL_NAME": "John Doe"}]
+            [{"FULL_NAME": "John Doe"}],
         ),
         # Test numeric parameters
-        (
-            "SELECT :num1 + :num2 as sum FROM dual",
-            {"num1": 10, "num2": 20},
-            [{"SUM": 30}]
-        ),
+        ("SELECT :num1 + :num2 as sum FROM dual", {"num1": 10, "num2": 20}, [{"SUM": 30}]),
     ],
 )
 @pytest.mark.xdist_group("oracle")
 def test_sync_oracle_parameter_styles(
-    oracle_sync_session: OracleSyncDriver,
-    sql: str,
-    params: OracleParamData,
-    expected_rows: list[dict[str, Any]]
+    oracle_sync_session: OracleSyncDriver, sql: str, params: OracleParamData, expected_rows: list[dict[str, Any]]
 ) -> None:
     """Test Oracle named parameter style conversion in sync driver."""
     result = oracle_sync_session.execute(sql, params)
@@ -65,37 +50,26 @@ def test_sync_oracle_parameter_styles(
     ("sql", "params", "expected_rows"),
     [
         # Test named parameters with dictionary
-        (
-            "SELECT :name as result FROM dual",
-            {"name": "oracle_async_test"},
-            [{"RESULT": "oracle_async_test"}]
-        ),
+        ("SELECT :name as result FROM dual", {"name": "oracle_async_test"}, [{"RESULT": "oracle_async_test"}]),
         # Test positional parameters with tuple
-        (
-            "SELECT :1 as result FROM dual",
-            ("oracle_async_positional",),
-            [{"RESULT": "oracle_async_positional"}]
-        ),
+        ("SELECT :1 as result FROM dual", ("oracle_async_positional",), [{"RESULT": "oracle_async_positional"}]),
         # Test multiple named parameters
         (
             "SELECT :city || ', ' || :state as location FROM dual",
             {"city": "San Francisco", "state": "CA"},
-            [{"LOCATION": "San Francisco, CA"}]
+            [{"LOCATION": "San Francisco, CA"}],
         ),
         # Test boolean-like parameters (Oracle uses 1/0)
         (
             "SELECT CASE WHEN :is_active = 1 THEN 'Active' ELSE 'Inactive' END as status FROM dual",
             {"is_active": 1},
-            [{"STATUS": "Active"}]
+            [{"STATUS": "Active"}],
         ),
     ],
 )
 @pytest.mark.xdist_group("oracle")
 async def test_async_oracle_parameter_styles(
-    oracle_async_session: OracleAsyncDriver,
-    sql: str,
-    params: OracleParamData,
-    expected_rows: list[dict[str, Any]]
+    oracle_async_session: OracleAsyncDriver, sql: str, params: OracleParamData, expected_rows: list[dict[str, Any]]
 ) -> None:
     """Test Oracle named parameter style conversion in async driver."""
     result = await oracle_async_session.execute(sql, params)
@@ -128,12 +102,7 @@ def test_sync_oracle_insert_with_named_params(oracle_sync_session: OracleSyncDri
 
     # Test named parameter INSERT
     insert_sql = "INSERT INTO test_params_table (id, name, age, city) VALUES (:id, :name, :age, :city)"
-    params = {
-        "id": 1,
-        "name": "Alice Johnson",
-        "age": 30,
-        "city": "Oracle City"
-    }
+    params = {"id": 1, "name": "Alice Johnson", "age": 30, "city": "Oracle City"}
 
     result = oracle_sync_session.execute(insert_sql, params)
     assert isinstance(result, SQLResult)
@@ -177,7 +146,7 @@ async def test_async_oracle_update_with_mixed_params(oracle_async_session: Oracl
     # Insert initial data
     await oracle_async_session.execute(
         "INSERT INTO test_mixed_params_table (id, name, status, last_updated) VALUES (:1, :2, :3, SYSDATE)",
-        (1, "Test User", "PENDING")
+        (1, "Test User", "PENDING"),
     )
 
     # Test UPDATE with named parameters
@@ -187,11 +156,7 @@ async def test_async_oracle_update_with_mixed_params(oracle_async_session: Oracl
         WHERE id = :target_id
     """
 
-    update_params = {
-        "new_name": "Updated User",
-        "new_status": "ACTIVE",
-        "target_id": 1
-    }
+    update_params = {"new_name": "Updated User", "new_status": "ACTIVE", "target_id": 1}
 
     result = await oracle_async_session.execute(update_sql, update_params)
     assert isinstance(result, SQLResult)
@@ -199,8 +164,7 @@ async def test_async_oracle_update_with_mixed_params(oracle_async_session: Oracl
 
     # Verify the update
     select_result = await oracle_async_session.execute(
-        "SELECT name, status FROM test_mixed_params_table WHERE id = :1",
-        (1,)
+        "SELECT name, status FROM test_mixed_params_table WHERE id = :1", (1,)
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
@@ -233,19 +197,10 @@ def test_sync_oracle_in_clause_with_params(oracle_sync_session: OracleSyncDriver
     """)
 
     # Insert test data
-    test_data = [
-        (1, "TYPE_A", 100),
-        (2, "TYPE_B", 200),
-        (3, "TYPE_C", 300),
-        (4, "TYPE_A", 150),
-        (5, "TYPE_B", 250)
-    ]
+    test_data = [(1, "TYPE_A", 100), (2, "TYPE_B", 200), (3, "TYPE_C", 300), (4, "TYPE_A", 150), (5, "TYPE_B", 250)]
 
     for data in test_data:
-        oracle_sync_session.execute(
-            "INSERT INTO test_in_clause_table (id, category, value) VALUES (:1, :2, :3)",
-            data
-        )
+        oracle_sync_session.execute("INSERT INTO test_in_clause_table (id, category, value) VALUES (:1, :2, :3)", data)
 
     # Test IN clause with named parameters
     # Note: Oracle requires separate parameters for each IN value
@@ -292,17 +247,13 @@ async def test_async_oracle_null_parameter_handling(oracle_async_session: Oracle
     insert_sql = "INSERT INTO test_null_params_table (id, name, optional_field) VALUES (:id, :name, :optional_field)"
 
     # Insert record with NULL optional_field
-    result = await oracle_async_session.execute(
-        insert_sql,
-        {"id": 1, "name": "Test User", "optional_field": None}
-    )
+    result = await oracle_async_session.execute(insert_sql, {"id": 1, "name": "Test User", "optional_field": None})
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 1
 
     # Insert record with non-NULL optional_field
     result = await oracle_async_session.execute(
-        insert_sql,
-        {"id": 2, "name": "Another User", "optional_field": "Not Null"}
+        insert_sql, {"id": 2, "name": "Another User", "optional_field": "Not Null"}
     )
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 1
@@ -354,8 +305,7 @@ def test_sync_oracle_date_parameter_handling(oracle_sync_session: OracleSyncDriv
     """
 
     result = oracle_sync_session.execute(
-        insert_sql,
-        {"id": 1, "event_name": "Oracle Conference", "date_str": "2024-06-15"}
+        insert_sql, {"id": 1, "event_name": "Oracle Conference", "date_str": "2024-06-15"}
     )
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 1
@@ -385,10 +335,7 @@ def test_sync_oracle_date_parameter_handling(oracle_sync_session: OracleSyncDriv
                              AND TO_DATE(:end_date, 'YYYY-MM-DD')
     """
 
-    range_result = oracle_sync_session.execute(
-        range_sql,
-        {"start_date": "2024-01-01", "end_date": "2024-12-31"}
-    )
+    range_result = oracle_sync_session.execute(range_sql, {"start_date": "2024-01-01", "end_date": "2024-12-31"})
     assert isinstance(range_result, SQLResult)
     assert range_result.data is not None
     assert range_result.data[0]["EVENT_COUNT"] == 1
