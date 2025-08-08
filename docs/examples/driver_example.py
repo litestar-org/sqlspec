@@ -11,7 +11,7 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.builder import Select
-from sqlspec.statement.filters import LimitOffsetFilter
+from sqlspec.core.statement.filters import LimitOffsetFilter
 from sqlspec.utils.correlation import correlation_context
 
 __all__ = ("async_driver_example", "main", "sync_driver_example")

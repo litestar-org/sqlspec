@@ -632,12 +632,16 @@ class ParameterConverter:
         current_styles = {p.style for p in param_info}
         if len(current_styles) == 1 and target_style in current_styles:
             # Only parameter format conversion needed (e.g., dict → list)
-            converted_parameters = self._convert_parameter_format(parameters, param_info, target_style, parameters, preserve_parameter_format=True)
+            converted_parameters = self._convert_parameter_format(
+                parameters, param_info, target_style, parameters, preserve_parameter_format=True
+            )
             return sql, converted_parameters
 
         # 4. Full SQL placeholder conversion + parameter format conversion
         converted_sql = self._convert_placeholders_to_style(sql, param_info, target_style)
-        converted_parameters = self._convert_parameter_format(parameters, param_info, target_style, parameters, preserve_parameter_format=True)
+        converted_parameters = self._convert_parameter_format(
+            parameters, param_info, target_style, parameters, preserve_parameter_format=True
+        )
 
         return converted_sql, converted_parameters
 
@@ -675,10 +679,15 @@ class ParameterConverter:
         return converted_sql
 
     def _convert_parameter_format(
-        self, parameters: Any, param_info: "list[ParameterInfo]", target_style: ParameterStyle, original_parameters: Any = None, preserve_parameter_format: bool = False
+        self,
+        parameters: Any,
+        param_info: "list[ParameterInfo]",
+        target_style: ParameterStyle,
+        original_parameters: Any = None,
+        preserve_parameter_format: bool = False,
     ) -> Any:
         """Convert parameter format to match target style requirements.
-        
+
         Args:
             parameters: Current parameter values
             param_info: Parameter information extracted from SQL
@@ -724,21 +733,21 @@ class ParameterConverter:
                     ordinal_key = str(param.ordinal + 1)  # 1-based for some styles
                     if ordinal_key in parameters:
                         param_values.append(parameters[ordinal_key])
-            
+
             # Preserve original container type if preserve_parameter_format=True and we have the original
             if preserve_parameter_format and original_parameters is not None:
                 if isinstance(original_parameters, tuple):
                     return tuple(param_values)
-                elif isinstance(original_parameters, list):
+                if isinstance(original_parameters, list):
                     return param_values
                 # For other sequence types, try to construct the same type
-                elif hasattr(original_parameters, '__class__') and hasattr(original_parameters.__class__, '__call__'):
+                if hasattr(original_parameters, "__class__") and callable(original_parameters.__class__):
                     try:
                         return original_parameters.__class__(param_values)
                     except (TypeError, ValueError):
                         # Fallback to tuple if construction fails
                         return tuple(param_values)
-            
+
             # Default to list for backward compatibility
             return param_values
 
@@ -798,11 +807,15 @@ class ParameterConverter:
     # Format converter methods for different parameter styles
     def _convert_to_positional_format(self, parameters: Any, param_info: "list[ParameterInfo]") -> Any:
         """Convert parameters to positional format (list/tuple)."""
-        return self._convert_parameter_format(parameters, param_info, ParameterStyle.QMARK, parameters, preserve_parameter_format=False)
+        return self._convert_parameter_format(
+            parameters, param_info, ParameterStyle.QMARK, parameters, preserve_parameter_format=False
+        )
 
     def _convert_to_named_colon_format(self, parameters: Any, param_info: "list[ParameterInfo]") -> Any:
         """Convert parameters to named colon format (dict)."""
-        return self._convert_parameter_format(parameters, param_info, ParameterStyle.NAMED_COLON, parameters, preserve_parameter_format=False)
+        return self._convert_parameter_format(
+            parameters, param_info, ParameterStyle.NAMED_COLON, parameters, preserve_parameter_format=False
+        )
 
     def _convert_to_positional_colon_format(self, parameters: Any, param_info: "list[ParameterInfo]") -> Any:
         """Convert parameters to positional colon format with 1-based keys."""
@@ -819,7 +832,9 @@ class ParameterConverter:
 
     def _convert_to_named_pyformat_format(self, parameters: Any, param_info: "list[ParameterInfo]") -> Any:
         """Convert parameters to named pyformat format (dict)."""
-        return self._convert_parameter_format(parameters, param_info, ParameterStyle.NAMED_PYFORMAT, parameters, preserve_parameter_format=False)
+        return self._convert_parameter_format(
+            parameters, param_info, ParameterStyle.NAMED_PYFORMAT, parameters, preserve_parameter_format=False
+        )
 
 
 # @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready

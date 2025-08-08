@@ -18,8 +18,8 @@ from sqlspec.builder.mixins import (
     UpdateTableClauseMixin,
     WhereClauseMixin,
 )
+from sqlspec.core.result import SQLResult
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.result import SQLResult
 
 if TYPE_CHECKING:
     from sqlspec.builder._select import Select

@@ -8,14 +8,14 @@ import time
 from typing import Any
 
 from sqlspec.builder import Select
-from sqlspec.statement.cache import (
+from sqlspec.core.statement import SQL
+from sqlspec.core.statement.cache import (
     ast_fragment_cache,
     get_cache_stats,
     optimized_expression_cache,
     reset_cache_stats,
     sql_cache,
 )
-from sqlspec.statement.sql import SQL
 from tools.benchmark.core.metrics import BenchmarkMetrics, TimingResult
 from tools.benchmark.suites.base import BaseBenchmarkSuite
 

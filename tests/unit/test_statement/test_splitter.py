@@ -1,10 +1,10 @@
-"""Unit tests for sqlspec.statement.splitter module."""
+"""Unit tests for sqlspec.core.statement.splitter module."""
 
 from typing import TYPE_CHECKING, Callable
 
 import pytest
 
-from sqlspec.statement.splitter import OracleDialectConfig, StatementSplitter, split_sql_script
+from sqlspec.core.statement.splitter import OracleDialectConfig, StatementSplitter, split_sql_script
 
 if TYPE_CHECKING:
     pass
@@ -309,11 +309,11 @@ def test_dialect_configuration(dialect: str, expected_name: str, has_batch_separ
     if dialect == "oracle":
         config = OracleDialectConfig()
     elif dialect == "tsql":
-        from sqlspec.statement.splitter import TSQLDialectConfig
+        from sqlspec.core.statement.splitter import TSQLDialectConfig
 
         config = TSQLDialectConfig()
     else:  # postgresql
-        from sqlspec.statement.splitter import PostgreSQLDialectConfig
+        from sqlspec.core.statement.splitter import PostgreSQLDialectConfig
 
         config = PostgreSQLDialectConfig()
 

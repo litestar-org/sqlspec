@@ -9,8 +9,8 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
-from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL
+from sqlspec.core.result import SQLResult
+from sqlspec.core.statement import SQL
 
 # Import the decorator
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing

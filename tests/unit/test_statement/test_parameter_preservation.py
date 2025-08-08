@@ -4,8 +4,8 @@ import pytest
 
 from sqlspec.builder._ddl import CreateTableAsSelect
 from sqlspec.builder._select import Select
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.statement.sql import SQL, StatementConfig
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import SQL, StatementConfig
 
 
 def test_ctas_preserves_parameter_names() -> None:

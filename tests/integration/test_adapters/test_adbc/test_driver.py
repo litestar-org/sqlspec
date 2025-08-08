@@ -10,7 +10,7 @@ from pytest_databases.docker.bigquery import BigQueryService
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
-from sqlspec.statement.result import SQLResult
+from sqlspec.core.result import SQLResult
 
 # Import the decorator
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing

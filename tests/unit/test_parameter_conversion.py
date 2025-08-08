@@ -13,10 +13,10 @@ from unittest.mock import Mock
 
 import pytest
 
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver._common import ExecutionResult
 from sqlspec.driver._sync import SyncDriverAdapterBase
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.statement.sql import SQL, StatementConfig
 
 
 class MockAdapter(SyncDriverAdapterBase):

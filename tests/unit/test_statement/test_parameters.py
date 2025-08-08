@@ -1,12 +1,12 @@
-"""Unit tests for sqlspec.parameters module."""
+"""Unit tests for sqlspec.core.parameters module."""
 
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Optional
 
 import pytest
 
+from sqlspec.core.parameters import ParameterConverter, ParameterInfo, ParameterStyle, ParameterValidator
 from sqlspec.exceptions import ExtraParameterError, MissingParameterError, ParameterStyleMismatchError
-from sqlspec.parameters import ParameterConverter, ParameterInfo, ParameterStyle, ParameterValidator
 
 if TYPE_CHECKING:
     from sqlspec.typing import StatementParameters

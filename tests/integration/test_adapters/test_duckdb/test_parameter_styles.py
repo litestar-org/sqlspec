@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
-from sqlspec.statement.result import SQLResult
+from sqlspec.core.result import SQLResult
 
 
 @pytest.fixture
@@ -178,7 +178,7 @@ def test_duckdb_parameter_with_in_clause(duckdb_parameters_session: DuckDBDriver
 
 def test_duckdb_parameter_with_sql_object(duckdb_parameters_session: DuckDBDriver) -> None:
     """Test parameters with SQL object."""
-    from sqlspec.statement.sql import SQL
+    from sqlspec.core.statement import SQL
 
     # Test with qmark style
     sql_obj = SQL("SELECT * FROM test_parameters WHERE value > ?", parameters=[150])

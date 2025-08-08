@@ -505,7 +505,7 @@ def test_sync_driver_build_statement_with_sql_object() -> None:
 
 def test_sync_driver_build_statement_with_filters() -> None:
     """Test sync driver statement building with filters."""
-    from sqlspec.statement.filters import StatementFilter
+    from sqlspec.core.statement.filters import StatementFilter
 
     connection = MockConnection()
     driver = MockSyncDriver(connection)

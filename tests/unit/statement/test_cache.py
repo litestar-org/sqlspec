@@ -4,9 +4,9 @@ import threading
 import time
 from unittest.mock import MagicMock
 
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.statement.cache import SQLCache, sql_cache
-from sqlspec.statement.sql import SQL, StatementConfig, _ProcessedState
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import SQL, StatementConfig, _ProcessedState
+from sqlspec.core.statement.cache import SQLCache, sql_cache
 
 
 class TestSQLCache:

@@ -10,8 +10,8 @@ import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.parameters import ParameterStyle
-from sqlspec.statement.result import SQLResult
+from sqlspec.core.parameters import ParameterStyle
+from sqlspec.core.result import SQLResult
 
 # Test data for different parameter styles
 PARAMETER_TEST_CASES = [

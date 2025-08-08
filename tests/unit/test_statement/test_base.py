@@ -8,9 +8,9 @@ from sqlglot import exp
 
 from sqlspec.base import SQLSpec
 from sqlspec.config import NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import CommonDriverAttributesMixin
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.statement.sql import SQL, StatementConfig
 
 DEFAULT_PARAMETER_CONFIG = ParameterStyleConfig(
     default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}

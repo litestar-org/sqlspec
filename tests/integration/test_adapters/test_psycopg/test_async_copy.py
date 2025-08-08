@@ -8,7 +8,7 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgAsyncDriver
-from sqlspec.statement.result import SQLResult
+from sqlspec.core.result import SQLResult
 
 
 @pytest.fixture

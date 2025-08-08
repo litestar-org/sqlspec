@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from sqlspec.adapters.bigquery import BigQueryConfig
-from sqlspec.statement.result import SQLResult
+from sqlspec.core.result import SQLResult
 
 
 @pytest.mark.xdist_group("bigquery")

@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from sqlspec.statement.sql import SQL, StatementConfig
+from sqlspec.core.statement import SQL, StatementConfig
 
 
 class TestSQLGenerationPerformance:

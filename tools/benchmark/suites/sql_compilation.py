@@ -5,7 +5,7 @@ from typing import Any
 from rich.panel import Panel
 from sqlglot import parse_one
 
-from sqlspec.statement.sql import SQL
+from sqlspec.core.statement import SQL
 from tools.benchmark.core.metrics import BenchmarkMetrics, TimingResult
 from tools.benchmark.suites.base import BaseBenchmarkSuite
 

@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
+from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.driver._common import ExecutionResult
-from sqlspec.statement.sql import SQL, StatementConfig
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager

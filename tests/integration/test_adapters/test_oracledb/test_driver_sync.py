@@ -9,7 +9,7 @@ import pytest
 from pytest_databases.docker.oracle import OracleService
 
 from sqlspec.adapters.oracledb import OracleSyncConfig
-from sqlspec.statement.result import SQLResult
+from sqlspec.core.result import SQLResult
 
 ParamStyle = Literal["positional_binds", "dict_binds"]
 
@@ -179,7 +179,7 @@ def test_oracle_ddl_script_parsing(oracle_sync_session: OracleSyncConfig) -> Non
     """Test that the Oracle 23AI DDL script can be parsed and prepared for execution."""
     from pathlib import Path
 
-    from sqlspec.statement.sql import SQL, StatementConfig
+    from sqlspec.core.statement import SQL, StatementConfig
 
     # Load the Oracle DDL script
     fixture_path = Path(__file__).parent.parent.parent.parent / "fixtures" / "oracle.ddl.sql"

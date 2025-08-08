@@ -7,9 +7,9 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from sqlspec.core.statement import SQL
 from sqlspec.migrations.base import BaseMigrationRunner
 from sqlspec.migrations.loaders import get_migration_loader
-from sqlspec.statement.sql import SQL
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import run_
 

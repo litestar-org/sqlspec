@@ -695,23 +695,186 @@ def get_cache_statistics() -> dict[str, CacheStats]:
     return stats
 
 
-# Compatibility functions for legacy interface used by _common.py
-def get_cache_config() -> "Any":
-    """Get cache configuration from global config system.
+# Compatibility functions for legacy interface used by _common.py and base.py
+# Global cache configuration instance - managed by SQLSpec base class
+_global_cache_config: "Optional[CacheConfig]" = None
+
+
+class CacheConfig:
+    """Global cache configuration for SQLSpec.
+
+    This configuration controls all caching behavior across the entire SQLSpec system.
+    Configuration is centralized and managed through the SQLSpec base class.
+    """
+
+    def __init__(
+        self,
+        *,
+        compiled_cache_enabled: bool = True,
+        sql_cache_enabled: bool = True,
+        fragment_cache_enabled: bool = True,
+        optimized_cache_enabled: bool = True,
+        sql_cache_size: int = 1000,
+        fragment_cache_size: int = 5000,
+        optimized_cache_size: int = 2000,
+    ) -> None:
+        """Initialize cache configuration.
+
+        Args:
+            compiled_cache_enabled: Enable compiled SQL caching
+            sql_cache_enabled: Enable SQL statement caching
+            fragment_cache_enabled: Enable AST fragment caching
+            optimized_cache_enabled: Enable optimized expression caching
+            sql_cache_size: Maximum SQL cache entries
+            fragment_cache_size: Maximum fragment cache entries
+            optimized_cache_size: Maximum optimized cache entries
+        """
+        self.compiled_cache_enabled = compiled_cache_enabled
+        self.sql_cache_enabled = sql_cache_enabled
+        self.fragment_cache_enabled = fragment_cache_enabled
+        self.optimized_cache_enabled = optimized_cache_enabled
+        self.sql_cache_size = sql_cache_size
+        self.fragment_cache_size = fragment_cache_size
+        self.optimized_cache_size = optimized_cache_size
+
+
+def get_cache_config() -> CacheConfig:
+    """Get the global cache configuration.
 
     Returns:
-        Cache configuration object with compiled_cache_enabled attribute
+        Current global cache configuration instance
     """
-    from sqlspec.core.config import get_global_config
+    global _global_cache_config
+    if _global_cache_config is None:
+        _global_cache_config = CacheConfig()
+    return _global_cache_config
 
-    config = get_global_config()
-    # Return object with compiled_cache_enabled attribute that _common.py expects
 
-    class CacheConfig:
-        def __init__(self, enable_caching: bool) -> None:
-            self.compiled_cache_enabled = enable_caching
+def update_cache_config(config: CacheConfig) -> None:
+    """Update the global cache configuration.
 
-    return CacheConfig(config.enable_caching)
+    This clears all existing caches when configuration changes to ensure
+    consistency with the new settings.
+
+    Args:
+        config: New cache configuration to apply globally
+    """
+    from sqlspec.utils.logging import get_logger
+
+    global _global_cache_config
+    _global_cache_config = config
+
+    # Clear all caches when configuration changes
+    unified_cache = get_default_cache()
+    unified_cache.clear()
+
+    # Clear statement cache if it exists
+    statement_cache = get_statement_cache()
+    statement_cache.clear()
+
+    logger = get_logger("sqlspec.cache")
+    logger.info(
+        "Cache configuration updated - all caches cleared",
+        extra={
+            "compiled_cache_enabled": config.compiled_cache_enabled,
+            "sql_cache_enabled": config.sql_cache_enabled,
+            "fragment_cache_enabled": config.fragment_cache_enabled,
+            "optimized_cache_enabled": config.optimized_cache_enabled,
+        },
+    )
+
+
+class CacheStatsAggregate:
+    """Aggregated cache statistics from all cache instances."""
+
+    def __init__(self) -> None:
+        """Initialize aggregated cache statistics."""
+        # Hit rates
+        self.sql_hit_rate = 0.0
+        self.fragment_hit_rate = 0.0
+        self.optimized_hit_rate = 0.0
+
+        # Cache sizes
+        self.sql_size = 0
+        self.fragment_size = 0
+        self.optimized_size = 0
+
+        # Cache capacities
+        self.sql_capacity = 0
+        self.fragment_capacity = 0
+        self.optimized_capacity = 0
+
+        # Operation counts
+        self.sql_hits = 0
+        self.sql_misses = 0
+        self.fragment_hits = 0
+        self.fragment_misses = 0
+        self.optimized_hits = 0
+        self.optimized_misses = 0
+
+
+def get_cache_stats() -> CacheStatsAggregate:
+    """Get current cache statistics from all caches.
+
+    Returns:
+        Combined cache statistics object
+    """
+    stats_dict = get_cache_statistics()
+    stats = CacheStatsAggregate()
+
+    if stats_dict:
+        # Aggregate statistics from unified cache system
+        for cache_name, cache_stats in stats_dict.items():
+            if hasattr(cache_stats, "hits") and hasattr(cache_stats, "misses"):
+                hits = getattr(cache_stats, "hits", 0)
+                misses = getattr(cache_stats, "misses", 0)
+                size = getattr(cache_stats, "size", 0)
+
+                if "sql" in cache_name.lower():
+                    stats.sql_hits += hits
+                    stats.sql_misses += misses
+                    stats.sql_size += size
+                elif "fragment" in cache_name.lower():
+                    stats.fragment_hits += hits
+                    stats.fragment_misses += misses
+                    stats.fragment_size += size
+                elif "optimized" in cache_name.lower():
+                    stats.optimized_hits += hits
+                    stats.optimized_misses += misses
+                    stats.optimized_size += size
+
+    # Calculate hit rates
+    if stats.sql_hits + stats.sql_misses > 0:
+        stats.sql_hit_rate = stats.sql_hits / (stats.sql_hits + stats.sql_misses)
+    if stats.fragment_hits + stats.fragment_misses > 0:
+        stats.fragment_hit_rate = stats.fragment_hits / (stats.fragment_hits + stats.fragment_misses)
+    if stats.optimized_hits + stats.optimized_misses > 0:
+        stats.optimized_hit_rate = stats.optimized_hits / (stats.optimized_hits + stats.optimized_misses)
+
+    return stats
+
+
+def reset_cache_stats() -> None:
+    """Reset all cache statistics."""
+    # Reset statistics in all cache instances
+    if _default_cache is not None:
+        _default_cache._stats = CacheStats()
+    if _statement_cache is not None:
+        _statement_cache._stats = CacheStats()
+    if _expression_cache is not None:
+        _expression_cache._stats = CacheStats()
+    if _parameter_cache is not None:
+        _parameter_cache._stats = CacheStats()
+
+
+def log_cache_stats() -> None:
+    """Log current cache statistics using the configured logger."""
+    from sqlspec.utils.logging import get_logger
+
+    logger = get_logger("sqlspec.cache")
+    stats = get_cache_stats()
+    # Note: CacheStatsAggregate doesn't have to_dict method, use string representation
+    logger.info("Cache Statistics: %s", stats)
 
 
 # Global cache instance for SQL compilation caching with compatible interface

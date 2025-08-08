@@ -8,9 +8,9 @@ from typing import Any, cast
 
 import pytest
 
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.statement.sql import SQL, StatementConfig
-from sqlspec.statement.transformer import SQLTransformer
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core.statement.transformer import SQLTransformer
 
 
 @pytest.fixture

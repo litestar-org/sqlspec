@@ -17,7 +17,7 @@ from sqlspec.builder.mixins import (
     MergeOnClauseMixin,
     MergeUsingClauseMixin,
 )
-from sqlspec.statement.result import SQLResult
+from sqlspec.core.result import SQLResult
 
 __all__ = ("Merge",)
 

@@ -6,8 +6,8 @@ from typing import Any
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteDriver
+from sqlspec.core.statement import SQL
 from sqlspec.exceptions import NotFoundError
-from sqlspec.statement.sql import SQL
 
 
 @pytest.fixture

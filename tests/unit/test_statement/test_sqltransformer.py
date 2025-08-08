@@ -4,8 +4,8 @@ from typing import Any
 
 import pytest
 
-from sqlspec.statement.sql import SQL
-from sqlspec.statement.transformer import SQLTransformer
+from sqlspec.core.statement import SQL
+from sqlspec.core.statement.transformer import SQLTransformer
 
 
 @pytest.mark.parametrize(
@@ -33,7 +33,7 @@ def test_basic_sql_operations(
     sql: str, parameters: Any, expected_operation: str, expected_parameters_type: type
 ) -> None:
     """Test basic SQL operations with various parameter styles."""
-    from sqlspec.statement.sql import StatementConfig
+    from sqlspec.core.statement import StatementConfig
 
     # Use postgres dialect for pyformat styles
     config = None
@@ -78,8 +78,8 @@ def test_basic_sql_operations(
 )
 def test_parameter_style_normalization(sql: str, parameters: Any, expected_sql: str) -> None:
     """Test that parameter styles are normalized to the config's default execution style when needed."""
-    from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-    from sqlspec.statement.sql import StatementConfig
+    from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+    from sqlspec.core.statement import StatementConfig
 
     # Create config that explicitly requires QMARK for execution
     config = StatementConfig(
@@ -112,7 +112,7 @@ def test_parameter_style_normalization(sql: str, parameters: Any, expected_sql: 
 )
 def test_parameter_format_detection(parameters: Any, expected_format: str) -> None:
     """Test parameter format detection for preservation."""
-    from sqlspec.statement.sql import StatementConfig
+    from sqlspec.core.statement import StatementConfig
 
     config = StatementConfig()
     transformer = SQLTransformer(parameters=parameters, dialect="postgres", config=config)
@@ -136,7 +136,7 @@ def test_parameter_format_conversion(
     original_parameters: Any, processed_dict: dict[str, Any], expected_result: Any
 ) -> None:
     """Test conversion back to original parameter format."""
-    from sqlspec.statement.sql import StatementConfig
+    from sqlspec.core.statement import StatementConfig
 
     config = StatementConfig()
     transformer = SQLTransformer(parameters=original_parameters, dialect="postgres", config=config)
@@ -147,7 +147,7 @@ def test_parameter_format_conversion(
 
 def test_sql_transformer_integration() -> None:
     """Test complete SQLTransformer integration with SQL class."""
-    from sqlspec.statement.sql import StatementConfig
+    from sqlspec.core.statement import StatementConfig
 
     # Test case that previously failed with SQLGlot parsing
     sql = "SELECT * FROM users WHERE id = %(id)s AND name = %(name)s"

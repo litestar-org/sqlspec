@@ -10,9 +10,9 @@ from typing import Any, Generic, Optional, TypeVar
 
 from sqlspec import sql
 from sqlspec.builder._ddl import CreateTable
+from sqlspec.core.statement import SQL
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.loaders import get_migration_loader
-from sqlspec.statement.sql import SQL
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import run_
 

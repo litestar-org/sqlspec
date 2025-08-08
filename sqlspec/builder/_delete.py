@@ -11,7 +11,7 @@ from sqlglot import exp
 
 from sqlspec.builder._base import QueryBuilder, SafeQuery
 from sqlspec.builder.mixins import DeleteFromClauseMixin, ReturningClauseMixin, WhereClauseMixin
-from sqlspec.statement.result import SQLResult
+from sqlspec.core.result import SQLResult
 
 __all__ = ("Delete",)
 

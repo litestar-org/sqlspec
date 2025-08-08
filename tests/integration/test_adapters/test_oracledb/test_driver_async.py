@@ -9,7 +9,7 @@ import pytest
 from pytest_databases.docker.oracle import OracleService
 
 from sqlspec.adapters.oracledb import OracleAsyncConfig
-from sqlspec.statement.result import SQLResult
+from sqlspec.core.result import SQLResult
 
 ParamStyle = Literal["positional_binds", "dict_binds"]
 

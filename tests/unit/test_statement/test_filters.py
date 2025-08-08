@@ -1,4 +1,4 @@
-"""Unit tests for sqlspec.statement.filters module."""
+"""Unit tests for sqlspec.core.statement.filters module."""
 
 from collections.abc import Collection
 from datetime import datetime
@@ -6,7 +6,8 @@ from typing import Any, Optional, Union
 
 import pytest
 
-from sqlspec.statement.filters import (
+from sqlspec.core.statement import SQL
+from sqlspec.core.statement.filters import (
     AnyCollectionFilter,
     BeforeAfterFilter,
     InCollectionFilter,
@@ -20,7 +21,6 @@ from sqlspec.statement.filters import (
     StatementFilter,
     apply_filter,
 )
-from sqlspec.statement.sql import SQL
 
 
 def test_statement_filter_protocol_implementation() -> None:

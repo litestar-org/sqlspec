@@ -9,7 +9,7 @@ import sqlglot
 import sqlglot.expressions as exp
 from sqlglot.errors import ParseError
 
-from sqlspec.statement.cache import BaseStatementCache, FilterCache
+from sqlspec.core.statement.cache import BaseStatementCache, FilterCache
 
 
 class TestBaseStatementCache:
@@ -214,7 +214,7 @@ class TestBaseStatementCache:
             parse_count += 1
             return original_parse(*args, **kwargs)  # type: ignore[no-any-return]
 
-        with patch("sqlspec.statement.cache.sqlglot.parse_one", side_effect=counting_parse):
+        with patch("sqlspec.core.statement.cache.sqlglot.parse_one", side_effect=counting_parse):
             # Launch multiple threads trying to get the same (cached) SQL
             threads = []
 

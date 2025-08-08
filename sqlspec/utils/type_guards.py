@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from typing_extensions import TypeGuard
 
     from sqlspec.builder import Select
+    from sqlspec.core.statement.filters import LimitOffsetFilter, StatementFilter
     from sqlspec.protocols import (
         AsyncCloseableConnectionProtocol,
         AsyncCopyCapableConnectionProtocol,
@@ -61,7 +62,6 @@ if TYPE_CHECKING:
         SyncTransactionStateConnectionProtocol,
         WithMethodProtocol,
     )
-    from sqlspec.statement.filters import LimitOffsetFilter, StatementFilter
     from sqlspec.typing import SupportedSchemaModel
 
 __all__ = (
@@ -157,7 +157,7 @@ def is_statement_filter(obj: Any) -> "TypeGuard[StatementFilter]":
     Returns:
         True if the object is a StatementFilter, False otherwise
     """
-    from sqlspec.statement.filters import StatementFilter as FilterProtocol
+    from sqlspec.core.statement.filters import StatementFilter as FilterProtocol
 
     return isinstance(obj, FilterProtocol)
 
@@ -171,7 +171,7 @@ def is_limit_offset_filter(obj: Any) -> "TypeGuard[LimitOffsetFilter]":
     Returns:
         True if the object is a LimitOffsetFilter, False otherwise
     """
-    from sqlspec.statement.filters import LimitOffsetFilter
+    from sqlspec.core.statement.filters import LimitOffsetFilter
 
     return isinstance(obj, LimitOffsetFilter)
 
@@ -1330,6 +1330,6 @@ def is_typed_parameter(obj: Any) -> "TypeGuard[Any]":
     Returns:
         True if the object is a TypedParameter, False otherwise
     """
-    from sqlspec.parameters import TypedParameter
+    from sqlspec.core.parameters import TypedParameter
 
     return isinstance(obj, TypedParameter)

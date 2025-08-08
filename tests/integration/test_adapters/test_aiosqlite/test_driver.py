@@ -9,8 +9,8 @@ from uuid import uuid4
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
-from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import StatementConfig
+from sqlspec.core.result import SQLResult
+from sqlspec.core.statement import StatementConfig
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 

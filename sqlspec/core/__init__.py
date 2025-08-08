@@ -32,7 +32,8 @@ from typing import TYPE_CHECKING
 # Import core classes for public API
 from sqlspec.core.cache import UnifiedCache, get_statement_cache
 from sqlspec.core.compiler import SQLProcessor, create_processor
-from sqlspec.core.config import CoreConfig, get_global_config, set_global_config
+
+# Note: Configuration is distributed across adapters/*/config.py - no centralized config
 from sqlspec.core.filters import StatementFilter
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.result import ArrowResult, SQLResult, StatementResult
@@ -41,32 +42,23 @@ from sqlspec.core.statement import SQL, StatementConfig
 __all__ = (
     # Core SQL processing
     "SQL",
-    "StatementConfig",
-    "SQLProcessor",
-    
-    # Results
-    "SQLResult",
-    "StatementResult", 
     "ArrowResult",
-    
-    # Filters
-    "StatementFilter",
-    
     # Parameters
     "ParameterStyle",
     "ParameterStyleConfig",
-    
-    # Configuration
-    "CoreConfig",
-    "get_global_config",
-    "set_global_config",
-    
+    "SQLProcessor",
+    # Results
+    "SQLResult",
+    "StatementConfig",
+    # Filters
+    "StatementFilter",
+    "StatementResult",
+    # Note: Configuration distributed across adapters - no centralized config exports
     # Caching
     "UnifiedCache",
-    "get_statement_cache",
-    
     # Compiler
     "create_processor",
+    "get_statement_cache",
 )
 
 # Version tracking for core module implementation

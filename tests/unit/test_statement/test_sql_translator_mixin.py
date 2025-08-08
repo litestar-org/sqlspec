@@ -8,12 +8,12 @@ import pytest
 from sqlglot import exp
 
 from sqlspec.config import NoPoolSyncConfig
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.driver._common import ExecutionResult
 from sqlspec.driver.mixins._sql_translator import SQLTranslatorMixin
 from sqlspec.exceptions import SQLConversionError
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.statement.sql import SQL, StatementConfig
 
 # Create a default parameter config for tests
 DEFAULT_PARAMETER_CONFIG = ParameterStyleConfig(

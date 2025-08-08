@@ -38,7 +38,7 @@ from sqlspec.utils.type_guards import is_statement_filter, supports_where
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.statement.filters import StatementFilter
+    from sqlspec.core.statement.filters import StatementFilter
 
 # Enable when MyPyC ready
 # from mypy_extensions import mypyc_attr

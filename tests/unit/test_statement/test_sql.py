@@ -1,4 +1,4 @@
-"""Unit tests for sqlspec.statement.sql module."""
+"""Unit tests for sqlspec.core.statement module."""
 
 from typing import TYPE_CHECKING, Any
 
@@ -6,7 +6,7 @@ import pytest
 from sqlglot import exp
 
 from sqlspec import SQL, ParameterStyle, ParameterStyleConfig, StatementConfig
-from sqlspec.statement import LimitOffsetFilter, SearchFilter
+from sqlspec.core.statement import LimitOffsetFilter, SearchFilter
 
 # Create a default test config
 DEFAULT_PARAMETER_CONFIG = ParameterStyleConfig(

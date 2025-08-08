@@ -38,10 +38,10 @@ from sqlspec.builder._ddl import (
 )
 from sqlspec.builder._select import Select
 from sqlspec.builder.mixins._where_clause import WhereClauseMixin
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.result import SQLResult
+from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL, StatementConfig
 
 
 # Test implementation of abstract QueryBuilder for testing

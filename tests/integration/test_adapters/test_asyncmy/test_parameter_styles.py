@@ -10,8 +10,8 @@ import pytest
 from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, asyncmy_statement_config
-from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL
+from sqlspec.core.result import SQLResult
+from sqlspec.core.statement import SQL
 
 
 @pytest.fixture

@@ -24,7 +24,7 @@ from sqlspec.builder.mixins import (
     UnpivotClauseMixin,
     WhereClauseMixin,
 )
-from sqlspec.statement.result import SQLResult
+from sqlspec.core.result import SQLResult
 
 __all__ = ("Select",)
 

@@ -6,7 +6,7 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
-from sqlspec.statement.result import SQLResult
+from sqlspec.core.result import SQLResult
 
 
 @pytest.fixture
@@ -203,7 +203,7 @@ async def test_asyncpg_execute_many_large_batch(asyncpg_batch_session: AsyncpgDr
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_many_with_sql_object(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with SQL object on AsyncPG."""
-    from sqlspec.statement.sql import SQL
+    from sqlspec.core.statement import SQL
 
     parameters = [("SQL Obj 1", 111, "SOB"), ("SQL Obj 2", 222, "SOB"), ("SQL Obj 3", 333, "SOB")]
 

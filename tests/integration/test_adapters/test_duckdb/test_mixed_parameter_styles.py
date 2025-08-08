@@ -5,7 +5,7 @@ from collections.abc import Generator
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
-from sqlspec.statement.sql import SQL, StatementConfig
+from sqlspec.core.statement import SQL, StatementConfig
 from tests.integration.test_adapters.test_duckdb.utils import get_unique_table_name
 
 
@@ -112,7 +112,7 @@ def test_complex_mixed_styles(duckdb_test_setup: tuple[DuckDBDriver, str]) -> No
 
 def test_parameter_info_detection(duckdb_test_setup: tuple[DuckDBDriver, str]) -> None:
     """Test that parameter_info correctly identifies mixed styles."""
-    from sqlspec.parameters import ParameterStyle
+    from sqlspec.core.parameters import ParameterStyle
 
     session, table_name = duckdb_test_setup
 

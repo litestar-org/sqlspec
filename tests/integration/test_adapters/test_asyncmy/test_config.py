@@ -4,7 +4,7 @@ import pytest
 from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyConnectionParams, AsyncmyDriver, AsyncmyPoolParams
-from sqlspec.statement.sql import StatementConfig
+from sqlspec.core.statement import StatementConfig
 
 
 def test_asyncmy_typed_dict_structure() -> None:

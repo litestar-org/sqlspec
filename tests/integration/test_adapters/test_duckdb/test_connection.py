@@ -5,8 +5,8 @@ from typing import Any
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBConnection
-from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import StatementConfig
+from sqlspec.core.result import SQLResult
+from sqlspec.core.statement import StatementConfig
 
 
 def create_permissive_config(**kwargs: Any) -> DuckDBConfig:

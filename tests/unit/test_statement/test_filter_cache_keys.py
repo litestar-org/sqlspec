@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlspec.statement.filters import (
+from sqlspec.core.statement.filters import (
     AnyCollectionFilter,
     BeforeAfterFilter,
     InCollectionFilter,

@@ -9,7 +9,7 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
-from sqlspec.statement.result import SQLResult
+from sqlspec.core.result import SQLResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
 

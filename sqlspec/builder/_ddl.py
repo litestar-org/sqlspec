@@ -9,11 +9,11 @@ from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder, SafeQuery
 from sqlspec.builder._ddl_utils import build_column_expression, build_constraint_expression
-from sqlspec.statement.result import SQLResult
+from sqlspec.core.result import SQLResult
 
 if TYPE_CHECKING:
     from sqlspec.builder._column import ColumnExpression
-    from sqlspec.statement.sql import SQL, StatementConfig
+    from sqlspec.core.statement import SQL, StatementConfig
 
 __all__ = (
     "AlterOperation",
@@ -788,7 +788,7 @@ class CreateTableAsSelect(DDLBuilder):
         select_expr = None
         select_parameters = None
         from sqlspec.builder._select import Select
-        from sqlspec.statement.sql import SQL
+        from sqlspec.core.statement import SQL
 
         if isinstance(self._select_query, SQL):
             select_expr = self._select_query.expression
@@ -905,7 +905,7 @@ class CreateMaterializedView(DDLBuilder):
         select_expr = None
         select_parameters = None
         from sqlspec.builder._select import Select
-        from sqlspec.statement.sql import SQL
+        from sqlspec.core.statement import SQL
 
         if isinstance(self._select_query, SQL):
             select_expr = self._select_query.expression
@@ -1000,7 +1000,7 @@ class CreateView(DDLBuilder):
         select_expr = None
         select_parameters = None
         from sqlspec.builder._select import Select
-        from sqlspec.statement.sql import SQL
+        from sqlspec.core.statement import SQL
 
         if isinstance(self._select_query, SQL):
             select_expr = self._select_query.expression

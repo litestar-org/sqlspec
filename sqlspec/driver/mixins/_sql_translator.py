@@ -2,8 +2,8 @@ from mypy_extensions import trait
 from sqlglot import exp, parse_one
 from sqlglot.dialects.dialect import DialectType
 
+from sqlspec.core.statement import SQL, Statement
 from sqlspec.exceptions import SQLConversionError
-from sqlspec.statement.sql import SQL, Statement
 
 __all__ = ("SQLTranslatorMixin",)
 

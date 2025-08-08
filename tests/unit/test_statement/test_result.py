@@ -1,12 +1,12 @@
-"""Unit tests for sqlspec.statement.result module."""
+"""Unit tests for sqlspec.core.result module."""
 
 from typing import TYPE_CHECKING, Any, Optional
 from unittest.mock import Mock
 
 import pytest
 
-from sqlspec.statement.result import ArrowResult, OperationType, SQLResult, StatementResult
-from sqlspec.statement.sql import SQL
+from sqlspec.core.result import ArrowResult, OperationType, SQLResult, StatementResult
+from sqlspec.core.statement import SQL
 
 if TYPE_CHECKING:
     pass

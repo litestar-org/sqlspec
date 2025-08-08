@@ -10,9 +10,9 @@ from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypeVar, Union, cast
 
+from sqlspec.core.result import SQLResult
+from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.exceptions import MissingDependencyError
-from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL, StatementConfig
 from sqlspec.typing import AIOSQL_INSTALLED
 
 if TYPE_CHECKING:

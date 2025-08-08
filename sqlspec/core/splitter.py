@@ -64,8 +64,8 @@ logger = get_logger("sqlspec.core.splitter")
 
 # Enhanced caching configuration
 DEFAULT_PATTERN_CACHE_SIZE = 1000  # Compiled regex patterns
-DEFAULT_RESULT_CACHE_SIZE = 5000   # Split results
-DEFAULT_CACHE_TTL = 3600          # 1 hour TTL
+DEFAULT_RESULT_CACHE_SIZE = 5000  # Split results
+DEFAULT_CACHE_TTL = 3600  # 1 hour TTL
 
 # Dialect configuration slots - optimized structure
 DIALECT_CONFIG_SLOTS = (
@@ -577,8 +577,7 @@ def _get_pattern_cache() -> UnifiedCache[list[tuple[TokenType, CompiledTokenPatt
         with _cache_lock:
             if _pattern_cache is None:
                 _pattern_cache = UnifiedCache[list[tuple[TokenType, CompiledTokenPattern]]](
-                    max_size=DEFAULT_PATTERN_CACHE_SIZE,
-                    ttl_seconds=DEFAULT_CACHE_TTL,
+                    max_size=DEFAULT_PATTERN_CACHE_SIZE, ttl_seconds=DEFAULT_CACHE_TTL
                 )
     return _pattern_cache
 
@@ -590,8 +589,7 @@ def _get_result_cache() -> UnifiedCache[list[str]]:
         with _cache_lock:
             if _result_cache is None:
                 _result_cache = UnifiedCache[list[str]](
-                    max_size=DEFAULT_RESULT_CACHE_SIZE,
-                    ttl_seconds=DEFAULT_CACHE_TTL,
+                    max_size=DEFAULT_RESULT_CACHE_SIZE, ttl_seconds=DEFAULT_CACHE_TTL
                 )
     return _result_cache
 
@@ -796,7 +794,7 @@ class StatementSplitter:
 
 def split_sql_script(script: str, dialect: Optional[str] = None, strip_trailing_terminator: bool = False) -> list[str]:
     """Enhanced split function with identical interface and behavior.
-    
+
     Splits a SQL script into individual statements using the appropriate dialect
     with enhanced caching and performance optimization.
 
@@ -845,7 +843,7 @@ def clear_splitter_caches() -> None:
 
 def get_splitter_cache_stats() -> dict[str, Any]:
     """Get statistics from splitter caches.
-    
+
     Returns:
         Dictionary containing cache statistics
     """
@@ -853,14 +851,8 @@ def get_splitter_cache_stats() -> dict[str, Any]:
     result_cache = _get_result_cache()
 
     return {
-        "pattern_cache": {
-            "size": pattern_cache.size(),
-            "stats": pattern_cache.get_stats(),
-        },
-        "result_cache": {
-            "size": result_cache.size(),
-            "stats": result_cache.get_stats(),
-        },
+        "pattern_cache": {"size": pattern_cache.size(), "stats": pattern_cache.get_stats()},
+        "result_cache": {"size": result_cache.size(), "stats": result_cache.get_stats()},
     }
 
 

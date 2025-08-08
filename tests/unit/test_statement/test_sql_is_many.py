@@ -1,6 +1,6 @@
 """Unit tests for SQL is_many parameter functionality."""
 
-from sqlspec.statement.sql import SQL
+from sqlspec.core.statement import SQL
 
 
 def test_is_many_with_parameters() -> None:

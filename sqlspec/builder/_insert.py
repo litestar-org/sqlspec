@@ -12,8 +12,8 @@ from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder.mixins import InsertFromSelectMixin, InsertIntoClauseMixin, InsertValuesMixin, ReturningClauseMixin
+from sqlspec.core.result import SQLResult
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.result import SQLResult
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence

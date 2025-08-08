@@ -17,8 +17,8 @@ from litestar import Litestar, get
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
+from sqlspec.core.statement import SQL
 from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec
-from sqlspec.statement.sql import SQL
 
 
 @get("/test", sync_to_thread=True)

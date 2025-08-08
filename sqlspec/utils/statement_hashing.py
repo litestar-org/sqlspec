@@ -13,8 +13,8 @@ from sqlglot import exp
 from sqlspec.utils.type_guards import is_typed_parameter
 
 if TYPE_CHECKING:
-    from sqlspec.statement.filters import StatementFilter
-    from sqlspec.statement.sql import SQL
+    from sqlspec.core.statement import SQL
+    from sqlspec.core.statement.filters import StatementFilter
 
 __all__ = (
     "hash_expression",
@@ -98,7 +98,7 @@ def hash_parameters(
 
     # Hash positional parameters
     if positional_parameters:
-        from sqlspec.parameters import TypedParameter
+        from sqlspec.core.parameters import TypedParameter
 
         hashable_parameters = []
         for param in positional_parameters:

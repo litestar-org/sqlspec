@@ -20,9 +20,9 @@ from sqlglot import exp
 
 from sqlspec.builder import Merge, Select
 from sqlspec.builder._base import SafeQuery
+from sqlspec.core.result import SQLResult
+from sqlspec.core.statement import SQL
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL
 
 if TYPE_CHECKING:
     pass

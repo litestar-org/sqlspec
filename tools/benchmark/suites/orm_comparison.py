@@ -19,7 +19,7 @@ from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig
-from sqlspec.statement.sql import StatementConfig
+from sqlspec.core.statement import StatementConfig
 from tools.benchmark.core.metrics import TimingResult
 from tools.benchmark.infrastructure.containers import ContainerManager
 from tools.benchmark.suites.base import BaseBenchmarkSuite
@@ -164,90 +164,88 @@ class ORMComparisonBenchmark(BaseBenchmarkSuite):
         """Add container-based databases to the list of databases to test."""
         try:
             host, port = self.container_manager.start_postgres(self.config.keep_containers)
-            databases.extend(
-                [
-                    {
-                        "name": "Psycopg Sync",
-                        "type": "sync",
-                        "get_sqlspec_config": lambda: self._get_psycopg_configs(host, port),
-                        "get_sqlalchemy_engine": lambda: create_engine(
-                            f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
-                            poolclass=QueuePool,
-                            pool_size=20,
-                            max_overflow=0,
-                            pool_pre_ping=True,
-                        ),
-                        "setup_func": self._setup_sync_db,
-                        "requires_container": True,
-                    },
-                    {
-                        "name": "Asyncpg",
-                        "type": "async",
-                        "get_sqlspec_config": lambda: self._get_asyncpg_configs(host, port),
-                        "get_sqlalchemy_engine": lambda: create_async_engine(
-                            f"postgresql+asyncpg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
-                            poolclass=pool.AsyncAdaptedQueuePool,
-                            pool_size=20,
-                            max_overflow=0,
-                            pool_pre_ping=True,
-                        ),
-                        "setup_func": self._setup_async_db,
-                        "requires_container": True,
-                    },
-                    {
-                        "name": "Psqlpy",
-                        "type": "async",
-                        "get_sqlspec_config": lambda: self._get_psqlpy_configs(host, port),
-                        "get_sqlalchemy_engine": lambda: create_async_engine(
-                            f"postgresql+asyncpg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
-                            poolclass=pool.AsyncAdaptedQueuePool,
-                            pool_size=20,
-                            max_overflow=0,
-                            pool_pre_ping=True,
-                        ),
-                        "setup_func": self._setup_async_db,
-                        "requires_container": True,
-                    },
-                    {
-                        "name": "AdbcPostgres",
-                        "type": "sync",
-                        "get_sqlspec_config": lambda: self._get_adbc_postgres_configs(host, port),
-                        "get_sqlalchemy_engine": lambda: create_engine(
-                            f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
-                            poolclass=QueuePool,
-                            pool_size=20,
-                            max_overflow=0,
-                            pool_pre_ping=True,
-                        ),
-                        "setup_func": self._setup_sync_db,
-                        "requires_container": True,
-                    },
-                    {
-                        "name": "PsycopgAsync",
-                        "type": "async",
-                        "get_sqlspec_config": lambda: self._get_psycopg_async_configs(host, port),
-                        "get_sqlalchemy_engine": lambda: create_async_engine(
-                            f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
-                            f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
-                            poolclass=pool.AsyncAdaptedQueuePool,
-                            pool_size=20,
-                            max_overflow=0,
-                            pool_pre_ping=True,
-                        ),
-                        "setup_func": self._setup_async_db,
-                        "requires_container": True,
-                    },
-                ]
-            )
+            databases.extend([
+                {
+                    "name": "Psycopg Sync",
+                    "type": "sync",
+                    "get_sqlspec_config": lambda: self._get_psycopg_configs(host, port),
+                    "get_sqlalchemy_engine": lambda: create_engine(
+                        f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
+                        poolclass=QueuePool,
+                        pool_size=20,
+                        max_overflow=0,
+                        pool_pre_ping=True,
+                    ),
+                    "setup_func": self._setup_sync_db,
+                    "requires_container": True,
+                },
+                {
+                    "name": "Asyncpg",
+                    "type": "async",
+                    "get_sqlspec_config": lambda: self._get_asyncpg_configs(host, port),
+                    "get_sqlalchemy_engine": lambda: create_async_engine(
+                        f"postgresql+asyncpg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
+                        poolclass=pool.AsyncAdaptedQueuePool,
+                        pool_size=20,
+                        max_overflow=0,
+                        pool_pre_ping=True,
+                    ),
+                    "setup_func": self._setup_async_db,
+                    "requires_container": True,
+                },
+                {
+                    "name": "Psqlpy",
+                    "type": "async",
+                    "get_sqlspec_config": lambda: self._get_psqlpy_configs(host, port),
+                    "get_sqlalchemy_engine": lambda: create_async_engine(
+                        f"postgresql+asyncpg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
+                        poolclass=pool.AsyncAdaptedQueuePool,
+                        pool_size=20,
+                        max_overflow=0,
+                        pool_pre_ping=True,
+                    ),
+                    "setup_func": self._setup_async_db,
+                    "requires_container": True,
+                },
+                {
+                    "name": "AdbcPostgres",
+                    "type": "sync",
+                    "get_sqlspec_config": lambda: self._get_adbc_postgres_configs(host, port),
+                    "get_sqlalchemy_engine": lambda: create_engine(
+                        f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
+                        poolclass=QueuePool,
+                        pool_size=20,
+                        max_overflow=0,
+                        pool_pre_ping=True,
+                    ),
+                    "setup_func": self._setup_sync_db,
+                    "requires_container": True,
+                },
+                {
+                    "name": "PsycopgAsync",
+                    "type": "async",
+                    "get_sqlspec_config": lambda: self._get_psycopg_async_configs(host, port),
+                    "get_sqlalchemy_engine": lambda: create_async_engine(
+                        f"postgresql+psycopg://{self.container_manager.docker_config.POSTGRES_DEFAULT_USER}:"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_PASSWORD}@{host}:{port}/"
+                        f"{self.container_manager.docker_config.POSTGRES_DEFAULT_DB}",
+                        poolclass=pool.AsyncAdaptedQueuePool,
+                        pool_size=20,
+                        max_overflow=0,
+                        pool_pre_ping=True,
+                    ),
+                    "setup_func": self._setup_async_db,
+                    "requires_container": True,
+                },
+            ])
         except Exception as e:
             self.console.print(f"[yellow]Skipping PostgreSQL tests: {e}[/yellow]")
 

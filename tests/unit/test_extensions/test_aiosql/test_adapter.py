@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from sqlspec.core.result import SQLResult
 from sqlspec.extensions.aiosql.adapter import AiosqlAsyncAdapter, AiosqlSyncAdapter
-from sqlspec.statement.result import SQLResult
 
 
 @pytest.fixture

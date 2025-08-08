@@ -38,8 +38,8 @@ from rich.table import Table
 
 from sqlspec import sql
 from sqlspec.adapters.duckdb import DuckDBConfig
-from sqlspec.statement.filters import LimitOffsetFilter, OrderByFilter, SearchFilter
-from sqlspec.statement.sql import SQL, StatementConfig
+from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core.statement.filters import LimitOffsetFilter, OrderByFilter, SearchFilter
 
 # Display constants
 MAX_ROWS_TO_DISPLAY = 5

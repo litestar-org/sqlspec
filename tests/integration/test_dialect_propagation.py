@@ -16,8 +16,8 @@ from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.builder import Select
 
 # Import removed - SQLProcessingContext no longer exists in new architecture
-from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL, StatementConfig
+from sqlspec.core.result import SQLResult
+from sqlspec.core.statement import SQL, StatementConfig
 from tests.integration.test_adapters.test_adbc.conftest import PostgresService
 
 
@@ -189,7 +189,7 @@ async def test_asyncmy_dialect_propagation_with_filters(mysql_service: MySQLServ
         await driver.execute("INSERT INTO test_users VALUES (1, 'test'), (2, 'another')")
 
         # Test with LimitOffsetFilter
-        from sqlspec.statement.filters import LimitOffsetFilter
+        from sqlspec.core.statement.filters import LimitOffsetFilter
 
         sql = SQL(
             "SELECT * FROM test_users", LimitOffsetFilter(limit=1, offset=0), statement_config=config.statement_config

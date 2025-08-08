@@ -4,8 +4,14 @@ import math
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlspec.parameters import ParameterConverter, ParameterInfo, ParameterStyle, ParameterStyleConfig, TypedParameter
-from sqlspec.statement.sql import SQL, StatementConfig
+from sqlspec.core.parameters import (
+    ParameterConverter,
+    ParameterInfo,
+    ParameterStyle,
+    ParameterStyleConfig,
+    TypedParameter,
+)
+from sqlspec.core.statement import SQL, StatementConfig
 
 
 def test_typed_parameter_hashable() -> None:

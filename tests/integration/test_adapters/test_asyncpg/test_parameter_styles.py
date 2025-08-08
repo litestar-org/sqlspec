@@ -8,7 +8,7 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
-from sqlspec.statement.result import SQLResult
+from sqlspec.core.result import SQLResult
 
 
 @pytest.fixture(scope="function")
@@ -197,7 +197,7 @@ async def test_asyncpg_parameter_with_any_array(asyncpg_parameters_session: Asyn
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_parameter_with_sql_object(asyncpg_parameters_session: AsyncpgDriver) -> None:
     """Test parameters with SQL object."""
-    from sqlspec.statement.sql import SQL
+    from sqlspec.core.statement import SQL
 
     # Test with numeric style - parameters must be included in SQL object constructor
     sql_obj = SQL("SELECT * FROM test_parameters WHERE value > $1", parameters=[150])

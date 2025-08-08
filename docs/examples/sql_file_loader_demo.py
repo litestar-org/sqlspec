@@ -9,8 +9,8 @@ from pathlib import Path
 
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.base import SQLSpec
+from sqlspec.core.statement import SQL
 from sqlspec.loader import SQLFileLoader
-from sqlspec.statement.sql import SQL
 
 __all__ = (
     "basic_loader_example",

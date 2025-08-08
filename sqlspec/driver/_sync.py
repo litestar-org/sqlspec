@@ -18,6 +18,7 @@ Performance Improvements:
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
+from sqlspec.core.statement import SQL
 from sqlspec.driver._common import CommonDriverAttributesMixin, ExecutionResult
 from sqlspec.driver.mixins import SQLTranslatorMixin, ToSchemaMixin
 from sqlspec.exceptions import NotFoundError
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core.result import SQLResult
-    from sqlspec.core.statement import SQL, Statement, StatementConfig, StatementFilter
+    from sqlspec.core.statement import Statement, StatementConfig, StatementFilter
     from sqlspec.typing import ModelDTOT, ModelT, RowT, StatementParameters
 
 logger = get_logger("sqlspec")

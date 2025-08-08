@@ -8,7 +8,7 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver, psycopg_statement_config
-from sqlspec.statement.result import SQLResult
+from sqlspec.core.result import SQLResult
 
 
 @pytest.fixture
@@ -211,7 +211,7 @@ def test_psycopg_parameter_with_any_array(psycopg_parameters_session: PsycopgSyn
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_parameter_with_sql_object(psycopg_parameters_session: PsycopgSyncDriver) -> None:
     """Test parameters with SQL object."""
-    from sqlspec.statement.sql import SQL
+    from sqlspec.core.statement import SQL
 
     # Test with pyformat style
     sql_obj = SQL("SELECT * FROM test_parameters WHERE value > %s", parameters=[150])

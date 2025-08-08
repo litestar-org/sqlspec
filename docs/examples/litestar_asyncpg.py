@@ -25,8 +25,8 @@ from typing import Any
 from litestar import Litestar, get
 
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
+from sqlspec.core.statement import SQL
 from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec
-from sqlspec.statement.sql import SQL
 
 
 @get("/")

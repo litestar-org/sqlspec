@@ -8,7 +8,7 @@ from typing import Any, Literal
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
-from sqlspec.statement.result import SQLResult
+from sqlspec.core.result import SQLResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds"]
 

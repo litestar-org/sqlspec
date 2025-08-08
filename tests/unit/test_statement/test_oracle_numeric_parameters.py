@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 import pytest
 
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig, ParameterValidator
+from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.exceptions import MissingParameterError, ParameterError, SQLValidationError
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig, ParameterValidator
-from sqlspec.statement.sql import SQL, StatementConfig
 
 if TYPE_CHECKING:
     pass
