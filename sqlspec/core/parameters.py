@@ -537,11 +537,11 @@ class ParameterConverter:
         }
 
         # Placeholder generators for different styles
-        self._placeholder_generators = {
+        self._placeholder_generators: dict[ParameterStyle, Callable[[Any], str]] = {
             ParameterStyle.QMARK: lambda _: "?",
-            ParameterStyle.NUMERIC: lambda i: f"${i + 1}",
+            ParameterStyle.NUMERIC: lambda i: f"${int(i) + 1}",
             ParameterStyle.NAMED_COLON: lambda name: f":{name}",
-            ParameterStyle.POSITIONAL_COLON: lambda i: f":{i + 1}",
+            ParameterStyle.POSITIONAL_COLON: lambda i: f":{int(i) + 1}",
             ParameterStyle.NAMED_AT: lambda name: f"@{name}",
             ParameterStyle.NAMED_DOLLAR: lambda name: f"${name}",
             ParameterStyle.NAMED_PYFORMAT: lambda name: f"%({name})s",

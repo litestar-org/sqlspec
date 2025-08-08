@@ -32,7 +32,7 @@ from sqlglot.errors import ParseError
 from typing_extensions import TypeAlias
 
 from sqlspec.core.parameters import ParameterConverter, ParameterStyle, ParameterStyleConfig, ParameterValidator
-from sqlspec.typing import Empty
+from sqlspec.typing import Empty, EmptyEnum
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_statement_filter, supports_where
 
@@ -173,7 +173,7 @@ class SQL:
 
         # Initialize state attributes
         self._dialect = self._normalize_dialect(self._statement_config.dialect)
-        self._processed_state = Empty
+        self._processed_state: Union[EmptyEnum, ProcessedState] = Empty
         self._hash: Optional[int] = None
         self._filters: list[StatementFilter] = []
         self._named_parameters: dict[str, Any] = {}
@@ -428,6 +428,7 @@ class SQL:
                 current_expr = sqlglot.parse_one(f"SELECT * FROM ({self._raw_sql}) AS subquery", dialect=self._dialect)
 
         # Handle condition input
+        condition_expr: exp.Expression
         if isinstance(condition, str):
             try:
                 condition_expr = sqlglot.parse_one(condition, dialect=self._dialect, into=exp.Condition)

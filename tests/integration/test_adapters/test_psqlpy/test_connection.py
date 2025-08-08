@@ -123,7 +123,9 @@ async def test_connection_concurrent_access(psqlpy_config: PsqlpyConfig) -> None
             result = await driver.execute("SELECT $1::text as task_id", (f"task_{task_id}",))
             assert isinstance(result, SQLResult)
             assert result.data is not None
-            return result.data[0]["task_id"]
+            from typing import cast
+
+            return cast(str, result.data[0]["task_id"])
 
     # Run multiple concurrent queries
     tasks = [query_task(i) for i in range(3)]

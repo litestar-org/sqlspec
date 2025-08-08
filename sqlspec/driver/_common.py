@@ -512,6 +512,7 @@ class CommonDriverAttributesMixin:
         # Create simple hash for core.statement.SQL (different from old SQL type)
         # Convert parameters to hashable representation safely
         params = statement.parameters
+        params_key: Any
         try:
             if isinstance(params, dict):
                 params_key = tuple(sorted(params.items()))

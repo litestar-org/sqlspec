@@ -967,7 +967,7 @@ def test_unified_cache_zero_max_size() -> None:
 
 def test_unified_cache_very_short_ttl() -> None:
     """Test UnifiedCache with very short TTL."""
-    cache: UnifiedCache[str] = UnifiedCache(ttl_seconds=0.1)  # 100ms TTL
+    cache: UnifiedCache[str] = UnifiedCache(ttl_seconds=1)  # 1 second TTL
     key = CacheKey(("test", "short_ttl"))
 
     cache.put(key, "expires_quickly")

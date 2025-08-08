@@ -142,10 +142,14 @@ def test_risk_level_ordering_edge_cases() -> None:
 
 def test_risk_level_ordering_with_non_risk_level() -> None:
     """Test RiskLevel comparison with non-RiskLevel objects."""
-    assert RiskLevel.MEDIUM.__lt__("not_risk_level") is NotImplemented
-    assert RiskLevel.MEDIUM.__le__("not_risk_level") is NotImplemented
-    assert RiskLevel.MEDIUM.__gt__("not_risk_level") is NotImplemented
-    assert RiskLevel.MEDIUM.__ge__("not_risk_level") is NotImplemented
+    from typing import cast
+
+    # Cast to Any for testing comparison behavior with non-RiskLevel objects
+    non_risk_obj = cast("Any", "not_risk_level")
+    assert RiskLevel.MEDIUM.__lt__(non_risk_obj) is NotImplemented
+    assert RiskLevel.MEDIUM.__le__(non_risk_obj) is NotImplemented
+    assert RiskLevel.MEDIUM.__gt__(non_risk_obj) is NotImplemented
+    assert RiskLevel.MEDIUM.__ge__(non_risk_obj) is NotImplemented
 
 
 # Missing Dependency Error Tests

@@ -175,7 +175,7 @@ class DuckDBConnectionPool:
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
 
-        return self._thread_local.connection
+        return cast("DuckDBConnection", self._thread_local.connection)
 
     def _close_thread_connection(self) -> None:
         """Close the connection for the current thread."""

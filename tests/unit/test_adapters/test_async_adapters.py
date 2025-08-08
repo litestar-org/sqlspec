@@ -294,9 +294,9 @@ async def test_async_driver_select_one_multiple_results(mock_async_driver: MockA
 
 
 @pytest.mark.asyncio
-async def test_async_driver_select_one_or_none(mock_async_driver: MockAsyncDriver) -> None:
+async def test_async_driver_select_one_or_none(mock_async_driver: MockAsyncDriver) -> None:  # type: ignore[func-returns-value]
     """Test async select_one_or_none method."""
-    result = await mock_async_driver.select_one_or_none("SELECT * FROM users WHERE id = ?", 1)
+    result = await mock_async_driver.select_one_or_none("SELECT * FROM users WHERE id = ?", 1)  # type: ignore[func-returns-value]
 
     assert isinstance(result, dict)
     assert result["id"] == 1
@@ -304,14 +304,14 @@ async def test_async_driver_select_one_or_none(mock_async_driver: MockAsyncDrive
 
 
 @pytest.mark.asyncio
-async def test_async_driver_select_one_or_none_no_results(mock_async_driver: MockAsyncDriver) -> None:
+async def test_async_driver_select_one_or_none_no_results(mock_async_driver: MockAsyncDriver) -> None:  # type: ignore[func-returns-value]
     """Test async select_one_or_none method with no results."""
     with patch.object(mock_async_driver, "execute", new_callable=AsyncMock) as mock_execute:
         mock_result = Mock(spec=SQLResult)
         mock_result.get_data.return_value = []
         mock_execute.return_value = mock_result
 
-        result = await mock_async_driver.select_one_or_none("SELECT * FROM users WHERE id = ?", 999)
+        result = await mock_async_driver.select_one_or_none("SELECT * FROM users WHERE id = ?", 999)  # type: ignore[func-returns-value]
         assert result is None
 
 

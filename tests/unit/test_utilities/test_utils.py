@@ -295,7 +295,7 @@ def test_singleton_different_classes() -> None:
     singleton1 = SingletonTestClass("test")
     singleton2 = AnotherSingletonClass(100)
 
-    assert singleton1 is not singleton2
+    assert singleton1 is not singleton2  # type: ignore[comparison-overlap]
     assert isinstance(singleton1, SingletonTestClass)
     assert isinstance(singleton2, AnotherSingletonClass)
 
@@ -590,7 +590,7 @@ async def test_ensure_async_with_async_function() -> None:
     async def already_async(x: int) -> int:
         return x * 6
 
-    ensured = ensure_async_(already_async)
+    ensured: Any = ensure_async_(already_async)  # type: ignore[arg-type]
     result = await ensured(2)
     assert result == 12
 
@@ -729,7 +729,7 @@ def test_no_value_class() -> None:
 
     # Should be usable as a sentinel value
     assert no_val is not None
-    assert no_val != "some_value"
+    assert no_val != "some_value"  # type: ignore[comparison-overlap]
 
 
 # Fixtures Tests

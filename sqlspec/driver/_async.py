@@ -297,7 +297,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         **kwargs: Any,
     ) -> "Union[ModelT, RowT, dict[str, Any]]": ...  # pyright: ignore[reportInvalidTypeVarUse]
 
-    async def select_one(  # type: ignore[misc]
+    async def select_one(
         self,
         statement: "Union[Statement, QueryBuilder]",
         /,

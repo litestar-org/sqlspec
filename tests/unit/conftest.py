@@ -23,7 +23,7 @@ import time
 from collections import defaultdict
 from contextlib import asynccontextmanager, contextmanager
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import pytest
 
@@ -839,7 +839,7 @@ def mock_sqlite_connection() -> MockSyncConnection:
 def mock_postgres_connection() -> MockAsyncConnection:
     """Mock PostgreSQL connection with Postgres-specific behavior."""
     conn = MockAsyncConnection("postgres_connection", "postgres")
-    conn.connection_info.update({"server_version": "14.0", "supports_returning": True, "supports_arrays": True})
+    conn.connection_info.update({"server_version": "14.0", "supports_returning": "True", "supports_arrays": "True"})
     return conn
 
 
@@ -847,7 +847,7 @@ def mock_postgres_connection() -> MockAsyncConnection:
 def mock_mysql_connection() -> MockSyncConnection:
     """Mock MySQL connection with MySQL-specific behavior."""
     conn = MockSyncConnection("mysql_connection", "mysql")
-    conn.connection_info.update({"server_version": "8.0.0", "supports_json": True, "charset": "utf8mb4"})
+    conn.connection_info.update({"server_version": "8.0.0", "supports_json": "True", "charset": "utf8mb4"})
     return conn
 
 
@@ -856,7 +856,12 @@ def mock_bigquery_connection() -> MockSyncConnection:
     """Mock BigQuery connection with BigQuery-specific behavior."""
     conn = MockSyncConnection("bigquery_connection", "bigquery")
     conn.connection_info.update(
-        {"project_id": "test-project", "dataset_id": "test_dataset", "supports_arrays": True, "supports_structs": True}
+        {
+            "project_id": "test-project",
+            "dataset_id": "test_dataset",
+            "supports_arrays": "True",
+            "supports_structs": "True",
+        }
     )
     return conn
 
@@ -878,11 +883,11 @@ def test_isolation() -> "Generator[None, None, None]":
 
 
 @pytest.fixture
-def cleanup_test_state() -> "Generator[callable, None, None]":
+def cleanup_test_state() -> "Generator[Callable[[Callable[[], None]], None], None, None]":
     """Fixture that provides a cleanup function for test state management."""
     cleanup_functions = []
 
-    def register_cleanup(func: callable) -> None:
+    def register_cleanup(func: "Callable[[], None]") -> None:
         """Register a cleanup function to be called during teardown."""
         cleanup_functions.append(func)
 
@@ -911,7 +916,7 @@ def reset_global_state() -> "Generator[None, None, None]":
 
 
 @pytest.fixture
-def performance_timer() -> "Generator[callable, None, None]":
+def performance_timer() -> "Generator[Any, None, None]":
     """Performance timer fixture for measuring execution time during tests."""
     times = {}
 
@@ -941,7 +946,7 @@ def benchmark_tracker() -> dict[str, Any]:
 
 
 @pytest.fixture
-def memory_profiler() -> "Generator[callable, None, None]":
+def memory_profiler() -> "Generator[Callable[[], dict[str, Any]], None, None]":
     """Memory profiling fixture for tracking memory usage during tests."""
     try:
         import os
@@ -970,9 +975,9 @@ def memory_profiler() -> "Generator[callable, None, None]":
 
 
 @pytest.fixture
-def compilation_metrics() -> "Generator[callable, None, None]":
+def compilation_metrics() -> "Generator[Any, None, None]":
     """Compilation metrics tracking for SQL compilation performance testing."""
-    metrics = {
+    metrics: dict[str, Any] = {
         "compilation_count": 0,
         "cache_hits": 0,
         "cache_misses": 0,

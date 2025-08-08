@@ -163,7 +163,9 @@ async def test_psqlpy_concurrent_operations() -> None:
             # Query data
             result = await session.execute(f"SELECT COUNT(*) as count FROM task_{task_id}_table")
             assert isinstance(result, SQLResult)
-            return result.data[0]["count"]
+            from typing import cast
+
+            return cast(int, result.data[0]["count"])
 
     # This test would need actual PostgreSQL connection
     # Skipping actual execution but keeping structure for reference

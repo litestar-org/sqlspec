@@ -60,7 +60,9 @@ ADAPTER_CONFIGS = [
 @pytest.fixture(params=ADAPTER_CONFIGS, ids=operator.itemgetter("name"))
 def adapter_config(request: pytest.FixtureRequest) -> "dict[str, Any]":
     """Parameterized fixture providing different adapter configurations."""
-    return request.param
+    from typing import cast
+
+    return cast("dict[str, Any]", request.param)
 
 
 @pytest.fixture

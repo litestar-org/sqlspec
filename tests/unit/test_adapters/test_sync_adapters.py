@@ -1,6 +1,6 @@
 """Tests for synchronous database adapters based on CORE_ROUND_3 architecture."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -65,9 +65,9 @@ def test_sync_driver_database_exception_handling(mock_sync_driver: MockSyncDrive
 def test_sync_driver_execute_statement_select(mock_sync_driver: MockSyncDriver) -> None:
     """Test _execute_statement method with SELECT query."""
     statement = SQL("SELECT id, name FROM users", statement_config=mock_sync_driver.statement_config)
-    cursor = mock_sync_driver.with_cursor(mock_sync_driver.connection)
 
-    result = mock_sync_driver._execute_statement(cursor, statement)
+    with mock_sync_driver.with_cursor(mock_sync_driver.connection) as cursor:
+        result = mock_sync_driver._execute_statement(cursor, statement)
 
     assert isinstance(result, ExecutionResult)
     assert result.is_select_result is True
@@ -81,9 +81,9 @@ def test_sync_driver_execute_statement_select(mock_sync_driver: MockSyncDriver) 
 def test_sync_driver_execute_statement_insert(mock_sync_driver: MockSyncDriver) -> None:
     """Test _execute_statement method with INSERT query."""
     statement = SQL("INSERT INTO users (name) VALUES (?)", "test", statement_config=mock_sync_driver.statement_config)
-    cursor = mock_sync_driver.with_cursor(mock_sync_driver.connection)
 
-    result = mock_sync_driver._execute_statement(cursor, statement)
+    with mock_sync_driver.with_cursor(mock_sync_driver.connection) as cursor:
+        result = mock_sync_driver._execute_statement(cursor, statement)
 
     assert isinstance(result, ExecutionResult)
     assert result.is_select_result is False
@@ -101,9 +101,8 @@ def test_sync_driver_execute_many(mock_sync_driver: MockSyncDriver) -> None:
         statement_config=mock_sync_driver.statement_config,
         is_many=True,
     )
-    cursor = mock_sync_driver.with_cursor(mock_sync_driver.connection)
-
-    result = mock_sync_driver._execute_many(cursor, statement)
+    with mock_sync_driver.with_cursor(mock_sync_driver.connection) as cursor:
+        result = mock_sync_driver._execute_many(cursor, statement)
 
     assert isinstance(result, ExecutionResult)
     assert result.is_many_result is True
@@ -118,10 +117,9 @@ def test_sync_driver_execute_many_no_parameters(mock_sync_driver: MockSyncDriver
     statement = SQL(
         "INSERT INTO users (name) VALUES (?)", statement_config=mock_sync_driver.statement_config, is_many=True
     )
-    cursor = mock_sync_driver.with_cursor(mock_sync_driver.connection)
-
-    with pytest.raises(ValueError, match="execute_many requires parameters"):
-        mock_sync_driver._execute_many(cursor, statement)
+    with mock_sync_driver.with_cursor(mock_sync_driver.connection) as cursor:
+        with pytest.raises(ValueError, match="execute_many requires parameters"):
+            mock_sync_driver._execute_many(cursor, statement)
 
 
 def test_sync_driver_execute_script(mock_sync_driver: MockSyncDriver) -> None:
@@ -132,9 +130,9 @@ def test_sync_driver_execute_script(mock_sync_driver: MockSyncDriver) -> None:
     UPDATE users SET active = 1;
     """
     statement = SQL(script, statement_config=mock_sync_driver.statement_config, is_script=True)
-    cursor = mock_sync_driver.with_cursor(mock_sync_driver.connection)
 
-    result = mock_sync_driver._execute_script(cursor, statement)
+    with mock_sync_driver.with_cursor(mock_sync_driver.connection) as cursor:
+        result = mock_sync_driver._execute_script(cursor, statement)
 
     assert isinstance(result, ExecutionResult)
     assert result.is_script_result is True
@@ -313,7 +311,7 @@ def test_sync_driver_select_one_or_none_multiple_results(mock_sync_driver: MockS
 
 def test_sync_driver_select(mock_sync_driver: MockSyncDriver) -> None:
     """Test select method."""
-    result = mock_sync_driver.select("SELECT * FROM users")
+    result: list[Any] = mock_sync_driver.select("SELECT * FROM users")
 
     assert isinstance(result, list)
     assert len(result) == 2

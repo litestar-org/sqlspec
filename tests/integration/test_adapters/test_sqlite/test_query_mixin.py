@@ -185,11 +185,11 @@ class TestSqliteQueryMixin:
         assert result == "JANE SMITH"
 
         # Test SUBSTR function with select_one
-        result: dict[str, Any] = sqlite_driver.select_one(
+        result_row: dict[str, Any] = sqlite_driver.select_one(
             "SELECT name, SUBSTR(name, 1, 4) as name_prefix FROM users WHERE id = 3"
         )
-        assert result["name"] == "Bob Johnson"
-        assert result["name_prefix"] == "Bob "
+        assert result_row["name"] == "Bob Johnson"
+        assert result_row["name_prefix"] == "Bob "
 
     @pytest.mark.parametrize(
         "query,expected_count",

@@ -169,9 +169,9 @@ def test_processed_state_initialization() -> None:
 
 def test_processed_state_hash_equality() -> None:
     """Test ProcessedState hash and equality."""
-    state1 = ProcessedState("SELECT * FROM users", [], "SELECT")
-    state2 = ProcessedState("SELECT * FROM users", [], "SELECT")
-    state3 = ProcessedState("SELECT * FROM orders", [], "SELECT")
+    state1 = ProcessedState("SELECT * FROM users", [], operation_type="SELECT")
+    state2 = ProcessedState("SELECT * FROM users", [], operation_type="SELECT")
+    state3 = ProcessedState("SELECT * FROM orders", [], operation_type="SELECT")
 
     # Equal states have same hash
     assert hash(state1) == hash(state2)

@@ -1,6 +1,7 @@
 """SQLite-specific fixtures for integration tests."""
 
 from collections.abc import Generator
+from typing import Any, cast
 
 import pytest
 
@@ -89,14 +90,16 @@ def sqlite_driver() -> Generator[SqliteDriver, None, None]:
 def sqlite_config_shared_memory() -> SqliteConfig:
     """Create SQLite config with shared memory for pooling tests."""
     return SqliteConfig(
-        pool_config={"database": "file::memory:?cache=shared", "uri": True, "pool_min_size": 2, "pool_max_size": 5}
+        pool_config=cast(
+            "Any", {"database": "file::memory:?cache=shared", "uri": True, "pool_min_size": 2, "pool_max_size": 5}
+        )
     )
 
 
 @pytest.fixture
 def sqlite_config_regular_memory() -> SqliteConfig:
     """Create SQLite config with regular memory for auto-conversion tests."""
-    return SqliteConfig(pool_config={"database": ":memory:", "pool_min_size": 5, "pool_max_size": 10})
+    return SqliteConfig(pool_config=cast("Any", {"database": ":memory:", "pool_min_size": 5, "pool_max_size": 10}))
 
 
 @pytest.fixture
@@ -109,7 +112,7 @@ def sqlite_temp_file_config() -> Generator[SqliteConfig, None, None]:
         db_path = tmp.name
 
     try:
-        config = SqliteConfig(pool_config={"database": db_path, "pool_min_size": 3, "pool_max_size": 8})
+        config = SqliteConfig(pool_config=cast("Any", {"database": db_path, "pool_min_size": 3, "pool_max_size": 8}))
         yield config
     finally:
         try:

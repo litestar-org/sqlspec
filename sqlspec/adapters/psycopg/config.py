@@ -77,7 +77,7 @@ __all__ = (
 class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool, PsycopgSyncDriver]):
     """Configuration for Psycopg synchronous database connections with direct field-based configuration."""
 
-    driver_type: "ClassVar[type[PsycopgSyncDriver]]" = PsycopgSyncDriver
+    driver_type: "ClassVar[type[PsycopgSyncDriver]]" = PsycopgSyncDriver  # type: ignore[type-abstract]
     connection_type: "ClassVar[type[PsycopgSyncConnection]]" = PsycopgSyncConnection
 
     def __init__(
@@ -258,7 +258,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnectionPool, PsycopgAsyncDriver]):
     """Configuration for Psycopg asynchronous database connections with direct field-based configuration."""
 
-    driver_type: ClassVar[type[PsycopgAsyncDriver]] = PsycopgAsyncDriver
+    driver_type: ClassVar[type[PsycopgAsyncDriver]] = PsycopgAsyncDriver  # type: ignore[type-abstract]
     connection_type: "ClassVar[type[PsycopgAsyncConnection]]" = PsycopgAsyncConnection
 
     def __init__(

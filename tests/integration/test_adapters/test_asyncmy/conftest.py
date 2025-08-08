@@ -11,7 +11,7 @@ from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, asyncmy_state
 @pytest.fixture(scope="session")
 def mysql_service() -> MySQLService:
     """MySQL service fixture."""
-    return MySQLService()
+    return MySQLService(host="localhost", port=3306, db="test", user="root", password="password")
 
 
 @pytest.fixture

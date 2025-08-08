@@ -22,7 +22,8 @@ import duckdb
 from sqlglot import exp
 
 from sqlspec.core.cache import get_cache_config
-from sqlspec.core.statement import SQL, ParameterStyle, ParameterStyleConfig, StatementConfig
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.utils.logging import get_logger

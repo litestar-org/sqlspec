@@ -20,6 +20,7 @@ from sqlspec._typing import (
     PYDANTIC_INSTALLED,
     DataclassProtocol,
     Empty,
+    EmptyEnum,
     EmptyType,
 )
 
@@ -312,6 +313,7 @@ __all__ = (
     "DictLike",
     "DictRow",
     "Empty",
+    "EmptyEnum",
     "EmptyType",
     "FailFast",
     "Gauge",

@@ -158,8 +158,11 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             else:
                 msg = f"PostgreSQL database error: {e}"
             raise SQLSpecError(msg) from e
-        except asyncpg.ConnectionError as e:
+        except asyncpg.ConnectionDoesNotExistError as e:
             msg = f"AsyncPG connection error: {e}"
+            raise SQLSpecError(msg) from e
+        except asyncpg.ConnectionFailureError as e:
+            msg = f"AsyncPG connection failure: {e}"
             raise SQLSpecError(msg) from e
         except Exception as e:
             # Handle any other unexpected errors
@@ -220,7 +223,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                 from io import BytesIO
 
                 data_io = BytesIO(data_str.encode("utf-8"))
-                await cursor.copy_from_query(sql_text, source=data_io)
+                await cursor.copy_from_query(sql_text, output=data_io)
             else:
                 # Standard COPY operation
                 await cursor.execute(sql_text)

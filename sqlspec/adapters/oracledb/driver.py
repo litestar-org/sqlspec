@@ -104,7 +104,7 @@ class OracleAsyncCursor:
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
         if self.cursor is not None:
-            await self.cursor.close()
+            await self.cursor.close()  # type: ignore[func-returns-value]
 
 
 class OracleSyncDriver(SyncDriverAdapterBase):

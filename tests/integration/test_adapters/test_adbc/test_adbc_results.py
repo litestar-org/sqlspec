@@ -1,5 +1,7 @@
 """Test ADBC result handling with Arrow table processing using CORE_ROUND_3 architecture."""
 
+from collections.abc import Generator
+
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
@@ -11,7 +13,7 @@ from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_m
 
 
 @pytest.fixture
-def adbc_postgresql_session(postgres_service: PostgresService) -> AdbcDriver:
+def adbc_postgresql_session(postgres_service: PostgresService) -> "Generator[AdbcDriver, None, None]":
     """Create an ADBC PostgreSQL session for result testing."""
     config = AdbcConfig(
         connection_config={
@@ -313,7 +315,7 @@ def test_sqlresult_large_result_handling(adbc_postgresql_session: AdbcDriver) ->
 
 
 @pytest.fixture
-def adbc_sqlite_session() -> AdbcDriver:
+def adbc_sqlite_session() -> "Generator[AdbcDriver, None, None]":
     """Create an ADBC SQLite session for Arrow testing."""
     config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"})
 

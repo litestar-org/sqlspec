@@ -100,13 +100,13 @@ def hash_parameters(
     if positional_parameters:
         from sqlspec.core.parameters import TypedParameter
 
-        hashable_parameters = []
+        hashable_parameters: list[tuple[Any, Any]] = []
         for param in positional_parameters:
             if isinstance(param, TypedParameter):
                 if isinstance(param.value, (list, dict)):
-                    hashable_parameters.append((repr(param.value), param.type_hint))
+                    hashable_parameters.append((repr(param.value), param.original_type))
                 else:
-                    hashable_parameters.append((param.value, param.type_hint))
+                    hashable_parameters.append((param.value, param.original_type))
             elif isinstance(param, (list, dict)):
                 # Convert unhashable types to hashable representations
                 hashable_parameters.append((repr(param), "unhashable"))

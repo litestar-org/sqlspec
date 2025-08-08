@@ -143,8 +143,8 @@ class StatementResult(ABC):
             The type of SQL operation that produced this result.
         """
         if hasattr(self.statement, "operation_type"):
-            return self.statement.operation_type
-        return "SELECT"  # Default fallback
+            return cast("OperationType", self.statement.operation_type)
+        return "SELECT"
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -171,13 +171,13 @@ class SQLResult(StatementResult):
     """
 
     __slots__ = (
+        "_operation_type",
         "column_names",
         "error",
         "errors",
         "has_more",
         "inserted_ids",
         "operation_index",
-        "operation_type",
         "parameters",
         "statement_results",
         "successful_statements",
@@ -220,7 +220,7 @@ class SQLResult(StatementResult):
             metadata=metadata,
         )
         self.error = error
-        self.operation_type = operation_type
+        self._operation_type = operation_type
         self.operation_index = operation_index
         self.parameters = parameters
         self.column_names = column_names if column_names is not None else []
@@ -237,6 +237,11 @@ class SQLResult(StatementResult):
             self.column_names = list(self.data[0].keys())
         if self.total_count is None:
             self.total_count = len(self.data) if self.data is not None else 0
+
+    @property
+    def operation_type(self) -> "OperationType":
+        """Get operation type for this result."""
+        return self._operation_type
 
     def get_metadata(self, key: str, default: Any = None) -> Any:
         """Get metadata value by key.

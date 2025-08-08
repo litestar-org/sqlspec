@@ -84,7 +84,7 @@ class SqliteConnectionPool:
     def _get_thread_connection(self) -> SqliteConnection:
         """Get or create a connection for the current thread."""
         try:
-            return self._thread_local.connection
+            return cast("SqliteConnection", self._thread_local.connection)
         except AttributeError:
             # Connection doesn't exist for this thread yet
             connection = self._create_connection()

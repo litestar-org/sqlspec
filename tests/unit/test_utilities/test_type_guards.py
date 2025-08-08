@@ -5,9 +5,12 @@ Uses function-based pytest approach as per CLAUDE.md requirements.
 """
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 import pytest
+
+if TYPE_CHECKING:
+    from sqlglot import exp
 
 from sqlspec.utils.type_guards import (
     dataclass_to_dict,
@@ -494,78 +497,78 @@ def test_has_attr_with_none() -> None:
 
 def test_get_node_this_with_this_attribute() -> None:
     """Test get_node_this returns this attribute when present."""
-    node = MockSQLGlotExpression(this="test_value")
+    node = cast("exp.Expression", MockSQLGlotExpression(this="test_value"))
     assert get_node_this(node) == "test_value"
 
 
 def test_get_node_this_without_this_attribute() -> None:
     """Test get_node_this returns default when this attribute missing."""
-    node = MockSQLGlotExpression()
+    node = cast("exp.Expression", MockSQLGlotExpression())
     assert get_node_this(node, "default") == "default"
     assert get_node_this(node) is None
 
 
 def test_has_this_attribute_with_attribute() -> None:
     """Test has_this_attribute returns True when this exists."""
-    node = MockSQLGlotExpression(this="test_value")
+    node = cast("exp.Expression", MockSQLGlotExpression(this="test_value"))
     assert has_this_attribute(node) is True
 
 
 def test_has_this_attribute_without_attribute() -> None:
     """Test has_this_attribute returns False when this doesn't exist."""
-    node = MockSQLGlotExpression()
+    node = cast("exp.Expression", MockSQLGlotExpression())
     assert has_this_attribute(node) is False
 
 
 def test_get_node_expressions_with_expressions() -> None:
     """Test get_node_expressions returns expressions when present."""
     expressions = ["expr1", "expr2"]
-    node = MockSQLGlotExpression(expressions=expressions)
+    node = cast("exp.Expression", MockSQLGlotExpression(expressions=expressions))
     assert get_node_expressions(node) == expressions
 
 
 def test_get_node_expressions_without_expressions() -> None:
     """Test get_node_expressions returns default when expressions missing."""
-    node = MockSQLGlotExpression()
+    node = cast("exp.Expression", MockSQLGlotExpression())
     assert get_node_expressions(node, "default") == "default"
     assert get_node_expressions(node) is None
 
 
 def test_has_expressions_attribute_with_attribute() -> None:
     """Test has_expressions_attribute returns True when expressions exists."""
-    node = MockSQLGlotExpression(expressions=["expr1"])
+    node = cast("exp.Expression", MockSQLGlotExpression(expressions=["expr1"]))
     assert has_expressions_attribute(node) is True
 
 
 def test_has_expressions_attribute_without_attribute() -> None:
     """Test has_expressions_attribute returns False when expressions doesn't exist."""
-    node = MockSQLGlotExpression()
+    node = cast("exp.Expression", MockSQLGlotExpression())
     assert has_expressions_attribute(node) is False
 
 
 def test_get_literal_parent_with_parent() -> None:
     """Test get_literal_parent returns parent when present."""
     parent = "parent_node"
-    literal = MockLiteral(parent=parent)
+    literal = cast("exp.Expression", MockLiteral(parent=parent))
     assert get_literal_parent(literal) == parent
 
 
 def test_get_literal_parent_without_parent() -> None:
     """Test get_literal_parent returns default when parent missing."""
-    literal = MockLiteral()
+    literal = cast("exp.Expression", MockLiteral())
     assert get_literal_parent(literal, "default") == "default"
     assert get_literal_parent(literal) is None
 
 
 def test_has_parent_attribute_with_attribute() -> None:
     """Test has_parent_attribute returns True when parent exists."""
-    literal = MockLiteral(parent="parent_node")
+    literal = cast("exp.Expression", MockLiteral(parent="parent_node"))
     assert has_parent_attribute(literal) is True
 
 
 def test_has_parent_attribute_without_attribute() -> None:
     """Test has_parent_attribute returns False when parent doesn't exist."""
-    literal = MockLiteral()
+    literal = cast("exp.Expression", MockLiteral())
     assert has_parent_attribute(literal) is False
 
 
@@ -574,39 +577,39 @@ def test_has_parent_attribute_without_attribute() -> None:
 
 def test_is_string_literal_with_string_flag() -> None:
     """Test is_string_literal returns True when is_string is True."""
-    literal = MockLiteral(is_string=True)
+    literal = cast("exp.Literal", MockLiteral(is_string=True))
     assert is_string_literal(literal) is True
 
 
 def test_is_string_literal_without_string_flag() -> None:
     """Test is_string_literal handles missing is_string attribute."""
-    literal = MockLiteral(this="string_value")
+    literal = cast("exp.Literal", MockLiteral(this="string_value"))
     # Should fall back to checking this attribute type
     assert is_string_literal(literal) is True
 
 
 def test_is_string_literal_with_non_string_this() -> None:
     """Test is_string_literal returns False for non-string this."""
-    literal = MockLiteral(this=42)
+    literal = cast("exp.Literal", MockLiteral(this=42))
     assert is_string_literal(literal) is False
 
 
 def test_is_number_literal_with_number_flag() -> None:
     """Test is_number_literal returns True when is_number is True."""
-    literal = MockLiteral(is_number=True)
+    literal = cast("exp.Literal", MockLiteral(is_number=True))
     assert is_number_literal(literal) is True
 
 
 def test_is_number_literal_without_number_flag() -> None:
     """Test is_number_literal handles missing is_number attribute."""
-    literal = MockLiteral(this="123")
+    literal = cast("exp.Literal", MockLiteral(this="123"))
     # Should fall back to trying to convert to float
     assert is_number_literal(literal) is True
 
 
 def test_is_number_literal_with_non_number_this() -> None:
     """Test is_number_literal returns False for non-numeric this."""
-    literal = MockLiteral(this="not_a_number")
+    literal = cast("exp.Literal", MockLiteral(this="not_a_number"))
     assert is_number_literal(literal) is False
 
 
@@ -664,13 +667,13 @@ def test_get_initial_expression_without_attribute() -> None:
 
 def test_expression_has_limit_with_limit() -> None:
     """Test expression_has_limit returns True when limit in args."""
-    expr = MockSQLGlotExpression(args={"limit": "10"})
+    expr = cast("exp.Expression", MockSQLGlotExpression(args={"limit": "10"}))
     assert expression_has_limit(expr) is True
 
 
 def test_expression_has_limit_without_limit() -> None:
     """Test expression_has_limit returns False when no limit in args."""
-    expr = MockSQLGlotExpression(args={"other": "value"})
+    expr = cast("exp.Expression", MockSQLGlotExpression(args={"other": "value"}))
     assert expression_has_limit(expr) is False
 
 
@@ -681,7 +684,7 @@ def test_expression_has_limit_with_none() -> None:
 
 def test_expression_has_limit_without_args() -> None:
     """Test expression_has_limit handles missing args attribute."""
-    expr = object()
+    expr = cast("exp.Expression", object())  # type: ignore[arg-type]
     assert expression_has_limit(expr) is False
 
 
@@ -848,7 +851,7 @@ def test_schema_dump_with_dict_attribute() -> None:
             self.age = 25
 
     obj = ObjectWithDict()
-    result = schema_dump(obj)
+    result = schema_dump(cast("Any", obj))  # type: ignore[arg-type]
 
     expected = {"name": "test", "age": 25}
     assert result == expected
@@ -911,7 +914,7 @@ def test_type_guards_with_empty_containers() -> None:
 
 def test_sqlglot_helpers_with_invalid_objects() -> None:
     """Test SQLGlot helper functions handle invalid objects gracefully."""
-    invalid_obj = "not an expression"
+    invalid_obj = cast("exp.Expression", "not an expression")  # type: ignore[arg-type]
 
     assert get_node_this(invalid_obj) is None
     assert get_node_expressions(invalid_obj) is None
@@ -923,8 +926,8 @@ def test_sqlglot_helpers_with_invalid_objects() -> None:
 
 def test_edge_case_empty_string_literal() -> None:
     """Test literal type guards with edge cases."""
-    empty_literal = MockLiteral(this="")
+    empty_literal = cast("exp.Literal", MockLiteral(this=""))
     assert is_string_literal(empty_literal) is True
 
-    zero_literal = MockLiteral(this="0")
+    zero_literal = cast("exp.Literal", MockLiteral(this="0"))
     assert is_number_literal(zero_literal) is True

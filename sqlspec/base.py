@@ -15,7 +15,7 @@ from sqlspec.config import (
 )
 from sqlspec.core.cache import (
     CacheConfig,
-    CacheStats,
+    CacheStatsAggregate,
     get_cache_config,
     get_cache_stats,
     log_cache_stats,
@@ -514,7 +514,7 @@ class SQLSpec:
         update_cache_config(config)
 
     @staticmethod
-    def get_cache_stats() -> CacheStats:
+    def get_cache_stats() -> CacheStatsAggregate:
         """Get current cache statistics.
 
         Returns performance metrics for all cache layers including hit rates,
