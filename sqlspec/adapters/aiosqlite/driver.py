@@ -23,20 +23,20 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import aiosqlite
 
-from sqlspec.core.config import get_global_config
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.statement.sql import StatementConfig
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
+    from sqlspec.core.result import SQLResult
+    from sqlspec.core.statement import SQL
     from sqlspec.driver import ExecutionResult
-    from sqlspec.statement.result import SQLResult
-    from sqlspec.statement.sql import SQL
 
 __all__ = ("AiosqliteCursor", "AiosqliteDriver", "aiosqlite_statement_config")
 
@@ -126,12 +126,12 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     ) -> None:
         # Enhanced configuration with global settings integration
         if statement_config is None:
-            global_config = get_global_config()
+            cache_config = get_cache_config()
             enhanced_config = aiosqlite_statement_config.replace(
-                enable_caching=global_config.enable_caching,
-                enable_parsing=global_config.enable_parsing,
-                enable_validation=global_config.enable_validation,
-                dialect=global_config.dialect if global_config.dialect != "auto" else "sqlite",
+                enable_caching=cache_config.compiled_cache_enabled,
+                enable_parsing=True,  # Default to enabled
+                enable_validation=True,  # Default to enabled
+                dialect="sqlite",  # Use adapter-specific dialect
             )
             statement_config = enhanced_config
 
@@ -254,12 +254,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             fetched_data = await cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
 
-            # Optimized async data transformation - avoid unnecessary dict creation for large results
-            large_result_threshold = 1000
-            if len(fetched_data) > large_result_threshold:  # Large result optimization
-                data = [dict(zip(column_names, row)) for row in fetched_data]
-            else:
-                data = [dict(zip(column_names, row)) for row in fetched_data]
+            data = [dict(zip(column_names, row)) for row in fetched_data]
 
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True

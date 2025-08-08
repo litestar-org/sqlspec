@@ -30,18 +30,18 @@ import oracledb
 from oracledb import AsyncCursor, Cursor
 
 from sqlspec.adapters.oracledb._types import OracleAsyncConnection, OracleSyncConnection
-from sqlspec.core.config import get_global_config
+from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterConverter, ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
-from sqlspec.statement.sql import StatementConfig
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
 
+    from sqlspec.core.result import SQLResult
+    from sqlspec.core.statement import SQL
     from sqlspec.driver._common import ExecutionResult
-    from sqlspec.statement.result import SQLResult
-    from sqlspec.statement.sql import SQL
 
 logger = logging.getLogger(__name__)
 
@@ -151,13 +151,13 @@ class OracleSyncDriver(SyncDriverAdapterBase):
     ) -> None:
         # Enhanced configuration with global settings integration and core ParameterConverter
         if statement_config is None:
-            global_config = get_global_config()
+            cache_config = get_cache_config()
             enhanced_config = oracledb_statement_config.replace(
                 parameter_converter=ParameterConverter(),  # Use core ParameterConverter for 2-phase system
-                enable_caching=global_config.enable_caching,
-                enable_parsing=global_config.enable_parsing,
-                enable_validation=global_config.enable_validation,
-                dialect=global_config.dialect if global_config.dialect != "auto" else "oracle",
+                enable_caching=cache_config.compiled_cache_enabled,
+                enable_parsing=True,  # Default to enabled
+                enable_validation=True,  # Default to enabled
+                dialect="oracle",  # Use adapter-specific dialect
             )
             statement_config = enhanced_config
 
@@ -370,13 +370,13 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
     ) -> None:
         # Enhanced configuration with global settings integration and core ParameterConverter
         if statement_config is None:
-            global_config = get_global_config()
+            cache_config = get_cache_config()
             enhanced_config = oracledb_statement_config.replace(
                 parameter_converter=ParameterConverter(),  # Use core ParameterConverter for 2-phase system
-                enable_caching=global_config.enable_caching,
-                enable_parsing=global_config.enable_parsing,
-                enable_validation=global_config.enable_validation,
-                dialect=global_config.dialect if global_config.dialect != "auto" else "oracle",
+                enable_caching=cache_config.compiled_cache_enabled,
+                enable_parsing=True,  # Default to enabled
+                enable_validation=True,  # Default to enabled
+                dialect="oracle",  # Use adapter-specific dialect
             )
             statement_config = enhanced_config
 

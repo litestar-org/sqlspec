@@ -3,8 +3,8 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, Optional, Ty
 
 from typing_extensions import NotRequired, TypedDict
 
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.statement import StatementConfig
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import StatementConfig
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:

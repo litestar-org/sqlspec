@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from asyncmy.cursors import Cursor, DictCursor
     from asyncmy.pool import Pool
 
-    from sqlspec.statement.sql import StatementConfig
+    from sqlspec.core.statement import StatementConfig
 
 
 __all__ = ("AsyncmyConfig", "AsyncmyConnectionParams", "AsyncmyPoolParams")
@@ -174,7 +174,9 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update(
-            {"AsyncmyConnection": AsyncmyConnection, "AsyncmyPool": AsyncmyPool, "AsyncmyCursor": AsyncmyCursor}
-        )
+        namespace.update({
+            "AsyncmyConnection": AsyncmyConnection,
+            "AsyncmyPool": AsyncmyPool,
+            "AsyncmyCursor": AsyncmyCursor,
+        })
         return namespace

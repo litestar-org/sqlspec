@@ -154,9 +154,8 @@ exclude = [
 
 ]
 include = [
-  "sqlspec/statement/**/*.py", # All statement-related modules
-  "sqlspec/parameters.py",     # All parameter-related modules
-  "sqlspec/loader.py",         # Loader module
+  "sqlspec/core/**/*.py", # Core module
+  "sqlspec/loader.py",    # Loader module
 
   # === UTILITY MODULES ===
   "sqlspec/utils/statement_hashing.py", # Statement hashing utilities

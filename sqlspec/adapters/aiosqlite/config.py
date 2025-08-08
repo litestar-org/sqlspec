@@ -16,7 +16,7 @@ from sqlspec.config import AsyncDatabaseConfig
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-    from sqlspec.statement.sql import StatementConfig
+    from sqlspec.core.statement import StatementConfig
 
 __all__ = ("AiosqliteConfig", "AiosqliteConnectionParams", "AiosqliteConnectionPool", "AiosqlitePoolParams")
 

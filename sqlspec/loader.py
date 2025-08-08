@@ -13,10 +13,10 @@ from difflib import get_close_matches
 from pathlib import Path
 from typing import Any, Optional, Union
 
+from sqlspec.core.cache import CacheKey, get_cache_config, get_default_cache
+from sqlspec.core.parameters import ParameterStyleConfig, ParameterValidator
+from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
-from sqlspec.parameters import ParameterStyleConfig, ParameterValidator
-from sqlspec.statement.cache import file_cache, get_cache_config
-from sqlspec.statement.sql import SQL, StatementConfig
 from sqlspec.storage import storage_registry
 from sqlspec.storage.registry import StorageRegistry
 from sqlspec.utils.correlation import CorrelationContext
@@ -511,14 +511,16 @@ class SQLFileLoader:
 
         # Check cache configuration
         cache_config = get_cache_config()
-        if not cache_config.file_cache_enabled:
+        if not cache_config.compiled_cache_enabled:
             # No caching - load directly
             self._load_file_without_cache(file_path, namespace)
             return
 
         # Try to load from cache
-        cache_key = self._generate_file_cache_key(file_path)
-        cached_file = file_cache.get(cache_key)
+        cache_key_str = self._generate_file_cache_key(file_path)
+        cache_key = CacheKey((cache_key_str,))
+        unified_cache = get_default_cache()
+        cached_file = unified_cache.get(cache_key)
 
         if (
             cached_file is not None
@@ -561,7 +563,7 @@ class SQLFileLoader:
                     file_statements[stored_name] = self._queries[query_name]
 
             cached_file_data = CachedSQLFile(sql_file=sql_file, parsed_statements=file_statements)
-            file_cache.set(cache_key, cached_file_data)
+            unified_cache.put(cache_key, cached_file_data)
 
     def _load_file_without_cache(self, file_path: Union[str, Path], namespace: Optional[str]) -> None:
         """Load a single SQL file without caching (original implementation).
@@ -778,14 +780,16 @@ class SQLFileLoader:
 
         # Also clear the file cache
         cache_config = get_cache_config()
-        if cache_config.file_cache_enabled:
-            file_cache.clear()
+        if cache_config.compiled_cache_enabled:
+            unified_cache = get_default_cache()
+            unified_cache.clear()
 
     def clear_file_cache(self) -> None:
         """Clear only the file cache, keeping loaded queries."""
         cache_config = get_cache_config()
-        if cache_config.file_cache_enabled:
-            file_cache.clear()
+        if cache_config.compiled_cache_enabled:
+            unified_cache = get_default_cache()
+            unified_cache.clear()
 
     def get_query_text(self, name: str) -> str:
         """Get raw SQL text for a query.

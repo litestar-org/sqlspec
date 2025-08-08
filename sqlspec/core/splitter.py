@@ -39,27 +39,24 @@ from abc import ABC, abstractmethod
 from collections.abc import Generator
 from enum import Enum
 from re import Pattern
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
+from typing import Any, Callable, Optional, Union
 
 from typing_extensions import TypeAlias
 
-from sqlspec.core.cache import CacheKey, UnifiedCache, get_default_cache
+from sqlspec.core.cache import CacheKey, UnifiedCache
 from sqlspec.utils.logging import get_logger
-
-if TYPE_CHECKING:
-    pass
 
 # Enable when MyPyC ready
 # from mypy_extensions import mypyc_attr
 
 __all__ = (
     "DialectConfig",
-    "OracleDialectConfig", 
+    "OracleDialectConfig",
     "PostgreSQLDialectConfig",
     "StatementSplitter",
     "TSQLDialectConfig",
     "Token",
-    "TokenType", 
+    "TokenType",
     "split_sql_script",
 )
 
@@ -73,7 +70,7 @@ DEFAULT_CACHE_TTL = 3600          # 1 hour TTL
 # Dialect configuration slots - optimized structure
 DIALECT_CONFIG_SLOTS = (
     "_block_starters",
-    "_block_enders", 
+    "_block_enders",
     "_statement_terminators",
     "_batch_separators",
     "_special_terminators",
@@ -588,7 +585,7 @@ def _get_pattern_cache() -> UnifiedCache[list[tuple[TokenType, CompiledTokenPatt
 
 def _get_result_cache() -> UnifiedCache[list[str]]:
     """Get or create the result cache."""
-    global _result_cache  
+    global _result_cache
     if _result_cache is None:
         with _cache_lock:
             if _result_cache is None:
@@ -613,7 +610,7 @@ class StatementSplitter:
 
         # Create pattern cache key for compiled patterns
         self._pattern_cache_key = f"{dialect.name}:{hash(tuple(str(p) for _, p in self._token_patterns))}"
-        
+
         # Get cache instances
         self._pattern_cache = _get_pattern_cache()
         self._result_cache = _get_result_cache()
@@ -624,7 +621,7 @@ class StatementSplitter:
     def _get_or_compile_patterns(self) -> list[tuple[TokenType, CompiledTokenPattern]]:
         """Get compiled patterns from cache or compile and cache them."""
         cache_key = CacheKey(("pattern", self._pattern_cache_key))
-        
+
         # Try to get from cache
         cached_patterns = self._pattern_cache.get(cache_key)
         if cached_patterns is not None:
@@ -813,7 +810,7 @@ def split_sql_script(script: str, dialect: Optional[str] = None, strip_trailing_
     """
     if dialect is None:
         dialect = "generic"
-        
+
     dialect_configs = {
         "generic": GenericDialectConfig(),
         "oracle": OracleDialectConfig(),
@@ -854,14 +851,14 @@ def get_splitter_cache_stats() -> dict[str, Any]:
     """
     pattern_cache = _get_pattern_cache()
     result_cache = _get_result_cache()
-    
+
     return {
         "pattern_cache": {
             "size": pattern_cache.size(),
             "stats": pattern_cache.get_stats(),
         },
         "result_cache": {
-            "size": result_cache.size(), 
+            "size": result_cache.size(),
             "stats": result_cache.get_stats(),
         },
     }

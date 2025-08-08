@@ -16,16 +16,16 @@ from sqlglot.errors import ParseError as SQLGlotParseError
 from sqlglot.optimizer import optimize
 from typing_extensions import Self
 
+from sqlspec.core.cache import CacheKey, get_cache_config, get_default_cache
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.statement.cache import builder_cache, get_cache_config, optimized_expression_cache
-from sqlspec.statement.sql import SQL, StatementConfig
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.statement_hashing import hash_optimized_expression
 from sqlspec.utils.type_guards import has_sql_method, has_with_method
 
 if TYPE_CHECKING:
-    from sqlspec.statement.result import SQLResult
+    from sqlspec.core.result import SQLResult
 
 __all__ = ("QueryBuilder", "SafeQuery")
 
@@ -339,16 +339,18 @@ class QueryBuilder(ABC):
             expression, dialect=dialect_name, schema=self.schema, optimizer_settings=optimizer_settings
         )
 
-        cached_optimized = optimized_expression_cache.get(cache_key)
+        cache_key_obj = CacheKey((cache_key,))
+        unified_cache = get_default_cache()
+        cached_optimized = unified_cache.get(cache_key_obj)
         if cached_optimized:
-            return cast("exp.Expression", cached_optimized.copy())
+            return cast("exp.Expression", cached_optimized)
 
         try:
             optimized = optimize(
                 expression.copy(), schema=self.schema, dialect=self.dialect_name, optimizer_settings=optimizer_settings
             )
 
-            optimized_expression_cache.set(cache_key, optimized.copy())
+            unified_cache.put(cache_key_obj, optimized.copy())
 
         except Exception:
             return expression
@@ -365,17 +367,19 @@ class QueryBuilder(ABC):
             SQL: A SQL statement object.
         """
         cache_config = get_cache_config()
-        if not cache_config.builder_cache_enabled:
+        if not cache_config.compiled_cache_enabled:
             return self._to_statement_without_cache(config)
 
-        cache_key = self._generate_builder_cache_key(config)
+        cache_key_str = self._generate_builder_cache_key(config)
+        cache_key = CacheKey((cache_key_str,))
 
-        cached_sql = builder_cache.get(cache_key)
+        unified_cache = get_default_cache()
+        cached_sql = unified_cache.get(cache_key)
         if cached_sql is not None:
-            return cast("SQL", cached_sql.copy())
+            return cast("SQL", cached_sql)
 
         sql_statement = self._to_statement_without_cache(config)
-        builder_cache.set(cache_key, sql_statement)
+        unified_cache.put(cache_key, sql_statement)
 
         return sql_statement
 
@@ -404,7 +408,7 @@ class QueryBuilder(ABC):
             )
 
         if config is None:
-            from sqlspec.statement.sql import StatementConfig
+            from sqlspec.core.statement import StatementConfig
 
             parameter_config = ParameterStyleConfig(
                 default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}

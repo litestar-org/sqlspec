@@ -14,7 +14,7 @@ from sqlspec.config import SyncDatabaseConfig
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-    from sqlspec.statement.sql import StatementConfig
+    from sqlspec.core.statement import StatementConfig
 
 
 class SqliteConnectionParams(TypedDict, total=False):

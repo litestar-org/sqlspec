@@ -34,19 +34,19 @@ from google.cloud.bigquery import ArrayQueryParameter, QueryJob, QueryJobConfig,
 from google.cloud.exceptions import GoogleCloudError
 
 from sqlspec.adapters.bigquery._types import BigQueryConnection
-from sqlspec.core.config import get_global_config
+from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterConverter, ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import StatementConfig
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.driver._common import ExecutionResult
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
-from sqlspec.statement.sql import StatementConfig
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-    from sqlspec.statement.result import SQLResult
-    from sqlspec.statement.sql import SQL
+    from sqlspec.core.result import SQLResult
+    from sqlspec.core.statement import SQL
 
 logger = logging.getLogger(__name__)
 
@@ -212,18 +212,20 @@ class BigQueryDriver(SyncDriverAdapterBase):
     ) -> None:
         # Enhanced configuration with global settings integration and core ParameterConverter
         if statement_config is None:
-            global_config = get_global_config()
+            cache_config = get_cache_config()
             enhanced_config = bigquery_statement_config.replace(
                 parameter_converter=ParameterConverter(),  # Use core ParameterConverter for 2-phase system
-                enable_caching=global_config.enable_caching,
-                enable_parsing=global_config.enable_parsing,
-                enable_validation=global_config.enable_validation,
-                dialect=global_config.dialect if global_config.dialect != "auto" else "bigquery",
+                enable_caching=cache_config.compiled_cache_enabled,
+                enable_parsing=True,  # Default to enabled
+                enable_validation=True,  # Default to enabled
+                dialect="bigquery",  # Use adapter-specific dialect
             )
             statement_config = enhanced_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._default_query_job_config: Optional[QueryJobConfig] = (driver_features or {}).get("default_query_job_config")
+        self._default_query_job_config: Optional[QueryJobConfig] = (driver_features or {}).get(
+            "default_query_job_config"
+        )
 
     @contextmanager
     def with_cursor(self, connection: "BigQueryConnection") -> "Any":

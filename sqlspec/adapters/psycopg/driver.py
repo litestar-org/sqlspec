@@ -29,18 +29,18 @@ from typing import TYPE_CHECKING, Any, Optional, cast
 import psycopg
 
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
-from sqlspec.core.config import get_global_config
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.statement.sql import SQL, StatementConfig
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
 
+    from sqlspec.core.result import SQLResult
     from sqlspec.driver._common import ExecutionResult
-    from sqlspec.statement.result import SQLResult
 
 logger = logging.getLogger(__name__)
 
@@ -180,12 +180,12 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
     ) -> None:
         # Enhanced configuration with global settings integration
         if statement_config is None:
-            global_config = get_global_config()
+            cache_config = get_cache_config()
             enhanced_config = psycopg_statement_config.replace(
-                enable_caching=global_config.enable_caching,
-                enable_parsing=global_config.enable_parsing,
-                enable_validation=global_config.enable_validation,
-                dialect=global_config.dialect if global_config.dialect != "auto" else "postgres",
+                enable_caching=cache_config.compiled_cache_enabled,
+                enable_parsing=True,  # Default to enabled
+                enable_validation=True,  # Default to enabled
+                dialect="postgres",  # Use adapter-specific dialect
             )
             statement_config = enhanced_config
 
@@ -288,11 +288,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         PostgreSQL supports complex scripts with multiple statements.
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(
-            sql,
-            statement.statement_config,
-            strip_trailing_semicolon=True
-        )
+        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         successful_count = 0
         last_cursor = cursor
@@ -306,10 +302,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
             successful_count += 1
 
         return self.create_execution_result(
-            last_cursor,
-            statement_count=len(statements),
-            successful_statements=successful_count,
-            is_script_result=True
+            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
     def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
@@ -329,11 +322,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         # PostgreSQL cursor.rowcount gives total affected rows
         affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
-        return self.create_execution_result(
-            cursor,
-            rowcount_override=affected_rows,
-            is_many_result=True
-        )
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with enhanced PostgreSQL data handling and performance optimization.
@@ -358,7 +347,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
                 selected_data=fetched_data,
                 column_names=column_names,
                 data_row_count=len(fetched_data),
-                is_select_result=True
+                is_select_result=True,
             )
 
         # Enhanced non-SELECT result processing for PostgreSQL
@@ -430,12 +419,12 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
     ) -> None:
         # Enhanced configuration with global settings integration
         if statement_config is None:
-            global_config = get_global_config()
+            cache_config = get_cache_config()
             enhanced_config = psycopg_statement_config.replace(
-                enable_caching=global_config.enable_caching,
-                enable_parsing=global_config.enable_parsing,
-                enable_validation=global_config.enable_validation,
-                dialect=global_config.dialect if global_config.dialect != "auto" else "postgres",
+                enable_caching=cache_config.compiled_cache_enabled,
+                enable_parsing=True,  # Default to enabled
+                enable_validation=True,  # Default to enabled
+                dialect="postgres",  # Use adapter-specific dialect
             )
             statement_config = enhanced_config
 
@@ -538,11 +527,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         PostgreSQL supports complex scripts with multiple statements.
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(
-            sql,
-            statement.statement_config,
-            strip_trailing_semicolon=True
-        )
+        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         successful_count = 0
         last_cursor = cursor
@@ -556,10 +541,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
             successful_count += 1
 
         return self.create_execution_result(
-            last_cursor,
-            statement_count=len(statements),
-            successful_statements=successful_count,
-            is_script_result=True
+            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
     async def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
@@ -579,11 +561,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         # PostgreSQL cursor.rowcount gives total affected rows
         affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
-        return self.create_execution_result(
-            cursor,
-            rowcount_override=affected_rows,
-            is_many_result=True
-        )
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     async def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with enhanced PostgreSQL async data handling and performance optimization.
@@ -608,7 +586,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
                 selected_data=fetched_data,
                 column_names=column_names,
                 data_row_count=len(fetched_data),
-                is_select_result=True
+                is_select_result=True,
             )
 
         # Enhanced non-SELECT result processing for PostgreSQL

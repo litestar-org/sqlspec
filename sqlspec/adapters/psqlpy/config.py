@@ -10,7 +10,7 @@ from typing_extensions import NotRequired
 
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver, psqlpy_statement_config
 from sqlspec.config import AsyncDatabaseConfig
-from sqlspec.statement.sql import StatementConfig
+from sqlspec.core.statement import StatementConfig
 
 if TYPE_CHECKING:
     from collections.abc import Callable

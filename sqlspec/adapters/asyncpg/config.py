@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from asyncio.events import AbstractEventLoop
     from collections.abc import AsyncGenerator, Awaitable
 
-    from sqlspec.statement.sql import StatementConfig
+    from sqlspec.core.statement import StatementConfig
 
 
 __all__ = ("AsyncpgConfig", "AsyncpgConnectionConfig", "AsyncpgDriverFeatures", "AsyncpgPoolConfig")
@@ -214,16 +214,14 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update(
-            {
-                "Connection": Connection,
-                "Pool": Pool,
-                "PoolConnectionProxy": PoolConnectionProxy,
-                "PoolConnectionProxyMeta": PoolConnectionProxyMeta,
-                "ConnectionMeta": ConnectionMeta,
-                "Record": Record,
-                "AsyncpgConnection": AsyncpgConnection,  # type: ignore[dict-item]
-                "AsyncpgCursor": AsyncpgCursor,
-            }
-        )
+        namespace.update({
+            "Connection": Connection,
+            "Pool": Pool,
+            "PoolConnectionProxy": PoolConnectionProxy,
+            "PoolConnectionProxyMeta": PoolConnectionProxyMeta,
+            "ConnectionMeta": ConnectionMeta,
+            "Record": Record,
+            "AsyncpgConnection": AsyncpgConnection,  # type: ignore[dict-item]
+            "AsyncpgCursor": AsyncpgCursor,
+        })
         return namespace

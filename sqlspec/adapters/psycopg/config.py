@@ -22,7 +22,7 @@ from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
 
-    from sqlspec.statement.sql import StatementConfig
+    from sqlspec.core.statement import StatementConfig
 
 
 logger = logging.getLogger("sqlspec.adapters.psycopg")

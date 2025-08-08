@@ -30,13 +30,7 @@ from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 from typing_extensions import TypeAlias
 
-from sqlspec.core.parameters import (
-    ParameterConverter,
-    ParameterProcessor,
-    ParameterStyle,
-    ParameterStyleConfig,
-    ParameterValidator,
-)
+from sqlspec.core.parameters import ParameterConverter, ParameterStyle, ParameterStyleConfig, ParameterValidator
 from sqlspec.typing import Empty
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_statement_filter, supports_where
@@ -260,7 +254,7 @@ class SQL:
                     self._named_parameters.update(param)
                 elif isinstance(param, (list, tuple)):
                     if self._is_many:
-                        self._positional_parameters = param
+                        self._positional_parameters = list(param)
                     else:
                         self._positional_parameters.extend(param)
                 else:
@@ -460,36 +454,25 @@ class SQL:
         if self._processed_state is not Empty:
             return
 
-        # Use enhanced parameter processor for single-pass processing
-        processor = ParameterProcessor()
+        # Use enhanced SQLProcessor for single-pass processing with integrated caching
+        from sqlspec.core.compiler import SQLProcessor
+
+        processor = SQLProcessor(self._statement_config)
 
         try:
             # Get current parameters for processing
             current_params = self._named_parameters or self._positional_parameters
 
-            # Single-pass processing with the enhanced system
-            processed_sql, processed_params = processor.process(
-                sql=self._raw_sql, parameters=current_params, config=self._statement_config.parameter_config
-            )
+            # Single-pass processing with the enhanced SQLProcessor system
+            compiled_result = processor.compile(self._raw_sql, current_params)
 
-            # Parse expression for operation type detection
-            parsed_expr = None
-            operation_type = "UNKNOWN"
-
-            if self._statement_config.enable_parsing:
-                try:
-                    parsed_expr = sqlglot.parse_one(processed_sql, dialect=self._dialect)
-                    operation_type = self._determine_operation_type(parsed_expr)
-                except ParseError:
-                    # Fallback for unparseable SQL
-                    operation_type = self._guess_operation_type(processed_sql)
-
-            # Cache the processed results
+            # SQLProcessor already handles parsing and operation type detection
+            # Use the results directly from the compiled result
             self._processed_state = ProcessedState(
-                compiled_sql=processed_sql,
-                execution_parameters=processed_params,
-                parsed_expression=parsed_expr,
-                operation_type=operation_type,
+                compiled_sql=compiled_result.compiled_sql,
+                execution_parameters=compiled_result.execution_parameters,
+                parsed_expression=compiled_result.expression,
+                operation_type=compiled_result.operation_type,
                 validation_errors=[],
                 is_many=self._is_many,
             )
@@ -503,32 +486,6 @@ class SQL:
                 operation_type="UNKNOWN",
                 is_many=self._is_many,
             )
-
-    def _determine_operation_type(self, expr: "exp.Expression") -> str:
-        """Determine operation type from SQLGlot expression."""
-        if isinstance(expr, exp.Select):
-            return "SELECT"
-        if isinstance(expr, exp.Insert):
-            return "INSERT"
-        if isinstance(expr, exp.Update):
-            return "UPDATE"
-        if isinstance(expr, exp.Delete):
-            return "DELETE"
-        if isinstance(expr, exp.Create):
-            return "CREATE"
-        if isinstance(expr, exp.Drop):
-            return "DROP"
-        if isinstance(expr, exp.Alter):
-            return "ALTER"
-        return "UNKNOWN"
-
-    def _guess_operation_type(self, sql: str) -> str:
-        """Fallback operation type detection from SQL string."""
-        sql_upper = sql.strip().upper()
-        for op in ["SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "COPY"]:
-            if sql_upper.startswith(op):
-                return op
-        return "UNKNOWN"
 
     def __hash__(self) -> int:
         """Hash for caching and equality."""

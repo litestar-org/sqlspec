@@ -13,7 +13,7 @@ from sqlspec.config import (
     SyncConfigT,
     SyncDatabaseConfig,
 )
-from sqlspec.statement.cache import (
+from sqlspec.core.cache import (
     CacheConfig,
     CacheStats,
     get_cache_config,

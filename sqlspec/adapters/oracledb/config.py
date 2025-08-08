@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from oracledb import AuthMode
     from oracledb.pool import AsyncConnectionPool, ConnectionPool
 
-    from sqlspec.statement.sql import StatementConfig
+    from sqlspec.core.statement import StatementConfig
 
 
 __all__ = ("OracleAsyncConfig", "OracleConnectionParams", "OraclePoolParams", "OracleSyncConfig")
@@ -184,13 +184,11 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update(
-            {
-                "OracleSyncConnection": OracleSyncConnection,
-                "OracleAsyncConnection": OracleAsyncConnection,
-                "OracleSyncCursor": OracleSyncCursor,
-            }
-        )
+        namespace.update({
+            "OracleSyncConnection": OracleSyncConnection,
+            "OracleAsyncConnection": OracleAsyncConnection,
+            "OracleSyncCursor": OracleSyncCursor,
+        })
         return namespace
 
 
@@ -306,12 +304,10 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update(
-            {
-                "OracleSyncConnection": OracleSyncConnection,
-                "OracleAsyncConnection": OracleAsyncConnection,
-                "OracleSyncCursor": OracleSyncCursor,
-                "OracleAsyncCursor": OracleAsyncCursor,
-            }
-        )
+        namespace.update({
+            "OracleSyncConnection": OracleSyncConnection,
+            "OracleAsyncConnection": OracleAsyncConnection,
+            "OracleSyncCursor": OracleSyncCursor,
+            "OracleAsyncCursor": OracleAsyncCursor,
+        })
         return namespace

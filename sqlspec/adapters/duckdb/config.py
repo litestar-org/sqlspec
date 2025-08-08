@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from collections.abc import Generator
     from typing import Callable, ClassVar, Union
 
-    from sqlspec.statement.sql import StatementConfig
+    from sqlspec.core.statement import StatementConfig
 
 
 logger = logging.getLogger(__name__)

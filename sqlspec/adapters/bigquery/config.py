@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from google.api_core.client_options import ClientOptions
     from google.auth.credentials import Credentials
 
-    from sqlspec.statement.sql import StatementConfig
+    from sqlspec.core.statement import StatementConfig
 
 
 logger = logging.getLogger(__name__)
