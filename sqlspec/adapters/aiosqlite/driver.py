@@ -141,17 +141,9 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """Create async context manager for AIOSQLite cursor with enhanced resource management."""
         return AiosqliteCursor(connection)
 
-    def handle_database_exceptions(self) -> Any:
-        """Handle AIOSQLite-specific exceptions with comprehensive error categorization."""
-        return self._handle_database_exceptions_impl()
-
     @asynccontextmanager
-    async def _handle_database_exceptions_impl(self) -> "AsyncGenerator[None, None]":
-        """Enhanced async exception handling with detailed error categorization.
-
-        Yields:
-            Context for database operations with exception handling
-        """
+    async def handle_database_exceptions(self) -> "AsyncGenerator[None, None]":
+        """Handle AIOSQLite-specific exceptions with comprehensive error categorization."""
         try:
             yield
         except aiosqlite.IntegrityError as e:

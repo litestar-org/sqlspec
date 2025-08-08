@@ -247,17 +247,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
     def commit(self) -> None:
         """Commit transaction - BigQuery doesn't support transactions."""
 
+    @contextmanager
     def handle_database_exceptions(self) -> "Generator[None, None, None]":
         """Handle BigQuery-specific exceptions with comprehensive error categorization."""
-        return self._handle_database_exceptions_impl()
-
-    @contextmanager
-    def _handle_database_exceptions_impl(self) -> "Generator[None, None, None]":
-        """Enhanced exception handling with detailed BigQuery error categorization.
-
-        Yields:
-            Context for database operations with exception handling
-        """
         try:
             yield
         except GoogleCloudError as e:

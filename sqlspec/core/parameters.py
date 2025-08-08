@@ -36,8 +36,7 @@ from enum import Enum
 from functools import singledispatch
 from typing import Any, Callable, Optional
 
-# Placeholder imports - will be enabled during BUILD phase
-# from mypy_extensions import mypyc_attr
+from mypy_extensions import mypyc_attr
 
 __all__ = (
     "ParameterConverter",
@@ -81,7 +80,7 @@ class ParameterStyle(str, Enum):
     POSITIONAL_PYFORMAT = "pyformat_positional"
 
 
-# @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
 class TypedParameter:
     """Parameter wrapper that preserves type information for processing.
 
@@ -114,7 +113,7 @@ class TypedParameter:
         self.value = value
         self.original_type = original_type or type(value)
         self.semantic_name = semantic_name
-        self._hash = None  # Lazy hash computation
+        self._hash = None
 
     def __hash__(self) -> int:
         """Cached hash for efficient dictionary operations."""
@@ -479,16 +478,16 @@ class ParameterValidator:
         }
 
         # Dialect-specific incompatibility adjustments
-        if dialect and dialect.lower() in ("mysql", "mariadb"):
+        if dialect and dialect.lower() in {"mysql", "mariadb"}:
             # MySQL has issues with both pyformat styles due to modulo operator
             return base_incompatible
-        if dialect and dialect.lower() in ("postgres", "postgresql"):
+        if dialect and dialect.lower() in {"postgres", "postgresql"}:
             # PostgreSQL only has issues with positional colon, handles pyformat better
             return {ParameterStyle.POSITIONAL_COLON}
         if dialect and dialect.lower() == "sqlite":
             # SQLite only has issues with positional colon
             return {ParameterStyle.POSITIONAL_COLON}
-        if dialect and dialect.lower() in ("oracle", "bigquery"):
+        if dialect and dialect.lower() in {"oracle", "bigquery"}:
             # Oracle and BigQuery have the full base incompatible set
             return base_incompatible
         # Default: return the base incompatible set for unknown/unspecified dialects
@@ -550,7 +549,7 @@ class ParameterConverter:
         }
 
     def normalize_sql_for_parsing(self, sql: str, dialect: Optional[str] = None) -> "tuple[str, list[ParameterInfo]]":
-        """PHASE 1: Convert SQL to SQLGlot-parseable format.
+        """PHASE 1: Convert SQL to SQLGlot-parsable format.
 
         This is the first phase of the two-phase parameter normalization system.
         Takes raw SQL with potentially incompatible parameter styles and converts
@@ -565,7 +564,7 @@ class ParameterConverter:
             dialect: Target SQL dialect for compatibility checking
 
         Returns:
-            Tuple of (parseable_sql, original_parameter_info)
+            Tuple of (parsable_sql, original_parameter_info)
         """
         # 1. Extract all parameters with position/metadata
         param_info = self.validator.extract_parameters(sql)
@@ -693,6 +692,7 @@ class ParameterConverter:
             param_info: Parameter information extracted from SQL
             target_style: Target parameter style for conversion
             original_parameters: Original parameter container for type preservation
+            preserve_parameter_format: Whether to preserve the original parameter format
         """
         if not parameters or not param_info:
             return parameters
@@ -837,7 +837,7 @@ class ParameterConverter:
         )
 
 
-# @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
 class ParameterProcessor:
     """HIGH-LEVEL parameter processing engine with complete pipeline.
 

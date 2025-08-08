@@ -13,8 +13,8 @@ from sqlglot import exp
 from sqlspec.utils.type_guards import is_typed_parameter
 
 if TYPE_CHECKING:
+    from sqlspec.core.filters import StatementFilter
     from sqlspec.core.statement import SQL
-    from sqlspec.core.statement.filters import StatementFilter
 
 __all__ = (
     "hash_expression",

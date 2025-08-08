@@ -23,7 +23,7 @@ Oracle Features:
 """
 
 import logging
-from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional
 
 import oracledb
@@ -167,17 +167,9 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         """Create sync context manager for Oracle cursor with enhanced resource management."""
         return OracleSyncCursor(connection)
 
+    @contextmanager
     def handle_database_exceptions(self) -> "Generator[None, None, None]":
         """Handle Oracle-specific exceptions with comprehensive error categorization."""
-        return self._handle_database_exceptions_impl()
-
-    @contextmanager
-    def _handle_database_exceptions_impl(self) -> "Generator[None, None, None]":
-        """Enhanced sync exception handling with detailed Oracle error categorization.
-
-        Yields:
-            Context for database operations with exception handling
-        """
         try:
             yield
         except oracledb.IntegrityError as e:
@@ -386,17 +378,9 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         """Create async context manager for Oracle cursor with enhanced resource management."""
         return OracleAsyncCursor(connection)
 
-    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
-        """Handle Oracle-specific exceptions with comprehensive error categorization."""
-        return self._handle_database_exceptions_impl()
-
     @asynccontextmanager
-    async def _handle_database_exceptions_impl(self) -> "AsyncGenerator[None, None]":
-        """Enhanced async exception handling with detailed Oracle error categorization.
-
-        Yields:
-            Context for database operations with exception handling
-        """
+    async def handle_database_exceptions(self) -> "AsyncGenerator[None, None]":
+        """Handle Oracle-specific exceptions with comprehensive error categorization."""
         try:
             yield
         except oracledb.IntegrityError as e:

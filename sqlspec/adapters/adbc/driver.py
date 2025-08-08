@@ -238,13 +238,9 @@ class AdbcDriver(SyncDriverAdapterBase):
         """Create context manager for ADBC cursor with enhanced resource management."""
         return AdbcCursor(connection)
 
-    def handle_database_exceptions(self) -> Any:
-        """Handle ADBC-specific exceptions with comprehensive error categorization."""
-        return cast("Generator[None, None, None]", self._handle_database_exceptions_impl())
-
     @contextmanager
-    def _handle_database_exceptions_impl(self) -> "Generator[None, None, None]":
-        """Enhanced exception handling with detailed error categorization."""
+    def handle_database_exceptions(self) -> "Generator[None, None, None]":
+        """Handle ADBC-specific exceptions with comprehensive error categorization."""
         try:
             yield
         except Exception as e:

@@ -22,7 +22,7 @@ MySQL Features:
 """
 
 import logging
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import asyncmy
@@ -154,17 +154,9 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """Create async context manager for AsyncMy cursor with enhanced resource management."""
         return AsyncmyCursor(connection)
 
-    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
-        """Handle AsyncMy-specific exceptions with comprehensive error categorization."""
-        return self._handle_database_exceptions_impl()
-
     @asynccontextmanager
-    async def _handle_database_exceptions_impl(self) -> "AsyncGenerator[None, None]":
-        """Enhanced async exception handling with detailed MySQL error categorization.
-
-        Yields:
-            Context for database operations with exception handling
-        """
+    async def handle_database_exceptions(self) -> "AsyncGenerator[None, None]":
+        """Handle AsyncMy-specific exceptions with comprehensive error categorization."""
         try:
             yield
         except asyncmy.errors.IntegrityError as e:

@@ -27,8 +27,6 @@ Performance Targets:
 - All 12 database adapters migrated successfully
 """
 
-from typing import TYPE_CHECKING
-
 # Import core classes for public API
 from sqlspec.core.cache import UnifiedCache, get_statement_cache
 from sqlspec.core.compiler import SQLProcessor, create_processor
@@ -37,26 +35,20 @@ from sqlspec.core.compiler import SQLProcessor, create_processor
 from sqlspec.core.filters import StatementFilter
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.result import ArrowResult, SQLResult, StatementResult
-from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core.statement import SQL, Statement, StatementConfig
 
 __all__ = (
-    # Core SQL processing
     "SQL",
     "ArrowResult",
-    # Parameters
     "ParameterStyle",
     "ParameterStyleConfig",
     "SQLProcessor",
-    # Results
     "SQLResult",
+    "Statement",
     "StatementConfig",
-    # Filters
     "StatementFilter",
     "StatementResult",
-    # Note: Configuration distributed across adapters - no centralized config exports
-    # Caching
     "UnifiedCache",
-    # Compiler
     "create_processor",
     "get_statement_cache",
 )

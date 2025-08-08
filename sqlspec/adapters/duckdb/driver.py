@@ -142,17 +142,9 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """Create context manager for DuckDB cursor with enhanced resource management."""
         return DuckDBCursor(connection)
 
-    def handle_database_exceptions(self) -> Any:
-        """Handle DuckDB-specific exceptions with comprehensive error categorization."""
-        return self._handle_database_exceptions_impl()
-
     @contextmanager
-    def _handle_database_exceptions_impl(self) -> "Generator[None, None, None]":
-        """Enhanced DuckDB exception handling with detailed error categorization.
-
-        Yields:
-            None: Context manager for database exception handling
-        """
+    def handle_database_exceptions(self) -> "Generator[None, None, None]":
+        """Handle DuckDB-specific exceptions with comprehensive error categorization."""
         try:
             yield
         except duckdb.Error as e:

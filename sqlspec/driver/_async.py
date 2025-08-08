@@ -16,9 +16,10 @@ Performance Improvements:
 """
 
 from abc import abstractmethod
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
-from sqlspec.core.statement import SQL, Statement
+from sqlspec.core import SQL, Statement
 from sqlspec.driver._common import CommonDriverAttributesMixin, ExecutionResult
 from sqlspec.driver.mixins import SQLTranslatorMixin, ToSchemaMixin
 from sqlspec.exceptions import NotFoundError
@@ -26,12 +27,10 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_dict_row, is_indexable_row
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-    from contextlib import AbstractAsyncContextManager
+    from collections.abc import AsyncGenerator, Sequence
 
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core.result import SQLResult
-    from sqlspec.core.statement import StatementConfig, StatementFilter
+    from sqlspec.core import SQLResult, StatementConfig, StatementFilter
     from sqlspec.typing import ModelDTOT, ModelT, RowT, StatementParameters
 
 logger = get_logger("sqlspec")
@@ -112,33 +111,16 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         context manager class with enhanced resource management.
         """
 
-    @abstractmethod
-    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
-        """MANDATORY: Handle database-specific exceptions and wrap them appropriately.
+    @asynccontextmanager
+    async def handle_database_exceptions(self) -> "AsyncGenerator[None, None]":
+        """Handle database-specific exceptions and wrap them appropriately.
 
-        This async context manager is the ONLY place where exceptions should be caught
-        and wrapped in SQLSpec exceptions. All other layers (SQLTransformer,
-        statement processing, etc.) should let exceptions bubble up naturally.
-
-        Each driver MUST implement this to handle their specific database exceptions:
-        - SQLGlot ParseError -> SQLSpecParseError
-        - Database connection errors -> SQLSpecConnectionError
-        - Constraint violations -> SQLSpecIntegrityError
-        - Driver-specific errors -> SQLSpecDatabaseError
-
-        Example implementation:
-            @asynccontextmanager
-            async def handle_database_exceptions(self):
-                try:
-                    yield
-                except sqlglot.ParseError as e:
-                    raise SQLSpecParseError(f"SQL parsing failed: {e}") from e
-                except asyncpg.PostgresError as e:
-                    raise SQLSpecDatabaseError(f"Database error: {e}") from e
-
-        Returns:
-            An async context manager that wraps database operations with proper exception handling
+        Yields:
+            AsyncGenerator that yields None for use with @asynccontextmanager decorator
         """
+        msg = "Each driver must implement handle_database_exceptions with @asynccontextmanager decorator"
+        raise NotImplementedError(msg)
+        yield
 
     @abstractmethod
     async def begin(self) -> None:

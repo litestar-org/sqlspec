@@ -174,9 +174,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
         """
 
         namespace = super().get_signature_namespace()
-        namespace.update({
-            "AsyncmyConnection": AsyncmyConnection,
-            "AsyncmyPool": AsyncmyPool,
-            "AsyncmyCursor": AsyncmyCursor,
-        })
+        namespace.update(
+            {"AsyncmyConnection": AsyncmyConnection, "AsyncmyPool": AsyncmyPool, "AsyncmyCursor": AsyncmyCursor}
+        )
         return namespace

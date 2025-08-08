@@ -614,7 +614,7 @@ def get_default_cache() -> UnifiedCache[Any]:
     Returns:
         Singleton default cache instance
     """
-    global _default_cache  # noqa: PLW0603
+    global _default_cache
     if _default_cache is None:
         with _cache_lock:
             if _default_cache is None:
@@ -628,7 +628,7 @@ def get_statement_cache() -> StatementCache:
     Returns:
         Singleton statement cache instance
     """
-    global _statement_cache  # noqa: PLW0603
+    global _statement_cache
     if _statement_cache is None:
         with _cache_lock:
             if _statement_cache is None:
@@ -642,7 +642,7 @@ def get_expression_cache() -> ExpressionCache:
     Returns:
         Singleton expression cache instance
     """
-    global _expression_cache  # noqa: PLW0603
+    global _expression_cache
     if _expression_cache is None:
         with _cache_lock:
             if _expression_cache is None:

@@ -41,13 +41,11 @@ from enum import Enum
 from re import Pattern
 from typing import Any, Callable, Optional, Union
 
+from mypy_extensions import mypyc_attr
 from typing_extensions import TypeAlias
 
 from sqlspec.core.cache import CacheKey, UnifiedCache
 from sqlspec.utils.logging import get_logger
-
-# Enable when MyPyC ready
-# from mypy_extensions import mypyc_attr
 
 __all__ = (
     "DialectConfig",
@@ -107,7 +105,7 @@ class TokenType(Enum):
     OTHER = "OTHER"
 
 
-# @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=True)
 class Token:
     """Enhanced token with optimized memory usage."""
 
@@ -129,7 +127,7 @@ TokenPattern: TypeAlias = Union[str, TokenHandler]
 CompiledTokenPattern: TypeAlias = Union[Pattern[str], TokenHandler]
 
 
-# @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=True)
 class DialectConfig(ABC):
     """Enhanced abstract base class for SQL dialect configurations."""
 
@@ -216,7 +214,7 @@ class DialectConfig(ABC):
         return []
 
     @staticmethod
-    def is_real_block_ender(tokens: list[Token], current_pos: int) -> bool:
+    def is_real_block_ender(tokens: list[Token], current_pos: int) -> bool:  # noqa: ARG004
         """Check if this END keyword is actually a block ender."""
         return True
 
@@ -594,7 +592,7 @@ def _get_result_cache() -> UnifiedCache[list[str]]:
     return _result_cache
 
 
-# @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=False)
 class StatementSplitter:
     """Enhanced SQL script splitter with unified caching and performance optimization."""
 

@@ -28,6 +28,7 @@ from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Optional
 
 import sqlglot
+from mypy_extensions import mypyc_attr
 from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 
@@ -37,8 +38,6 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from sqlspec.core.statement import StatementConfig
 
-# Enable when MyPyC ready
-# from mypy_extensions import mypyc_attr
 
 __all__ = ("CompiledSQL", "OperationType", "SQLProcessor")
 
@@ -58,7 +57,7 @@ OperationType = {
 }
 
 
-# @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
 class CompiledSQL:
     """Immutable compiled SQL result with complete information.
 
@@ -142,7 +141,7 @@ class CompiledSQL:
         )
 
 
-# @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
 class SQLProcessor:
     """Enhanced SQLProcessor with integrated caching and full compatibility.
 
@@ -261,7 +260,7 @@ class SQLProcessor:
                     expression = sqlglot.parse_one(processed_sql, dialect=dialect_str)
                     operation_type = self._detect_operation_type(expression)
                 except ParseError:
-                    # Fallback for unparseable SQL
+                    # Fallback for unparsable SQL
                     expression = None
                     operation_type = self._guess_operation_type(processed_sql)
             else:

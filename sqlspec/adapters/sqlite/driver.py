@@ -138,13 +138,9 @@ class SqliteDriver(SyncDriverAdapterBase):
         """Create context manager for SQLite cursor with enhanced resource management."""
         return SqliteCursor(connection)
 
-    def handle_database_exceptions(self) -> Any:
-        """Handle SQLite-specific exceptions with comprehensive error categorization."""
-        return self._handle_database_exceptions_impl()
-
     @contextmanager
-    def _handle_database_exceptions_impl(self) -> "Generator[None, None, None]":
-        """Enhanced exception handling with detailed error categorization."""
+    def handle_database_exceptions(self) -> "Generator[None, None, None]":
+        """Handle SQLite-specific exceptions with comprehensive error categorization."""
         try:
             yield
         except sqlite3.IntegrityError as e:

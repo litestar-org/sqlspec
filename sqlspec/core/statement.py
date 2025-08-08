@@ -23,9 +23,10 @@ Performance Optimizations:
 - Direct method calls optimized for MyPyC compilation
 """
 
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Union
 
 import sqlglot
+from mypy_extensions import mypyc_attr
 from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 from typing_extensions import TypeAlias
@@ -38,10 +39,8 @@ from sqlspec.utils.type_guards import is_statement_filter, supports_where
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.core.statement.filters import StatementFilter
+    from sqlspec.core.filters import StatementFilter
 
-# Enable when MyPyC ready
-# from mypy_extensions import mypyc_attr
 
 __all__ = (
     "SQL",
@@ -51,7 +50,8 @@ __all__ = (
     "get_default_config",
     "get_default_parameter_config",
 )
-
+# Operation type definition - preserved exactly
+OperationType = Literal["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT"]
 logger = get_logger("sqlspec.core.statement")
 
 # Configuration slots - preserved from existing StatementConfig
@@ -85,6 +85,7 @@ PROCESSED_STATE_SLOTS = (
 )
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class ProcessedState:
     """Cached processing results for enhanced SQL statements.
 
@@ -114,7 +115,7 @@ class ProcessedState:
         return hash((self.compiled_sql, str(self.execution_parameters), self.operation_type))
 
 
-# @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
 class SQL:
     """Enhanced SQL statement with complete backward compatibility.
 
@@ -490,13 +491,15 @@ class SQL:
     def __hash__(self) -> int:
         """Hash for caching and equality."""
         if self._hash is None:
-            self._hash = hash((
-                self._raw_sql,
-                tuple(self._positional_parameters),
-                tuple(sorted(self._named_parameters.items())),
-                self._is_many,
-                self._is_script,
-            ))
+            self._hash = hash(
+                (
+                    self._raw_sql,
+                    tuple(self._positional_parameters),
+                    tuple(sorted(self._named_parameters.items())),
+                    self._is_many,
+                    self._is_script,
+                )
+            )
         return self._hash
 
     def __eq__(self, other: object) -> bool:
@@ -529,6 +532,7 @@ class SQL:
         return f"SQL({self._raw_sql!r}{params_str}{flags_str})"
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class StatementConfig:
     """Enhanced StatementConfig with complete backward compatibility.
 
@@ -625,16 +629,18 @@ class StatementConfig:
 
     def __hash__(self) -> int:
         """Hash based on key configuration settings."""
-        return hash((
-            self.enable_parsing,
-            self.enable_validation,
-            self.enable_transformations,
-            self.enable_analysis,
-            self.enable_expression_simplification,
-            self.enable_parameter_type_wrapping,
-            self.enable_caching,
-            str(self.dialect),
-        ))
+        return hash(
+            (
+                self.enable_parsing,
+                self.enable_validation,
+                self.enable_transformations,
+                self.enable_analysis,
+                self.enable_expression_simplification,
+                self.enable_parameter_type_wrapping,
+                self.enable_caching,
+                str(self.dialect),
+            )
+        )
 
     def __repr__(self) -> str:
         """String representation of the StatementConfig instance."""

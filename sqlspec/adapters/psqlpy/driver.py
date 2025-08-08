@@ -162,35 +162,30 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         """Create context manager for psqlpy cursor with enhanced resource management."""
         return PsqlpyCursor(connection)
 
-    def handle_database_exceptions(self) -> Any:
-        """Handle psqlpy-specific exceptions with comprehensive error categorization."""
-        return self._handle_database_exceptions_impl()
-
     @asynccontextmanager
-    async def _handle_database_exceptions_impl(self) -> "AsyncGenerator[None, None]":
-        """Enhanced psqlpy exception handling with detailed error categorization.
-
-        Yields:
-            None: Context manager for database exception handling
-        """
+    async def handle_database_exceptions(self) -> "AsyncGenerator[None, None]":
+        """Handle psqlpy-specific exceptions with comprehensive error categorization."""
         try:
             yield
-        except psqlpy.exceptions.DatabaseError as e:
-            # Handle psqlpy-specific database errors with categorization
-            error_msg = str(e).lower()
-            if any(keyword in error_msg for keyword in ("parse", "syntax", "grammar")):
-                msg = f"Psqlpy SQL syntax error: {e}"
-                raise SQLParsingError(msg) from e
-            elif any(keyword in error_msg for keyword in ("constraint", "unique", "foreign")):
-                msg = f"Psqlpy constraint violation: {e}"
-            elif any(keyword in error_msg for keyword in ("connection", "pool", "timeout")):
-                msg = f"Psqlpy connection error: {e}"
-            else:
-                msg = f"Psqlpy database error: {e}"
-            raise SQLSpecError(msg) from e
         except Exception as e:
-            # Handle any other unexpected errors
+            # Handle psqlpy-specific database errors with safe attribute access
             error_msg = str(e).lower()
+            exc_type = type(e).__name__.lower()
+
+            # Check for database error types by name to avoid attribute access issues
+            if "databaseerror" in exc_type or "psqlpy" in str(type(e).__module__):
+                if any(keyword in error_msg for keyword in ("parse", "syntax", "grammar")):
+                    msg = f"Psqlpy SQL syntax error: {e}"
+                    raise SQLParsingError(msg) from e
+                elif any(keyword in error_msg for keyword in ("constraint", "unique", "foreign")):
+                    msg = f"Psqlpy constraint violation: {e}"
+                elif any(keyword in error_msg for keyword in ("connection", "pool", "timeout")):
+                    msg = f"Psqlpy connection error: {e}"
+                else:
+                    msg = f"Psqlpy database error: {e}"
+                raise SQLSpecError(msg) from e
+
+            # Handle any other unexpected errors
             if "parse" in error_msg or "syntax" in error_msg:
                 msg = f"SQL parsing failed: {e}"
                 raise SQLParsingError(msg) from e

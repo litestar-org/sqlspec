@@ -18,7 +18,7 @@ Performance Improvements:
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
-from sqlspec.core.statement import SQL
+from sqlspec.core import SQL
 from sqlspec.driver._common import CommonDriverAttributesMixin, ExecutionResult
 from sqlspec.driver.mixins import SQLTranslatorMixin, ToSchemaMixin
 from sqlspec.exceptions import NotFoundError
@@ -30,8 +30,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core.result import SQLResult
-    from sqlspec.core.statement import Statement, StatementConfig, StatementFilter
+    from sqlspec.core import SQLResult, Statement, StatementConfig, StatementFilter
     from sqlspec.typing import ModelDTOT, ModelT, RowT, StatementParameters
 
 logger = get_logger("sqlspec")
@@ -112,13 +111,12 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         or a custom context manager class with enhanced resource management.
         """
 
-    @abstractmethod
     def handle_database_exceptions(self) -> "AbstractContextManager[None]":
         """MANDATORY: Handle database-specific exceptions and wrap them appropriately.
 
-        This context manager is the ONLY place where exceptions should be caught
-        and wrapped in SQLSpec exceptions. All other layers (SQLTransformer,
-        statement processing, etc.) should let exceptions bubble up naturally.
+        This method must be decorated with @contextmanager in each driver implementation.
+        It is the ONLY place where exceptions should be caught and wrapped in SQLSpec exceptions.
+        All other layers (SQLTransformer, statement processing, etc.) should let exceptions bubble up naturally.
 
         Each driver MUST implement this to handle their specific database exceptions:
         - SQLGlot ParseError -> SQLSpecParseError
@@ -137,8 +135,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
                     raise SQLSpecDatabaseError(f"Database error: {e}") from e
 
         Returns:
-            A context manager that wraps database operations with proper exception handling
+            Generator that yields None for use with @contextmanager decorator
         """
+        msg = "Each driver must implement handle_database_exceptions with @contextmanager decorator"
+        raise NotImplementedError(msg)
 
     @abstractmethod
     def begin(self) -> None:

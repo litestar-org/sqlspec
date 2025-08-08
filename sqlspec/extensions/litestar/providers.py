@@ -13,10 +13,10 @@ from typing import Any, Literal, NamedTuple, Optional, TypedDict, Union, cast
 from uuid import UUID
 
 from litestar.di import Provide
-from litestar.parameters import Dependency, Parameter
+from litestar.params import Dependency, Parameter
 from typing_extensions import NotRequired
 
-from sqlspec.core.statement.filters import (
+from sqlspec.core.filters import (
     BeforeAfterFilter,
     FilterTypes,
     InCollectionFilter,

@@ -23,8 +23,8 @@ PostgreSQL Features:
 """
 
 import logging
-from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, Optional, cast
+from contextlib import asynccontextmanager, contextmanager
+from typing import TYPE_CHECKING, Any, Optional
 
 import psycopg
 
@@ -195,17 +195,9 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         """Create context manager for PostgreSQL cursor with enhanced resource management."""
         return PsycopgSyncCursor(connection)
 
+    @contextmanager
     def handle_database_exceptions(self) -> "Generator[None, None, None]":
         """Handle PostgreSQL psycopg-specific exceptions with comprehensive error categorization."""
-        return cast("Generator[None, None, None]", self._handle_database_exceptions_impl())
-
-    @contextmanager
-    def _handle_database_exceptions_impl(self) -> "Generator[None, None, None]":
-        """Enhanced exception handling with detailed PostgreSQL error categorization.
-
-        Yields:
-            Context for database operations with exception handling
-        """
         try:
             yield
         except psycopg.IntegrityError as e:
@@ -434,17 +426,9 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         """Create async context manager for PostgreSQL cursor with enhanced resource management."""
         return PsycopgAsyncCursor(connection)
 
-    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
-        """Handle PostgreSQL psycopg-specific exceptions with comprehensive error categorization."""
-        return self._handle_database_exceptions_impl()
-
     @asynccontextmanager
-    async def _handle_database_exceptions_impl(self) -> "AsyncGenerator[None, None]":
-        """Enhanced async exception handling with detailed PostgreSQL error categorization.
-
-        Yields:
-            Context for database operations with exception handling
-        """
+    async def handle_database_exceptions(self) -> "AsyncGenerator[None, None]":
+        """Handle PostgreSQL psycopg-specific exceptions with comprehensive error categorization."""
         try:
             yield
         except psycopg.IntegrityError as e:

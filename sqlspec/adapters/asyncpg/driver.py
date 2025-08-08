@@ -16,7 +16,8 @@ Architecture Features:
 """
 
 import re
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 import asyncpg
@@ -136,12 +137,8 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """Create context manager for AsyncPG cursor with enhanced resource management."""
         return AsyncpgCursor(connection)
 
-    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
-        """Handle AsyncPG-specific exceptions with comprehensive error categorization."""
-        return self._handle_database_exceptions_async()
-
     @asynccontextmanager
-    async def _handle_database_exceptions_async(self) -> Any:
+    async def handle_database_exceptions_async(self) -> AsyncGenerator[None]:
         """Enhanced async exception handling with detailed error categorization."""
         try:
             yield

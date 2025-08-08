@@ -26,13 +26,12 @@ Critical Compatibility:
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union, cast
 
+from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
 if TYPE_CHECKING:
     from sqlspec.core.statement import SQL
 
-# Enable when MyPyC ready
-# from mypy_extensions import mypyc_attr
 
 __all__ = ("ArrowResult", "SQLResult", "StatementResult")
 
@@ -42,7 +41,7 @@ T = TypeVar("T")
 OperationType = Literal["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT"]
 
 
-# @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=True)
 class StatementResult(ABC):
     """Base class for SQL statement execution results.
 
@@ -148,7 +147,7 @@ class StatementResult(ABC):
         return "SELECT"  # Default fallback
 
 
-# @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SQLResult(StatementResult):
     """Unified result class for SQL operations that return a list of rows
     or affect rows (e.g., SELECT, INSERT, UPDATE, DELETE).
