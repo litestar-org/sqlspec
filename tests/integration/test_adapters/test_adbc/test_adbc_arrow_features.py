@@ -1,17 +1,17 @@
 """Test ADBC Arrow-specific features and integrations using CORE_ROUND_3 architecture."""
 
+from collections.abc import Generator
+
 import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.core.result import SQLResult
-
-# Import the decorator
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
 
 @pytest.fixture
-def adbc_postgresql_session(postgres_service: PostgresService) -> AdbcDriver:
+def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[AdbcDriver, None, None]:
     """Create an ADBC PostgreSQL session for Arrow testing."""
     config = AdbcConfig(
         connection_config={
@@ -149,15 +149,10 @@ def test_arrow_large_dataset_handling(adbc_postgresql_session: AdbcDriver) -> No
     total_rows = 1000
 
     for batch_start in range(0, total_rows, batch_size):
-        batch_data = []
-        for i in range(batch_start, min(batch_start + batch_size, total_rows)):
-            batch_data.append(
-                (
-                    f"name_{i:04d}",
-                    i * 10,
-                    f"data_string_{i}_" + "x" * 50,  # Longer strings to test memory handling
-                )
-            )
+        batch_data = [
+            (f"name_{i:04d}", i * 10, f"data_string_{i}_" + "x" * 50)
+            for i in range(batch_start, min(batch_start + batch_size, total_rows))
+        ]
 
         adbc_postgresql_session.execute_many(
             """

@@ -38,11 +38,11 @@ def temp_workspace_with_migrations() -> Generator[Path, None, None]:
     """Create a temporary workspace with migrations directory for tests."""
     with tempfile.TemporaryDirectory() as temp_dir:
         workspace = Path(temp_dir)
-        
+
         # Create migrations directory
         migrations_dir = workspace / "migrations"
         migrations_dir.mkdir()
-        
+
         yield workspace
 
 
@@ -176,11 +176,7 @@ def test_record_migration_sql_generation() -> None:
     tracker = MockMigrationTracker("test_migrations")
 
     record_sql = tracker._get_record_migration_sql(
-        version="0001",
-        description="test migration",
-        execution_time_ms=250,
-        checksum="abc123",
-        applied_by="test_user",
+        version="0001", description="test migration", execution_time_ms=250, checksum="abc123", applied_by="test_user"
     )
 
     assert isinstance(record_sql, SQL)
@@ -459,11 +455,7 @@ def test_migration_state_recording() -> None:
 
     # Record a migration
     tracker.record_migration(
-        mock_driver,
-        version="0001",
-        description="create users table",
-        execution_time_ms=150,
-        checksum="abc123def456",
+        mock_driver, version="0001", description="create users table", execution_time_ms=150, checksum="abc123def456"
     )
 
     # Verify recording

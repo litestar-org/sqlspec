@@ -335,9 +335,8 @@ class TestFileSystemPerformance:
         large_file = temp_workspace / "large_queries.sql"
 
         # Generate large file with many queries
-        content_parts = []
-        for i in range(500):
-            content_parts.append(f"""
+        large_content = "\n".join(
+            f"""
 -- name: large_query_{i:04d}
 SELECT {i} as query_id,
        'This is query number {i}' as description,
@@ -348,9 +347,9 @@ WHERE id > {i * 100}
   AND created_at > '2024-01-01'
 ORDER BY id
 LIMIT 1000;
-""")
-
-        large_content = "\n".join(content_parts)
+"""
+            for i in range(500)
+        )
         large_file.write_text(large_content)
 
         loader = SQLFileLoader()

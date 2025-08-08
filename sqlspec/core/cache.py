@@ -32,7 +32,10 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any, Generic, Optional
 
+from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
+
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     import sqlglot.expressions as exp
@@ -69,7 +72,7 @@ UNIFIED_CACHE_SLOTS = ("_cache", "_lock", "_max_size", "_ttl", "_head", "_tail",
 CACHE_STATS_SLOTS = ("hits", "misses", "evictions", "total_operations", "memory_usage")
 
 
-# @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=True)
 class CacheKey:
     """High-performance immutable cache key with optimized hashing.
 
@@ -103,19 +106,20 @@ class CacheKey:
     @property
     def key_data(self) -> tuple[Any, ...]:
         """Get the key data tuple."""
-        return self._key_data  # type: ignore[attr-defined]
+        return self._key_data  # type: ignore[attr-defined,no-any-return]
 
     def __hash__(self) -> int:
         """Return cached hash value for O(1) performance."""
-        return self._hash  # type: ignore[attr-defined]
+        return self._hash  # type: ignore[attr-defined,no-any-return]
 
     def __eq__(self, other: object) -> bool:
         """Fast equality comparison with short-circuit evaluation."""
-        if not isinstance(other, CacheKey):
+        if type(other) is not CacheKey:
             return False
-        if self._hash != other._hash:  # type: ignore[attr-defined]
+        other_key = other  # type: CacheKey
+        if self._hash != other_key._hash:  # type: ignore[attr-defined]
             return False
-        return self._key_data == other._key_data  # type: ignore[attr-defined]
+        return self._key_data == other_key._key_data  # type: ignore[attr-defined,no-any-return]
 
     def __repr__(self) -> str:
         """String representation of the cache key."""
@@ -127,6 +131,7 @@ class CacheKey:
         raise AttributeError(msg)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class CacheStats:
     """Cache statistics tracking with performance monitoring.
 
@@ -186,6 +191,7 @@ class CacheStats:
         )
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class CacheNode:
     """Internal cache node for LRU linked list implementation.
 
@@ -210,7 +216,7 @@ class CacheNode:
         self.access_count = 1
 
 
-# @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=True)
 class UnifiedCache(Generic[CacheValueT]):
     """Unified high-performance cache with LRU eviction and TTL support.
 
@@ -269,27 +275,24 @@ class UnifiedCache(Generic[CacheValueT]):
             Cached value or None if not found or expired
         """
         with self._lock:
-            node = self._cache.get(key)
+            node: Optional[CacheNode] = self._cache.get(key)
             if node is None:
                 self._stats.record_miss()
                 return None
 
-            # Check TTL expiration
-            if self._ttl is not None:
-                age = time.time() - node.timestamp
-                if age > self._ttl:
-                    # Remove expired entry
-                    self._remove_node(node)
-                    del self._cache[key]
-                    self._stats.record_miss()
-                    self._stats.record_eviction()
-                    return None
+            current_time: float = time.time()
+            ttl: Optional[int] = self._ttl
+            if ttl is not None and (current_time - node.timestamp) > ttl:
+                self._remove_node(node)
+                del self._cache[key]
+                self._stats.record_miss()
+                self._stats.record_eviction()
+                return None
 
-            # Move to head (most recently used)
             self._move_to_head(node)
             node.access_count += 1
             self._stats.record_hit()
-            return node.value
+            return node.value  # type: ignore[no-any-return]
 
     def put(self, key: CacheKey, value: CacheValueT) -> None:
         """Put value in cache with LRU management.
@@ -299,24 +302,23 @@ class UnifiedCache(Generic[CacheValueT]):
             value: Value to cache
         """
         with self._lock:
-            existing_node = self._cache.get(key)
+            existing_node: Optional[CacheNode] = self._cache.get(key)
             if existing_node is not None:
-                # Update existing entry
                 existing_node.value = value
                 existing_node.timestamp = time.time()
                 existing_node.access_count += 1
                 self._move_to_head(existing_node)
                 return
 
-            # Create new entry
-            new_node = CacheNode(key, value)
+            new_node: CacheNode = CacheNode(key, value)
             self._cache[key] = new_node
             self._add_to_head(new_node)
 
-            # Check size limit and evict if necessary
-            if len(self._cache) > self._max_size:
-                tail_node = self._tail.prev
-                if tail_node and tail_node != self._head:
+            cache_size: int = len(self._cache)
+            max_size: int = self._max_size
+            if cache_size > max_size:
+                tail_node: Optional[CacheNode] = self._tail.prev
+                if tail_node is not None and tail_node is not self._head:
                     self._remove_node(tail_node)
                     del self._cache[tail_node.key]
                     self._stats.record_eviction()
@@ -331,7 +333,7 @@ class UnifiedCache(Generic[CacheValueT]):
             True if key was found and deleted, False otherwise
         """
         with self._lock:
-            node = self._cache.get(key)
+            node: Optional[CacheNode] = self._cache.get(key)
             if node is None:
                 return False
 
@@ -362,17 +364,20 @@ class UnifiedCache(Generic[CacheValueT]):
     def _add_to_head(self, node: CacheNode) -> None:
         """Add node right after head (most recently used position)."""
         node.prev = self._head
-        node.next = self._head.next
-        if self._head.next:
-            self._head.next.prev = node
+        head_next: Optional[CacheNode] = self._head.next
+        node.next = head_next
+        if head_next is not None:
+            head_next.prev = node
         self._head.next = node
 
     def _remove_node(self, node: CacheNode) -> None:
         """Remove node from linked list."""
-        if node.prev:
-            node.prev.next = node.next
-        if node.next:
-            node.next.prev = node.prev
+        node_prev: Optional[CacheNode] = node.prev
+        node_next: Optional[CacheNode] = node.next
+        if node_prev is not None:
+            node_prev.next = node_next
+        if node_next is not None:
+            node_next.prev = node_prev
 
     def _move_to_head(self, node: CacheNode) -> None:
         """Move existing node to head (most recently used)."""
@@ -386,19 +391,20 @@ class UnifiedCache(Generic[CacheValueT]):
     def __contains__(self, key: CacheKey) -> bool:
         """Check if key exists in cache (without updating LRU)."""
         with self._lock:
-            node = self._cache.get(key)
+            node: Optional[CacheNode] = self._cache.get(key)
             if node is None:
                 return False
 
-            # Check TTL expiration
-            if self._ttl is not None:
-                age = time.time() - node.timestamp
-                if age > self._ttl:
+            ttl: Optional[int] = self._ttl
+            if ttl is not None:
+                current_time: float = time.time()
+                if (current_time - node.timestamp) > ttl:
                     return False
 
             return True
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class StatementCache:
     """Specialized cache for compiled SQL statements.
 
@@ -466,6 +472,7 @@ class StatementCache:
         return self._cache.get_stats()
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class ExpressionCache:
     """Specialized cache for parsed SQLGlot expressions.
 
@@ -527,6 +534,7 @@ class ExpressionCache:
         return self._cache.get_stats()
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterCache:
     """Specialized cache for processed parameters.
 
@@ -585,8 +593,7 @@ class ParameterCache:
             else:
                 param_key = (params,)
         except (TypeError, ValueError):
-            # Fallback for unhashable parameters
-            param_key = (str(params), type(params).__name__)
+            param_key = (str(params), type(params).__name__)  # type: ignore[assignment]
 
         key_data = ("parameters", param_key, config_hash)
         return CacheKey(key_data)
@@ -700,6 +707,7 @@ def get_cache_statistics() -> dict[str, CacheStats]:
 _global_cache_config: "Optional[CacheConfig]" = None
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class CacheConfig:
     """Global cache configuration for SQLSpec.
 
@@ -759,16 +767,11 @@ def update_cache_config(config: CacheConfig) -> None:
     Args:
         config: New cache configuration to apply globally
     """
-    from sqlspec.utils.logging import get_logger
-
     global _global_cache_config
     _global_cache_config = config
 
-    # Clear all caches when configuration changes
     unified_cache = get_default_cache()
     unified_cache.clear()
-
-    # Clear statement cache if it exists
     statement_cache = get_statement_cache()
     statement_cache.clear()
 
@@ -784,27 +787,39 @@ def update_cache_config(config: CacheConfig) -> None:
     )
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class CacheStatsAggregate:
     """Aggregated cache statistics from all cache instances."""
 
+    __slots__ = (
+        "fragment_capacity",
+        "fragment_hit_rate",
+        "fragment_hits",
+        "fragment_misses",
+        "fragment_size",
+        "optimized_capacity",
+        "optimized_hit_rate",
+        "optimized_hits",
+        "optimized_misses",
+        "optimized_size",
+        "sql_capacity",
+        "sql_hit_rate",
+        "sql_hits",
+        "sql_misses",
+        "sql_size",
+    )
+
     def __init__(self) -> None:
         """Initialize aggregated cache statistics."""
-        # Hit rates
         self.sql_hit_rate = 0.0
         self.fragment_hit_rate = 0.0
         self.optimized_hit_rate = 0.0
-
-        # Cache sizes
         self.sql_size = 0
         self.fragment_size = 0
         self.optimized_size = 0
-
-        # Cache capacities
         self.sql_capacity = 0
         self.fragment_capacity = 0
         self.optimized_capacity = 0
-
-        # Operation counts
         self.sql_hits = 0
         self.sql_misses = 0
         self.fragment_hits = 0
@@ -822,64 +837,57 @@ def get_cache_stats() -> CacheStatsAggregate:
     stats_dict = get_cache_statistics()
     stats = CacheStatsAggregate()
 
-    if stats_dict:
-        # Aggregate statistics from unified cache system
-        for cache_name, cache_stats in stats_dict.items():
-            if hasattr(cache_stats, "hits") and hasattr(cache_stats, "misses"):
-                hits = getattr(cache_stats, "hits", 0)
-                misses = getattr(cache_stats, "misses", 0)
-                size = getattr(cache_stats, "size", 0)
+    for cache_name, cache_stats in stats_dict.items():
+        hits = cache_stats.hits
+        misses = cache_stats.misses
+        size = 0
 
-                if "sql" in cache_name.lower():
-                    stats.sql_hits += hits
-                    stats.sql_misses += misses
-                    stats.sql_size += size
-                elif "fragment" in cache_name.lower():
-                    stats.fragment_hits += hits
-                    stats.fragment_misses += misses
-                    stats.fragment_size += size
-                elif "optimized" in cache_name.lower():
-                    stats.optimized_hits += hits
-                    stats.optimized_misses += misses
-                    stats.optimized_size += size
+        if "sql" in cache_name.lower():
+            stats.sql_hits += hits
+            stats.sql_misses += misses
+            stats.sql_size += size
+        elif "fragment" in cache_name.lower():
+            stats.fragment_hits += hits
+            stats.fragment_misses += misses
+            stats.fragment_size += size
+        elif "optimized" in cache_name.lower():
+            stats.optimized_hits += hits
+            stats.optimized_misses += misses
+            stats.optimized_size += size
 
-    # Calculate hit rates
-    if stats.sql_hits + stats.sql_misses > 0:
-        stats.sql_hit_rate = stats.sql_hits / (stats.sql_hits + stats.sql_misses)
-    if stats.fragment_hits + stats.fragment_misses > 0:
-        stats.fragment_hit_rate = stats.fragment_hits / (stats.fragment_hits + stats.fragment_misses)
-    if stats.optimized_hits + stats.optimized_misses > 0:
-        stats.optimized_hit_rate = stats.optimized_hits / (stats.optimized_hits + stats.optimized_misses)
+    sql_total = stats.sql_hits + stats.sql_misses
+    if sql_total > 0:
+        stats.sql_hit_rate = stats.sql_hits / sql_total
+
+    fragment_total = stats.fragment_hits + stats.fragment_misses
+    if fragment_total > 0:
+        stats.fragment_hit_rate = stats.fragment_hits / fragment_total
+
+    optimized_total = stats.optimized_hits + stats.optimized_misses
+    if optimized_total > 0:
+        stats.optimized_hit_rate = stats.optimized_hits / optimized_total
 
     return stats
 
 
 def reset_cache_stats() -> None:
     """Reset all cache statistics."""
-    # Reset statistics in all cache instances
-    if _default_cache is not None:
-        _default_cache._stats = CacheStats()
-    if _statement_cache is not None:
-        _statement_cache._stats = CacheStats()
-    if _expression_cache is not None:
-        _expression_cache._stats = CacheStats()
-    if _parameter_cache is not None:
-        _parameter_cache._stats = CacheStats()
+    clear_all_caches()
 
 
 def log_cache_stats() -> None:
     """Log current cache statistics using the configured logger."""
-    from sqlspec.utils.logging import get_logger
-
     logger = get_logger("sqlspec.cache")
     stats = get_cache_stats()
-    # Note: CacheStatsAggregate doesn't have to_dict method, use string representation
     logger.info("Cache Statistics: %s", stats)
 
 
 # Global cache instance for SQL compilation caching with compatible interface
+@mypyc_attr(allow_interpreted_subclasses=False)
 class SQLCompilationCache:
     """Wrapper around StatementCache to provide compatible interface for _common.py."""
+
+    __slots__ = ("_statement_cache", "_unified_cache")
 
     def __init__(self) -> None:
         self._statement_cache = get_statement_cache()

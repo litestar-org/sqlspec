@@ -1,6 +1,6 @@
 """Tests for asynchronous database adapters based on CORE_ROUND_3 architecture."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -10,7 +10,7 @@ from sqlspec.core.result import SQLResult
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import ExecutionResult
 from sqlspec.exceptions import NotFoundError, SQLSpecError
-from tests.unit.test_adapters.conftest import MockAsyncConnection, MockAsyncDriver
+from tests.unit.test_adapters.conftest import MockAsyncConnection, MockAsyncCursor, MockAsyncDriver
 
 if TYPE_CHECKING:
     pass
@@ -122,10 +122,9 @@ async def test_async_driver_execute_many_no_parameters(mock_async_driver: MockAs
     statement = SQL(
         "INSERT INTO users (name) VALUES (?)", statement_config=mock_async_driver.statement_config, is_many=True
     )
-    cursor = mock_async_driver.with_cursor(mock_async_driver.connection)
-
-    with pytest.raises(ValueError, match="execute_many requires parameters"):
-        await mock_async_driver._execute_many(cursor, statement)
+    async with mock_async_driver.with_cursor(mock_async_driver.connection) as cursor:
+        with pytest.raises(ValueError, match="execute_many requires parameters"):
+            await mock_async_driver._execute_many(cursor, statement)
 
 
 @pytest.mark.asyncio
@@ -331,7 +330,7 @@ async def test_async_driver_select_one_or_none_multiple_results(mock_async_drive
 @pytest.mark.asyncio
 async def test_async_driver_select(mock_async_driver: MockAsyncDriver) -> None:
     """Test async select method."""
-    result = await mock_async_driver.select("SELECT * FROM users")
+    result: list[dict[str, Any]] = await mock_async_driver.select("SELECT * FROM users")
 
     assert isinstance(result, list)
     assert len(result) == 2

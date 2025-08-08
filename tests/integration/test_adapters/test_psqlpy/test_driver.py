@@ -465,4 +465,4 @@ async def test_postgresql_specific_features(psqlpy_session: PsqlpyDriver) -> Non
     pg_result = await psqlpy_session.execute("SELECT version() as pg_version")
     assert isinstance(pg_result, SQLResult)
     assert pg_result.data is not None
-    assert "PostgreSQL" in result.data[0]["pg_version"]
+    assert "PostgreSQL" in pg_result.data[0]["pg_version"]

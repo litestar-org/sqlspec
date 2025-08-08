@@ -10,6 +10,8 @@ Tests focused on Migration core functionality including:
 Uses CORE_ROUND_3 architecture with core.statement.SQL and related modules.
 """
 
+from __future__ import annotations
+
 import tempfile
 from pathlib import Path
 from typing import Any

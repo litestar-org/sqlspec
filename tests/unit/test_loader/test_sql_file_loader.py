@@ -332,8 +332,7 @@ def test_is_file_unchanged() -> None:
         assert loader._is_file_unchanged(tf.name, cached_file)
 
         # Modify file
-        with open(tf.name, "w") as f:
-            f.write("SELECT * FROM products;")
+        Path(tf.name).write_text("SELECT * FROM products;")
 
         # File should now be changed
         assert not loader._is_file_unchanged(tf.name, cached_file)
