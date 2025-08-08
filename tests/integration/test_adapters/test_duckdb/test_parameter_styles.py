@@ -23,7 +23,8 @@ def duckdb_parameters_session() -> "Generator[DuckDBDriver, None, None]":
                 name VARCHAR NOT NULL,
                 value INTEGER DEFAULT 0,
                 description VARCHAR
-            )
+            );
+            TRUNCATE TABLE test_parameters;
         """)
         # Insert test data
         session.execute(
@@ -181,7 +182,7 @@ def test_duckdb_parameter_with_sql_object(duckdb_parameters_session: DuckDBDrive
     from sqlspec.core.statement import SQL
 
     # Test with qmark style
-    sql_obj = SQL("SELECT * FROM test_parameters WHERE value > ?", parameters=[150])
+    sql_obj = SQL("SELECT * FROM test_parameters WHERE value > ?", [150])
     result = duckdb_parameters_session.execute(sql_obj)
 
     assert isinstance(result, SQLResult)
@@ -190,7 +191,7 @@ def test_duckdb_parameter_with_sql_object(duckdb_parameters_session: DuckDBDrive
     assert all(row["value"] > 150 for row in result.data)
 
     # Test with numeric style
-    numeric_sql = SQL("SELECT * FROM test_parameters WHERE value < $1", parameters=[150])
+    numeric_sql = SQL("SELECT * FROM test_parameters WHERE value < $1", [150])
     numeric_result = duckdb_parameters_session.execute(numeric_sql)
 
     assert isinstance(numeric_result, SQLResult)

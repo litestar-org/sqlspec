@@ -8,12 +8,6 @@ from pytest_databases.docker.mysql import MySQLService
 from sqlspec.adapters.asyncmy import AsyncmyConfig, AsyncmyDriver, asyncmy_statement_config
 
 
-@pytest.fixture(scope="session")
-def mysql_service() -> MySQLService:
-    """MySQL service fixture."""
-    return MySQLService(host="localhost", port=3306, db="test", user="root", password="password")
-
-
 @pytest.fixture
 async def asyncmy_config(mysql_service: MySQLService) -> AsyncmyConfig:
     """Create AsyncMy configuration for testing."""

@@ -138,7 +138,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         return AsyncpgCursor(connection)
 
     @asynccontextmanager
-    async def handle_database_exceptions_async(self) -> AsyncGenerator[None]:
+    async def handle_database_exceptions(self) -> AsyncGenerator[None]:
         """Enhanced async exception handling with detailed error categorization."""
         try:
             yield
@@ -157,12 +157,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                     msg = f"PostgreSQL database error [{error_code}]: {e}"
             else:
                 msg = f"PostgreSQL database error: {e}"
-            raise SQLSpecError(msg) from e
-        except asyncpg.ConnectionDoesNotExistError as e:
-            msg = f"AsyncPG connection error: {e}"
-            raise SQLSpecError(msg) from e
-        except asyncpg.ConnectionFailureError as e:
-            msg = f"AsyncPG connection failure: {e}"
             raise SQLSpecError(msg) from e
         except Exception as e:
             # Handle any other unexpected errors
@@ -263,16 +257,14 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        # Enhanced parameter validation for executemany
-        if not prepared_parameters:
-            msg = "execute_many requires parameters"
-            raise ValueError(msg)
-
-        # Use AsyncPG's efficient executemany for batch operations
-        await cursor.executemany(sql, prepared_parameters)
-
-        # Calculate affected rows (AsyncPG doesn't provide direct rowcount for executemany)
-        affected_rows = len(prepared_parameters) if prepared_parameters else 0
+        if prepared_parameters:
+            # Use AsyncPG's efficient executemany for batch operations
+            await cursor.executemany(sql, prepared_parameters)
+            # Calculate affected rows (AsyncPG doesn't provide direct rowcount for executemany)
+            affected_rows = len(prepared_parameters)
+        else:
+            # Handle empty parameter case - no operations to execute
+            affected_rows = 0
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 

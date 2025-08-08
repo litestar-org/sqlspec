@@ -40,7 +40,7 @@ def test_sync_execute_many_insert_batch(oracle_sync_session: OracleSyncDriver) -
         (5, "Item 5", "TYPE_B", 250),
     ]
 
-    result = oracle_sync_session.execute_many(insert_sql, parameters=batch_data)
+    result = oracle_sync_session.execute_many(insert_sql, batch_data)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == len(batch_data)
 
@@ -101,14 +101,14 @@ async def test_async_execute_many_update_batch(oracle_async_session: OracleAsync
     ]
 
     insert_sql = "INSERT INTO test_batch_update (id, name, status, score) VALUES (:1, :2, :3, :4)"
-    await oracle_async_session.execute_many(insert_sql, parameters=initial_data)
+    await oracle_async_session.execute_many(insert_sql, initial_data)
 
     # Test batch update with positional parameters
     update_sql = "UPDATE test_batch_update SET status = :1, score = :2 WHERE id = :3"
 
     update_data = [("ACTIVE", 85, 1), ("ACTIVE", 92, 2), ("INACTIVE", 78, 3), ("ACTIVE", 95, 4)]
 
-    result = await oracle_async_session.execute_many(update_sql, parameters=update_data)
+    result = await oracle_async_session.execute_many(update_sql, update_data)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == len(update_data)
 
@@ -172,7 +172,7 @@ def test_sync_execute_many_with_named_parameters(oracle_sync_session: OracleSync
         {"id": 4, "product_name": "Oracle Security", "category_id": 3, "price": 1499.99, "in_stock": 1},
     ]
 
-    result = oracle_sync_session.execute_many(insert_sql, parameters=batch_data)
+    result = oracle_sync_session.execute_many(insert_sql, batch_data)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == len(batch_data)
 
@@ -249,7 +249,7 @@ async def test_async_execute_many_with_sequences(oracle_async_session: OracleAsy
         ("Eve Davis", "HR"),
     ]
 
-    result = await oracle_async_session.execute_many(insert_sql, parameters=employee_data)
+    result = await oracle_async_session.execute_many(insert_sql, employee_data)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == len(employee_data)
 
@@ -319,7 +319,7 @@ def test_sync_execute_many_error_handling(oracle_sync_session: OracleSyncDriver)
     valid_data = [(1, "user1@example.com", "User 1"), (2, "user2@example.com", "User 2")]
 
     insert_sql = "INSERT INTO test_error_handling (id, email, name) VALUES (:1, :2, :3)"
-    result = oracle_sync_session.execute_many(insert_sql, parameters=valid_data)
+    result = oracle_sync_session.execute_many(insert_sql, valid_data)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == len(valid_data)
 
@@ -332,7 +332,7 @@ def test_sync_execute_many_error_handling(oracle_sync_session: OracleSyncDriver)
 
     # This should raise an exception due to unique constraint violation
     with pytest.raises(Exception):  # Oracle will raise an ORA-00001 error
-        oracle_sync_session.execute_many(insert_sql, parameters=duplicate_data)
+        oracle_sync_session.execute_many(insert_sql, duplicate_data)
 
     # Verify that the failed batch didn't partially insert records
     count_result = oracle_sync_session.execute("SELECT COUNT(*) as total_count FROM test_error_handling")
@@ -343,7 +343,7 @@ def test_sync_execute_many_error_handling(oracle_sync_session: OracleSyncDriver)
     # Test successful batch after error
     new_valid_data = [(6, "user6@example.com", "User 6"), (7, "user7@example.com", "User 7")]
 
-    result = oracle_sync_session.execute_many(insert_sql, parameters=new_valid_data)
+    result = oracle_sync_session.execute_many(insert_sql, new_valid_data)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == len(new_valid_data)
 

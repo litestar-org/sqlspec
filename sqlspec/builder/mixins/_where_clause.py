@@ -334,7 +334,7 @@ class WhereClauseMixin:
                 subquery = values.build()  # pyright: ignore
                 # Trust that subquery follows the expected protocol with .sql attribute
                 sql_str = subquery.sql
-                subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=builder.dialect_name))
+                subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=builder.dialect_name))  # pyright: ignore
             else:
                 subquery_exp = values  # type: ignore[assignment]
             condition = col_expr.isin(subquery_exp)

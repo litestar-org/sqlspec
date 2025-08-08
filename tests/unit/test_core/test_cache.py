@@ -424,14 +424,14 @@ def test_statement_cache_key_generation(mock_sql: MagicMock) -> None:
     mock_statement1.dialect = "postgresql"
     mock_statement1.is_many = False
     mock_statement1.is_script = False
-    mock_statement1.__hash__ = lambda self: hash("statement1")  # pyright: ignore[reportAttributeAccessIssue]
+    mock_statement1.__hash__ = lambda self: hash("statement1")  # type: ignore[misc]
 
     mock_statement2 = MagicMock()
     mock_statement2._raw_sql = "SELECT * FROM orders"  # Different SQL
     mock_statement2.dialect = "postgresql"
     mock_statement2.is_many = False
     mock_statement2.is_script = False
-    mock_statement2.__hash__ = lambda self: hash("statement2")  # pyright: ignore[reportAttributeAccessIssue]
+    mock_statement2.__hash__ = lambda self: hash("statement2")  # type: ignore[misc]
 
     # Generate cache keys
     key1 = stmt_cache._create_statement_key(mock_statement1)

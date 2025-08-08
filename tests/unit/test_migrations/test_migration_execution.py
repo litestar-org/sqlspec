@@ -237,8 +237,6 @@ DROP TABLE users;
         runner.loader.clear_cache = Mock()
         runner.loader.load_sql = Mock()
         runner.loader.has_query = Mock(return_value=True)
-        runner.loader.get_up_sql = Mock()
-        runner.loader.get_down_sql = Mock()
 
         migration = runner.load_migration(migration_file)
 
@@ -292,8 +290,6 @@ DROP TABLE users;
         runner.loader.clear_cache = Mock()
         runner.loader.load_sql = Mock()
         runner.loader.has_query = Mock(return_value=True)
-        runner.loader.get_up_sql = Mock()
-        runner.loader.get_down_sql = Mock()
 
         migration = runner.load_migration(migration_file)
 
@@ -369,8 +365,6 @@ def test_multiple_migrations_execution_order(temp_workspace_with_migrations: Pat
         runner.loader.clear_cache = Mock()
         runner.loader.load_sql = Mock()
         runner.loader.has_query = Mock(return_value=True)
-        runner.loader.get_up_sql = Mock()
-        runner.loader.get_down_sql = Mock()
 
         # Mock different SQL for each migration
         sql_statements = [
@@ -423,8 +417,6 @@ SELECT DISTINCT column1, column2 FROM legacy_table;
         runner.loader.load_sql = Mock()
         # Only upgrade query exists
         runner.loader.has_query = Mock(side_effect=lambda q: q.endswith("-up"))
-        runner.loader.get_up_sql = Mock()
-        runner.loader.get_down_sql = Mock()
 
         migration = runner.load_migration(migration_file)
 
@@ -572,8 +564,6 @@ DROP TABLE IF EXISTS nonexistent_table;
         runner.loader.clear_cache = Mock()
         runner.loader.load_sql = Mock()
         runner.loader.has_query = Mock(return_value=True)
-        runner.loader.get_up_sql = Mock()
-        runner.loader.get_down_sql = Mock()
 
         migration = runner.load_migration(migration_file)
 
@@ -614,8 +604,6 @@ DROP TABLE legacy_table;
         runner.loader.load_sql = Mock()
         # Only downgrade query exists
         runner.loader.has_query = Mock(side_effect=lambda q: q.endswith("-down"))
-        runner.loader.get_up_sql = Mock()
-        runner.loader.get_down_sql = Mock()
 
         migration = runner.load_migration(migration_file)
 

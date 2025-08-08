@@ -22,7 +22,7 @@ A comprehensive 700+ line guide covering:
 Essential patterns and commands including:
 
 - Public API with accurate type signatures and method names
-- Current driver method signatures (_try_special_handling, _execute_statement, _execute_many, _execute_script)
+- Current driver method signatures (_try_special_handling,_execute_statement,_execute_many,_execute_script)
 - Pipeline processing order with caching layers and StatementConfig integration
 - Enhanced caching configuration and cache statistics
 - Type definitions and StatementFilter implementations
@@ -84,7 +84,7 @@ def _execute_statement(
     self,
     cursor: Any,
     sql: str,
-    prepared_params: Any
+    prepared_parameters: Any
 ) -> Any:
     """Execute single statement"""
 
@@ -92,7 +92,7 @@ def _execute_many(
     self,
     cursor: Any,
     sql: str,
-    prepared_params: Any
+    prepared_parameters: Any
 ) -> Any:
     """Execute with multiple parameter sets"""
 
@@ -100,7 +100,7 @@ def _execute_script(
     self,
     cursor: Any,
     sql: str,
-    prepared_params: Any,
+    prepared_parameters: Any,
     statement_config: StatementConfig
 ) -> Any:
     """Execute script"""
@@ -122,57 +122,57 @@ def _get_row_count(
 
 SQLSpec now implements multi-tier caching:
 
-- **SQL Cache**: Compiled SQL strings with StatementConfig-aware keys
-- **Optimized Cache**: Post-optimization AST expressions
-- **Builder Cache**: QueryBuilder instances with state serialization
-- **File Cache**: SQLFileLoader with checksum validation
-- **Analysis Cache**: Pipeline analysis results with step-specific caching
+- __SQL Cache__: Compiled SQL strings with StatementConfig-aware keys
+- __Optimized Cache__: Post-optimization AST expressions
+- __Builder Cache__: QueryBuilder instances with state serialization
+- __File Cache__: SQLFileLoader with checksum validation
+- __Analysis Cache__: Pipeline analysis results with step-specific caching
 
 ### StatementConfig Integration (NEW)
 
-- **ALWAYS** use StatementConfig for pipeline configuration
-- **CRITICAL** Cache keys include StatementConfig to prevent cross-contamination
-- **USE** get_pipeline_steps() for enhanced pipeline architecture
+- __ALWAYS__ use StatementConfig for pipeline configuration
+- __CRITICAL__ Cache keys include StatementConfig to prevent cross-contamination
+- __USE__ get_pipeline_steps() for enhanced pipeline architecture
 
 ### Golden Rules (UPDATED)
 
-1. **Template Method Pattern** - Base class orchestrates, drivers implement specifics
-2. **Parameters flow through enhanced context** - User → SQL → Pipeline → Driver → Database
-3. **Immutability** - Always return new instances from QueryBuilder methods
-4. **AST over strings** - Use SQLGlot with pipeline transformations
-5. **Leverage multi-tier caching** - Multiple cache layers provide significant performance gains
-6. **Use execution result tuples** - Standard format: (result, row_count, metadata)
-7. **StatementConfig awareness** - All caching and processing respects configuration
-8. **Test everything** - Especially all abstract method implementations with current signatures
+1. __Template Method Pattern__ - Base class orchestrates, drivers implement specifics
+2. __Parameters flow through enhanced context__ - User → SQL → Pipeline → Driver → Database
+3. __Immutability__ - Always return new instances from QueryBuilder methods
+4. __AST over strings__ - Use SQLGlot with pipeline transformations
+5. __Leverage multi-tier caching__ - Multiple cache layers provide significant performance gains
+6. __Use execution result tuples__ - Standard format: (result, row_count, metadata)
+7. __StatementConfig awareness__ - All caching and processing respects configuration
+8. __Test everything__ - Especially all abstract method implementations with current signatures
 
 ### Pipeline Architecture (ENHANCED)
 
 The current pipeline uses:
 
-- **SQLTransformContext**: Carries state through pipeline execution
-- **compose_pipeline**: Composes multiple pipeline steps efficiently
-- **StatementConfig.get_pipeline_steps()**: Enhanced pipeline with pre/post processing
-- **Caching integration**: Each step can leverage analysis_cache for performance
+- __SQLTransformContext__: Carries state through pipeline execution
+- __compose_pipeline__: Composes multiple pipeline steps efficiently
+- __StatementConfig.get_pipeline_steps()__: Enhanced pipeline with pre/post processing
+- __Caching integration__: Each step can leverage analysis_cache for performance
 
 ## When to Reference
 
-- **Starting a new adapter**: Review the architecture guide and current SQLite reference implementation
-- **Debugging parameter issues**: Check quick reference DO's and DON'Ts with current patterns
-- **Adding features**: Ensure you're implementing current abstract method signatures
-- **Type errors**: Verify against the exact method signatures (_get_selected_data, not _extract_select_data)
-- **Performance issues**: Review multi-tier caching and enhanced pipeline patterns
-- **MyPyC optimization**: Follow current patterns with __slots__ classes and compilation verification
-- **Pipeline development**: Use SQLTransformContext and compose_pipeline patterns
+- __Starting a new adapter__: Review the architecture guide and current SQLite reference implementation
+- __Debugging parameter issues__: Check quick reference DO's and DON'Ts with current patterns
+- __Adding features__: Ensure you're implementing current abstract method signatures
+- __Type errors__: Verify against the exact method signatures (_get_selected_data, not_extract_select_data)
+- __Performance issues__: Review multi-tier caching and enhanced pipeline patterns
+- __MyPyC optimization__: Follow current patterns with __slots__ classes and compilation verification
+- __Pipeline development__: Use SQLTransformContext and compose_pipeline patterns
 
 ## Recent Major Changes
 
 This documentation reflects significant recent enhancements:
 
-1. **Comprehensive Caching System**: Multi-tier caching with 12x+ performance improvements
-2. **Enhanced Pipeline Architecture**: SQLTransformContext and compose_pipeline
-3. **StatementConfig Integration**: Configuration-aware caching and processing
-4. **Method Signature Updates**: Current _get_selected_data/_get_row_count signatures
-5. **MyPyC Optimization**: CachedSQLFile with __slots__ for compilation compatibility
-6. **Performance Optimization**: Mapping-based dispatch and optimized cache operations
+1. __Comprehensive Caching System__: Multi-tier caching with 12x+ performance improvements
+2. __Enhanced Pipeline Architecture__: SQLTransformContext and compose_pipeline
+3. __StatementConfig Integration__: Configuration-aware caching and processing
+4. __Method Signature Updates__: Current _get_selected_data/_get_row_count signatures
+5. __MyPyC Optimization__: CachedSQLFile with __slots__ for compilation compatibility
+6. __Performance Optimization__: Mapping-based dispatch and optimized cache operations
 
 All code examples, method signatures, and architectural patterns have been verified against the current implementation.

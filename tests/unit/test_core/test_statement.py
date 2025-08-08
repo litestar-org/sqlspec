@@ -538,7 +538,7 @@ def test_sql_parameters_property_fallback_to_original() -> None:
         ("WITH cte AS (SELECT * FROM users) SELECT * FROM cte", "SELECT"),
         ("CREATE TABLE users (id INT)", "CREATE"),
         ("DROP TABLE users", "DROP"),
-        ("EXECUTE sp_procedure", "EXECUTE"),
+        ("EXECUTE sp_procedure", "COMMAND"),
     ],
     ids=["select", "insert", "update", "delete", "cte", "create", "drop", "execute"],
 )

@@ -200,7 +200,7 @@ async def test_asyncpg_parameter_with_sql_object(asyncpg_parameters_session: Asy
     from sqlspec.core.statement import SQL
 
     # Test with numeric style - parameters must be included in SQL object constructor
-    sql_obj = SQL("SELECT * FROM test_parameters WHERE value > $1", parameters=[150])
+    sql_obj = SQL("SELECT * FROM test_parameters WHERE value > $1", [150])
     result = await asyncpg_parameters_session.execute(sql_obj)
 
     assert isinstance(result, SQLResult)

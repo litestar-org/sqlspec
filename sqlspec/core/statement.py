@@ -350,8 +350,39 @@ class SQL:
 
     def returns_rows(self) -> bool:
         """Check if statement returns rows - preserved interface."""
-        op_type = self.operation_type.upper()
-        return op_type in {"SELECT", "WITH", "VALUES", "TABLE", "SHOW", "DESCRIBE", "PRAGMA"}
+        self._ensure_processed()
+
+        # Check if we have a parsed expression
+        if self.expression is not None:
+            # For SELECT and similar, check the operation type
+            op_type = self.operation_type.upper()
+            if op_type in {"SELECT", "WITH", "VALUES", "TABLE", "SHOW", "DESCRIBE", "PRAGMA", "COMMAND"}:
+                return True
+
+            # For DML operations (INSERT/UPDATE/DELETE), check for RETURNING clause
+            if hasattr(self.expression, "args") and self.expression.args.get("returning") is not None:
+                return True
+
+        return False
+
+    def is_modifying_operation(self) -> bool:
+        """Check if the SQL statement is a modifying operation.
+
+        Uses both AST-based detection (when available) and SQL text analysis
+        for comprehensive operation type identification.
+
+        Returns:
+            True if the operation modifies data (INSERT/UPDATE/DELETE)
+        """
+        # Enhanced AST-based detection using core expression
+        expression = self.expression
+        if expression and isinstance(expression, (exp.Insert, exp.Update, exp.Delete)):
+            return True
+
+        # Fallback to SQL text analysis for comprehensive detection
+        sql_upper = self.sql.strip().upper()
+        modifying_operations = ("INSERT", "UPDATE", "DELETE")
+        return any(sql_upper.startswith(op) for op in modifying_operations)
 
     # PRESERVED METHODS - Exact same interface as existing SQL class
     def compile(self) -> tuple[str, Any]:
@@ -463,10 +494,41 @@ class SQL:
             parsed_expr = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
             operation_type = self._detect_operation_type(parsed_expr)
 
-            # Create processed state with basic compilation
+            # Determine final SQL and parameters with parameter style conversion if needed
+            compiled_sql = self._raw_sql
+            execution_parameters = self._named_parameters or self._positional_parameters
+
+            # Perform parameter style conversion if execution parameter styles are restricted
+            param_config = self._statement_config.parameter_config
+            if param_config.supported_execution_parameter_styles:
+                # Check if current parameters need conversion
+                current_parameters = self._named_parameters or self._positional_parameters
+                if current_parameters:
+                    # Detect current parameter style
+                    validator = ParameterValidator()
+                    param_info = validator.extract_parameters(self._raw_sql)
+
+                    if param_info:
+                        current_styles = {p.style for p in param_info}
+                        supported_styles = param_config.supported_execution_parameter_styles
+
+                        # Convert if current style not supported for execution
+                        if not current_styles.issubset(supported_styles):
+                            target_style = next(iter(supported_styles))
+                            converter = ParameterConverter()
+
+                            try:
+                                compiled_sql, execution_parameters = converter.convert_placeholder_style(
+                                    self._raw_sql, current_parameters, target_style, is_many=self._is_many
+                                )
+                            except Exception as conv_e:
+                                logger.warning("Parameter style conversion failed: %s", conv_e)
+                                # Keep original SQL and parameters on conversion failure
+
+            # Create processed state with compilation
             self._processed_state = ProcessedState(
-                compiled_sql=self._raw_sql,
-                execution_parameters=self._named_parameters or self._positional_parameters,
+                compiled_sql=compiled_sql,
+                execution_parameters=execution_parameters,
                 parsed_expression=parsed_expr,
                 operation_type=operation_type,
                 validation_errors=[],
@@ -488,30 +550,51 @@ class SQL:
         if expression is None:
             return "UNKNOWN"
 
-        expr_type = type(expression).__name__
+        # Use SQLGlot's expression type directly with efficient lookup
+        from sqlglot import exp
 
-        if "Select" in expr_type:
-            return "SELECT"
-        if "Insert" in expr_type:
-            return "INSERT"
-        if "Update" in expr_type:
-            return "UPDATE"
-        if "Delete" in expr_type:
-            return "DELETE"
-        if "Create" in expr_type or "Drop" in expr_type or "Alter" in expr_type:
+        # Expression type to operation type mapping
+        operation_type_map = {
+            exp.Select: "SELECT",
+            exp.Insert: "INSERT",
+            exp.Update: "UPDATE",
+            exp.Delete: "DELETE",
+            exp.Create: "CREATE",
+            exp.Drop: "DROP",
+            exp.Alter: "ALTER",
+            exp.Merge: "MERGE",
+            exp.With: "WITH",
+            exp.Values: "VALUES",
+            exp.Command: "COMMAND",
+            exp.Pragma: "PRAGMA",
+            exp.Describe: "DESCRIBE",
+        }
+
+        # Check expression type
+        expr_type = type(expression)
+
+        # Direct lookup
+        if expr_type in operation_type_map:
+            return operation_type_map[expr_type]
+
+        # Check for DDL operations (Create, Drop, Alter are already in map)
+        if isinstance(expression, (exp.Create, exp.Drop, exp.Alter)):
             return "DDL"
+
         return "UNKNOWN"
 
     def __hash__(self) -> int:
         """Hash for caching and equality."""
         if self._hash is None:
-            self._hash = hash((
-                self._raw_sql,
-                tuple(self._positional_parameters),
-                tuple(sorted(self._named_parameters.items())),
-                self._is_many,
-                self._is_script,
-            ))
+            self._hash = hash(
+                (
+                    self._raw_sql,
+                    tuple(self._positional_parameters),
+                    tuple(sorted(self._named_parameters.items())),
+                    self._is_many,
+                    self._is_script,
+                )
+            )
         return self._hash
 
     def __eq__(self, other: object) -> bool:
@@ -641,16 +724,18 @@ class StatementConfig:
 
     def __hash__(self) -> int:
         """Hash based on key configuration settings."""
-        return hash((
-            self.enable_parsing,
-            self.enable_validation,
-            self.enable_transformations,
-            self.enable_analysis,
-            self.enable_expression_simplification,
-            self.enable_parameter_type_wrapping,
-            self.enable_caching,
-            str(self.dialect),
-        ))
+        return hash(
+            (
+                self.enable_parsing,
+                self.enable_validation,
+                self.enable_transformations,
+                self.enable_analysis,
+                self.enable_expression_simplification,
+                self.enable_parameter_type_wrapping,
+                self.enable_caching,
+                str(self.dialect),
+            )
+        )
 
     def __repr__(self) -> str:
         """String representation of the StatementConfig instance."""

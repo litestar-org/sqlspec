@@ -260,7 +260,8 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         file_path, loader = migration["file_path"], migration["loader"]
 
         try:
-            sql_statements = run_(loader.get_up_sql if direction == "up" else loader.get_down_sql)(file_path)
+            method = loader.get_up_sql if direction == "up" else loader.get_down_sql
+            sql_statements = run_(method)(file_path)
 
         except Exception as e:
             if direction == "down":

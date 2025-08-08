@@ -324,7 +324,7 @@ def test_sqlite_schema_operations(sqlite_session: SqliteDriver) -> None:
     pragma_result = sqlite_session.execute("PRAGMA table_info(schema_test)")
     assert isinstance(pragma_result, SQLResult)
     assert pragma_result.data is not None
-    assert len(pragma_result.data) == 3  # id, description, created_at
+    assert len(pragma_result.get_data()) == 3  # id, description, created_at
 
     # Drop table
     drop_result = sqlite_session.execute_script("DROP TABLE schema_test")

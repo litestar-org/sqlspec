@@ -46,7 +46,7 @@ sqlite_statement_config = StatementConfig(
         default_parameter_style=ParameterStyle.QMARK,
         supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
         default_execution_parameter_style=ParameterStyle.QMARK,
-        supported_execution_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
+        supported_execution_parameter_styles={ParameterStyle.QMARK},
         type_coercion_map={
             bool: int,
             datetime.datetime: lambda v: v.isoformat(),

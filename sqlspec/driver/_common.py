@@ -513,14 +513,31 @@ class CommonDriverAttributesMixin:
         # Convert parameters to hashable representation safely
         params = statement.parameters
         params_key: Any
+
+        def make_hashable(obj: Any) -> Any:
+            """Recursively convert unhashable types to hashable ones."""
+            if isinstance(obj, (list, tuple)):
+                return tuple(make_hashable(item) for item in obj)
+            if isinstance(obj, dict):
+                return tuple(sorted((k, make_hashable(v)) for k, v in obj.items()))
+            if isinstance(obj, set):
+                return frozenset(make_hashable(item) for item in obj)
+            return obj
+
         try:
             if isinstance(params, dict):
-                params_key = tuple(sorted(params.items()))
+                params_key = make_hashable(params)
+            elif isinstance(params, (list, tuple)) and params:
+                # Handle list of dicts for execute_many
+                if isinstance(params[0], dict):
+                    params_key = tuple(make_hashable(d) for d in params)
+                else:
+                    params_key = make_hashable(params)
             elif isinstance(params, (list, tuple)):
-                params_key = tuple(params) if params else ()
+                params_key = ()
             else:
                 params_key = params
-        except TypeError:
+        except (TypeError, AttributeError):
             # If parameters contain unhashable elements, use string representation
             params_key = str(params)
 

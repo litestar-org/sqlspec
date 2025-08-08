@@ -186,7 +186,7 @@ def test_sync_execute_many_insert(oracle_sync_session: OracleSyncDriver) -> None
     insert_sql = "INSERT INTO test_many_table (id, name) VALUES (:1, :2)"
     parameters_list = [(1, "name1"), (2, "name2"), (3, "name3")]
 
-    result = oracle_sync_session.execute_many(insert_sql, parameters=parameters_list)
+    result = oracle_sync_session.execute_many(insert_sql, parameters_list)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == len(parameters_list)
 

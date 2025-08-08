@@ -214,7 +214,7 @@ def test_psycopg_parameter_with_sql_object(psycopg_parameters_session: PsycopgSy
     from sqlspec.core.statement import SQL
 
     # Test with pyformat style
-    sql_obj = SQL("SELECT * FROM test_parameters WHERE value > %s", parameters=[150])
+    sql_obj = SQL("SELECT * FROM test_parameters WHERE value > %s", [150])
     result = psycopg_parameters_session.execute(sql_obj)
 
     assert isinstance(result, SQLResult)
@@ -223,7 +223,7 @@ def test_psycopg_parameter_with_sql_object(psycopg_parameters_session: PsycopgSy
     assert all(row["value"] > 150 for row in result.data)
 
     # Test with named style
-    named_sql = SQL("SELECT * FROM test_parameters WHERE value < %(max_value)s", parameters={"max_value": 150})
+    named_sql = SQL("SELECT * FROM test_parameters WHERE value < %(max_value)s", {"max_value": 150})
     named_result = psycopg_parameters_session.execute(named_sql)
 
     assert isinstance(named_result, SQLResult)

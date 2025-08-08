@@ -240,7 +240,7 @@ class SQLResult(StatementResult):
     @property
     def operation_type(self) -> "OperationType":
         """Get operation type for this result."""
-        return cast("OperationType", self._operation_type)
+        return cast("OperationType", self._operation_type)  # type: ignore[redundant-cast]
 
     def get_metadata(self, key: str, default: Any = None) -> Any:
         """Get metadata value by key.
@@ -495,7 +495,7 @@ class SQLResult(StatementResult):
         return next(iter(row.values()))
 
 
-# @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=True)
 class ArrowResult(StatementResult):
     """Result class for SQL operations that return Apache Arrow data.
 

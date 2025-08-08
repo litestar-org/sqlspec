@@ -31,7 +31,7 @@ from oracledb import AsyncCursor, Cursor
 
 from sqlspec.adapters.oracledb._types import OracleAsyncConnection, OracleSyncConnection
 from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterConverter, ParameterStyle, ParameterStyleConfig
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
@@ -149,11 +149,10 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Enhanced configuration with global settings integration and core ParameterConverter
+        # Enhanced configuration with global settings integration
         if statement_config is None:
             cache_config = get_cache_config()
             enhanced_config = oracledb_statement_config.replace(
-                parameter_converter=ParameterConverter(),  # Use core ParameterConverter for 2-phase system
                 enable_caching=cache_config.compiled_cache_enabled,
                 enable_parsing=True,  # Default to enabled
                 enable_validation=True,  # Default to enabled
@@ -360,11 +359,10 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Enhanced configuration with global settings integration and core ParameterConverter
+        # Enhanced configuration with global settings integration
         if statement_config is None:
             cache_config = get_cache_config()
             enhanced_config = oracledb_statement_config.replace(
-                parameter_converter=ParameterConverter(),  # Use core ParameterConverter for 2-phase system
                 enable_caching=cache_config.compiled_cache_enabled,
                 enable_parsing=True,  # Default to enabled
                 enable_validation=True,  # Default to enabled

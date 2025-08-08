@@ -51,9 +51,6 @@ async def asyncmy_pooled_session(mysql_service: MySQLService) -> AsyncGenerator[
 
         yield session
 
-        # Cleanup
-        await session.execute_script("DROP TABLE IF EXISTS concurrent_test")
-
 
 @pytest.mark.asyncio
 @pytest.mark.xdist_group("mysql")

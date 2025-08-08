@@ -187,7 +187,7 @@ async def test_async_execute_many_insert(oracle_async_session: OracleAsyncDriver
     insert_sql = "INSERT INTO test_many_table (id, name) VALUES (:1, :2)"
     parameters_list = [(1, "name1"), (2, "name2"), (3, "name3")]
 
-    result = await oracle_async_session.execute_many(insert_sql, parameters=parameters_list)
+    result = await oracle_async_session.execute_many(insert_sql, parameters_list)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == len(parameters_list)
 

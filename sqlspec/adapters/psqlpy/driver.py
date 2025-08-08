@@ -20,6 +20,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 import psqlpy
+import psqlpy.exceptions
 
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
