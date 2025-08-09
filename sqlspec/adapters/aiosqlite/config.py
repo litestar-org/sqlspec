@@ -132,6 +132,7 @@ class AiosqliteConnectionPool:
         Args:
             connection: Connection to release (ignored)
         """
+        _ = connection  # Mark as intentionally unused
         # No-op - shared connection doesn't need releasing
 
 
@@ -231,18 +232,26 @@ class AiosqliteConfig(AsyncDatabaseConfig):
             yield connection
 
     @asynccontextmanager
-    async def provide_session(self) -> "AsyncGenerator[AiosqliteDriver, None]":
+    async def provide_session(
+        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+    ) -> "AsyncGenerator[AiosqliteDriver, None]":
         """Provide an async database session using optimized connection management.
+
+        Args:
+            *args: Additional positional arguments (unused but required for compatibility).
+            statement_config: Optional statement configuration override.
+            **kwargs: Additional keyword arguments (unused but required for compatibility).
 
         Yields:
             AiosqliteDriver: Database session instance.
         """
+        _ = args, kwargs  # Mark as intentionally unused
+        effective_statement_config = statement_config or self.statement_config
         async with self.pool_instance.get_connection() as connection:
-            session = self.driver_type(connection, statement_config=self.statement_config)
+            session = self.driver_type(connection, statement_config=effective_statement_config)
             try:
                 yield session
             finally:
-                # No special cleanup needed - connection is shared
                 pass
 
     async def close(self) -> None:
