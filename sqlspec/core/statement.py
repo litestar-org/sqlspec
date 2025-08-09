@@ -493,10 +493,32 @@ class SQL:
             return
 
         try:
-            # Process parameters FIRST - this handles SQLGlot incompatible parameter styles
+            # Phase 1: Normalize SQL for SQLGlot parsing (keep parameters SQLGlot-compatible)
             current_parameters = self._named_parameters or self._positional_parameters
             processor = ParameterProcessor()
 
+            try:
+                # Get SQL normalized for SQLGlot parsing only (defer execution format conversion)
+                parsing_sql, _parsing_parameters = processor._get_sqlglot_compatible_sql(
+                    sql=self._raw_sql,
+                    parameters=current_parameters,
+                    config=self._statement_config.parameter_config,
+                    dialect=self._dialect,
+                )
+            except Exception as proc_e:
+                logger.warning("SQLGlot normalization failed, using original SQL: %s", proc_e)
+                parsing_sql = self._raw_sql
+
+            # Parse the SQLGlot-compatible SQL
+            try:
+                parsed_expr = sqlglot.parse_one(parsing_sql, dialect=self._dialect)
+            except ParseError as parse_e:
+                logger.warning("SQLGlot parsing failed, will use fallback operation type detection: %s", parse_e)
+                parsed_expr = None
+
+            operation_type = self._detect_operation_type(parsed_expr)
+
+            # Phase 2: Full parameter processing including execution format conversion
             try:
                 compiled_sql, execution_parameters = processor.process(
                     sql=self._raw_sql,
@@ -507,20 +529,10 @@ class SQL:
                 )
             except Exception as proc_e:
                 logger.warning("Parameter processing failed, using fallback: %s", proc_e)
-                # Fallback to original SQL and parameters
                 compiled_sql = self._raw_sql
                 execution_parameters = current_parameters
 
-            # Parse the processed SQL (which may have been normalized for SQLGlot compatibility)
-            try:
-                parsed_expr = sqlglot.parse_one(compiled_sql, dialect=self._dialect)
-            except ParseError as parse_e:
-                logger.warning("SQLGlot parsing failed, will use fallback operation type detection: %s", parse_e)
-                parsed_expr = None
-
-            operation_type = self._detect_operation_type(parsed_expr)
-
-            # Create processed state with compilation
+            # Create processed state with correct operation type
             self._processed_state = ProcessedState(
                 compiled_sql=compiled_sql,
                 execution_parameters=execution_parameters,
@@ -794,7 +806,3 @@ def get_default_parameter_config() -> ParameterStyleConfig:
 
 
 Statement: TypeAlias = Union[str, exp.Expression, SQL]
-# Implementation status tracking
-__module_status__ = "IMPLEMENTED"  # PLACEHOLDER → BUILDING → TESTING → COMPLETE
-__compatibility_target__ = "100%"  # Must maintain 100% compatibility
-__performance_target__ = "5-10x"  # Compilation speed improvement target

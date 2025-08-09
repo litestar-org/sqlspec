@@ -66,7 +66,7 @@ def test_sync_plsql_block_execution(oracle_sync_session: OracleSyncDriver) -> No
     select_result = oracle_sync_session.execute("SELECT id, name, calculated_value FROM test_plsql_table ORDER BY id")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert len(select_result.data) == 3  # Records 1, 2, 3, 4 - but we expect 3 from the loop
+    assert len(select_result.data) == 4  # Records 1, 2, 3, 4 - 1 initial + 3 from loop (2..4)
 
     # Check the calculated values
     first_row = select_result.data[0]
@@ -87,7 +87,7 @@ async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsync
         "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_proc_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
     )
     await oracle_async_session.execute_script(
-        "BEGIN EXECUTE IMMEDIATE 'DROP PROCEDURE test_procedure'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        "BEGIN EXECUTE IMMEDIATE 'DROP PROCEDURE test_procedure'; EXCEPTION WHEN OTHERS THEN IF SQLCODE NOT IN (-942, -4043) THEN RAISE; END IF; END;"
     )
 
     # Create test table
@@ -202,7 +202,9 @@ def test_sync_oracle_data_types(oracle_sync_session: OracleSyncDriver) -> None:
     row = select_result.data[0]
     assert row["ID"] == 1
     assert row["NAME"] == "Test Product"
-    assert len(row["DESCRIPTION"]) > 100  # CLOB field
+    # CLOB field - Oracle returns this as a LOB object, read it
+    description_value = row["DESCRIPTION"].read() if hasattr(row["DESCRIPTION"], "read") else str(row["DESCRIPTION"])
+    assert len(description_value) > 100  # CLOB field
     assert row["PRICE"] == 99.99
     assert row["IS_ACTIVE"] == 1
 

@@ -21,8 +21,6 @@ import decimal
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional, cast
 
-import sqlglot
-
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import SQL, StatementConfig
@@ -102,72 +100,19 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
 def _convert_array_for_postgres_adbc(value: Any) -> Any:
     """Convert array values for PostgreSQL ADBC compatibility.
 
-    ADBC PostgreSQL driver has specific issues with nested arrays and OID 1016 mapping.
-    For problematic nested arrays, we'll mark them for SQL literal replacement.
+    Simple array handling for ADBC - complex array issues are now handled
+    by the global parameter processing pipeline with remove_null_parameters=True.
     """
-    if not isinstance(value, (list, tuple)):
-        return value
-
-    # Handle None/empty arrays
-    if value is None or len(value) == 0:
-        return value
-
-    # For nested arrays (2D), check if they might cause OID issues
-    if value and isinstance(value[0], (list, tuple)):
-        # Nested arrays often cause OID 1016 issues in ADBC
-        # Mark these for literal replacement instead of parameter binding
-        return ArrayLiteral(value)
-
-    # Convert tuples to lists for consistency
     if isinstance(value, tuple):
         return list(value)
-
     return value
-
-
-class ArrayLiteral:
-    """Marker class for arrays that should be converted to SQL literals.
-
-    This is used to work around ADBC PostgreSQL driver issues with certain
-    array types that cause OID mapping errors.
-    """
-    __slots__ = ("value",)
-
-    def __init__(self, value: Any) -> None:
-        self.value = value
-
-    def to_sql_literal(self) -> str:
-        """Convert array to PostgreSQL array literal format."""
-        if not isinstance(self.value, (list, tuple)):
-            return str(self.value)
-
-        def format_array_element(element: Any) -> str:
-            if isinstance(element, (list, tuple)):
-                # Nested array - use ARRAY[] syntax for nested arrays
-                inner = ",".join(format_array_element(x) for x in element)
-                return f"ARRAY[{inner}]"
-            if isinstance(element, str):
-                # Escape quotes in strings
-                escaped = element.replace("'", "''")
-                return f"'{escaped}'"
-            if element is None:
-                return "NULL"
-            return str(element)
-
-        if not self.value:
-            return "ARRAY[]"
-
-        # Format as PostgreSQL array literal
-        elements = ",".join(format_array_element(x) for x in self.value)
-        return f"ARRAY[{elements}]"
 
 
 def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
     """Get type coercion map for Arrow/ADBC type handling with enhanced compatibility."""
     type_map = {
-        # NOTE: NoneType is excluded from type map to force NULL handling at SQL level
-        # ADBC cannot handle NULL parameters in parameter arrays - they must be
-        # replaced with literal NULL in SQL and removed from parameter list
+        # Standard type coercions for Arrow/ADBC compatibility
+        # NULL parameters are handled by global remove_null_parameters=True config
         datetime.datetime: lambda x: x,
         datetime.date: lambda x: x,
         datetime.time: lambda x: x,
@@ -326,7 +271,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                 raise SQLSpecError(msg) from e
 
     def _try_special_handling(self, cursor: "Cursor", statement: SQL) -> "Optional[SQLResult]":
-        """Handle ADBC-specific operations including enhanced script execution.
+        """Handle ADBC-specific operations (currently none).
 
         Args:
             cursor: ADBC cursor object
@@ -335,34 +280,6 @@ class AdbcDriver(SyncDriverAdapterBase):
         Returns:
             SQLResult if special operation was handled, None for standard execution
         """
-        if statement.is_script:
-            try:
-                sql, parameters = self._get_compiled_sql(statement, self.statement_config)
-                statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
-                statement_count = len(statements)
-                successful_count = 0
-
-                for stmt in statements:
-                    if stmt.strip():
-                        prepared_parameters = self.prepare_driver_parameters(
-                            self._handle_postgres_empty_parameters(parameters), self.statement_config, is_many=False
-                        )
-                        cursor.execute(stmt, parameters=prepared_parameters)
-                        successful_count += 1
-
-                execution_result = self.create_execution_result(
-                    cursor,
-                    statement_count=statement_count,
-                    successful_statements=successful_count,
-                    is_script_result=True,
-                )
-                return self.build_statement_result(statement, execution_result)
-
-            except Exception:
-                self._handle_postgres_rollback(cursor)
-                logger.exception("ADBC script execution failed")
-                raise
-
         return None
 
     def _execute_many(self, cursor: "Cursor", statement: SQL) -> "ExecutionResult":
@@ -416,12 +333,10 @@ class AdbcDriver(SyncDriverAdapterBase):
             parameters = self.prepare_driver_parameters(
                 postgres_compatible_params, self.statement_config, is_many=False
             )
-            final_parameters = self._handle_single_param_list(sql, parameters)
-            cursor.execute(sql, parameters=final_parameters)
+            cursor.execute(sql, parameters=parameters)
 
         except Exception:
             self._handle_postgres_rollback(cursor)
-            logger.exception("ADBC statement execution failed")
             raise
 
         # Enhanced SELECT result processing
@@ -446,33 +361,6 @@ class AdbcDriver(SyncDriverAdapterBase):
         # Enhanced non-SELECT result processing
         row_count = cursor.rowcount if cursor.rowcount is not None else -1
         return self.create_execution_result(cursor, rowcount_override=row_count)
-
-    def _handle_single_param_list(self, sql: str, parameters: "list[Any]") -> "list[Any]":
-        """Handle single parameter list edge cases for ADBC compatibility with enhanced parsing."""
-        try:
-            # Use SQLGlot for accurate parameter placeholder detection
-            parsed = sqlglot.parse_one(sql, dialect=self.dialect)
-            param_placeholders = set()
-            for node in parsed.walk():
-                if isinstance(node, sqlglot.exp.Placeholder):
-                    param_placeholders.add(node.this)
-            param_count = len(param_placeholders)
-        except Exception as e:
-            logger.debug("SQLGlot parameter detection failed, using fallback: %s", e)
-            # Fallback: Count common parameter patterns
-            param_count = sql.count("$1") + sql.count("$2") + sql.count("?") + sql.count("%s")
-
-        # Handle nested parameter structure edge case
-        if (
-            param_count == 1
-            and len(parameters) == 1
-            and isinstance(parameters[0], (list, tuple))
-            and len(parameters[0]) == 1
-            and not isinstance(parameters[0][0], (list, tuple))
-        ):
-            return list(parameters[0])
-
-        return parameters
 
     # Enhanced transaction management with ADBC-specific optimizations
     def begin(self) -> None:

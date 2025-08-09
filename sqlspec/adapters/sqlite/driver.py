@@ -243,12 +243,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             fetched_data = cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
 
-            # Optimized data transformation - avoid unnecessary dict creation for large results
-            large_result_threshold = 1000
-            if len(fetched_data) > large_result_threshold:  # Large result optimization
-                data = [dict(zip(column_names, row)) for row in fetched_data]
-            else:
-                data = [dict(zip(column_names, row)) for row in fetched_data]
+            data = [dict(zip(column_names, row)) for row in fetched_data]
 
             return self.create_execution_result(
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True

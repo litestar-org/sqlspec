@@ -22,15 +22,18 @@ PostgreSQL Features:
 - PostgreSQL-specific error categorization
 """
 
+import io
 import logging
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional
 
 import psycopg
+from sqlglot import expressions as exp
 
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.result import SQLResult
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
@@ -39,7 +42,6 @@ from sqlspec.utils.serializers import to_json
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
 
-    from sqlspec.core.result import SQLResult
     from sqlspec.driver._common import ExecutionResult
 
 logger = logging.getLogger(__name__)
@@ -249,7 +251,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
     def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
         """Hook for PostgreSQL-specific special operations.
 
-        Checks for execution_mode configuration to handle special operations like COPY.
+        Uses statement.expression AST to detect COPY operations and other special operations.
 
         Args:
             cursor: Psycopg cursor object
@@ -258,20 +260,89 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         Returns:
             SQLResult if special handling was applied, None otherwise
         """
-        # Check for COPY operations
-        sql_text = statement.sql.strip().upper()
-        if sql_text.startswith("COPY"):
-            # Handle PostgreSQL COPY operations with enhanced performance
-            # This would require special COPY handling logic
-            pass
+        # Check for COPY operations using AST
+        if isinstance(statement.expression, exp.Copy):
+            return self._handle_copy_operation(cursor, statement)
 
         # Check for other PostgreSQL special operations
+        # LISTEN/NOTIFY don't parse well in SQLGlot, so use string detection
+        sql_text = statement.sql.strip().upper()
         if "LISTEN" in sql_text or "NOTIFY" in sql_text:
             # Handle PostgreSQL pub/sub operations
             pass
 
         # No special handling needed - proceed with standard execution
         return None
+
+    def _handle_copy_operation(self, cursor: Any, statement: "SQL") -> "SQLResult":
+        """Handle PostgreSQL COPY operations using copy_expert.
+
+        Args:
+            cursor: Psycopg cursor object
+            statement: SQL statement with COPY operation
+
+        Returns:
+            SQLResult with COPY operation results
+        """
+        # Use the properly rendered SQL from the statement
+        sql = statement.sql
+
+        # Get COPY data from parameters - handle both direct value and list format
+        copy_data = statement.parameters
+        if isinstance(copy_data, list) and len(copy_data) == 1:
+            copy_data = copy_data[0]
+
+        # Check COPY direction using AST
+        copy_expr = statement.expression
+        files = copy_expr.args.get("files", [])
+
+        # Detect STDIN/STDOUT from files list
+        is_stdin = any(str(f).upper() == "STDIN" for f in files)
+        is_stdout = any(str(f).upper() == "STDOUT" for f in files)
+
+        if is_stdin:
+            # COPY FROM STDIN - import data
+            if isinstance(copy_data, (str, bytes)):
+                data_file = io.StringIO(copy_data) if isinstance(copy_data, str) else io.BytesIO(copy_data)
+            elif hasattr(copy_data, "read"):
+                # Already a file-like object
+                data_file = copy_data
+            else:
+                # Convert to string representation
+                data_file = io.StringIO(str(copy_data))
+
+            # Use context manager for COPY FROM (sync version)
+            with cursor.copy(sql) as copy_ctx:
+                copy_ctx.write(data_file.read().encode() if hasattr(data_file, "read") else str(copy_data).encode())
+
+            rows_affected = max(cursor.rowcount, 0)
+
+            return SQLResult(
+                data=None, rows_affected=rows_affected, statement=statement, metadata={"copy_operation": "FROM_STDIN"}
+            )
+
+        if is_stdout:
+            # COPY TO STDOUT - export data
+            output_data = []
+            with cursor.copy(sql) as copy_ctx:
+                output_data.extend(row.decode() if isinstance(row, bytes) else str(row) for row in copy_ctx)
+
+            exported_data = "".join(output_data)
+
+            return SQLResult(
+                data=[{"copy_output": exported_data}],  # Wrap in list format for consistency
+                rows_affected=0,
+                statement=statement,
+                metadata={"copy_operation": "TO_STDOUT"},
+            )
+
+        # Regular COPY with file - execute normally
+        cursor.execute(sql)
+        rows_affected = max(cursor.rowcount, 0)
+
+        return SQLResult(
+            data=None, rows_affected=rows_affected, statement=statement, metadata={"copy_operation": "FILE"}
+        )
 
     def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script using enhanced statement splitting and parameter handling.
@@ -480,7 +551,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
     async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
         """Hook for PostgreSQL-specific special operations.
 
-        Checks for execution_mode configuration to handle special operations like COPY.
+        Uses statement.expression AST to detect COPY operations and other special operations.
 
         Args:
             cursor: Psycopg async cursor object
@@ -489,20 +560,91 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         Returns:
             SQLResult if special handling was applied, None otherwise
         """
-        # Check for COPY operations
-        sql_text = statement.sql.strip().upper()
-        if sql_text.startswith("COPY"):
-            # Handle PostgreSQL COPY operations with enhanced async performance
-            # This would require special COPY handling logic
-            pass
+        # Check for COPY operations using AST
+        if isinstance(statement.expression, exp.Copy):
+            return await self._handle_copy_operation_async(cursor, statement)
 
         # Check for async PostgreSQL special operations
+        # LISTEN/NOTIFY don't parse well in SQLGlot, so use string detection
+        sql_text = statement.sql.strip().upper()
         if "LISTEN" in sql_text or "NOTIFY" in sql_text:
             # Handle PostgreSQL async pub/sub operations
             pass
 
         # No special handling needed - proceed with standard execution
         return None
+
+    async def _handle_copy_operation_async(self, cursor: Any, statement: "SQL") -> "SQLResult":
+        """Handle PostgreSQL COPY operations using copy_expert (async version).
+
+        Args:
+            cursor: Psycopg async cursor object
+            statement: SQL statement with COPY operation
+
+        Returns:
+            SQLResult with COPY operation results
+        """
+        # Use the properly rendered SQL from the statement
+        sql = statement.sql
+
+        # Get COPY data from parameters - handle both direct value and list format
+        copy_data = statement.parameters
+        if isinstance(copy_data, list) and len(copy_data) == 1:
+            copy_data = copy_data[0]
+
+        # Check COPY direction using AST
+        copy_expr = statement.expression
+        files = copy_expr.args.get("files", [])
+
+        # Detect STDIN/STDOUT from files list
+        is_stdin = any(str(f).upper() == "STDIN" for f in files)
+        is_stdout = any(str(f).upper() == "STDOUT" for f in files)
+
+        if is_stdin:
+            # COPY FROM STDIN - import data
+            if isinstance(copy_data, (str, bytes)):
+                data_file = io.StringIO(copy_data) if isinstance(copy_data, str) else io.BytesIO(copy_data)
+            elif hasattr(copy_data, "read"):
+                # Already a file-like object
+                data_file = copy_data
+            else:
+                # Convert to string representation
+                data_file = io.StringIO(str(copy_data))
+
+            # Use async context manager for COPY FROM
+            async with cursor.copy(sql) as copy_ctx:
+                await copy_ctx.write(
+                    data_file.read().encode() if hasattr(data_file, "read") else str(copy_data).encode()
+                )
+
+            rows_affected = max(cursor.rowcount, 0)
+
+            return SQLResult(
+                data=None, rows_affected=rows_affected, statement=statement, metadata={"copy_operation": "FROM_STDIN"}
+            )
+
+        if is_stdout:
+            # COPY TO STDOUT - export data
+            output_data = []
+            async with cursor.copy(sql) as copy_ctx:
+                output_data.extend([row.decode() if isinstance(row, bytes) else str(row) async for row in copy_ctx])
+
+            exported_data = "".join(output_data)
+
+            return SQLResult(
+                data=[{"copy_output": exported_data}],  # Wrap in list format for consistency
+                rows_affected=0,
+                statement=statement,
+                metadata={"copy_operation": "TO_STDOUT"},
+            )
+
+        # Regular COPY with file - execute normally
+        await cursor.execute(sql)
+        rows_affected = max(cursor.rowcount, 0)
+
+        return SQLResult(
+            data=None, rows_affected=rows_affected, statement=statement, metadata={"copy_operation": "FILE"}
+        )
 
     async def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script using enhanced statement splitting and parameter handling.

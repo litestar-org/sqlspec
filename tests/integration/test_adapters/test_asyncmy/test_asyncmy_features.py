@@ -76,13 +76,13 @@ async def test_asyncmy_mysql_json_operations(asyncmy_pooled_session: AsyncmyDriv
     # Query JSON data using MySQL JSON functions
     json_result = await driver.execute(
         "SELECT data->>'$.name' as name, JSON_EXTRACT(data, '$.values[1]') as second_value FROM json_test WHERE id = ?",
-        (result.last_insert_id,),  # Use the inserted ID
+        (result.last_inserted_id,),  # Use the inserted ID
     )
 
     assert len(json_result.get_data()) == 1
     row = json_result.get_data()[0]
     assert row["name"] == "test"
-    assert row["second_value"] == 2
+    assert str(row["second_value"]) == "2"  # JSON_EXTRACT may return string or int depending on MySQL version
 
     # Test JSON_CONTAINS function
     contains_result = await driver.execute(

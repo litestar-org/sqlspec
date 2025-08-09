@@ -280,7 +280,8 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
         # Enhanced non-SELECT result processing for MySQL
         affected_rows = cursor.rowcount if cursor.rowcount is not None else -1
-        return self.create_execution_result(cursor, rowcount_override=affected_rows)
+        last_id = getattr(cursor, "lastrowid", None) if cursor.rowcount and cursor.rowcount > 0 else None
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
     # MySQL transaction management with enhanced async error handling
     async def begin(self) -> None:

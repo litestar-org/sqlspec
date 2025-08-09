@@ -99,6 +99,7 @@ class ExecutionResult(NamedTuple):
     is_script_result: bool
     is_select_result: bool
     is_many_result: bool
+    last_inserted_id: Optional[Union[int, str]] = None
 
 
 EXEC_CURSOR_RESULT = 0
@@ -152,6 +153,7 @@ class CommonDriverAttributesMixin:
         is_script_result: bool = False,
         is_select_result: bool = False,
         is_many_result: bool = False,
+        last_inserted_id: Optional[Union[int, str]] = None,
     ) -> ExecutionResult:
         """Create ExecutionResult with all necessary data for any operation type.
 
@@ -170,6 +172,7 @@ class CommonDriverAttributesMixin:
             is_script_result: Whether this result is from script execution
             is_select_result: Whether this result is from a SELECT operation
             is_many_result: Whether this result is from an execute_many operation
+            last_inserted_id: The ID of the last inserted row (if applicable)
 
         Returns:
             ExecutionResult configured for the specified operation type
@@ -201,6 +204,7 @@ class CommonDriverAttributesMixin:
             is_script_result=is_script_result,
             is_select_result=is_select_result,
             is_many_result=is_many_result,
+            last_inserted_id=last_inserted_id,
         )
 
     def build_statement_result(self, statement: "SQL", execution_result: ExecutionResult) -> "SQLResult":
@@ -243,6 +247,7 @@ class CommonDriverAttributesMixin:
             data=[],
             rows_affected=execution_result.rowcount_override or 0,
             operation_type=self._determine_operation_type(statement),
+            last_inserted_id=execution_result.last_inserted_id,
             metadata=execution_result.special_data or {"status_message": "OK"},
         )
 
@@ -321,8 +326,10 @@ class CommonDriverAttributesMixin:
                 needs_rebuild = True
 
             # Check parameter config mismatch - critical for ensuring correct parameter style
-            if (statement.statement_config.parameter_config.default_execution_parameter_style !=
-                statement_config.parameter_config.default_execution_parameter_style):
+            if (
+                statement.statement_config.parameter_config.default_execution_parameter_style
+                != statement_config.parameter_config.default_execution_parameter_style
+            ):
                 needs_rebuild = True
 
             if needs_rebuild:
@@ -389,7 +396,7 @@ class CommonDriverAttributesMixin:
         if not parameters:
             return []
         return (
-            [self._format_parameter_set(parameters, statement_config) for parameters in parameters]
+            [self._format_parameter_set(param_set, statement_config) for param_set in parameters]
             if is_many
             else self._format_parameter_set(parameters, statement_config)
         )
