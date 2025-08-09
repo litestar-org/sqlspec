@@ -64,10 +64,10 @@ def test_postgresql_specific_features(postgresql_session: AdbcDriver) -> None:
     postgresql_session.execute(
         """
         INSERT INTO pg_test (jsonb_col, array_col, inet_col, tsvector_col)
-        VALUES ($1, $2, $3, to_tsvector($4))
+        VALUES ($1::jsonb, $2, $3::inet, to_tsvector($4))
     """,
         (
-            '{"name": "John", "age": 30, "tags": ["developer", "python"]}',
+            {"name": "John", "age": 30, "tags": ["developer", "python"]},
             [1, 2, 3, 4, 5],
             "192.168.1.1",
             "PostgreSQL full text search",

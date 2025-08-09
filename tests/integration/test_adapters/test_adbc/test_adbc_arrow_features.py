@@ -45,9 +45,9 @@ def test_arrow_table_metadata_handling(adbc_postgresql_session: AdbcDriver) -> N
     adbc_postgresql_session.execute(
         """
         INSERT INTO arrow_metadata_test (name, age, salary, is_active, tags, metadata)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb)
     """,
-        ("John Doe", 30, 75000.50, True, ["developer", "senior"], '{"department": "engineering", "level": "senior"}'),
+        ("John Doe", 30, 75000.50, True, ["developer", "senior"], {"department": "engineering", "level": "senior"}),
     )
 
     # Query with column metadata

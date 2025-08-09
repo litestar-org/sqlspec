@@ -921,17 +921,25 @@ class ParameterProcessor:
         if self._needs_sqlglot_normalization(param_info, dialect):
             processed_sql, _ = self._converter.normalize_sql_for_parsing(processed_sql, dialect)
 
-        # Phase C: Type coercion (database-specific)
-        if config.type_coercion_map and processed_parameters:
-            processed_parameters = self._apply_type_coercions(processed_parameters, config.type_coercion_map)
+        # Phase C: NULL parameter removal (ADBC-specific)
+        if config.remove_null_parameters and processed_parameters:
+            processed_sql, processed_parameters = self._remove_null_parameters(processed_sql, processed_parameters, param_info)
 
-        # Phase D: Phase 2 - Execution format conversion
+        # Phase D: Type coercion (database-specific)
+        if config.type_coercion_map and processed_parameters:
+            processed_parameters = self._apply_type_coercions(processed_parameters, config.type_coercion_map, is_many)
+
+        # Phase D.1: Array literal replacement (ADBC PostgreSQL-specific, after type coercion)
+        if processed_parameters:
+            processed_sql, processed_parameters = self._replace_array_literals(processed_sql, processed_parameters, param_info)
+
+        # Phase E: Phase 2 - Execution format conversion
         if needs_transformation:
             processed_sql, processed_parameters = self._converter.convert_placeholder_style(
                 processed_sql, processed_parameters, config.default_execution_parameter_style, is_many
             )
 
-        # Phase E: Output transformation (custom hooks)
+        # Phase F: Output transformation (custom hooks)
         if config.output_transformer:
             processed_sql, processed_parameters = config.output_transformer(processed_sql, processed_parameters)
 
@@ -976,20 +984,213 @@ class ParameterProcessor:
             return {k: _wrap_parameter_by_type(v) for k, v in parameters.items()}
         return _wrap_parameter_by_type(parameters)
 
-    def _apply_type_coercions(self, parameters: Any, type_coercion_map: "dict[type, Callable[[Any], Any]]") -> Any:
-        """Apply database-specific type coercions."""
+    def _apply_type_coercions(self, parameters: Any, type_coercion_map: "dict[type, Callable[[Any], Any]]", is_many: bool = False) -> Any:
+        """Apply database-specific type coercions.
+        
+        Args:
+            parameters: Parameter values to coerce
+            type_coercion_map: Type coercion mappings
+            is_many: If True, parameters is a list of parameter sets for execute_many
+        """
 
         def coerce_value(value: Any) -> Any:
             value_type = type(value)
             if value_type in type_coercion_map:
-                return type_coercion_map[value_type](value)
+                coerced = type_coercion_map[value_type](value)
+                # Recursively apply coercion to elements in the coerced result if it's a sequence
+                if isinstance(coerced, (list, tuple)) and not isinstance(coerced, (str, bytes)):
+                    coerced = [coerce_value(item) for item in coerced]
+                elif isinstance(coerced, dict):
+                    coerced = {k: coerce_value(v) for k, v in coerced.items()}
+                return coerced
             return value
 
+        def coerce_parameter_set(param_set: Any) -> Any:
+            """Coerce a single parameter set (dict, list, tuple, or scalar)."""
+            if isinstance(param_set, Sequence) and not isinstance(param_set, (str, bytes)):
+                return [coerce_value(p) for p in param_set]
+            if isinstance(param_set, Mapping):
+                return {k: coerce_value(v) for k, v in param_set.items()}
+            return coerce_value(param_set)
+
+        # Handle execute_many case specially - apply coercions to individual parameter values,
+        # not to the parameter set tuples/lists themselves
+        if is_many and isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
+            return [coerce_parameter_set(param_set) for param_set in parameters]
+        
+        # Regular single execution - apply coercions to all parameters
         if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
             return [coerce_value(p) for p in parameters]
         if isinstance(parameters, Mapping):
             return {k: coerce_value(v) for k, v in parameters.items()}
         return coerce_value(parameters)
+
+    def _remove_null_parameters(self, sql: str, parameters: Any, param_info: "list[ParameterInfo]") -> "tuple[str, Any]":
+        """Remove NULL parameters by replacing with literal NULL in SQL.
+
+        This is required for ADBC drivers that cannot handle NULL parameters in
+        parameter arrays. NULL values are replaced with literal NULL in the SQL
+        and removed from the parameter list.
+
+        Args:
+            sql: SQL string with parameter placeholders
+            parameters: Parameter values (list, tuple, or dict)
+            param_info: Information about detected parameters
+
+        Returns:
+            Tuple of (updated_sql, updated_parameters)
+        """
+        if not param_info or not parameters:
+            return sql, parameters
+
+        # Track which parameters are NULL and need to be removed
+        null_indices = set()
+        null_names = set()
+
+        # Identify NULL parameters
+        if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
+            for i, value in enumerate(parameters):
+                if value is None:
+                    null_indices.add(i)
+        elif isinstance(parameters, Mapping):
+            for key, value in parameters.items():
+                if value is None:
+                    null_names.add(key)
+
+        if not null_indices and not null_names:
+            # No NULL parameters to remove
+            return sql, parameters
+
+        # First identify which parameters need replacement
+        null_params_to_replace = set()
+        for param in param_info:
+            is_null = False
+            if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
+                if param.ordinal < len(parameters) and param.ordinal in null_indices:
+                    is_null = True
+            elif isinstance(parameters, Mapping):
+                if (param.name and param.name in null_names) or f"param_{param.ordinal}" in null_names or str(param.ordinal + 1) in null_names:
+                    is_null = True
+
+            if is_null:
+                null_params_to_replace.add(param.placeholder_text)
+
+        # Replace ALL occurrences of NULL parameters with literal NULL
+        # Work backwards through parameters to maintain position accuracy
+        updated_sql = sql
+        for param in reversed(param_info):
+            if param.placeholder_text in null_params_to_replace:
+                # Replace placeholder with literal NULL
+                updated_sql = (
+                    updated_sql[: param.position]
+                    + "NULL"
+                    + updated_sql[param.position + len(param.placeholder_text) :]
+                )
+
+        # Remove NULL parameters from parameter list
+        if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)) and null_indices:
+            updated_parameters = [p for i, p in enumerate(parameters) if i not in null_indices]
+            return updated_sql, updated_parameters
+        if isinstance(parameters, Mapping) and null_names:
+            updated_parameters = {k: v for k, v in parameters.items() if k not in null_names}
+            return updated_sql, updated_parameters
+
+        return updated_sql, parameters
+
+    def _replace_array_literals(self, sql: str, parameters: Any, param_info: "list[ParameterInfo]") -> "tuple[str, Any]":
+        """Replace ArrayLiteral objects with SQL literals and remove from parameters.
+
+        This is used to work around ADBC PostgreSQL driver issues with certain
+        array types that cause OID mapping errors.
+
+        Args:
+            sql: SQL string with parameter placeholders
+            parameters: Parameter values (list, tuple, or dict)
+            param_info: Information about detected parameters
+
+        Returns:
+            Tuple of (updated_sql, updated_parameters)
+        """
+        if not param_info or not parameters:
+            return sql, parameters
+
+        # Import here to avoid circular import
+        try:
+            from sqlspec.adapters.adbc.driver import ArrayLiteral
+        except ImportError:
+            # ArrayLiteral not available, skip this processing
+            return sql, parameters
+
+        # Track which parameters are ArrayLiterals and need to be replaced
+        array_literal_indices = set()
+        array_literal_names = set()
+        array_literal_values = {}
+
+        # Identify ArrayLiteral parameters
+        if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
+            for i, value in enumerate(parameters):
+                if isinstance(value, ArrayLiteral):
+                    array_literal_indices.add(i)
+                    array_literal_values[i] = value.to_sql_literal()
+        elif isinstance(parameters, Mapping):
+            for key, value in parameters.items():
+                if isinstance(value, ArrayLiteral):
+                    array_literal_names.add(key)
+                    array_literal_values[key] = value.to_sql_literal()
+
+        if not array_literal_indices and not array_literal_names:
+            # No ArrayLiteral parameters to replace
+            return sql, parameters
+
+        # First identify which parameters need replacement
+        array_params_to_replace = set()
+        for param in param_info:
+            should_replace = False
+            if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
+                if param.ordinal < len(parameters) and param.ordinal in array_literal_indices:
+                    should_replace = True
+            elif isinstance(parameters, Mapping):
+                if (param.name and param.name in array_literal_names) or f"param_{param.ordinal}" in array_literal_names or str(param.ordinal + 1) in array_literal_names:
+                    should_replace = True
+
+            if should_replace:
+                array_params_to_replace.add(param.placeholder_text)
+
+        # Replace ALL occurrences of ArrayLiteral parameters with SQL literals
+        # Work backwards through parameters to maintain position accuracy
+        updated_sql = sql
+        for param in reversed(param_info):
+            if param.placeholder_text in array_params_to_replace:
+                # Get the SQL literal value
+                sql_literal = None
+                if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
+                    if param.ordinal < len(parameters) and param.ordinal in array_literal_values:
+                        sql_literal = array_literal_values[param.ordinal]
+                elif isinstance(parameters, Mapping):
+                    if param.name and param.name in array_literal_values:
+                        sql_literal = array_literal_values[param.name]
+                    elif f"param_{param.ordinal}" in array_literal_values:
+                        sql_literal = array_literal_values[f"param_{param.ordinal}"]
+                    elif str(param.ordinal + 1) in array_literal_values:
+                        sql_literal = array_literal_values[str(param.ordinal + 1)]
+
+                if sql_literal:
+                    # Replace placeholder with SQL literal
+                    updated_sql = (
+                        updated_sql[: param.position]
+                        + sql_literal
+                        + updated_sql[param.position + len(param.placeholder_text) :]
+                    )
+
+        # Remove ArrayLiteral parameters from parameter list
+        if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)) and array_literal_indices:
+            updated_parameters = [p for i, p in enumerate(parameters) if i not in array_literal_indices]
+            return updated_sql, updated_parameters
+        if isinstance(parameters, Mapping) and array_literal_names:
+            updated_parameters = {k: v for k, v in parameters.items() if k not in array_literal_names}
+            return updated_sql, updated_parameters
+
+        return updated_sql, parameters
 
 
 # Helper functions for parameter processing

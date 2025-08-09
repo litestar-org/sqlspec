@@ -1,5 +1,6 @@
 """Test Oracle-specific features with CORE_ROUND_3 architecture."""
 
+import operator
 from pathlib import Path
 
 import pytest
@@ -265,7 +266,7 @@ async def test_async_oracle_analytic_functions(oracle_async_session: OracleAsync
     assert len(it_employees) == 3
 
     # Check that ROW_NUMBER within IT department is correct
-    it_sorted = sorted(it_employees, key=lambda x: x["SALARY"], reverse=True)
+    it_sorted = sorted(it_employees, key=operator.itemgetter("SALARY"), reverse=True)
     assert it_sorted[0]["DEPT_RANK"] == 1  # Highest paid in IT
     assert it_sorted[1]["DEPT_RANK"] == 2
     assert it_sorted[2]["DEPT_RANK"] == 3
@@ -319,7 +320,7 @@ def test_oracle_ddl_script_parsing(oracle_sync_session: OracleSyncDriver) -> Non
     assert stmt.is_script is True
 
     # Verify the SQL output contains key Oracle features
-    sql_output = stmt.to_sql()
+    sql_output = stmt.sql
     assert "ALTER SESSION SET CONTAINER" in sql_output
     assert "CREATE TABLE" in sql_output
     assert "VECTOR(768, FLOAT32)" in sql_output

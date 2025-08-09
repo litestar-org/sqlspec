@@ -311,24 +311,34 @@ class CommonDriverAttributesMixin:
                     (*statement._positional_parameters, *parameters) if parameters else statement._positional_parameters
                 )
                 return SQL(statement.sql, *merged_parameters, statement_config=statement_config, **kwargs)
+            # Check if we need to rebuild the SQL object due to config differences
+            needs_rebuild = False
+
+            # Check dialect mismatch
             if statement_config.dialect and (
                 not statement.statement_config.dialect or statement.statement_config.dialect != statement_config.dialect
             ):
-                # When dialect changes, we need to rebuild the SQL object with the new config
-                # to ensure proper parsing with the correct dialect
-                new_config = statement.statement_config.replace(dialect=statement_config.dialect)
+                needs_rebuild = True
+
+            # Check parameter config mismatch - critical for ensuring correct parameter style
+            if (statement.statement_config.parameter_config.default_execution_parameter_style !=
+                statement_config.parameter_config.default_execution_parameter_style):
+                needs_rebuild = True
+
+            if needs_rebuild:
+                # Use the driver's complete statement config to ensure correct parameter processing
                 # Use the original raw SQL if available, otherwise use the current SQL
                 sql_text = statement._raw_sql or statement.sql
 
-                # Rebuild the SQL object with the new config
+                # Rebuild the SQL object with the driver's config
                 # If is_many is set, we need to preserve the execute_many parameters
                 if statement.is_many and statement.parameters:
                     # Create SQL with is_many=True and the execute_many parameters
-                    new_sql = SQL(sql_text, statement.parameters, statement_config=new_config, is_many=True)
+                    new_sql = SQL(sql_text, statement.parameters, statement_config=statement_config, is_many=True)
                 elif statement._named_parameters:
-                    new_sql = SQL(sql_text, statement_config=new_config, **statement._named_parameters)
+                    new_sql = SQL(sql_text, statement_config=statement_config, **statement._named_parameters)
                 else:
-                    new_sql = SQL(sql_text, *statement._positional_parameters, statement_config=new_config)
+                    new_sql = SQL(sql_text, *statement._positional_parameters, statement_config=statement_config)
 
                 return new_sql
             return statement

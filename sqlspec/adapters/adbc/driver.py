@@ -99,6 +99,69 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
     )
 
 
+def _convert_array_for_postgres_adbc(value: Any) -> Any:
+    """Convert array values for PostgreSQL ADBC compatibility.
+
+    ADBC PostgreSQL driver has specific issues with nested arrays and OID 1016 mapping.
+    For problematic nested arrays, we'll mark them for SQL literal replacement.
+    """
+    if not isinstance(value, (list, tuple)):
+        return value
+
+    # Handle None/empty arrays
+    if value is None or len(value) == 0:
+        return value
+
+    # For nested arrays (2D), check if they might cause OID issues
+    if value and isinstance(value[0], (list, tuple)):
+        # Nested arrays often cause OID 1016 issues in ADBC
+        # Mark these for literal replacement instead of parameter binding
+        return ArrayLiteral(value)
+
+    # Convert tuples to lists for consistency
+    if isinstance(value, tuple):
+        return list(value)
+
+    return value
+
+
+class ArrayLiteral:
+    """Marker class for arrays that should be converted to SQL literals.
+
+    This is used to work around ADBC PostgreSQL driver issues with certain
+    array types that cause OID mapping errors.
+    """
+    __slots__ = ("value",)
+
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+    def to_sql_literal(self) -> str:
+        """Convert array to PostgreSQL array literal format."""
+        if not isinstance(self.value, (list, tuple)):
+            return str(self.value)
+
+        def format_array_element(element: Any) -> str:
+            if isinstance(element, (list, tuple)):
+                # Nested array - use ARRAY[] syntax for nested arrays
+                inner = ",".join(format_array_element(x) for x in element)
+                return f"ARRAY[{inner}]"
+            if isinstance(element, str):
+                # Escape quotes in strings
+                escaped = element.replace("'", "''")
+                return f"'{escaped}'"
+            if element is None:
+                return "NULL"
+            return str(element)
+
+        if not self.value:
+            return "ARRAY[]"
+
+        # Format as PostgreSQL array literal
+        elements = ",".join(format_array_element(x) for x in self.value)
+        return f"ARRAY[{elements}]"
+
+
 def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
     """Get type coercion map for Arrow/ADBC type handling with enhanced compatibility."""
     type_map = {
@@ -114,12 +177,13 @@ def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
         float: lambda x: x,
         str: lambda x: x,
         bytes: lambda x: x,
-        tuple: list,
+        tuple: _convert_array_for_postgres_adbc,
+        list: _convert_array_for_postgres_adbc,
         dict: lambda x: x,
     }
 
     # PostgreSQL-specific type handling
-    if dialect == "postgres":
+    if dialect in {"postgres", "postgresql"}:
         type_map[dict] = lambda x: to_json(x) if x is not None else None
 
     return type_map

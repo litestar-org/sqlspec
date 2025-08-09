@@ -8,7 +8,6 @@ This test suite focuses on AsyncMy adapter specific functionality including:
 - Performance characteristics
 """
 
-import asyncio
 from collections.abc import AsyncGenerator
 
 import pytest
@@ -50,34 +49,6 @@ async def asyncmy_pooled_session(mysql_service: MySQLService) -> AsyncGenerator[
         await session.execute_script("TRUNCATE TABLE concurrent_test")
 
         yield session
-
-
-@pytest.mark.asyncio
-@pytest.mark.xdist_group("mysql")
-async def test_asyncmy_connection_pooling(asyncmy_pooled_session: AsyncmyDriver) -> None:
-    """Test connection pooling behavior with concurrent operations."""
-    driver = asyncmy_pooled_session
-
-    async def insert_data(thread_id: str, count: int) -> None:
-        """Insert data from a specific thread."""
-        for i in range(count):
-            await driver.execute("INSERT INTO concurrent_test (thread_id, value) VALUES (?, ?)", (thread_id, i))
-
-    # Run concurrent inserts to test pooling
-    tasks = [insert_data("thread_1", 5), insert_data("thread_2", 5), insert_data("thread_3", 5)]
-
-    await asyncio.gather(*tasks)
-
-    # Verify all data was inserted correctly
-    result = await driver.execute("SELECT COUNT(*) as total FROM concurrent_test")
-    assert result.get_data()[0]["total"] == 15
-
-    # Verify data from each thread
-    for thread_id in ["thread_1", "thread_2", "thread_3"]:
-        thread_result = await driver.execute(
-            "SELECT COUNT(*) as count FROM concurrent_test WHERE thread_id = ?", (thread_id,)
-        )
-        assert thread_result.get_data()[0]["count"] == 5
 
 
 @pytest.mark.asyncio

@@ -38,16 +38,18 @@ def adbc_postgresql_session(postgres_service: PostgresService) -> "Generator[Adb
         """)
 
         # Insert test data
+        test_data = [
+            ("Product A", 100, 19.99, True, ["electronics", "gadget"], {"category": "tech", "rating": 4.5}),
+            ("Product B", 200, 29.99, False, ["home", "kitchen"], {"category": "home", "rating": 3.8}),
+            ("Product C", 150, 24.99, True, ["outdoor", "sport"], {"category": "sports", "rating": 4.2}),
+        ]
+        
         session.execute_many(
             """
             INSERT INTO result_test (name, value, price, is_active, tags, metadata)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5, $6::jsonb)
         """,
-            [
-                ("Product A", 100, 19.99, True, ["electronics", "gadget"], '{"category": "tech", "rating": 4.5}'),
-                ("Product B", 200, 29.99, False, ["home", "kitchen"], '{"category": "home", "rating": 3.8}'),
-                ("Product C", 150, 24.99, True, ["outdoor", "sport"], '{"category": "sports", "rating": 4.2}'),
-            ],
+            test_data,
         )
 
         yield session

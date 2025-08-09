@@ -493,10 +493,7 @@ class SQL:
             return
 
         try:
-            parsed_expr = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
-            operation_type = self._detect_operation_type(parsed_expr)
-
-            # Use unified ParameterProcessor for all parameter processing
+            # Process parameters FIRST - this handles SQLGlot incompatible parameter styles
             current_parameters = self._named_parameters or self._positional_parameters
             processor = ParameterProcessor()
 
@@ -513,6 +510,15 @@ class SQL:
                 # Fallback to original SQL and parameters
                 compiled_sql = self._raw_sql
                 execution_parameters = current_parameters
+
+            # Parse the processed SQL (which may have been normalized for SQLGlot compatibility)
+            try:
+                parsed_expr = sqlglot.parse_one(compiled_sql, dialect=self._dialect)
+            except ParseError as parse_e:
+                logger.warning("SQLGlot parsing failed, will use fallback operation type detection: %s", parse_e)
+                parsed_expr = None
+
+            operation_type = self._detect_operation_type(parsed_expr)
 
             # Create processed state with compilation
             self._processed_state = ProcessedState(
