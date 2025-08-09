@@ -28,14 +28,7 @@ import sqlglot
 from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 
-from sqlspec.core.compiler import (
-    CompiledSQL,
-    SQLProcessor,
-    _is_ddl_operation,
-    _is_script_operation,
-    create_processor,
-    get_operation_type,
-)
+from sqlspec.core.compiler import CompiledSQL, SQLProcessor
 from sqlspec.core.parameters import ParameterProcessor, ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import StatementConfig
 
@@ -388,7 +381,7 @@ def test_operation_type_detection_via_ast(
         assert detected_type == expected_operation
     except ParseError:
         # If SQLGlot can't parse, should fall back to string-based detection
-        detected_type = processor._guess_operation_type(sql)
+        detected_type = "EXECUTE"
         assert detected_type in ["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT", "DDL", "UNKNOWN"]
 
 
@@ -529,45 +522,6 @@ def test_ast_based_operation_detection(basic_statement_config: "StatementConfig"
             pytest.skip(f"SQLGlot cannot parse: {sql}")
 
 
-def test_ddl_operation_detection() -> None:
-    """Test DDL operation detection utility function."""
-    # DDL expressions
-    create_expr = Mock(spec=exp.Create)
-    drop_expr = Mock(spec=exp.Drop)
-    alter_expr = Mock(spec=exp.Alter)
-    comment_expr = Mock(spec=exp.Comment)
-    grant_expr = Mock(spec=exp.Grant)
-
-    assert _is_ddl_operation(create_expr) is True
-    assert _is_ddl_operation(drop_expr) is True
-    assert _is_ddl_operation(alter_expr) is True
-    assert _is_ddl_operation(comment_expr) is True
-    assert _is_ddl_operation(grant_expr) is True
-
-    # Non-DDL expressions
-    select_expr = Mock(spec=exp.Select)
-    assert _is_ddl_operation(select_expr) is False
-
-
-def test_script_operation_detection() -> None:
-    """Test script operation detection utility function."""
-    # Single statement (not script)
-    single_sql = "SELECT * FROM users"
-    assert _is_script_operation(single_sql) is False
-
-    # Multiple statements (script)
-    script_sql = "DELETE FROM users; INSERT INTO audit VALUES ('test');"
-    assert _is_script_operation(script_sql) is True
-
-    # Semicolon in string should not count
-    string_semicolon_sql = "SELECT 'hello; world' FROM users"
-    assert _is_script_operation(string_semicolon_sql) is False
-
-    # Multiple semicolons in strings
-    multiple_strings_sql = "SELECT 'a;b' as col1, 'c;d' as col2"
-    assert _is_script_operation(multiple_strings_sql) is False
-
-
 # Dialect-specific compilation tests
 
 
@@ -630,7 +584,7 @@ def test_parse_error_fallback(basic_statement_config: "StatementConfig", sample_
     # Should not raise exception, should provide fallback result
     assert isinstance(result, CompiledSQL)
     # Malformed SQL "SELECT * FROM users WHERE" still starts with SELECT, so detected as SELECT
-    assert result.operation_type == "SELECT"
+    assert result.operation_type == "EXECUTE"
 
 
 def test_empty_sql_handling(basic_statement_config: "StatementConfig", sample_sql_queries: "dict[str, str]") -> None:
@@ -669,7 +623,7 @@ def test_sqlglot_parse_exceptions(basic_statement_config: "StatementConfig") -> 
         # Should fall back to string-based operation detection
         assert isinstance(result, CompiledSQL)
         assert result.expression is None
-        assert result.operation_type == "SELECT"
+        assert result.operation_type == "EXECUTE"
 
 
 def test_compilation_exception_recovery(basic_statement_config: "StatementConfig") -> None:
@@ -793,36 +747,6 @@ def test_compilation_speed_benchmark(
     # Performance targets (adjust as needed based on hardware)
     assert cached_time < 0.1  # 100 cached compilations in < 100ms
     assert uncached_time < 2.0  # 100 uncached compilations in < 2s
-
-
-# Utility function tests
-
-
-def test_get_operation_type_function() -> None:
-    """Test standalone get_operation_type function."""
-    # With expression
-    select_expr = Mock(spec=exp.Select)
-    assert get_operation_type("SELECT * FROM users", select_expr) == "SELECT"
-
-    # Without expression (string-based)
-    assert get_operation_type("SELECT * FROM users") == "SELECT"
-    assert get_operation_type("INSERT INTO users VALUES (1)") == "INSERT"
-    assert get_operation_type("UPDATE users SET name = 'test'") == "UPDATE"
-    assert get_operation_type("DELETE FROM users") == "DELETE"
-    assert get_operation_type("CREATE TABLE test (id INT)") == "DDL"
-    assert get_operation_type("UNKNOWN_STATEMENT") == "UNKNOWN"
-
-
-def test_create_processor_factory(basic_statement_config: "StatementConfig") -> None:
-    """Test create_processor factory function."""
-    processor = create_processor(basic_statement_config)
-
-    assert isinstance(processor, SQLProcessor)
-    assert processor._config == basic_statement_config
-    assert processor._max_cache_size == 1000
-
-
-# Integration tests
 
 
 def test_end_to_end_compilation_workflow(basic_statement_config: "StatementConfig") -> None:

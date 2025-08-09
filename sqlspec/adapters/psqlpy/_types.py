@@ -1,10 +1,6 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from typing_extensions import TypeAlias
-
-
-if TYPE_CHECKING:
     from psqlpy import Connection
     from typing_extensions import TypeAlias
 

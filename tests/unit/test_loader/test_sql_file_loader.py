@@ -11,6 +11,7 @@ Uses CORE_ROUND_3 architecture with core.statement.SQL and related modules.
 """
 
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -703,3 +704,259 @@ def test_query_name_normalization_parametrized(name: str, expected: str) -> None
 
     result = _normalize_query_name(name)
     assert result == expected
+
+
+class TestFixtureBasedParsing:
+    """Test SQL file parsing using real fixture files."""
+
+    @pytest.fixture
+    def fixtures_path(self) -> Path:
+        """Get path to test fixtures directory."""
+        return Path(__file__).parent.parent.parent / "fixtures"
+
+    def test_parse_postgres_database_details_fixture(self, fixtures_path: Path) -> None:
+        """Test parsing complex PostgreSQL database details fixture."""
+        fixture_file = fixtures_path / "postgres" / "collection-database_details.sql"
+
+        content = fixture_file.read_text(encoding="utf-8")
+
+        statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
+
+        # Should find all named statements
+        expected_queries = [
+            "collection_postgres_base_database_details",
+            "collection_postgres_13_database_details",
+            "collection_postgres_12_database_details",
+        ]
+
+        assert len(statements) == len(expected_queries)
+        for query_name in expected_queries:
+            assert query_name in statements
+            stmt = statements[query_name]
+            assert isinstance(stmt, NamedStatement)
+            assert stmt.name == query_name
+            assert "database_oid" in stmt.sql
+            assert ":PKEY" in stmt.sql or ":DMA_SOURCE_ID" in stmt.sql
+
+    def test_parse_mysql_data_types_fixture(self, fixtures_path: Path) -> None:
+        """Test parsing MySQL data types fixture."""
+        fixture_file = fixtures_path / "mysql" / "collection-data_types.sql"
+
+        with open(fixture_file, encoding="utf-8") as f:
+            content = f.read()
+
+        statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
+
+        assert len(statements) == 1
+        assert "collection_mysql_data_types" in statements
+
+        stmt = statements["collection_mysql_data_types"]
+        assert "information_schema.columns" in stmt.sql
+        assert "@PKEY" in stmt.sql or "@DMA_SOURCE_ID" in stmt.sql
+
+    def test_parse_init_fixture(self, fixtures_path: Path) -> None:
+        """Test parsing the init.sql fixture with multiple small queries."""
+        fixture_file = fixtures_path / "init.sql"
+
+        with open(fixture_file, encoding="utf-8") as f:
+            content = f.read()
+
+        statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
+
+        expected_queries = [
+            "readiness_check_init_get_db_count",
+            "readiness_check_init_get_execution_id",
+            "readiness_check_init_get_source_id",
+        ]
+
+        assert len(statements) == len(expected_queries)
+        for query_name in expected_queries:
+            assert query_name in statements
+
+    def test_parse_oracle_ddl_fixture(self, fixtures_path: Path) -> None:
+        """Test parsing Oracle DDL fixture for complex SQL structures."""
+        fixture_file = fixtures_path / "oracle.ddl.sql"
+
+        if not fixture_file.exists():
+            pytest.skip("Oracle DDL fixture not found")
+
+        with open(fixture_file, encoding="utf-8") as f:
+            content = f.read()
+
+        # Oracle DDL might not have named statements, so handle gracefully
+        try:
+            statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
+            # If it parses successfully, verify structure
+            for stmt_name, stmt in statements.items():
+                assert isinstance(stmt, NamedStatement)
+                assert stmt.name == stmt_name
+                assert len(stmt.sql.strip()) > 0
+        except SQLFileParseError as e:
+            # If no named statements found, that's expected for DDL file
+            assert "No named SQL statements found" in str(e)
+
+    def test_large_fixture_parsing_performance(self, fixtures_path: Path) -> None:
+        """Test parsing performance with large fixture files."""
+        large_fixtures = [
+            "postgres/collection-database_details.sql",
+            "postgres/collection-table_details.sql",
+            "mysql/collection-database_details.sql",
+        ]
+
+        SQLFileLoader()
+
+        for fixture_path in large_fixtures:
+            fixture_file = fixtures_path / fixture_path
+            if not fixture_file.exists():
+                continue
+
+            with open(fixture_file, encoding="utf-8") as f:
+                content = f.read()
+
+            start_time = time.time()
+            statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
+            parse_time = time.time() - start_time
+
+            # Should parse within reasonable time (adjust threshold as needed)
+            assert parse_time < 0.5, f"Parsing {fixture_path} took too long: {parse_time:.3f}s"
+            assert len(statements) > 0, f"No statements found in {fixture_path}"
+
+    def test_fixture_parameter_style_detection(self, fixtures_path: Path) -> None:
+        """Test parameter style detection in fixture files."""
+        test_cases = [
+            ("postgres/collection-database_details.sql", ":PKEY"),
+            ("mysql/collection-data_types.sql", "@PKEY"),
+            ("init.sql", "pg_control_system"),
+        ]
+
+        for fixture_path, expected_pattern in test_cases:
+            fixture_file = fixtures_path / fixture_path
+            if not fixture_file.exists():
+                continue
+
+            with open(fixture_file, encoding="utf-8") as f:
+                content = f.read()
+
+            statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
+
+            # At least one statement should contain the expected pattern
+            found_pattern = False
+            for stmt in statements.values():
+                if expected_pattern in stmt.sql:
+                    found_pattern = True
+                    break
+
+            assert found_pattern, f"Pattern '{expected_pattern}' not found in {fixture_path}"
+
+    def test_complex_cte_parsing_from_fixtures(self, fixtures_path: Path) -> None:
+        """Test parsing complex CTE queries from fixtures."""
+        fixture_file = fixtures_path / "postgres" / "collection-database_details.sql"
+
+        with open(fixture_file, encoding="utf-8") as f:
+            content = f.read()
+
+        statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
+
+        # These queries should contain complex CTEs
+        for stmt in statements.values():
+            sql = stmt.sql.upper()
+            if "WITH" in sql:
+                # Should have proper CTE structure
+                assert "SELECT" in sql
+                # Should have joins or complex logic
+                assert "JOIN" in sql or "WHERE" in sql or "FROM" in sql
+
+    def test_multi_dialect_fixture_parsing(self, fixtures_path: Path) -> None:
+        """Test parsing fixtures from multiple database dialects."""
+        dialect_fixtures = [
+            ("postgres", "collection-extensions.sql"),
+            ("mysql", "collection-engines.sql"),
+            ("oracle.ddl.sql", None),
+        ]
+
+        SQLFileLoader()
+
+        for dialect_info in dialect_fixtures:
+            if len(dialect_info) == 2 and dialect_info[1] is not None:
+                dialect_dir, filename = dialect_info
+                fixture_file = fixtures_path / dialect_dir / filename
+            else:
+                fixture_file = fixtures_path / dialect_info[0]
+
+            if not fixture_file.exists():
+                continue
+
+            with open(fixture_file, encoding="utf-8") as f:
+                content = f.read()
+
+            try:
+                statements = SQLFileLoader._parse_sql_content(content, str(fixture_file))
+
+                # All statements should parse successfully
+                for stmt_name, stmt in statements.items():
+                    assert isinstance(stmt, NamedStatement)
+                    assert len(stmt.sql.strip()) > 0
+                    # Should preserve original case and structure
+                    assert stmt.name == stmt_name
+
+            except SQLFileParseError:
+                # Some fixtures might not have named statements - that's OK
+                pass
+
+
+class TestFixtureBasedIntegration:
+    """Test loader integration using fixture files."""
+
+    @pytest.fixture
+    def fixtures_path(self) -> Path:
+        """Get path to test fixtures directory."""
+        return Path(__file__).parent.parent.parent / "fixtures"
+
+    def test_load_and_execute_fixture_queries(self, fixtures_path: Path) -> None:
+        """Test loading and creating SQL objects from fixture queries."""
+        fixture_file = fixtures_path / "init.sql"
+
+        loader = SQLFileLoader()
+        loader.load_sql(fixture_file)
+
+        queries = loader.list_queries()
+        assert len(queries) >= 3
+
+        # Test getting SQL objects
+        for query_name in queries:
+            sql = loader.get_sql(query_name)
+            assert isinstance(sql, SQL)
+            assert len(sql.sql.strip()) > 0
+
+    def test_fixture_query_metadata_preservation(self, fixtures_path: Path) -> None:
+        """Test that fixture query metadata is preserved."""
+        fixture_file = fixtures_path / "postgres" / "collection-database_details.sql"
+
+        loader = SQLFileLoader()
+        loader.load_sql(fixture_file)
+
+        # Check that file metadata is tracked
+        files = loader.list_files()
+        assert str(fixture_file) in files
+
+        # Check query-to-file mapping
+        queries = loader.list_queries()
+        for query_name in queries:
+            file_info = loader.get_file_for_query(query_name)
+            assert file_info is not None
+            assert fixture_file.name in file_info.path
+
+    def test_fixture_parameter_extraction(self, fixtures_path: Path) -> None:
+        """Test parameter extraction from fixture queries."""
+        fixture_file = fixtures_path / "postgres" / "collection-database_details.sql"
+
+        loader = SQLFileLoader()
+        loader.load_sql(fixture_file)
+
+        queries = loader.list_queries()
+        test_query = queries[0]  # Get first query
+
+        # Create SQL with parameters
+        sql = loader.get_sql(test_query, {"DMA_SOURCE_ID": "test", "PKEY": "pk123"})
+        assert isinstance(sql, SQL)
+        assert sql.parameters is not None

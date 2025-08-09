@@ -23,7 +23,6 @@ PostgreSQL Features:
 """
 
 import io
-import logging
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -37,6 +36,7 @@ from sqlspec.core.result import SQLResult
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 
     from sqlspec.driver._common import ExecutionResult
 
-logger = logging.getLogger(__name__)
+logger = get_logger("adapters.psycopg")
 
 
 def _convert_list_to_postgres_array(value: Any) -> str:

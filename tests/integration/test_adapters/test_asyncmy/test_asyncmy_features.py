@@ -106,7 +106,8 @@ async def test_asyncmy_mysql_specific_sql_features(asyncmy_pooled_session: Async
             value INT,
             status ENUM('active', 'inactive', 'pending') DEFAULT 'pending',
             tags SET('urgent', 'important', 'normal', 'low') DEFAULT 'normal'
-        )
+        );
+        TRUNCATE TABLE mysql_features;
     """)
 
     # Test INSERT ... ON DUPLICATE KEY UPDATE

@@ -16,7 +16,7 @@ from typing import Any, Optional, Union
 from sqlspec.core.cache import CacheKey, get_cache_config, get_default_cache
 from sqlspec.core.parameters import ParameterStyleConfig, ParameterValidator
 from sqlspec.core.statement import SQL, StatementConfig
-from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
+from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError, StorageOperationFailedError
 from sqlspec.storage import storage_registry
 from sqlspec.storage.registry import StorageRegistry
 from sqlspec.utils.correlation import CorrelationContext
@@ -311,8 +311,10 @@ class SQLFileLoader:
             File content as string.
 
         Raises:
-            SQLFileParseError: If file cannot be read.
+            SQLFileNotFoundError: If file does not exist.
+            SQLFileParseError: If file cannot be read or parsed.
         """
+
         path_str = str(path)
 
         try:
@@ -320,6 +322,12 @@ class SQLFileLoader:
             return backend.read_text(path_str, encoding=self.encoding)
         except KeyError as e:
             raise SQLFileNotFoundError(path_str) from e
+        except StorageOperationFailedError as e:
+            # Check if this is a file not found error
+            if "not found" in str(e).lower() or "no such file" in str(e).lower():
+                raise SQLFileNotFoundError(path_str) from e
+            # Otherwise treat as parse error
+            raise SQLFileParseError(path_str, path_str, e) from e
         except Exception as e:
             raise SQLFileParseError(path_str, path_str, e) from e
 
@@ -451,7 +459,7 @@ class SQLFileLoader:
                     path_obj = Path(path)
                     if path_obj.is_dir():
                         loaded_count += self._load_directory(path_obj)
-                    else:
+                    elif path_obj.exists():
                         self._load_single_file(path_obj, None)
                         loaded_count += 1
 

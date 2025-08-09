@@ -23,21 +23,16 @@ Performance Optimizations:
 - Direct method calls optimized for MyPyC compilation
 """
 
-from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
 import sqlglot
 from mypy_extensions import mypyc_attr
-from sqlglot import expressions as exp
+from sqlglot import exp
 from sqlglot.errors import ParseError
 from typing_extensions import TypeAlias
 
-from sqlspec.core.parameters import (
-    ParameterConverter,
-    ParameterProcessor,
-    ParameterStyle,
-    ParameterStyleConfig,
-    ParameterValidator,
-)
+from sqlspec.core.compiler import OperationType, SQLProcessor
+from sqlspec.core.parameters import ParameterConverter, ParameterStyle, ParameterStyleConfig, ParameterValidator
 from sqlspec.typing import Empty, EmptyEnum
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_statement_filter, supports_where
@@ -56,8 +51,6 @@ __all__ = (
     "get_default_config",
     "get_default_parameter_config",
 )
-# Operation type definition - preserved exactly
-OperationType = Literal["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT", "DDL", "UNKNOWN"]
 logger = get_logger("sqlspec.core.statement")
 
 # Configuration slots - preserved from existing StatementConfig
@@ -250,6 +243,10 @@ class SQL:
         if dialect is not None:
             self._dialect = self._normalize_dialect(dialect)
 
+        # Handle is_script parameter
+        if "is_script" in kwargs:
+            self._is_script = bool(kwargs.pop("is_script"))
+
         # Separate filters from actual parameters
         filters = [p for p in parameters if is_statement_filter(p)]
         actual_params = [p for p in parameters if not is_statement_filter(p)]
@@ -288,8 +285,9 @@ class SQL:
     @property
     def parameters(self) -> Any:
         """Statement parameters - preserved interface."""
+        self._ensure_processed()
         if self._processed_state is Empty:
-            # Return original parameters if not processed
+            # Return original parameters if processing failed
             if self._named_parameters:
                 return self._named_parameters
             return self._positional_parameters or []
@@ -358,18 +356,17 @@ class SQL:
         """Check if statement returns rows - preserved interface."""
         self._ensure_processed()
 
-        # Check if we have a parsed expression
-        if self.expression is not None:
-            # For SELECT and similar, check the operation type
-            op_type = self.operation_type.upper()
-            if op_type in {"SELECT", "WITH", "VALUES", "TABLE", "SHOW", "DESCRIBE", "PRAGMA", "COMMAND"}:
-                return True
+        # First check operation type (available even without expression)
+        op_type = self.operation_type.upper()
+        if op_type in {"SELECT", "WITH", "VALUES", "TABLE", "SHOW", "DESCRIBE", "PRAGMA", "COMMAND"}:
+            return True
 
-            # For DML operations (INSERT/UPDATE/DELETE), check for RETURNING clause
-            if hasattr(self.expression, "args") and self.expression.args.get("returning") is not None:
-                return True
-
-        return False
+        # Check if we have a parsed expression for RETURNING clause detection
+        return (
+            self.expression is not None
+            and hasattr(self.expression, "args")
+            and self.expression.args.get("returning") is not None
+        )
 
     def is_modifying_operation(self) -> bool:
         """Check if the SQL statement is a modifying operation.
@@ -493,51 +490,19 @@ class SQL:
             return
 
         try:
-            # Phase 1: Normalize SQL for SQLGlot parsing (keep parameters SQLGlot-compatible)
+            # Use SQLProcessor for single-pass compilation
             current_parameters = self._named_parameters or self._positional_parameters
-            processor = ParameterProcessor()
+            processor = SQLProcessor(self._statement_config)
 
-            try:
-                # Get SQL normalized for SQLGlot parsing only (defer execution format conversion)
-                parsing_sql, _parsing_parameters = processor._get_sqlglot_compatible_sql(
-                    sql=self._raw_sql,
-                    parameters=current_parameters,
-                    config=self._statement_config.parameter_config,
-                    dialect=self._dialect,
-                )
-            except Exception as proc_e:
-                logger.warning("SQLGlot normalization failed, using original SQL: %s", proc_e)
-                parsing_sql = self._raw_sql
+            # Single-pass compilation that handles both parsing and parameter processing
+            compiled_result = processor.compile(self._raw_sql, current_parameters)
 
-            # Parse the SQLGlot-compatible SQL
-            try:
-                parsed_expr = sqlglot.parse_one(parsing_sql, dialect=self._dialect)
-            except ParseError as parse_e:
-                logger.warning("SQLGlot parsing failed, will use fallback operation type detection: %s", parse_e)
-                parsed_expr = None
-
-            operation_type = self._detect_operation_type(parsed_expr)
-
-            # Phase 2: Full parameter processing including execution format conversion
-            try:
-                compiled_sql, execution_parameters = processor.process(
-                    sql=self._raw_sql,
-                    parameters=current_parameters,
-                    config=self._statement_config.parameter_config,
-                    dialect=self._dialect,
-                    is_many=self._is_many,
-                )
-            except Exception as proc_e:
-                logger.warning("Parameter processing failed, using fallback: %s", proc_e)
-                compiled_sql = self._raw_sql
-                execution_parameters = current_parameters
-
-            # Create processed state with correct operation type
+            # Create processed state from compiled result
             self._processed_state = ProcessedState(
-                compiled_sql=compiled_sql,
-                execution_parameters=execution_parameters,
-                parsed_expression=parsed_expr,
-                operation_type=operation_type,
+                compiled_sql=compiled_result.compiled_sql,
+                execution_parameters=compiled_result.execution_parameters,
+                parsed_expression=compiled_result.expression,
+                operation_type=compiled_result.operation_type,
                 validation_errors=[],
                 is_many=self._is_many,
             )
@@ -552,13 +517,10 @@ class SQL:
                 is_many=self._is_many,
             )
 
-    def _detect_operation_type(self, expression: Any) -> str:
+    def _detect_operation_type(self, expression: Any) -> OperationType:
         """Detect SQL operation type from SQLGlot expression."""
         if expression is None:
             return "UNKNOWN"
-
-        # Use SQLGlot's expression type directly with efficient lookup
-        from sqlglot import exp
 
         # Expression type to operation type mapping
         operation_type_map = {
@@ -580,9 +542,9 @@ class SQL:
         # Check expression type
         expr_type = type(expression)
 
-        # Direct lookup
+        # Direct lookup with proper type casting
         if expr_type in operation_type_map:
-            return operation_type_map[expr_type]
+            return operation_type_map[expr_type]  # type: ignore[return-value]
 
         # Check for DDL operations (Create, Drop, Alter are already in map)
         if isinstance(expression, (exp.Create, exp.Drop, exp.Alter)):

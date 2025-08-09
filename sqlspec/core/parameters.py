@@ -80,7 +80,7 @@ class ParameterStyle(str, Enum):
     POSITIONAL_PYFORMAT = "pyformat_positional"
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=True)
 class TypedParameter:
     """Parameter wrapper that preserves type information for processing.
 
@@ -494,7 +494,7 @@ class ParameterValidator:
         return base_incompatible
 
 
-# @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=True)
 class ParameterConverter:
     """Parameter style conversion with complete format support.
 
@@ -512,10 +512,6 @@ class ParameterConverter:
       - Handles parameter format changes (list ↔ dict, positional ↔ named)
       - Applies driver-specific type coercions and transformations
 
-    Performance:
-    - O(1) placeholder generation via hash-map lookups
-    - O(1) format conversion via pre-built converter functions
-    - Cached SQL processing for repeated conversions
     """
 
     __slots__ = ("_format_converters", "_placeholder_generators", "validator")
@@ -653,6 +649,14 @@ class ParameterConverter:
             msg = f"Unsupported target parameter style: {target_style}"
             raise ValueError(msg)
 
+        # Build a mapping of unique parameters to their ordinals
+        # This handles repeated parameters like $1, $2, $2 correctly
+        unique_params: dict[str, int] = {}
+        for param in param_info:
+            param_key = param.placeholder_text
+            if param_key not in unique_params:
+                unique_params[param_key] = len(unique_params)
+
         # Work backwards through parameters to maintain position accuracy
         converted_sql = sql
         for param in reversed(param_info):
@@ -663,7 +667,9 @@ class ParameterConverter:
                 ParameterStyle.POSITIONAL_PYFORMAT,
                 ParameterStyle.POSITIONAL_COLON,
             }:
-                new_placeholder = generator(param.ordinal)
+                # Use the ordinal from our unique parameter mapping
+                ordinal_to_use = unique_params[param.placeholder_text]
+                new_placeholder = generator(ordinal_to_use)
             else:  # Named styles
                 param_name = param.name or f"param_{param.ordinal}"
                 new_placeholder = generator(param_name)
@@ -902,12 +908,19 @@ class ParameterProcessor:
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        # 2. Determine if transformation is needed
+        # 2. Determine what transformations are needed
         param_info = self._validator.extract_parameters(sql)
-        needs_transformation = self._needs_transformation(param_info, config, dialect)
+        original_styles = {p.style for p in param_info} if param_info else set()
+        needs_sqlglot_normalization = self._needs_sqlglot_normalization(param_info, dialect)
+        needs_execution_conversion = self._needs_execution_conversion(param_info, config)
 
         # 3. Fast path: Skip processing if no transformation needed
-        if not needs_transformation and not config.type_coercion_map and not config.output_transformer:
+        if (
+            not needs_sqlglot_normalization
+            and not needs_execution_conversion
+            and not config.type_coercion_map
+            and not config.output_transformer
+        ):
             return sql, parameters
 
         # 4. Progressive transformation pipeline
@@ -918,23 +931,21 @@ class ParameterProcessor:
             processed_parameters = self._apply_type_wrapping(processed_parameters)
 
         # Phase B: Phase 1 - SQLGlot normalization if needed
-        if self._needs_sqlglot_normalization(param_info, dialect):
+        if needs_sqlglot_normalization:
             processed_sql, _ = self._converter.normalize_sql_for_parsing(processed_sql, dialect)
 
-        # Phase C: NULL parameter removal (ADBC-specific)
-        if config.remove_null_parameters and processed_parameters:
-            processed_sql, processed_parameters = self._remove_null_parameters(
-                processed_sql, processed_parameters, param_info
-            )
+        # Phase C: NULL parameter removal moved to compiler where AST is available
 
         # Phase D: Type coercion (database-specific)
         if config.type_coercion_map and processed_parameters:
             processed_parameters = self._apply_type_coercions(processed_parameters, config.type_coercion_map, is_many)
 
         # Phase E: Phase 2 - Execution format conversion
-        if needs_transformation:
+        if needs_execution_conversion or needs_sqlglot_normalization:
+            # Determine target style: preserve original if supported, otherwise use default
+            target_style = self._determine_target_execution_style(original_styles, config)
             processed_sql, processed_parameters = self._converter.convert_placeholder_style(
-                processed_sql, processed_parameters, config.default_execution_parameter_style, is_many
+                processed_sql, processed_parameters, target_style, is_many
             )
 
         # Phase F: Output transformation (custom hooks)
@@ -976,31 +987,58 @@ class ParameterProcessor:
         # 3. No normalization needed - return original SQL
         return sql, parameters
 
-    def _needs_transformation(
-        self, param_info: "list[ParameterInfo]", config: ParameterStyleConfig, dialect: Optional[str] = None
-    ) -> bool:
-        """Determine if parameter transformation is needed."""
+    def _needs_execution_conversion(self, param_info: "list[ParameterInfo]", config: ParameterStyleConfig) -> bool:
+        """Determine if execution format conversion is needed.
+
+        Preserves the original parameter style if it's supported by the execution environment,
+        otherwise converts to the default execution style.
+        """
         if not param_info:
             return False
 
-        # Check if SQLGlot normalization is needed
-        if self._needs_sqlglot_normalization(param_info, dialect):
-            return True
-
-        # Check if execution style conversion is needed
         current_styles = {p.style for p in param_info}
-        target_style = config.default_execution_parameter_style
 
         # Check for mixed styles - if not allowed, force conversion to single style
-        if len(current_styles) > 1 and not config.allow_mixed_parameter_styles:
+        if len(current_styles) > 1:
             return True
 
-        return not (len(current_styles) == 1 and target_style in current_styles)
+        # If we have a single current style and it's supported by the execution environment, preserve it
+        if len(current_styles) == 1:
+            current_style = next(iter(current_styles))
+            supported_styles = config.supported_execution_parameter_styles
+            if supported_styles is None:
+                return True  # No supported styles defined, need conversion
+            return current_style not in supported_styles
+
+        # Multiple styles detected - transformation needed
+        return True
 
     def _needs_sqlglot_normalization(self, param_info: "list[ParameterInfo]", dialect: Optional[str] = None) -> bool:
         """Check if SQLGlot normalization is needed for this SQL."""
         incompatible_styles = self._validator.get_sqlglot_incompatible_styles(dialect)
         return any(p.style in incompatible_styles for p in param_info)
+
+    def _determine_target_execution_style(
+        self, original_styles: "set[ParameterStyle]", config: ParameterStyleConfig
+    ) -> ParameterStyle:
+        """Determine the target execution style based on original styles and config.
+
+        Logic:
+        1. If there's a single original style and it's in supported execution styles, use it
+        2. Otherwise, use the default execution style
+        3. If no default execution style, use the default parameter style
+
+        This preserves the original parameter style when possible, only converting
+        when necessary for execution compatibility.
+        """
+        # If we have a single original style that's supported for execution, preserve it
+        if len(original_styles) == 1 and config.supported_execution_parameter_styles is not None:
+            original_style = next(iter(original_styles))
+            if original_style in config.supported_execution_parameter_styles:
+                return original_style
+
+        # Otherwise use the configured execution style or fallback to default parameter style
+        return config.default_execution_parameter_style or config.default_parameter_style
 
     def _apply_type_wrapping(self, parameters: Any) -> Any:
         """Apply type wrapping using singledispatch for performance."""
@@ -1009,6 +1047,153 @@ class ParameterProcessor:
         if isinstance(parameters, Mapping):
             return {k: _wrap_parameter_by_type(v) for k, v in parameters.items()}
         return _wrap_parameter_by_type(parameters)
+
+    def _remove_null_parameters(
+        self, sql: str, parameters: Any, param_info: "list[ParameterInfo]"
+    ) -> "tuple[str, Any]":
+        """Remove NULL parameters and replace with NULL literals in SQL using AST manipulation.
+
+        This method implements the ADBC-specific NULL parameter handling that was
+        previously in the pipeline_steps.py. It uses SQLGlot AST transformation
+        to replace parameter placeholders with NULL literals when the parameter
+        value is None, preventing Arrow type inference issues.
+
+        Args:
+            sql: SQL string (possibly SQLGlot-normalized)
+            parameters: Parameter values that may contain None
+            param_info: Parameter information from validation
+
+        Returns:
+            Tuple of (modified_sql, cleaned_parameters)
+        """
+        # 1. Analyze NULL parameters
+        null_positions = self._analyze_null_positions(parameters)
+        if not null_positions:
+            return sql, parameters
+
+        # 2. Parse SQL for AST manipulation
+        try:
+            import sqlglot
+
+            expression = sqlglot.parse_one(sql)
+        except Exception:
+            # Fallback to original if parsing fails
+            return sql, parameters
+
+        # 3. Transform AST to replace NULL placeholders with NULL literals
+        modified_expression = self._replace_null_placeholders_in_ast(expression, null_positions)
+
+        # 4. Generate modified SQL
+        modified_sql = modified_expression.sql()
+
+        # 5. Remove NULL parameters from parameter list
+        cleaned_parameters = self._clean_null_parameters(parameters, null_positions)
+
+        return modified_sql, cleaned_parameters
+
+    def _analyze_null_positions(self, parameters: Any) -> "dict[int, Any]":
+        """Analyze parameters to find NULL positions."""
+        null_positions = {}
+
+        if isinstance(parameters, (list, tuple)):
+            for i, param in enumerate(parameters):
+                if param is None:
+                    null_positions[i] = None
+        elif isinstance(parameters, dict):
+            for key, param in parameters.items():
+                if param is None:
+                    # Handle different key formats
+                    if isinstance(key, str) and key.lstrip("$").isdigit():
+                        param_num = int(key.lstrip("$"))
+                        null_positions[param_num - 1] = None  # Convert to 0-based index
+                    elif isinstance(key, int):
+                        null_positions[key] = None
+
+        return null_positions
+
+    def _replace_null_placeholders_in_ast(self, expression: Any, null_positions: "dict[int, Any]") -> Any:
+        """Replace NULL parameter placeholders with NULL literals in AST.
+
+        Uses SQLGlot AST transformation to find and replace parameter nodes
+        with NULL literal nodes, following the pattern from pipeline_steps.py.
+        """
+        import sqlglot.expressions as exp
+
+        def transform_node(node: Any) -> Any:
+            # Handle PostgreSQL-style placeholders ($1, $2, etc.)
+            if isinstance(node, exp.Placeholder) and hasattr(node, "this"):
+                return self._transform_postgres_placeholder(node, null_positions)
+
+            # Handle generic parameter nodes
+            if isinstance(node, exp.Parameter) and hasattr(node, "this"):
+                return self._transform_parameter_node(node, null_positions)
+
+            return node
+
+        return expression.transform(transform_node)
+
+    def _transform_postgres_placeholder(self, node: Any, null_positions: "dict[int, Any]") -> Any:
+        """Transform PostgreSQL-style placeholders ($1, $2, etc.)."""
+        import sqlglot.expressions as exp
+
+        try:
+            param_str = node.this.lstrip("$")
+            param_num = int(param_str)
+            param_index = param_num - 1  # Convert to 0-based
+
+            if param_index in null_positions:
+                # Replace with NULL literal
+                return exp.Null()
+            # Renumber placeholder to account for removed NULLs
+            nulls_before = sum(1 for idx in null_positions if idx < param_index)
+            new_param_num = param_num - nulls_before
+            return exp.Placeholder(this=f"${new_param_num}")
+
+        except (ValueError, AttributeError):
+            # Return original if parsing fails
+            return node
+
+    def _transform_parameter_node(self, node: Any, null_positions: "dict[int, Any]") -> Any:
+        """Transform generic parameter nodes."""
+        import sqlglot.expressions as exp
+
+        try:
+            param_str = str(node.this)
+            param_num = int(param_str)
+            param_index = param_num - 1  # Convert to 0-based
+
+            if param_index in null_positions:
+                # Replace with NULL literal
+                return exp.Null()
+            # Renumber parameter to account for removed NULLs
+            nulls_before = sum(1 for idx in null_positions if idx < param_index)
+            new_param_num = param_num - nulls_before
+            return exp.Parameter(this=str(new_param_num))
+
+        except (ValueError, AttributeError):
+            # Return original if parsing fails
+            return node
+
+    def _clean_null_parameters(self, parameters: Any, null_positions: "dict[int, Any]") -> Any:
+        """Remove NULL parameters from parameter list."""
+        if isinstance(parameters, (list, tuple)):
+            return [param for i, param in enumerate(parameters) if i not in null_positions]
+        if isinstance(parameters, dict):
+            cleaned_dict = {}
+            param_keys = sorted(
+                parameters.keys(),
+                key=lambda k: int(k.lstrip("$")) if isinstance(k, str) and k.lstrip("$").isdigit() else 0,
+            )
+
+            new_param_num = 1
+            for key in param_keys:
+                if parameters[key] is not None:
+                    cleaned_dict[str(new_param_num)] = parameters[key]
+                    new_param_num += 1
+
+            return cleaned_dict
+
+        return parameters
 
     def _apply_type_coercions(
         self, parameters: Any, type_coercion_map: "dict[type, Callable[[Any], Any]]", is_many: bool = False
@@ -1052,81 +1237,6 @@ class ParameterProcessor:
         if isinstance(parameters, Mapping):
             return {k: coerce_value(v) for k, v in parameters.items()}
         return coerce_value(parameters)
-
-    def _remove_null_parameters(
-        self, sql: str, parameters: Any, param_info: "list[ParameterInfo]"
-    ) -> "tuple[str, Any]":
-        """Remove NULL parameters by replacing with literal NULL in SQL.
-
-        This is required for ADBC drivers that cannot handle NULL parameters in
-        parameter arrays. NULL values are replaced with literal NULL in the SQL
-        and removed from the parameter list.
-
-        Args:
-            sql: SQL string with parameter placeholders
-            parameters: Parameter values (list, tuple, or dict)
-            param_info: Information about detected parameters
-
-        Returns:
-            Tuple of (updated_sql, updated_parameters)
-        """
-        if not param_info or not parameters:
-            return sql, parameters
-
-        # Track which parameters are NULL and need to be removed
-        null_indices = set()
-        null_names = set()
-
-        # Identify NULL parameters
-        if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-            for i, value in enumerate(parameters):
-                if value is None:
-                    null_indices.add(i)
-        elif isinstance(parameters, Mapping):
-            for key, value in parameters.items():
-                if value is None:
-                    null_names.add(key)
-
-        if not null_indices and not null_names:
-            # No NULL parameters to remove
-            return sql, parameters
-
-        # First identify which parameters need replacement
-        null_params_to_replace = set()
-        for param in param_info:
-            is_null = False
-            if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-                if param.ordinal < len(parameters) and param.ordinal in null_indices:
-                    is_null = True
-            elif isinstance(parameters, Mapping) and (
-                (param.name and param.name in null_names)
-                or f"param_{param.ordinal}" in null_names
-                or str(param.ordinal + 1) in null_names
-            ):
-                is_null = True
-
-            if is_null:
-                null_params_to_replace.add(param.placeholder_text)
-
-        # Replace ALL occurrences of NULL parameters with literal NULL
-        # Work backwards through parameters to maintain position accuracy
-        updated_sql = sql
-        for param in reversed(param_info):
-            if param.placeholder_text in null_params_to_replace:
-                # Replace placeholder with literal NULL
-                updated_sql = (
-                    updated_sql[: param.position] + "NULL" + updated_sql[param.position + len(param.placeholder_text) :]
-                )
-
-        # Remove NULL parameters from parameter list
-        if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)) and null_indices:
-            updated_parameters = [p for i, p in enumerate(parameters) if i not in null_indices]
-            return updated_sql, updated_parameters
-        if isinstance(parameters, Mapping) and null_names:
-            updated_parameters = {k: v for k, v in parameters.items() if k not in null_names}
-            return updated_sql, updated_parameters
-
-        return updated_sql, parameters
 
 
 # Helper functions for parameter processing

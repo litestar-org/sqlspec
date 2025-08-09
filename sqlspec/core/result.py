@@ -29,10 +29,10 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
+from sqlspec.core.compiler import OperationType
+
 if TYPE_CHECKING:
-    from sqlspec.core.statement import SQL, OperationType
-else:
-    from sqlspec.core.statement import OperationType
+    from sqlspec.core.statement import SQL
 
 
 __all__ = ("ArrowResult", "SQLResult", "StatementResult")

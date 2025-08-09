@@ -167,14 +167,13 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
 
-        last_result = None
         for stmt in statements:
             # Create individual statement for each script part with core processing
             single_stmt = statement.copy(statement=stmt, parameters=prepared_parameters)
-            last_result = await self._execute_statement(cursor, single_stmt)
+            await self._execute_statement(cursor, single_stmt)
 
         return self.create_execution_result(
-            last_result, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
+            cursor, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
         )
 
     @abstractmethod

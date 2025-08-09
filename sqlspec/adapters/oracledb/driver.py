@@ -52,9 +52,9 @@ __all__ = ("OracleAsyncDriver", "OracleSyncDriver", "oracledb_statement_config")
 oracledb_statement_config = StatementConfig(
     dialect="oracle",
     parameter_config=ParameterStyleConfig(
-        default_parameter_style=ParameterStyle.NAMED_COLON,
+        default_parameter_style=ParameterStyle.POSITIONAL_COLON,  # Oracle's :1, :2 style
         supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON, ParameterStyle.QMARK},
-        default_execution_parameter_style=ParameterStyle.NAMED_COLON,
+        default_execution_parameter_style=ParameterStyle.POSITIONAL_COLON,  # Keep Oracle's native :1, :2
         supported_execution_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON},
         type_coercion_map={},
         has_native_list_expansion=False,
@@ -465,11 +465,6 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         Leverages core parameter processing for enhanced Oracle type handling and parameter conversion.
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
-
-        # Enhanced parameter validation for executemany
-        if not prepared_parameters:
-            msg = "execute_many requires parameters"
-            raise ValueError(msg)
 
         await cursor.executemany(sql, prepared_parameters)
 

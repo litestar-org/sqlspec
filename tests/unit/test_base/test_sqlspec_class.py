@@ -176,7 +176,7 @@ def test_reset_cache_stats_clears_statistics() -> None:
 
 def test_log_cache_stats_logs_to_configured_logger() -> None:
     """Test that log_cache_stats outputs to the logging system."""
-    with patch("sqlspec.utils.logging.get_logger") as mock_get_logger:
+    with patch("sqlspec.core.cache.get_logger") as mock_get_logger:
         mock_logger = MagicMock()
         mock_get_logger.return_value = mock_logger
 
@@ -492,7 +492,7 @@ def test_cache_configuration_affects_cache_clearing() -> None:
             SQLSpec.update_cache_config(original_config)
 
 
-@patch("sqlspec.utils.logging.get_logger")
+@patch("sqlspec.core.cache.get_logger")
 def test_cache_configuration_logging_integration(mock_get_logger: MagicMock) -> None:
     """Test that cache configuration changes are logged properly."""
     mock_logger = MagicMock()

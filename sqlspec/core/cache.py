@@ -770,6 +770,9 @@ def update_cache_config(config: CacheConfig) -> None:
     Args:
         config: New cache configuration to apply globally
     """
+    logger = get_logger("sqlspec.cache")
+    logger.info("Cache configuration updated: %s", config)
+
     global _global_cache_config
     _global_cache_config = config
 

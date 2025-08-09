@@ -120,6 +120,7 @@ class MockSyncCursor:
         # Set mock results based on SQL type
         if sql.upper().strip().startswith("SELECT"):
             self.description = [("id", "INTEGER"), ("name", "TEXT")]
+            # Always return 2 rows - tests expect this
             self.fetchall_result = [(1, "test"), (2, "example")]
             self.rowcount = len(self.fetchall_result)
         else:
@@ -162,6 +163,7 @@ class MockAsyncCursor:
         # Set mock results based on SQL type
         if sql.upper().strip().startswith("SELECT"):
             self.description = [("id", "INTEGER"), ("name", "TEXT")]
+            # Always return 2 rows - tests expect this
             self.fetchall_result = [(1, "test"), (2, "example")]
             self.rowcount = len(self.fetchall_result)
         else:
@@ -183,6 +185,14 @@ class MockAsyncCursor:
     async def close(self) -> None:
         """Mock async close method."""
         self.closed = True
+
+    async def __aenter__(self) -> "MockAsyncCursor":
+        """Async context manager entry."""
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Async context manager exit."""
+        await self.close()
 
 
 class MockSyncDriver(SyncDriverAdapterBase):
@@ -229,6 +239,13 @@ class MockSyncDriver(SyncDriverAdapterBase):
 
     def _execute_statement(self, cursor: MockSyncCursor, statement: SQL) -> ExecutionResult:
         """Mock execute statement."""
+        # If this is an is_many statement, delegate to _execute_many
+        if statement.is_many:
+            return self._execute_many(cursor, statement)
+        # If this is a script statement, delegate to _execute_script
+        if statement.is_script:
+            return self._execute_script(cursor, statement)
+
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         cursor.execute(sql, prepared_parameters)
 
@@ -325,6 +342,13 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
 
     async def _execute_statement(self, cursor: MockAsyncCursor, statement: SQL) -> ExecutionResult:
         """Mock async execute statement."""
+        # If this is an is_many statement, delegate to _execute_many
+        if statement.is_many:
+            return await self._execute_many(cursor, statement)
+        # If this is a script statement, delegate to _execute_script
+        if statement.is_script:
+            return await self._execute_script(cursor, statement)
+
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, prepared_parameters)
 

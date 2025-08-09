@@ -7,7 +7,7 @@ import pytest
 from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver
 from sqlspec.core.result import SQLResult
 
-pytestmark = pytest.mark.asyncio(loop_scope="function")
+# Note: Only apply asyncio mark to actual async tests, not all tests in the file
 
 BatchParameters = Union[list[tuple[Any, ...]], list[dict[str, Any]], list[list[Any]]]
 
@@ -75,6 +75,7 @@ def test_sync_execute_many_insert_batch(oracle_sync_session: OracleSyncDriver) -
     )
 
 
+@pytest.mark.asyncio(loop_scope="function")
 @pytest.mark.xdist_group("oracle")
 async def test_async_execute_many_update_batch(oracle_async_session: OracleAsyncDriver) -> None:
     """Test execute_many with batch UPDATE operations."""
@@ -211,6 +212,7 @@ def test_sync_execute_many_with_named_parameters(oracle_sync_session: OracleSync
     )
 
 
+@pytest.mark.asyncio(loop_scope="function")
 @pytest.mark.xdist_group("oracle")
 async def test_async_execute_many_with_sequences(oracle_async_session: OracleAsyncDriver) -> None:
     """Test execute_many with Oracle sequences for auto-incrementing IDs."""
@@ -334,11 +336,14 @@ def test_sync_execute_many_error_handling(oracle_sync_session: OracleSyncDriver)
     with pytest.raises(Exception):  # Oracle will raise an ORA-00001 error
         oracle_sync_session.execute_many(insert_sql, duplicate_data)
 
-    # Verify that the failed batch didn't partially insert records
+    # Verify that the failed batch partially inserted valid records before hitting constraint violation
+    # Oracle's executemany processes sequentially, so the first valid record (id=3) should be inserted
     count_result = oracle_sync_session.execute("SELECT COUNT(*) as total_count FROM test_error_handling")
     assert isinstance(count_result, SQLResult)
     assert count_result.data is not None
-    assert count_result.data[0]["TOTAL_COUNT"] == len(valid_data)  # Only original valid data
+    assert (
+        count_result.data[0]["TOTAL_COUNT"] == len(valid_data) + 1
+    )  # Original data + first valid record from failed batch
 
     # Test successful batch after error
     new_valid_data = [(6, "user6@example.com", "User 6"), (7, "user7@example.com", "User 7")]
@@ -347,11 +352,11 @@ def test_sync_execute_many_error_handling(oracle_sync_session: OracleSyncDriver)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == len(new_valid_data)
 
-    # Final count should be original + new valid records
+    # Final count should be original + partial failed batch + new valid records
     final_count_result = oracle_sync_session.execute("SELECT COUNT(*) as total_count FROM test_error_handling")
     assert isinstance(final_count_result, SQLResult)
     assert final_count_result.data is not None
-    expected_total = len(valid_data) + len(new_valid_data)
+    expected_total = len(valid_data) + 1 + len(new_valid_data)  # +1 for first record from failed batch
     assert final_count_result.data[0]["TOTAL_COUNT"] == expected_total
 
     # Cleanup

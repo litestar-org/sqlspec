@@ -31,13 +31,16 @@ import sqlglot
 from mypy_extensions import mypyc_attr
 from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
+from typing_extensions import Literal
 
 from sqlspec.core.parameters import ParameterProcessor
-from sqlspec.core.statement import OperationType
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from sqlspec.core.statement import StatementConfig
+
+# Define OperationType here to avoid circular import
+OperationType = Literal["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT", "DDL", "PRAGMA", "UNKNOWN"]
 
 
 __all__ = ("CompiledSQL", "OperationType", "SQLProcessor")
@@ -54,6 +57,7 @@ _OPERATION_TYPES = {
     "EXECUTE": "EXECUTE",
     "SCRIPT": "SCRIPT",
     "DDL": "DDL",
+    "PRAGMA": "PRAGMA",
     "UNKNOWN": "UNKNOWN",
 }
 
@@ -252,29 +256,39 @@ class SQLProcessor:
                 sql=sql, parameters=parameters, config=self._config.parameter_config
             )
 
-            # Phase 2: Single SQLGlot parse with dialect
+            # Phase 2: Get SQLGlot-compatible SQL for parsing and operation detection
             dialect_str = str(self._config.dialect) if self._config.dialect else None
+            sqlglot_sql, _ = self._parameter_processor._get_sqlglot_compatible_sql(
+                sql, parameters, self._config.parameter_config, dialect_str
+            )
+
+            # Initialize variables that might be modified later
+            final_parameters = processed_params
 
             if self._config.enable_parsing:
                 try:
-                    # Parse once for both AST and operation detection
-                    expression = sqlglot.parse_one(processed_sql, dialect=dialect_str)
+                    # Parse SQLGlot-compatible SQL for AST and operation detection
+                    expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)
                     operation_type = self._detect_operation_type(expression)
+
+                    # Apply NULL parameter handling if needed (modifies both AST and parameters)
+                    if self._config.parameter_config.remove_null_parameters:
+                        expression, final_parameters = self._apply_null_parameter_removal(expression, processed_params)
+
                 except ParseError:
                     # Fallback for unparsable SQL
                     expression = None
-                    operation_type = self._guess_operation_type(processed_sql)
+                    operation_type = "EXECUTE"
             else:
                 expression = None
-                operation_type = self._guess_operation_type(processed_sql)
+                operation_type = "EXECUTE"
 
-            # Phase 3: Apply final transformations if configured
-            if self._config.output_transformer:
-                final_sql, final_params = self._apply_final_transformations(processed_sql, processed_params)
-            else:
-                final_sql, final_params = processed_sql, processed_params
+            # Phase 3: Apply final transformations (always work with AST when available)
+            final_sql, final_params = self._apply_final_transformations(
+                expression, processed_sql, final_parameters, dialect_str
+            )
 
-            # Phase 4: Create immutable result
+            # Phase 5: Create immutable result
             return CompiledSQL(
                 compiled_sql=final_sql,
                 execution_parameters=final_params,
@@ -348,42 +362,179 @@ class SQLProcessor:
             return _OPERATION_TYPES["DELETE"]
         if isinstance(expression, (exp.Create, exp.Drop, exp.Alter)):
             return _OPERATION_TYPES["DDL"]
-        if hasattr(expression, "sql") and "COPY" in str(expression).upper():
+        if isinstance(expression, exp.Copy):
             return _OPERATION_TYPES["COPY"]
-        if hasattr(expression, "sql") and "EXEC" in str(expression).upper():
+        if isinstance(expression, exp.Pragma):
+            return _OPERATION_TYPES["PRAGMA"]
+        if isinstance(expression, exp.Command):
             return _OPERATION_TYPES["EXECUTE"]
         return _OPERATION_TYPES["UNKNOWN"]
 
-    def _guess_operation_type(self, sql: str) -> str:
-        """Fallback operation type detection from SQL string."""
-        sql_upper = sql.strip().upper()
+    def _apply_final_transformations(
+        self, expression: "Optional[exp.Expression]", sql: str, parameters: Any, dialect_str: "Optional[str]"
+    ) -> "tuple[str, Any]":
+        """Apply final transformations with AST support.
 
-        # Map DDL operations to DDL type
-        if sql_upper.startswith(("CREATE", "DROP", "ALTER")):
-            return _OPERATION_TYPES["DDL"]
-
-        for op_type in ["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE"]:
-            if sql_upper.startswith(op_type):
-                return _OPERATION_TYPES.get(op_type, _OPERATION_TYPES["UNKNOWN"])
-
-        return _OPERATION_TYPES["UNKNOWN"]
-
-    def _apply_final_transformations(self, sql: str, parameters: Any) -> "tuple[str, Any]":
-        """Apply final transformations from StatementConfig.
-
-        Applies any final transformations specified in the configuration,
-        such as output_transformer functions.
+        When an AST expression is available, it's passed to output transformers for potential
+        manipulation before final SQL generation. This enables users to manipulate the AST
+        in their custom output transformers.
 
         Args:
-            sql: Compiled SQL string
+            expression: SQLGlot AST expression (if available)
+            sql: Compiled SQL string (fallback)
             parameters: Execution parameters
+            dialect_str: SQL dialect for AST-to-SQL conversion
 
         Returns:
             Tuple of (final_sql, final_parameters)
         """
         if self._config.output_transformer:
+            # If AST is available, generate SQL from AST for consistency
+            if expression is not None:
+                # Generate SQL from AST for transformer input
+                ast_sql = expression.sql(dialect=dialect_str)
+                return self._config.output_transformer(ast_sql, parameters)
+            # No AST available, use string-based transformation
             return self._config.output_transformer(sql, parameters)
+
+        # No transformer configured
+        if expression is not None:
+            # Regenerate SQL from AST to ensure consistency
+            return expression.sql(dialect=dialect_str), parameters
         return sql, parameters
+
+    def _apply_null_parameter_removal(
+        self, expression: "exp.Expression", parameters: Any
+    ) -> "tuple[exp.Expression, Any]":
+        """Apply ADBC-specific NULL parameter removal using AST transformation.
+
+        This method implements the NULL parameter handling from the old pipeline_steps.py
+        using SQLGlot AST transformation. It replaces NULL parameter placeholders with
+        NULL literals and removes the corresponding parameters to prevent Arrow type
+        inference issues.
+
+        Args:
+            expression: Parsed SQLGlot AST expression
+            parameters: Parameter values that may contain None
+
+        Returns:
+            Tuple of (modified_expression, cleaned_parameters)
+        """
+        # 1. Analyze NULL parameters
+        null_positions = self._analyze_null_positions(parameters)
+        if not null_positions:
+            return expression, parameters
+
+        # 2. Transform AST to replace NULL placeholders with NULL literals
+        modified_expression = self._replace_null_placeholders_in_ast(expression, null_positions)
+
+        # 3. Remove NULL parameters from parameter list
+        cleaned_parameters = self._clean_null_parameters(parameters, null_positions)
+
+        return modified_expression, cleaned_parameters
+
+    def _analyze_null_positions(self, parameters: Any) -> "dict[int, Any]":
+        """Analyze parameters to find NULL positions."""
+        null_positions = {}
+
+        if isinstance(parameters, (list, tuple)):
+            for i, param in enumerate(parameters):
+                if param is None:
+                    null_positions[i] = None
+        elif isinstance(parameters, dict):
+            for key, param in parameters.items():
+                if param is None:
+                    # Handle different key formats
+                    if isinstance(key, str) and key.lstrip("$").isdigit():
+                        param_num = int(key.lstrip("$"))
+                        null_positions[param_num - 1] = None  # Convert to 0-based index
+                    elif isinstance(key, int):
+                        null_positions[key] = None
+
+        return null_positions
+
+    def _replace_null_placeholders_in_ast(
+        self, expression: "exp.Expression", null_positions: "dict[int, Any]"
+    ) -> "exp.Expression":
+        """Replace NULL parameter placeholders with NULL literals in AST.
+
+        Uses SQLGlot AST transformation to find and replace parameter nodes
+        with NULL literal nodes, following the pattern from pipeline_steps.py.
+        """
+
+        def transform_node(node: "exp.Expression") -> "exp.Expression":
+            # Handle PostgreSQL-style placeholders ($1, $2, etc.)
+            if isinstance(node, exp.Placeholder) and hasattr(node, "this"):
+                return self._transform_postgres_placeholder(node, null_positions)
+
+            # Handle generic parameter nodes
+            if isinstance(node, exp.Parameter) and hasattr(node, "this"):
+                return self._transform_parameter_node(node, null_positions)
+
+            return node
+
+        return expression.transform(transform_node)
+
+    def _transform_postgres_placeholder(
+        self, node: "exp.Placeholder", null_positions: "dict[int, Any]"
+    ) -> "exp.Expression":
+        """Transform PostgreSQL-style placeholders ($1, $2, etc.)."""
+        try:
+            param_str = str(node.this).lstrip("$")
+            param_num = int(param_str)
+            param_index = param_num - 1  # Convert to 0-based
+
+            if param_index in null_positions:
+                # Replace with NULL literal
+                return exp.Null()
+            # Renumber placeholder to account for removed NULLs
+            nulls_before = sum(1 for idx in null_positions if idx < param_index)
+            new_param_num = param_num - nulls_before
+            return exp.Placeholder(this=f"${new_param_num}")
+
+        except (ValueError, AttributeError):
+            # Return original if parsing fails
+            return node
+
+    def _transform_parameter_node(self, node: "exp.Parameter", null_positions: "dict[int, Any]") -> "exp.Expression":
+        """Transform generic parameter nodes."""
+        try:
+            param_str = str(node.this)
+            param_num = int(param_str)
+            param_index = param_num - 1  # Convert to 0-based
+
+            if param_index in null_positions:
+                # Replace with NULL literal
+                return exp.Null()
+            # Renumber parameter to account for removed NULLs
+            nulls_before = sum(1 for idx in null_positions if idx < param_index)
+            new_param_num = param_num - nulls_before
+            return exp.Parameter(this=str(new_param_num))
+
+        except (ValueError, AttributeError):
+            # Return original if parsing fails
+            return node
+
+    def _clean_null_parameters(self, parameters: Any, null_positions: "dict[int, Any]") -> Any:
+        """Remove NULL parameters from parameter list."""
+        if isinstance(parameters, (list, tuple)):
+            return [param for i, param in enumerate(parameters) if i not in null_positions]
+        if isinstance(parameters, dict):
+            cleaned_dict = {}
+            param_keys = sorted(
+                parameters.keys(),
+                key=lambda k: int(k.lstrip("$")) if isinstance(k, str) and k.lstrip("$").isdigit() else 0,
+            )
+
+            new_param_num = 1
+            for key in param_keys:
+                if parameters[key] is not None:
+                    cleaned_dict[str(new_param_num)] = parameters[key]
+                    new_param_num += 1
+
+            return cleaned_dict
+
+        return parameters
 
     def clear_cache(self) -> None:
         """Clear compilation cache.
@@ -411,131 +562,3 @@ class SQLProcessor:
             "max_size": self._max_cache_size,
             "hit_rate_percent": hit_rate_pct,
         }
-
-
-# Utility functions for operation type detection
-def _is_ddl_operation(expression: "exp.Expression") -> bool:
-    """Check if expression is DDL operation.
-
-    Args:
-        expression: SQLGlot expression
-
-    Returns:
-        True if expression is DDL (CREATE, DROP, ALTER, etc.)
-    """
-    return isinstance(expression, (exp.Create, exp.Drop, exp.Alter, exp.Comment, exp.Grant))
-
-
-def _is_script_operation(sql: str) -> bool:
-    """Check if SQL contains multiple statements (script).
-
-    Args:
-        sql: SQL string
-
-    Returns:
-        True if SQL contains multiple statements
-    """
-    # Simple check for multiple statements - look for semicolons not in strings
-    in_string = False
-    quote_char = None
-    escaped = False
-    semicolon_count = 0
-
-    for char in sql:
-        if escaped:
-            escaped = False
-            continue
-
-        if char == "\\":
-            escaped = True
-            continue
-
-        if not in_string and char in {"'", '"'}:
-            in_string = True
-            quote_char = char
-        elif in_string and char == quote_char:
-            in_string = False
-            quote_char = None
-        elif not in_string and char == ";":
-            semicolon_count += 1
-
-    # Multiple statements if more than one non-string semicolon
-    return semicolon_count > 1
-
-
-# Compatibility functions for current transformer interface
-def get_operation_type(sql: str, expression: Optional["exp.Expression"] = None) -> str:
-    """Get operation type - compatibility interface.
-
-    Provides same interface as current transformer.py for operation detection.
-
-    Args:
-        sql: SQL string
-        expression: Optional SQLGlot expression
-
-    Returns:
-        Operation type string
-    """
-    if expression is not None:
-        # Use AST-based detection if expression provided
-        if isinstance(expression, exp.Select):
-            return _OPERATION_TYPES["SELECT"]
-        if isinstance(expression, exp.Insert):
-            return _OPERATION_TYPES["INSERT"]
-        if isinstance(expression, exp.Update):
-            return _OPERATION_TYPES["UPDATE"]
-        if isinstance(expression, exp.Delete):
-            return _OPERATION_TYPES["DELETE"]
-        if _is_ddl_operation(expression):
-            return _OPERATION_TYPES["DDL"]
-        if hasattr(expression, "sql") and "COPY" in str(expression).upper():
-            return _OPERATION_TYPES["COPY"]
-        if hasattr(expression, "sql") and "EXEC" in str(expression).upper():
-            return _OPERATION_TYPES["EXECUTE"]
-        return _OPERATION_TYPES["UNKNOWN"]
-    # Fallback to string-based detection
-    if _is_script_operation(sql):
-        return _OPERATION_TYPES["SCRIPT"]
-
-    sql_upper = sql.strip().upper()
-
-    # Direct operation type mapping for string-based detection
-    if sql_upper.startswith("SELECT"):
-        return _OPERATION_TYPES["SELECT"]
-    if sql_upper.startswith("INSERT"):
-        return _OPERATION_TYPES["INSERT"]
-    if sql_upper.startswith("UPDATE"):
-        return _OPERATION_TYPES["UPDATE"]
-    if sql_upper.startswith("DELETE"):
-        return _OPERATION_TYPES["DELETE"]
-    if sql_upper.startswith(("CREATE", "DROP", "ALTER")):
-        return _OPERATION_TYPES["DDL"]
-    if sql_upper.startswith("COPY"):
-        return _OPERATION_TYPES["COPY"]
-    if sql_upper.startswith("EXECUTE"):
-        return _OPERATION_TYPES["EXECUTE"]
-
-    return _OPERATION_TYPES["UNKNOWN"]
-
-
-# Factory function for creating processors
-def create_processor(config: "StatementConfig") -> SQLProcessor:
-    """Create SQLProcessor instance with configuration.
-
-    Factory function for easier processor creation and potential
-    future optimizations like processor pooling.
-
-    Args:
-        config: Statement configuration
-
-    Returns:
-        Configured SQLProcessor instance
-    """
-    return SQLProcessor(config)
-
-
-# Implementation status tracking
-__module_status__ = "IMPLEMENTED"  # PLACEHOLDER → BUILDING → TESTING → COMPLETE
-__performance_target__ = "5-10x faster"  # Compilation speed improvement target
-__memory_target__ = "40-60% reduction"  # Memory usage improvement target
-__compatibility_target__ = "100%"  # Must maintain complete compatibility

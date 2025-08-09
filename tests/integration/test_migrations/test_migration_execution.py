@@ -34,12 +34,13 @@ def temp_workspace() -> Generator[Path, None, None]:
 
 
 @pytest.fixture
-def temp_workspace_with_migrations() -> Generator[Path, None, None]:
+def temp_workspace_with_migrations(tmp_path: Path) -> Path:
     """Create a temporary workspace with migrations directory for tests."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        workspace = Path(temp_dir)
+    # Create migrations directory in pytest's tmp_path
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
 
-        yield workspace
+    return tmp_path
 
 
 class MockMigrationTracker(BaseMigrationTracker):
@@ -236,7 +237,8 @@ DROP TABLE users;
 
     # Execute upgrade
     with patch("sqlspec.migrations.base.run_") as mock_run:
-        mock_run.return_value = [
+        # run_ should return a callable that returns the SQL statements
+        mock_run.return_value = lambda file_path: [
             "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL);"
         ]
 
@@ -287,7 +289,8 @@ DROP TABLE users;
 
     # Execute downgrade
     with patch("sqlspec.migrations.base.run_") as mock_run:
-        mock_run.return_value = ["DROP TABLE users;"]
+        # run_ should return a callable that returns the SQL statements
+        mock_run.return_value = lambda file_path: ["DROP TABLE users;"]
 
         result = runner.execute_downgrade(mock_driver, migration)
 
@@ -364,7 +367,8 @@ def test_multiple_migrations_execution_order(temp_workspace_with_migrations: Pat
         ]
 
         for i, (version, file_path) in enumerate(migration_files):
-            mock_run.return_value = [sql_statements[i]]
+            # run_ should return a callable that returns the SQL statements
+            mock_run.return_value = lambda file_path, idx=i: [sql_statements[idx]]
 
             migration = runner.load_migration(file_path)
             result = runner.execute_upgrade(mock_driver, migration)
@@ -413,7 +417,8 @@ SELECT DISTINCT column1, column2 FROM legacy_table;
 
     # Execute upgrade should work
     with patch("sqlspec.migrations.base.run_") as mock_run:
-        mock_run.return_value = [
+        # run_ should return a callable that returns the SQL statements
+        mock_run.return_value = lambda file_path: [
             "CREATE TABLE irreversible_data AS SELECT DISTINCT column1, column2 FROM legacy_table;"
         ]
 

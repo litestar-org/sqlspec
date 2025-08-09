@@ -186,7 +186,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
 
         for stmt in statements:
-            # Create individual statement for each script part with core processing
             single_stmt = statement.copy(statement=stmt, parameters=prepared_parameters)
             self._execute_statement(cursor, single_stmt)
 

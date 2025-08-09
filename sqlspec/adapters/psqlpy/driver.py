@@ -16,6 +16,7 @@ Architecture Features:
 """
 
 import re
+import uuid
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Final, Optional
 
@@ -28,7 +29,6 @@ from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -50,18 +50,12 @@ psqlpy_statement_config = StatementConfig(
         default_execution_parameter_style=ParameterStyle.NUMERIC,
         supported_execution_parameter_styles={ParameterStyle.NUMERIC},
         type_coercion_map={
-            list: lambda x: x,
-            tuple: list,
-            dict: to_json,
-            bool: lambda x: x,
-            int: lambda x: x,
-            float: lambda x: x,
-            str: lambda x: x,
-            bytes: lambda x: x,
-            type(None): lambda _: None,
+            tuple: list  # Convert tuples to lists for PostgreSQL array compatibility
+            # Psqlpy handles most types natively, including dict->JSON conversion
         },
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=True,  # Support mixed parameter styles like ":name and $2"
         preserve_parameter_format=True,
     ),
     # Core processing features enabled for performance
@@ -74,15 +68,35 @@ psqlpy_statement_config = StatementConfig(
 # PostgreSQL command tag parsing for rows affected extraction
 PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 
+# UUID format regex - matches both with and without dashes
+UUID_REGEX: Final[re.Pattern[str]] = re.compile(
+    r"^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$", re.IGNORECASE
+)
+
+
+def _convert_psqlpy_parameters(value: Any) -> Any:
+    """Convert parameters for Psqlpy compatibility.
+
+    Psqlpy handles most types natively. Only convert UUID strings to UUID objects
+    when explicitly needed, as psqlpy can handle JSON and other types directly.
+    """
+    # Only convert UUID strings to UUID objects if they match UUID format
+    if isinstance(value, str) and UUID_REGEX.match(value):
+        try:
+            return uuid.UUID(value)
+        except ValueError:
+            pass  # Not a valid UUID, return as string
+
+    return value
+
 
 class PsqlpyCursor:
     """Context manager for Psqlpy cursor management with enhanced error handling."""
 
-    __slots__ = ("_in_use", "_transaction", "connection")
+    __slots__ = ("_in_use", "connection")
 
     def __init__(self, connection: "PsqlpyConnection") -> None:
         self.connection = connection
-        self._transaction = None
         self._in_use = False
 
     async def __aenter__(self) -> "PsqlpyConnection":
@@ -96,8 +110,7 @@ class PsqlpyCursor:
         self._in_use = False
         if hasattr(self.connection, "back_to_pool"):
             try:
-                if not self._transaction:
-                    self.connection.back_to_pool()
+                self.connection.back_to_pool()
             except Exception as e:
                 logger.debug("Failed to return psqlpy connection to pool: %s", e)
 
@@ -137,7 +150,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     - Preserved async patterns and transaction management
     """
 
-    __slots__ = ("_transaction",)
+    __slots__ = ()
     dialect = "postgres"
 
     def __init__(
@@ -233,18 +246,11 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         # Try psqlpy's native execute_batch first for better performance
         if not prepared_parameters:
-            try:
-                await cursor.execute_batch(sql)
-                statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
-                return self.create_execution_result(
-                    cursor,
-                    statement_count=len(statements),
-                    successful_statements=len(statements),
-                    is_script_result=True,
-                )
-            except Exception as e:
-                logger.debug("psqlpy execute_batch failed, falling back to individual statements: %s", e)
-
+            await cursor.execute_batch(sql)
+            statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
+            return self.create_execution_result(
+                cursor, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
+            )
         # Fallback to individual statement execution with parameters
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
         successful_count = 0
@@ -277,10 +283,14 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
         # Format parameters for psqlpy execute_many (expects list of lists/sequences)
-        formatted_parameters = [
-            list(param_set) if isinstance(param_set, (list, tuple)) else [param_set]
-            for param_set in prepared_parameters
-        ]
+        formatted_parameters = []
+        for param_set in prepared_parameters:
+            if isinstance(param_set, (list, tuple)):
+                # Light parameter conversion - only UUID strings need special handling
+                converted_params = [_convert_psqlpy_parameters(param) for param in param_set]
+                formatted_parameters.append(converted_params)
+            else:
+                formatted_parameters.append([_convert_psqlpy_parameters(param_set)])
 
         await cursor.execute_many(sql, formatted_parameters)
 
@@ -300,6 +310,10 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             ExecutionResult with comprehensive execution metadata
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+
+        # Light parameter conversion - psqlpy handles most types natively
+        if prepared_parameters:
+            prepared_parameters = [_convert_psqlpy_parameters(param) for param in prepared_parameters]
 
         # Enhanced SELECT result processing using psqlpy fetch
         if statement.returns_rows():
@@ -370,39 +384,27 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                 return int(match.group(3))
         return -1
 
-    # Enhanced transaction management with psqlpy native methods
+    # Simplified transaction management using standard SQL commands
     async def begin(self) -> None:
-        """Begin a database transaction with enhanced error handling."""
+        """Begin a database transaction."""
         try:
-            if not hasattr(self, "_transaction"):
-                self._transaction = self.connection.transaction()
-                await self._transaction.begin()
-            else:
-                await self.connection.execute("BEGIN")
+            await self.connection.execute("BEGIN")
         except psqlpy.exceptions.DatabaseError as e:
             msg = f"Failed to begin psqlpy transaction: {e}"
             raise SQLSpecError(msg) from e
 
     async def rollback(self) -> None:
-        """Rollback the current transaction with enhanced error handling."""
+        """Rollback the current transaction."""
         try:
-            if hasattr(self, "_transaction") and self._transaction:
-                await self._transaction.rollback()
-                delattr(self, "_transaction")
-            else:
-                await self.connection.execute("ROLLBACK")
+            await self.connection.execute("ROLLBACK")
         except psqlpy.exceptions.DatabaseError as e:
             msg = f"Failed to rollback psqlpy transaction: {e}"
             raise SQLSpecError(msg) from e
 
     async def commit(self) -> None:
-        """Commit the current transaction with enhanced error handling."""
+        """Commit the current transaction."""
         try:
-            if hasattr(self, "_transaction") and self._transaction:
-                await self._transaction.commit()
-                delattr(self, "_transaction")
-            else:
-                await self.connection.execute("COMMIT")
+            await self.connection.execute("COMMIT")
         except psqlpy.exceptions.DatabaseError as e:
             msg = f"Failed to commit psqlpy transaction: {e}"
             raise SQLSpecError(msg) from e

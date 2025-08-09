@@ -46,15 +46,18 @@ sqlite_statement_config = StatementConfig(
         default_parameter_style=ParameterStyle.QMARK,
         supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
         default_execution_parameter_style=ParameterStyle.QMARK,
-        supported_execution_parameter_styles={ParameterStyle.QMARK},
+        supported_execution_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
         type_coercion_map={
             bool: int,
             datetime.datetime: lambda v: v.isoformat(),
             datetime.date: lambda v: v.isoformat(),
             Decimal: str,
-            dict: to_json,
+            # Note: Don't auto-convert dicts to JSON for SQLite
+            # This interferes with named parameter processing in execute_many
+            # dict: to_json,  # Removed to prevent parameter interference
             list: to_json,
-            tuple: lambda v: to_json(list(v)),
+            # Note: Don't convert tuples to JSON for SQLite as they're used as parameter sets
+            # tuple: lambda v: to_json(list(v)),  # Removed - tuples are parameter sets
         },
         has_native_list_expansion=False,
         needs_static_script_compilation=True,
@@ -188,7 +191,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         Returns:
             None - always proceeds with standard execution for SQLite
         """
-        _ = (cursor, statement)  # Mark as intentionally unused
         return None
 
     def _execute_script(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "ExecutionResult":
@@ -223,6 +225,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             msg = "execute_many requires parameters"
             raise ValueError(msg)
 
+        # Ensure prepared_parameters is a list of parameter sets for SQLite executemany
         cursor.executemany(sql, prepared_parameters)
 
         # Calculate affected rows more accurately

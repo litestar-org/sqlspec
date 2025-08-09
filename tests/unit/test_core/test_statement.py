@@ -275,7 +275,7 @@ def test_sql_single_pass_processing_triggered_by_sql_property() -> None:
     stmt = SQL("SELECT * FROM users")
 
     # Mock the SQLProcessor to verify it's called exactly once
-    with patch("sqlspec.core.compiler.SQLProcessor") as mock_processor_class:
+    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
         mock_processor = MagicMock()
         mock_processor_class.return_value = mock_processor
 
@@ -314,7 +314,7 @@ def test_sql_single_pass_processing_triggered_by_parameters_property() -> None:
     """Test accessing .parameters property triggers processing."""
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
 
-    with patch("sqlspec.core.compiler.SQLProcessor") as mock_processor_class:
+    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
         mock_processor = MagicMock()
         mock_processor_class.return_value = mock_processor
 
@@ -339,7 +339,7 @@ def test_sql_single_pass_processing_triggered_by_operation_type_property() -> No
     """Test accessing .operation_type property triggers processing."""
     stmt = SQL("INSERT INTO users (name) VALUES ('john')")
 
-    with patch("sqlspec.core.compiler.SQLProcessor") as mock_processor_class:
+    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
         mock_processor = MagicMock()
         mock_processor_class.return_value = mock_processor
 
@@ -364,7 +364,7 @@ def test_sql_processing_fallback_on_error() -> None:
     """Test SQL processing fallback when SQLProcessor fails."""
     stmt = SQL("INVALID SQL SYNTAX")
 
-    with patch("sqlspec.core.compiler.SQLProcessor") as mock_processor_class:
+    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
         mock_processor = MagicMock()
         mock_processor_class.return_value = mock_processor
         mock_processor.compile.side_effect = Exception("Processing failed")
@@ -387,7 +387,7 @@ def test_sql_expression_caching_enabled() -> None:
     stmt = SQL("SELECT * FROM users", statement_config=config)
 
     # Mock SQLProcessor to control caching behavior
-    with patch("sqlspec.core.compiler.SQLProcessor") as mock_processor_class:
+    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
         mock_processor = MagicMock()
         mock_processor_class.return_value = mock_processor
 
@@ -417,7 +417,7 @@ def test_sql_expression_caching_disabled() -> None:
 
     # Even with caching disabled, the processed state should be cached internally
     # to avoid redundant processing within the same SQL object
-    with patch("sqlspec.core.compiler.SQLProcessor") as mock_processor_class:
+    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
         mock_processor = MagicMock()
         mock_processor_class.return_value = mock_processor
 
@@ -495,7 +495,7 @@ def test_sql_parameters_property_returns_processed_parameters() -> None:
     """Test SQL.parameters property returns processed parameters."""
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
 
-    with patch("sqlspec.core.compiler.SQLProcessor") as mock_processor_class:
+    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
         mock_processor = MagicMock()
         mock_processor_class.return_value = mock_processor
 
@@ -546,7 +546,7 @@ def test_sql_operation_type_detection(sql_statement: str, expected_operation_typ
     """Test SQL operation type detection for various statement types."""
     stmt = SQL(sql_statement)
 
-    with patch("sqlspec.core.compiler.SQLProcessor") as mock_processor_class:
+    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
         mock_processor = MagicMock()
         mock_processor_class.return_value = mock_processor
 
@@ -682,7 +682,7 @@ def test_sql_compile_method_compatibility() -> None:
     """Test SQL.compile() method returns same format as old API."""
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
 
-    with patch("sqlspec.core.compiler.SQLProcessor") as mock_processor_class:
+    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
         mock_processor = MagicMock()
         mock_processor_class.return_value = mock_processor
 
@@ -746,7 +746,7 @@ def test_sql_validation_errors_property_compatibility() -> None:
     """Test SQL.validation_errors property compatibility."""
     stmt = SQL("SELECT * FROM users")
 
-    with patch("sqlspec.core.compiler.SQLProcessor") as mock_processor_class:
+    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
         mock_processor = MagicMock()
         mock_processor_class.return_value = mock_processor
 
@@ -802,7 +802,7 @@ def test_sql_single_parse_guarantee() -> None:
     """Test SQL guarantees single parse operation."""
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
 
-    with patch("sqlspec.core.compiler.SQLProcessor") as mock_processor_class:
+    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
         mock_processor = MagicMock()
         mock_processor_class.return_value = mock_processor
 
@@ -847,7 +847,7 @@ def test_sql_processing_caching_performance() -> None:
     """Test SQL processing result caching for performance."""
     stmt = SQL("SELECT * FROM users")
 
-    with patch("sqlspec.core.compiler.SQLProcessor") as mock_processor_class:
+    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
         mock_processor = MagicMock()
         mock_processor_class.return_value = mock_processor
 
@@ -957,7 +957,7 @@ def test_sql_invalid_syntax_handling() -> None:
     assert "INVALID" in invalid_stmt._raw_sql
 
     # Processing should fall back gracefully
-    with patch("sqlspec.core.compiler.SQLProcessor") as mock_processor_class:
+    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
         mock_processor = MagicMock()
         mock_processor_class.return_value = mock_processor
         mock_processor.compile.side_effect = Exception("Parse error")
@@ -1102,7 +1102,7 @@ def test_sql_processing_state_stability() -> None:
     """Test SQL processing state remains stable after first access."""
     stmt = SQL("SELECT * FROM users")
 
-    with patch("sqlspec.core.compiler.SQLProcessor") as mock_processor_class:
+    with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
         mock_processor = MagicMock()
         mock_processor_class.return_value = mock_processor
 

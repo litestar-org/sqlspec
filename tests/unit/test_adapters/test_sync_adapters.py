@@ -246,12 +246,9 @@ def test_sync_driver_execute_script_method(mock_sync_driver: MockSyncDriver) -> 
 
 
 def test_sync_driver_select_one(mock_sync_driver: MockSyncDriver) -> None:
-    """Test select_one method."""
-    result = mock_sync_driver.select_one("SELECT * FROM users WHERE id = ?", 1)
-
-    assert isinstance(result, dict)
-    assert result["id"] == 1
-    assert result["name"] == "test"
+    """Test select_one method - expects error when multiple rows returned."""
+    with pytest.raises(ValueError, match="Expected exactly one row, found 2"):
+        mock_sync_driver.select_one("SELECT * FROM users WHERE id = ?", 1)
 
 
 def test_sync_driver_select_one_no_results(mock_sync_driver: MockSyncDriver) -> None:
@@ -279,12 +276,9 @@ def test_sync_driver_select_one_multiple_results(mock_sync_driver: MockSyncDrive
 
 
 def test_sync_driver_select_one_or_none(mock_sync_driver: MockSyncDriver) -> None:
-    """Test select_one_or_none method."""
-    result = mock_sync_driver.select_one_or_none("SELECT * FROM users WHERE id = ?", 1)
-
-    assert isinstance(result, dict)
-    assert result["id"] == 1
-    assert result["name"] == "test"
+    """Test select_one_or_none method - expects error when multiple rows returned."""
+    with pytest.raises(ValueError, match="Expected at most one row, found 2"):
+        mock_sync_driver.select_one_or_none("SELECT * FROM users WHERE id = ?", 1)
 
 
 def test_sync_driver_select_one_or_none_no_results(mock_sync_driver: MockSyncDriver) -> None:
@@ -343,9 +337,9 @@ def test_sync_driver_select_value_no_results(mock_sync_driver: MockSyncDriver) -
 
 
 def test_sync_driver_select_value_or_none(mock_sync_driver: MockSyncDriver) -> None:
-    """Test select_value_or_none method."""
-    result = mock_sync_driver.select_value_or_none("SELECT * FROM users WHERE id = ?", 1)
-    assert result == 1  # First value from first row
+    """Test select_value_or_none method - expects error when multiple rows returned."""
+    with pytest.raises(ValueError, match="Expected at most one row, found 2"):
+        mock_sync_driver.select_value_or_none("SELECT * FROM users WHERE id = ?", 1)
 
 
 def test_sync_driver_select_value_or_none_no_results(mock_sync_driver: MockSyncDriver) -> None:

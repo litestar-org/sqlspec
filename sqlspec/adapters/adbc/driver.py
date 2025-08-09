@@ -64,6 +64,54 @@ DIALECT_PARAMETER_STYLES = {
 }
 
 
+def _adbc_output_transformer(sql: str, parameters: Any) -> "tuple[str, Any]":
+    """ADBC-specific output transformer that handles SQL and parameter transformations.
+
+    This transformer replicates the functionality that was previously in pipeline_steps.py
+    for ADBC-specific SQL processing, including:
+    - SQL dialect-specific formatting for optimal Arrow performance
+    - Parameter binding optimizations for Arrow/ADBC type inference
+    - Type coercion adjustments for ADBC compatibility
+    - Array parameter handling for PostgreSQL and other array-supporting dialects
+    """
+
+    return sql, _transform_adbc_parameters(parameters)
+
+
+def _transform_adbc_parameters(parameters: Any) -> Any:
+    """Transform parameters for ADBC compatibility.
+
+    Handles type coercion and format conversion that helps Arrow type inference
+    and prevents binding issues with ADBC drivers.
+    """
+    if isinstance(parameters, (list, tuple)):
+        return [_coerce_parameter_for_adbc(param) for param in parameters]
+    if isinstance(parameters, dict):
+        return {key: _coerce_parameter_for_adbc(param) for key, param in parameters.items()}
+    return _coerce_parameter_for_adbc(parameters) if parameters is not None else parameters
+
+
+def _coerce_parameter_for_adbc(param: Any) -> Any:
+    """Coerce individual parameter for ADBC compatibility."""
+    # Handle array types for PostgreSQL and other array-supporting databases
+    if isinstance(param, (list, tuple)) and param:
+        return _convert_array_for_postgres_adbc(param)
+
+    # Handle decimal types that might cause Arrow issues
+    if isinstance(param, decimal.Decimal):
+        return float(param)
+
+    # Handle datetime types for consistent Arrow representation
+    if isinstance(param, (datetime.datetime, datetime.date, datetime.time)):
+        return param  # Arrow handles these natively
+
+    # Handle JSON/dict types for PostgreSQL
+    if isinstance(param, dict):
+        return to_json(param)
+
+    return param
+
+
 def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
     """Create ADBC statement configuration for the specified dialect with core optimizations."""
     default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
@@ -81,8 +129,8 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
         has_native_list_expansion=True,
         needs_static_script_compilation=True,
         preserve_parameter_format=True,
-        # ADBC specific: Cannot handle NULL parameters in parameter arrays
-        # They must be replaced with literal NULL in SQL and removed from parameter list
+        # ADBC NULL parameter handling: Enable AST-based NULL parameter removal
+        # This provides Arrow type inference compatibility by removing NULL placeholders
         remove_null_parameters=True,
     )
 
@@ -94,6 +142,8 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
         enable_validation=True,
         enable_caching=True,
         enable_parameter_type_wrapping=True,
+        # ADBC-specific output transformer for SQL and parameter processing
+        output_transformer=_adbc_output_transformer,
     )
 
 
@@ -295,21 +345,20 @@ class AdbcDriver(SyncDriverAdapterBase):
                 # Handle empty parameters case
                 cursor._rowcount = 0
                 row_count = 0
+            elif isinstance(prepared_parameters, list) and prepared_parameters:
+                # Process each parameter set for ADBC compatibility
+                processed_params = []
+                for param_set in prepared_parameters:
+                    postgres_compatible = self._handle_postgres_empty_parameters(param_set)
+                    formatted_params = self.prepare_driver_parameters(
+                        postgres_compatible, self.statement_config, is_many=False
+                    )
+                    processed_params.append(formatted_params)
+
+                cursor.executemany(sql, processed_params)
+                row_count = cursor.rowcount if cursor.rowcount is not None else -1
             else:
-                if isinstance(prepared_parameters, list) and prepared_parameters:
-                    # Process each parameter set for ADBC compatibility
-                    processed_params = []
-                    for param_set in prepared_parameters:
-                        postgres_compatible = self._handle_postgres_empty_parameters(param_set)
-                        formatted_params = self.prepare_driver_parameters(
-                            postgres_compatible, self.statement_config, is_many=False
-                        )
-                        processed_params.append(formatted_params)
-
-                    cursor.executemany(sql, processed_params)
-                else:
-                    cursor.executemany(sql, prepared_parameters)
-
+                cursor.executemany(sql, prepared_parameters)
                 row_count = cursor.rowcount if cursor.rowcount is not None else -1
 
         except Exception:

@@ -9,7 +9,7 @@ from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver
 from sqlspec.core.result import SQLResult
 from sqlspec.core.statement import SQL, StatementConfig
 
-pytestmark = pytest.mark.asyncio(loop_scope="function")
+# Note: Only apply asyncio mark to actual async tests, not all tests in the file
 
 
 @pytest.mark.xdist_group("oracle")
@@ -79,6 +79,7 @@ def test_sync_plsql_block_execution(oracle_sync_session: OracleSyncDriver) -> No
     )
 
 
+@pytest.mark.asyncio(loop_scope="function")
 @pytest.mark.xdist_group("oracle")
 async def test_async_plsql_procedure_execution(oracle_async_session: OracleAsyncDriver) -> None:
     """Test creation and execution of PL/SQL stored procedures."""
@@ -214,6 +215,7 @@ def test_sync_oracle_data_types(oracle_sync_session: OracleSyncDriver) -> None:
     )
 
 
+@pytest.mark.asyncio(loop_scope="function")
 @pytest.mark.xdist_group("oracle")
 async def test_async_oracle_analytic_functions(oracle_async_session: OracleAsyncDriver) -> None:
     """Test Oracle's analytic/window functions."""
@@ -335,9 +337,20 @@ def test_oracle_ddl_script_parsing(oracle_sync_session: OracleSyncDriver) -> Non
     # The test verifies that the script can be parsed and prepared.
 
 
+@pytest.mark.asyncio(loop_scope="function")
 @pytest.mark.xdist_group("oracle")
 async def test_async_oracle_exception_handling(oracle_async_session: OracleAsyncDriver) -> None:
     """Test Oracle-specific exception handling in PL/SQL."""
+    # Cleanup first - ensure table doesn't exist
+    await oracle_async_session.execute_script(
+        "BEGIN EXECUTE IMMEDIATE 'DROP TABLE test_exception_table'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+    )
+
+    # Create the table first (Oracle PL/SQL compiler needs to see the table at compile time)
+    await oracle_async_session.execute_script(
+        "CREATE TABLE test_exception_table (id NUMBER PRIMARY KEY, name VARCHAR2(50))"
+    )
+
     # Test exception handling in PL/SQL blocks
     exception_handling_block = """
     DECLARE
@@ -345,9 +358,6 @@ async def test_async_oracle_exception_handling(oracle_async_session: OracleAsync
         duplicate_key EXCEPTION;
         PRAGMA EXCEPTION_INIT(duplicate_key, -1);
     BEGIN
-        -- This should succeed
-        EXECUTE IMMEDIATE 'CREATE TABLE test_exception_table (id NUMBER PRIMARY KEY, name VARCHAR2(50))';
-
         -- Insert first record
         INSERT INTO test_exception_table VALUES (1, 'First Record');
 

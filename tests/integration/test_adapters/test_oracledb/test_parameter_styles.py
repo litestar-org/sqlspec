@@ -7,8 +7,6 @@ import pytest
 from sqlspec.adapters.oracledb import OracleAsyncDriver, OracleSyncDriver
 from sqlspec.core.result import SQLResult
 
-pytestmark = pytest.mark.asyncio(loop_scope="function")
-
 # Oracle uses named parameters with colon prefix (:param)
 OracleParamData = Union[tuple[Any, ...], list[Any], dict[str, Any]]
 
@@ -67,6 +65,7 @@ def test_sync_oracle_parameter_styles(
         ),
     ],
 )
+@pytest.mark.asyncio(loop_scope="function")
 @pytest.mark.xdist_group("oracle")
 async def test_async_oracle_parameter_styles(
     oracle_async_session: OracleAsyncDriver, sql: str, params: OracleParamData, expected_rows: list[dict[str, Any]]
@@ -126,6 +125,7 @@ def test_sync_oracle_insert_with_named_params(oracle_sync_session: OracleSyncDri
     )
 
 
+@pytest.mark.asyncio(loop_scope="function")
 @pytest.mark.xdist_group("oracle")
 async def test_async_oracle_update_with_mixed_params(oracle_async_session: OracleAsyncDriver) -> None:
     """Test UPDATE operations using mixed parameter styles."""
@@ -227,6 +227,7 @@ def test_sync_oracle_in_clause_with_params(oracle_sync_session: OracleSyncDriver
     )
 
 
+@pytest.mark.asyncio(loop_scope="function")
 @pytest.mark.xdist_group("oracle")
 async def test_async_oracle_null_parameter_handling(oracle_async_session: OracleAsyncDriver) -> None:
     """Test handling of NULL parameters in Oracle."""
