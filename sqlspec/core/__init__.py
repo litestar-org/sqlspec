@@ -33,13 +33,14 @@ from sqlspec.core.compiler import SQLProcessor, create_processor
 
 # Note: Configuration is distributed across adapters/*/config.py - no centralized config
 from sqlspec.core.filters import StatementFilter
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig, TypedParameter
 from sqlspec.core.result import ArrowResult, SQLResult, StatementResult
-from sqlspec.core.statement import SQL, Statement, StatementConfig
+from sqlspec.core.statement import SQL, OperationType, Statement, StatementConfig
 
 __all__ = (
     "SQL",
     "ArrowResult",
+    "OperationType",
     "ParameterStyle",
     "ParameterStyleConfig",
     "SQLProcessor",
@@ -48,11 +49,8 @@ __all__ = (
     "StatementConfig",
     "StatementFilter",
     "StatementResult",
+    "TypedParameter",
     "UnifiedCache",
     "create_processor",
     "get_statement_cache",
 )
-
-# Version tracking for core module implementation
-__core_version__ = "0.2.0-beta"
-__implementation_phase__ = "MIGRATE"  # SETUP → RESEARCH → BUILD → MIGRATE → DELETE

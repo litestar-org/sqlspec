@@ -11,8 +11,7 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.builder import Select
-from sqlspec.core.statement.filters import LimitOffsetFilter
-from sqlspec.utils.correlation import correlation_context
+from sqlspec.core.filters import LimitOffsetFilter
 
 __all__ = ("async_driver_example", "main", "sync_driver_example")
 
@@ -21,13 +20,11 @@ def sync_driver_example() -> None:
     """Demonstrate synchronous database driver usage with query mixins."""
     # Create SQLSpec instance with SQLite
     spec = SQLSpec()
-    config = SqliteConfig(database=":memory:")
+    config = SqliteConfig(pool_config={"database": ":memory:"})
     spec.add_config(config)
 
     # Get a driver directly (drivers now have built-in query methods)
-    with spec.provide_session(config) as driver, correlation_context() as correlation_id:
-        print(f"Request correlation ID: {correlation_id}")
-
+    with spec.provide_session(config) as driver:
         # Create a table
         driver.execute("""
                 CREATE TABLE users (
@@ -38,7 +35,7 @@ def sync_driver_example() -> None:
             """)
 
         # Insert data
-        driver.execute("INSERT INTO users (name, email) VALUES (?, ?)", ("Alice", "alice@example.com"))
+        driver.execute("INSERT INTO users (name, email) VALUES (?, ?)", "Alice", "alice@example.com")
 
         # Insert multiple rows
         driver.execute_many(
@@ -63,7 +60,7 @@ def sync_driver_example() -> None:
         print(f"User count: {user_count}")
 
         # Update
-        result = driver.execute("UPDATE users SET email = ? WHERE name = ?", ("alice.doe@example.com", "Alice"))
+        result = driver.execute("UPDATE users SET email = ? WHERE name = ?", "alice.doe@example.com", "Alice")
         print(f"Updated {result.rows_affected} rows")
 
         # Delete
@@ -84,58 +81,53 @@ async def async_driver_example() -> None:
     """Demonstrate asynchronous database driver usage with query mixins."""
     # Create SQLSpec instance with AIOSQLite
     spec = SQLSpec()
-    config = AiosqliteConfig(database=":memory:")
+    config = AiosqliteConfig(pool_config={"database": ":memory:"})
     conf = spec.add_config(config)
 
     # Get an async driver directly (drivers now have built-in query methods)
     async with spec.provide_session(conf) as driver:
-        with correlation_context() as correlation_id:
-            print(f"\nAsync request correlation ID: {correlation_id}")
-
-            # Create a table
-            await driver.execute("""
-                CREATE TABLE products (
-                    id INTEGER PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    price REAL NOT NULL
-                )
-            """)
-
-            # Insert data
-            await driver.execute("INSERT INTO products (name, price) VALUES (?, ?)", ("Laptop", 999.99))
-
-            # Insert multiple rows
-            await driver.execute_many(
-                "INSERT INTO products (name, price) VALUES (?, ?)",
-                [("Mouse", 29.99), ("Keyboard", 79.99), ("Monitor", 299.99)],
+        # Create a table
+        await driver.execute("""
+            CREATE TABLE products (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                price REAL NOT NULL
             )
+        """)
 
-            # Select all products using query mixin
-            products = await driver.select("SELECT * FROM products ORDER BY price")
-            print(f"All products: {products}")
+        # Insert data
+        await driver.execute("INSERT INTO products (name, price) VALUES (?, ?)", "Laptop", 999.99)
 
-            # Select one product using query mixin
-            laptop = await driver.select_one("SELECT * FROM products WHERE name = ?", "Laptop")
-            print(f"Laptop: {laptop}")
+        # Insert multiple rows
+        await driver.execute_many(
+            "INSERT INTO products (name, price) VALUES (?, ?)",
+            [("Mouse", 29.99), ("Keyboard", 79.99), ("Monitor", 299.99)],
+        )
 
-            # Select scalar value using query mixin
-            avg_price = await driver.select_value("SELECT AVG(price) FROM products")
-            print(f"Average price: ${avg_price:.2f}")
+        # Select all products using query mixin
+        products = await driver.select("SELECT * FROM products ORDER BY price")
+        print(f"All products: {products}")
 
-            # Update
-            result = await driver.execute("UPDATE products SET price = price * 0.9 WHERE price > ?", 100.0)
-            print(f"Applied 10% discount to {result.rows_affected} expensive products")
+        # Select one product using query mixin
+        laptop = await driver.select_one("SELECT * FROM products WHERE name = ?", "Laptop")
+        print(f"Laptop: {laptop}")
 
-            # Use query builder with async driver
-            query = Select("name", "price").from_("products").where("price < ?").order_by("price")
-            cheap_products = await driver.select(query, 100.0)
-            print(f"Cheap products: {cheap_products}")
+        # Select scalar value using query mixin
+        avg_price = await driver.select_value("SELECT AVG(price) FROM products")
+        print(f"Average price: ${avg_price:.2f}")
 
-            # Demonstrate pagination with query mixin
-            paginated = await driver.paginate(
-                "SELECT * FROM products ORDER BY price", LimitOffsetFilter(limit=2, offset=1)
-            )
-            print(f"Products page 2: {len(paginated.items)} items, Total: {paginated.total}")
+        # Update
+        result = await driver.execute("UPDATE products SET price = price * 0.9 WHERE price > ?", 100.0)
+        print(f"Applied 10% discount to {result.rows_affected} expensive products")
+
+        # Use query builder with async driver
+        query = Select("name", "price").from_("products").where("price < ?").order_by("price")
+        cheap_products = await driver.select(query, 100.0)
+        print(f"Cheap products: {cheap_products}")
+
+        # Demonstrate pagination with query mixin
+        paginated = await driver.paginate("SELECT * FROM products ORDER BY price", LimitOffsetFilter(limit=2, offset=1))
+        print(f"Products page 2: {len(paginated.items)} items, Total: {paginated.total}")
 
 
 def main() -> None:

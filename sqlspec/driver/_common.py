@@ -21,11 +21,9 @@ from mypy_extensions import trait
 from sqlglot import exp
 
 from sqlspec.builder import QueryBuilder
+from sqlspec.core import SQL, OperationType, ParameterStyle, SQLResult, Statement, StatementConfig, TypedParameter
 from sqlspec.core.cache import get_cache_config, sql_cache
-from sqlspec.core.parameters import ParameterStyle, TypedParameter
-from sqlspec.core.result import OperationType, SQLResult
 from sqlspec.core.splitter import split_sql_script
-from sqlspec.core.statement import SQL, Statement, StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import get_logger
 

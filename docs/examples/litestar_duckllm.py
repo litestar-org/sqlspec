@@ -26,24 +26,26 @@ class ChatMessage(Struct):
 
 @post("/chat", sync_to_thread=True)
 def duckllm_chat(db_session: DuckDBDriver, data: ChatMessage) -> ChatMessage:
-    results = db_session.execute("SELECT open_prompt(?)", data.message, schema_type=ChatMessage).get_first()
-    return results or ChatMessage(message="No response from DuckLLM")
+    results = db_session.execute("SELECT open_prompt(?)", data.message).get_first()
+    return db_session.to_schema(results or {"message": "No response from DuckLLM"}, schema_type=ChatMessage)
 
 
 sqlspec = SQLSpec(
     config=DuckDBConfig(
-        extensions=[{"name": "open_prompt"}],
-        secrets=[
-            {
-                "secret_type": "open_prompt",
-                "name": "open_prompt",
-                "value": {
-                    "api_url": "http://127.0.0.1:11434/v1/chat/completions",
-                    "model_name": "gemma3:1b",
-                    "api_timeout": "120",
-                },
-            }
-        ],
+        driver_features={
+            "extensions": [{"name": "open_prompt"}],
+            "secrets": [
+                {
+                    "secret_type": "open_prompt",
+                    "name": "open_prompt",
+                    "value": {
+                        "api_url": "http://127.0.0.1:11434/v1/chat/completions",
+                        "model_name": "gemma3:1b",
+                        "api_timeout": "120",
+                    },
+                }
+            ],
+        }
     )
 )
 app = Litestar(route_handlers=[duckllm_chat], plugins=[sqlspec], debug=True)

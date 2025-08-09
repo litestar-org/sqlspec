@@ -40,8 +40,10 @@ sqlspec = SQLSpec(
         DatabaseConfig(config=AiosqliteConfig(), commit_mode="autocommit"),
         DatabaseConfig(
             config=DuckDBConfig(
-                extensions=[{"name": "vss", "force_install": True}],
-                secrets=[{"secret_type": "s3", "name": "s3_secret", "value": {"key_id": "abcd"}}],
+                driver_features={
+                    "extensions": [{"name": "vss", "force_install": True}],
+                    "secrets": [{"secret_type": "s3", "name": "s3_secret", "value": {"key_id": "abcd"}}],
+                }
             ),
             connection_key="etl_connection",
             session_key="etl_session",

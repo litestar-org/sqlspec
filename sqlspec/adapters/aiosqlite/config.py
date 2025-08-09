@@ -192,7 +192,7 @@ class AiosqliteConfig(AsyncDatabaseConfig):
         self._connection_parameters = self._parse_connection_parameters(connection_params)
 
         if pool_instance is None:
-            self.pool_instance = AiosqliteConnectionPool(self._connection_parameters)
+            self.pool_instance: AiosqliteConnectionPool = AiosqliteConnectionPool(self._connection_parameters)
 
     def _parse_connection_parameters(self, params: "dict[str, Any]") -> "dict[str, Any]":
         """Parse connection parameters for AioSQLite.

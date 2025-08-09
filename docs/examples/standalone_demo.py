@@ -36,10 +36,9 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
-from sqlspec import sql
+from sqlspec import SQL, StatementConfig, sql
 from sqlspec.adapters.duckdb import DuckDBConfig
-from sqlspec.core.statement import SQL, StatementConfig
-from sqlspec.core.statement.filters import LimitOffsetFilter, OrderByFilter, SearchFilter
+from sqlspec.core.filters import LimitOffsetFilter, OrderByFilter, SearchFilter
 
 # Display constants
 MAX_ROWS_TO_DISPLAY = 5
@@ -172,16 +171,14 @@ def create_sample_database() -> Any:
                     INSERT INTO users (id, name, email, department, age, salary, hire_date, active)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                    (
-                        i,
-                        fake.name(),
-                        fake.unique.email(),
-                        fake.random_element(departments),
-                        fake.random_int(min=22, max=65),
-                        fake.random_int(min=40000, max=150000),
-                        fake.date_between(start_date="-3y", end_date="today"),
-                        fake.boolean(chance_of_getting_true=85),
-                    ),
+                    i,
+                    fake.name(),
+                    fake.unique.email(),
+                    fake.random_element(departments),
+                    fake.random_int(min=22, max=65),
+                    fake.random_int(min=40000, max=150000),
+                    fake.date_between(start_date="-3y", end_date="today"),
+                    fake.boolean(chance_of_getting_true=85),
                 )
             )
 
@@ -193,14 +190,12 @@ def create_sample_database() -> Any:
                     INSERT INTO products (id, name, category, price, stock_quantity, created_at)
                     VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                    (
-                        i,
-                        fake.catch_phrase(),
-                        fake.random_element(categories),
-                        fake.random_int(min=10, max=1000),
-                        fake.random_int(min=0, max=100),
-                        fake.date_time_between(start_date="-2y", end_date="now"),
-                    ),
+                    i,
+                    fake.catch_phrase(),
+                    fake.random_element(categories),
+                    fake.random_int(min=10, max=1000),
+                    fake.random_int(min=0, max=100),
+                    fake.date_time_between(start_date="-2y", end_date="now"),
                 )
             )
 
@@ -214,15 +209,13 @@ def create_sample_database() -> Any:
                     INSERT INTO orders (id, user_id, product_id, quantity, total_amount, order_date, status)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                    (
-                        i,
-                        fake.random_int(min=1, max=50),
-                        fake.random_int(min=1, max=30),
-                        quantity,
-                        quantity * price,
-                        fake.date_time_between(start_date="-1y", end_date="now"),
-                        fake.random_element(statuses),
-                    ),
+                    i,
+                    fake.random_int(min=1, max=50),
+                    fake.random_int(min=1, max=30),
+                    quantity,
+                    quantity * price,
+                    fake.date_time_between(start_date="-1y", end_date="now"),
+                    fake.random_element(statuses),
                 )
             )
 
@@ -244,7 +237,7 @@ def display_header() -> None:
 
 def display_sql_with_syntax(sql_obj: SQL, title: str = "Generated SQL") -> None:
     """Display SQL with syntax highlighting."""
-    sql_text = sql_obj.to_sql()
+    sql_text = sql_obj.sql
     syntax = Syntax(sql_text, "sql", theme="monokai", line_numbers=True)
     console.print(Panel(syntax, title=title, border_style="green"))
 
@@ -549,7 +542,12 @@ def demo_insert_returning() -> None:
         VALUES (?, ?, ?, ?, ?, ?)
         RETURNING id, name, email
     """,
-        ("John Doe", "john@example.com", "Engineering", 30, 75000, datetime.now()),
+        "John Doe",
+        "john@example.com",
+        "Engineering",
+        30,
+        75000,
+        datetime.now(),
     )
 
     display_sql_with_syntax(query)
@@ -622,7 +620,7 @@ def interactive() -> None:
         try:
             user_input = console.input("[bold blue]sqlspec>[/bold blue] ").strip()
 
-            if user_input.lower() in ("exit", "quit"):
+            if user_input.lower() in {"exit", "quit"}:
                 break
             elif user_input.lower() == "help":
                 show_interactive_help()
@@ -700,7 +698,7 @@ def show_interactive_help() -> None:
 Start with [green]sql.[/green] to build queries:
 • [yellow]sql.select("*").from_("users")[/yellow]
 • [yellow]sql.insert("users").values(...)[/yellow]
-• [yellow]SQL("SELECT * FROM users WHERE id = ?", [1])[/yellow]
+• [yellow]SQL("SELECT * FROM users WHERE id = ?", 1)[/yellow]
 
 [bold cyan]Available Objects:[/bold cyan]
 • sql - Query builder factory object

@@ -855,14 +855,12 @@ def mock_mysql_connection() -> MockSyncConnection:
 def mock_bigquery_connection() -> MockSyncConnection:
     """Mock BigQuery connection with BigQuery-specific behavior."""
     conn = MockSyncConnection("bigquery_connection", "bigquery")
-    conn.connection_info.update(
-        {
-            "project_id": "test-project",
-            "dataset_id": "test_dataset",
-            "supports_arrays": "True",
-            "supports_structs": "True",
-        }
-    )
+    conn.connection_info.update({
+        "project_id": "test-project",
+        "dataset_id": "test_dataset",
+        "supports_arrays": "True",
+        "supports_structs": "True",
+    })
     return conn
 
 
@@ -1031,4 +1029,4 @@ def assert_sql_execution_result(result: ExecutionResult, expected_rowcount: int 
     """Helper function to assert SQL execution results."""
     assert result is not None
     if expected_rowcount >= 0:
-        assert result.rowcount == expected_rowcount
+        assert result.data_row_count == expected_rowcount

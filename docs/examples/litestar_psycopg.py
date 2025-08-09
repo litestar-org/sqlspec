@@ -30,7 +30,9 @@ async def simple_psycopg(db_session: PsycopgAsyncDriver) -> dict[str, str]:
 sqlspec = SQLSpec(
     config=[
         DatabaseConfig(
-            config=PsycopgAsyncConfig(conninfo="postgres://app:app@localhost:15432/app", min_size=1, max_size=3),
+            config=PsycopgAsyncConfig(
+                pool_config={"conninfo": "postgres://app:app@localhost:15432/app", "min_size": 1, "max_size": 3}
+            ),
             commit_mode="autocommit",
         )
     ]

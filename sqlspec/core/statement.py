@@ -398,10 +398,6 @@ class SQL:
             return self._raw_sql, self.parameters
         return self._processed_state.compiled_sql, self._processed_state.execution_parameters
 
-    def as_many(self, parameters: Any) -> "SQL":
-        """Create execute_many version - preserved interface."""
-        return SQL(self._raw_sql, parameters, statement_config=self._statement_config, is_many=True)
-
     def as_script(self) -> "SQL":
         """Mark as script execution - preserved interface."""
         new_sql = SQL(

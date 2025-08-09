@@ -48,7 +48,7 @@ class CommonTableExpressionMixin:
         else:
             # Query is a builder instance - trust the protocol
             built_query = query.to_statement()  # pyright: ignore
-            cte_sql = built_query.to_sql()
+            cte_sql = built_query.sql
             cte_expr = exp.maybe_parse(cte_sql, dialect=self.dialect)  # type: ignore[attr-defined]
 
             # Merge parameters - handle both dict and list formats

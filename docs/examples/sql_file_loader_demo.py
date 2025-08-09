@@ -192,7 +192,7 @@ def database_integration_example() -> None:
 
         # Initialize SQLSpec and register database
         sqlspec = SQLSpec()
-        config = SqliteConfig(database=":memory:")
+        config = SqliteConfig()
         sqlspec.add_config(config)
 
         # Initialize loader and load SQL files

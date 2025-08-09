@@ -649,18 +649,6 @@ def test_sql_copy_creates_new_instance() -> None:
     assert copy_stmt._raw_sql == original._raw_sql
 
 
-def test_sql_as_many_creates_new_instance() -> None:
-    """Test SQL.as_many() creates new immutable instance."""
-    original = SQL("INSERT INTO users (name) VALUES (?)", "john")
-    many_stmt = original.as_many([("john",), ("jane",)])
-
-    # Different instances
-    assert many_stmt is not original
-    # Different is_many flag
-    assert many_stmt._is_many is True
-    assert original._is_many is False
-
-
 def test_sql_as_script_creates_new_instance() -> None:
     """Test SQL.as_script() creates new immutable instance."""
     original = SQL("SELECT * FROM users")
