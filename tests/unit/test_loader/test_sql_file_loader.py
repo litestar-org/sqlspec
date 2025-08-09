@@ -464,7 +464,7 @@ def test_get_sql_with_parameters() -> None:
     loader = SQLFileLoader()
     loader.add_named_sql("test_query", "SELECT * FROM users WHERE id = :user_id")
 
-    sql = loader.get_sql("test_query", parameters={"user_id": 123})
+    sql = loader.get_sql("test_query", {"user_id": 123})
 
     assert isinstance(sql, SQL)
     # Parameters are wrapped in CORE_ROUND_3 architecture

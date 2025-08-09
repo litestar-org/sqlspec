@@ -55,6 +55,7 @@ duckdb_statement_config = StatementConfig(
         has_native_list_expansion=True,
         needs_static_script_compilation=True,
         preserve_parameter_format=True,
+        allow_mixed_parameter_styles=False,  # DuckDB doesn't support mixed styles in single statement
     ),
     # Core processing features enabled for performance
     enable_parsing=True,

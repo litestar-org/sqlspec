@@ -240,3 +240,138 @@ def test_multiple_concurrent_connections() -> None:
             assert False, "Should not be able to access other session's table"
         except Exception:
             pass
+
+
+@pytest.mark.xdist_group("duckdb")
+def test_config_with_pool_config_parameter() -> None:
+    """Test that DuckDBConfig correctly accepts pool_config parameter."""
+
+    # Define connection parameters using DuckDBPoolParams type
+    pool_config = {"database": "test.duckdb", "memory_limit": "256MB", "threads": 4}
+
+    # Create config with pool_config
+    config = DuckDBConfig(pool_config=pool_config)
+
+    try:
+        # Verify the configuration was set correctly
+        connection_config = config._get_connection_config_dict()
+        assert connection_config["database"] == "test.duckdb"
+        assert connection_config["memory_limit"] == "256MB"
+        assert connection_config["threads"] == 4
+
+        # Test that pool-related parameters are excluded from connection config
+        assert "pool_min_size" not in connection_config
+        assert "pool_max_size" not in connection_config
+
+        # Verify the connection works
+        with config.provide_session() as session:
+            result = session.execute("SELECT 1 as test")
+            assert isinstance(result, SQLResult)
+            assert result.data[0]["test"] == 1
+
+    finally:
+        config._close_pool()
+
+
+@pytest.mark.xdist_group("duckdb")
+def test_config_memory_database_shared_conversion() -> None:
+    """Test that :memory: databases are converted to shared memory."""
+
+    # Test with explicit :memory:
+    config = DuckDBConfig(pool_config={"database": ":memory:"})
+
+    try:
+        # Should be converted to shared memory for DuckDB
+        assert config.pool_config["database"] == ":memory:shared_db"
+
+        # Verify it works
+        with config.provide_session() as session:
+            result = session.execute("SELECT 'memory_test' as test")
+            assert isinstance(result, SQLResult)
+            assert result.data[0]["test"] == "memory_test"
+
+    finally:
+        config._close_pool()
+
+
+@pytest.mark.xdist_group("duckdb")
+def test_config_empty_database_conversion() -> None:
+    """Test that empty database string is converted to shared memory."""
+
+    # Test with empty string
+    config = DuckDBConfig(pool_config={"database": ""})
+
+    try:
+        # Should be converted to shared memory for DuckDB
+        assert config.pool_config["database"] == ":memory:shared_db"
+
+        # Verify it works
+        with config.provide_session() as session:
+            result = session.execute("SELECT 'empty_test' as test")
+            assert isinstance(result, SQLResult)
+            assert result.data[0]["test"] == "empty_test"
+
+    finally:
+        config._close_pool()
+
+
+@pytest.mark.xdist_group("duckdb")
+def test_config_default_database_shared() -> None:
+    """Test that default database is shared memory."""
+
+    # Test with no database specified
+    config = DuckDBConfig()
+
+    try:
+        # Should default to shared memory for DuckDB
+        assert config.pool_config["database"] == ":memory:shared_db"
+
+        # Verify it works
+        with config.provide_session() as session:
+            result = session.execute("SELECT 'default_test' as test")
+            assert isinstance(result, SQLResult)
+            assert result.data[0]["test"] == "default_test"
+
+    finally:
+        config._close_pool()
+
+
+@pytest.mark.xdist_group("duckdb")
+def test_config_consistency_with_other_adapters() -> None:
+    """Test that DuckDB config behaves consistently with SQLite/aiosqlite."""
+
+    # Test that pool_config is properly passed and used
+    pool_config = {
+        "database": "consistency_test.duckdb",
+        "memory_limit": "512MB",
+        "threads": 2,
+        "pool_min_size": 1,  # Should be filtered out
+        "pool_max_size": 4,  # Should be filtered out
+    }
+
+    config = DuckDBConfig(pool_config=pool_config)
+
+    try:
+        # Verify parameters are preserved
+        connection_config = config._get_connection_config_dict()
+        assert connection_config["database"] == "consistency_test.duckdb"
+        assert connection_config["memory_limit"] == "512MB"
+        assert connection_config["threads"] == 2
+
+        # Pool parameters should be filtered out
+        assert "pool_min_size" not in connection_config
+        assert "pool_max_size" not in connection_config
+
+        # Verify connection works with these settings
+        with config.provide_session() as session:
+            session.execute("CREATE TABLE IF NOT EXISTS consistency_test (id INTEGER)")
+            session.execute("INSERT INTO consistency_test VALUES (42)")
+            result = session.execute("SELECT id FROM consistency_test")
+            assert isinstance(result, SQLResult)
+            assert result.data[0]["id"] == 42
+
+            # Clean up
+            session.execute("DROP TABLE consistency_test")
+
+    finally:
+        config._close_pool()

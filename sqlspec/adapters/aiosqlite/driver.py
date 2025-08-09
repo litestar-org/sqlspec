@@ -46,9 +46,9 @@ aiosqlite_statement_config = StatementConfig(
     dialect="sqlite",
     parameter_config=ParameterStyleConfig(
         default_parameter_style=ParameterStyle.QMARK,
-        supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
+        supported_parameter_styles={ParameterStyle.QMARK},
         default_execution_parameter_style=ParameterStyle.QMARK,
-        supported_execution_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
+        supported_execution_parameter_styles={ParameterStyle.QMARK},
         type_coercion_map={
             bool: int,
             datetime.datetime: lambda v: v.isoformat(),
@@ -154,7 +154,8 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             # Handle locked database, malformed SQL, etc.
             error_msg = str(e).lower()
             if "locked" in error_msg:
-                msg = f"AIOSQLite database is locked: {e}"
+                # For database locks, re-raise the original exception for retry handling
+                raise
             elif "syntax" in error_msg or "malformed" in error_msg:
                 msg = f"AIOSQLite SQL syntax error: {e}"
                 raise SQLParsingError(msg) from e

@@ -237,3 +237,78 @@ def test_pool_transaction_rollback(sqlite_config_shared_memory: SqliteConfig) ->
 
     finally:
         config.close_pool()
+
+
+@pytest.mark.xdist_group("sqlite")
+def test_config_with_pool_config_parameter() -> None:
+    """Test that SqliteConfig correctly accepts pool_config parameter."""
+
+    # Define connection parameters using SqliteConnectionParams type
+    pool_config = {"database": "test.sqlite", "timeout": 10.0, "check_same_thread": False}
+
+    # Create config with pool_config
+    config = SqliteConfig(pool_config=pool_config)
+
+    try:
+        # Verify the configuration was set correctly
+        connection_config = config._get_connection_config_dict()
+        assert connection_config["database"] == "test.sqlite"
+        assert connection_config["timeout"] == 10.0
+        assert connection_config["check_same_thread"] is False
+
+        # Test that pool-related parameters are excluded from connection config
+        assert "pool_min_size" not in connection_config
+        assert "pool_max_size" not in connection_config
+
+        # Verify the connection works
+        with config.provide_session() as session:
+            result = session.execute("SELECT 1 as test")
+            assert isinstance(result, SQLResult)
+            assert result.data[0]["test"] == 1
+
+    finally:
+        config._close_pool()
+
+
+@pytest.mark.xdist_group("sqlite")
+def test_config_memory_database_conversion() -> None:
+    """Test that :memory: databases are converted to shared memory."""
+
+    # Test with explicit :memory:
+    config = SqliteConfig(pool_config={"database": ":memory:"})
+
+    try:
+        # Should be converted to shared memory
+        assert config.pool_config["database"] == "file::memory:?cache=shared"
+        assert config.pool_config["uri"] is True
+
+        # Verify it works
+        with config.provide_session() as session:
+            result = session.execute("SELECT 'memory_test' as test")
+            assert isinstance(result, SQLResult)
+            assert result.data[0]["test"] == "memory_test"
+
+    finally:
+        config._close_pool()
+
+
+@pytest.mark.xdist_group("sqlite")
+def test_config_default_database() -> None:
+    """Test that default database is shared memory."""
+
+    # Test with no database specified
+    config = SqliteConfig()
+
+    try:
+        # Should default to shared memory
+        assert config.pool_config["database"] == "file::memory:?cache=shared"
+        assert config.pool_config["uri"] is True
+
+        # Verify it works
+        with config.provide_session() as session:
+            result = session.execute("SELECT 'default_test' as test")
+            assert isinstance(result, SQLResult)
+            assert result.data[0]["test"] == "default_test"
+
+    finally:
+        config._close_pool()

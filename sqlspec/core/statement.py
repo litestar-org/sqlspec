@@ -31,7 +31,13 @@ from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 from typing_extensions import TypeAlias
 
-from sqlspec.core.parameters import ParameterConverter, ParameterStyle, ParameterStyleConfig, ParameterValidator
+from sqlspec.core.parameters import (
+    ParameterConverter,
+    ParameterProcessor,
+    ParameterStyle,
+    ParameterStyleConfig,
+    ParameterValidator,
+)
 from sqlspec.typing import Empty, EmptyEnum
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_statement_filter, supports_where
@@ -494,36 +500,23 @@ class SQL:
             parsed_expr = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
             operation_type = self._detect_operation_type(parsed_expr)
 
-            # Determine final SQL and parameters with parameter style conversion if needed
-            compiled_sql = self._raw_sql
-            execution_parameters = self._named_parameters or self._positional_parameters
+            # Use unified ParameterProcessor for all parameter processing
+            current_parameters = self._named_parameters or self._positional_parameters
+            processor = ParameterProcessor()
 
-            # Perform parameter style conversion if execution parameter styles are restricted
-            param_config = self._statement_config.parameter_config
-            if param_config.supported_execution_parameter_styles:
-                # Check if current parameters need conversion
-                current_parameters = self._named_parameters or self._positional_parameters
-                if current_parameters:
-                    # Detect current parameter style
-                    validator = ParameterValidator()
-                    param_info = validator.extract_parameters(self._raw_sql)
-
-                    if param_info:
-                        current_styles = {p.style for p in param_info}
-                        supported_styles = param_config.supported_execution_parameter_styles
-
-                        # Convert if current style not supported for execution
-                        if not current_styles.issubset(supported_styles):
-                            target_style = next(iter(supported_styles))
-                            converter = ParameterConverter()
-
-                            try:
-                                compiled_sql, execution_parameters = converter.convert_placeholder_style(
-                                    self._raw_sql, current_parameters, target_style, is_many=self._is_many
-                                )
-                            except Exception as conv_e:
-                                logger.warning("Parameter style conversion failed: %s", conv_e)
-                                # Keep original SQL and parameters on conversion failure
+            try:
+                compiled_sql, execution_parameters = processor.process(
+                    sql=self._raw_sql,
+                    parameters=current_parameters,
+                    config=self._statement_config.parameter_config,
+                    dialect=self._dialect,
+                    is_many=self._is_many,
+                )
+            except Exception as proc_e:
+                logger.warning("Parameter processing failed, using fallback: %s", proc_e)
+                # Fallback to original SQL and parameters
+                compiled_sql = self._raw_sql
+                execution_parameters = current_parameters
 
             # Create processed state with compilation
             self._processed_state = ProcessedState(

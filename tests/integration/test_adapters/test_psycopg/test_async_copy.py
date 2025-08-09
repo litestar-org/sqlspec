@@ -95,9 +95,7 @@ async def test_psycopg_async_copy_operations_keyword(psycopg_async_session: Psyc
 
     # Test COPY FROM STDIN with text format using keyword parameter
     copy_data = "3\ttest3\t300\n4\ttest4\t400\n"
-    result = await psycopg_async_session.execute(
-        "COPY copy_test_async_kw FROM STDIN WITH (FORMAT text)", parameters=copy_data
-    )
+    result = await psycopg_async_session.execute("COPY copy_test_async_kw FROM STDIN WITH (FORMAT text)", copy_data)
     assert isinstance(result, SQLResult)
     assert result.rows_affected >= 0  # May be -1 or actual count
 

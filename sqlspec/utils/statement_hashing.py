@@ -226,7 +226,7 @@ def hash_sql_statement(statement: "SQL") -> str:
         expr_hash,
         param_hash,
         filter_hash,
-        hash(statement._dialect),  # Use _dialect instead of _config.dialect
+        hash(statement._dialect),
         hash(statement._is_many),
         hash(statement._is_script),
     ]

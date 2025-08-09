@@ -454,8 +454,7 @@ def test_psycopg_postgresql_specific_features(psycopg_session: PsycopgSyncDriver
 
     # Test window functions
     psycopg_session.execute_many(
-        "INSERT INTO test_table (name, value) VALUES (%s, %s)",
-        parameters=[("window1", 10), ("window2", 20), ("window3", 30)],
+        "INSERT INTO test_table (name, value) VALUES (%s, %s)", [("window1", 10), ("window2", 20), ("window3", 30)]
     )
 
     window_result = psycopg_session.execute("""

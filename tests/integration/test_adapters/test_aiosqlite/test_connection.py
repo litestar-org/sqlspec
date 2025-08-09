@@ -152,3 +152,150 @@ async def test_provide_connection_direct() -> None:
 
     finally:
         await config.close_pool()
+
+
+@pytest.mark.xdist_group("aiosqlite")
+async def test_config_with_pool_config() -> None:
+    """Test that AiosqliteConfig correctly accepts pool_config parameter."""
+    from uuid import uuid4
+
+    # Define connection parameters using the expected TypedDict type
+    pool_config = {
+        "database": f"file:test_{uuid4().hex}.db?mode=memory&cache=shared",
+        "timeout": 10.0,
+        "isolation_level": None,
+        "check_same_thread": False,
+    }
+
+    # Create config with pool_config
+    config = AiosqliteConfig(pool_config=pool_config)
+
+    try:
+        # Verify the configuration was set correctly
+        connection_config = config._get_connection_config_dict()
+        assert "test_" in connection_config["database"]
+        assert connection_config["timeout"] == 10.0
+        assert connection_config["isolation_level"] is None
+
+        # Test that pool-related parameters are excluded from connection config
+        assert "pool_min_size" not in connection_config
+        assert "pool_max_size" not in connection_config
+
+        # Verify the connection works
+        async with config.provide_session() as driver:
+            result = await driver.execute("SELECT 1 as test")
+            assert isinstance(result, SQLResult)
+            assert result.data[0]["test"] == 1
+
+    finally:
+        await config.close_pool()
+
+
+@pytest.mark.xdist_group("aiosqlite")
+async def test_config_with_kwargs_override() -> None:
+    """Test that kwargs properly override pool_config values."""
+    from uuid import uuid4
+
+    # Define base pool config
+    pool_config = {"database": "base.db", "timeout": 5.0}
+
+    # Create config with pool_config and kwargs override
+    unique_db = f"file:override_{uuid4().hex}.db?mode=memory&cache=shared"
+    config = AiosqliteConfig(
+        pool_config=pool_config,
+        database=unique_db,  # This should override pool_config["database"]
+        timeout=15.0,  # This should override pool_config["timeout"]
+    )
+
+    try:
+        # Verify kwargs overrode pool_config
+        connection_config = config._get_connection_config_dict()
+        assert connection_config["database"] == unique_db
+        assert connection_config["timeout"] == 15.0
+
+        # Verify the connection works with overridden config
+        async with config.provide_session() as driver:
+            result = await driver.execute("SELECT 'override_test' as status")
+            assert isinstance(result, SQLResult)
+            assert result.data[0]["status"] == "override_test"
+
+    finally:
+        await config.close_pool()
+
+
+@pytest.mark.xdist_group("aiosqlite")
+async def test_config_memory_database_conversion() -> None:
+    """Test that :memory: databases are converted to shared memory."""
+
+    # Test with explicit :memory:
+    config = AiosqliteConfig(pool_config={"database": ":memory:"})
+
+    try:
+        # Should be converted to shared memory
+        connection_config = config._get_connection_config_dict()
+        assert connection_config["database"] == "file::memory:?cache=shared"
+        assert connection_config.get("uri") is True
+
+        # Verify it works
+        async with config.provide_session() as driver:
+            result = await driver.execute("SELECT 'memory_test' as test")
+            assert isinstance(result, SQLResult)
+            assert result.data[0]["test"] == "memory_test"
+
+    finally:
+        await config.close_pool()
+
+
+@pytest.mark.xdist_group("aiosqlite")
+async def test_config_default_database() -> None:
+    """Test that default database is shared memory."""
+
+    # Test with no database specified
+    config = AiosqliteConfig()
+
+    try:
+        # Should default to shared memory
+        connection_config = config._get_connection_config_dict()
+        assert connection_config["database"] == "file::memory:?cache=shared"
+        assert connection_config.get("uri") is True
+
+        # Verify it works
+        async with config.provide_session() as driver:
+            result = await driver.execute("SELECT 'default_test' as test")
+            assert isinstance(result, SQLResult)
+            assert result.data[0]["test"] == "default_test"
+
+    finally:
+        await config.close_pool()
+
+
+@pytest.mark.xdist_group("aiosqlite")
+async def test_config_parameter_preservation() -> None:
+    """Test that aiosqlite config properly preserves parameters."""
+
+    # Test that pool_config is properly passed and used
+    pool_config = {"database": "parameter_test.db", "isolation_level": None, "cached_statements": 100}
+
+    config = AiosqliteConfig(pool_config=pool_config)
+
+    try:
+        # Verify all parameters are preserved
+        connection_config = config._get_connection_config_dict()
+        assert connection_config["database"] == "parameter_test.db"
+        assert connection_config["isolation_level"] is None
+        assert connection_config["cached_statements"] == 100
+
+        # Verify connection works with these settings
+        async with config.provide_session() as driver:
+            await driver.execute("CREATE TABLE IF NOT EXISTS parameter_test (id INTEGER)")
+            await driver.execute("INSERT INTO parameter_test VALUES (42)")
+            result = await driver.execute("SELECT id FROM parameter_test")
+            assert isinstance(result, SQLResult)
+            assert result.data[0]["id"] == 42
+
+            # Clean up
+            await driver.execute("DROP TABLE parameter_test")
+            await driver.commit()
+
+    finally:
+        await config.close_pool()

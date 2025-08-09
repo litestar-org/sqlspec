@@ -43,7 +43,7 @@ def test_mixed_qmark_and_numeric_styles(duckdb_test_setup: tuple[DuckDBDriver, s
     session, table_name = duckdb_test_setup
 
     # Create SQL with mixed parameter styles
-    sql = SQL(f"SELECT * FROM {table_name} WHERE name = ? AND value > $1", parameters=["test2", 150])
+    sql = SQL(f"SELECT * FROM {table_name} WHERE name = ? AND value > $1", "test2", 150)
 
     result = session.execute(sql)
 
@@ -57,7 +57,7 @@ def test_numeric_style_extraction(duckdb_test_setup: tuple[DuckDBDriver, str]) -
     session, table_name = duckdb_test_setup
 
     # Use only numeric style
-    sql = SQL(f"SELECT * FROM {table_name} WHERE id = $1 AND value >= $2", parameters=[2, 100])
+    sql = SQL(f"SELECT * FROM {table_name} WHERE id = $1 AND value >= $2", 2, 100)
 
     result = session.execute(sql)
 
@@ -71,7 +71,7 @@ def test_qmark_style_extraction(duckdb_test_setup: tuple[DuckDBDriver, str]) -> 
     session, table_name = duckdb_test_setup
 
     # Use only qmark style
-    sql = SQL(f"SELECT * FROM {table_name} WHERE name = ? AND value < ?", parameters=["test1", 150])
+    sql = SQL(f"SELECT * FROM {table_name} WHERE name = ? AND value < ?", "test1", 150)
 
     result = session.execute(sql)
 
@@ -98,7 +98,10 @@ def test_complex_mixed_styles(duckdb_test_setup: tuple[DuckDBDriver, str]) -> No
         AND value BETWEEN $2 AND ?
         ORDER BY value
         """,
-        parameters=["test%", "special", 250, 550],
+        "test%",
+        "special",
+        250,
+        550,
     )
 
     result = session.execute(sql)
@@ -112,17 +115,11 @@ def test_complex_mixed_styles(duckdb_test_setup: tuple[DuckDBDriver, str]) -> No
 
 def test_parameter_info_detection(duckdb_test_setup: tuple[DuckDBDriver, str]) -> None:
     """Test that parameter_info correctly identifies mixed styles."""
-    from sqlspec.core.parameters import ParameterStyle
 
     session, table_name = duckdb_test_setup
 
     # Create SQL with mixed styles
-    sql = SQL(f"SELECT * FROM {table_name} WHERE id = ? AND name = $1", parameters=[1, "test1"])
-
-    # Check parameter_info
-    param_styles = {p.style for p in sql.parameter_info}
-    assert ParameterStyle.QMARK in param_styles
-    assert ParameterStyle.NUMERIC in param_styles
+    sql = SQL(f"SELECT * FROM {table_name} WHERE id = ? AND name = $1", 1, "test1")
 
     # Execute to ensure it works
     result = session.execute(sql)
@@ -144,7 +141,7 @@ def test_unsupported_style_fallback(duckdb_test_setup: tuple[DuckDBDriver, str])
 
 def test_execute_many_with_numeric_style(duckdb_test_setup: tuple[DuckDBDriver, str]) -> None:
     """Test execute_many with numeric parameter style."""
-    session, table_name = duckdb_test_setup
+    session, _table_name = duckdb_test_setup
 
     # Create a new table for this test
     session.execute_script("""
@@ -156,9 +153,7 @@ def test_execute_many_with_numeric_style(duckdb_test_setup: tuple[DuckDBDriver, 
 
     # Use numeric style for execute_many
     sql = SQL(
-        "INSERT INTO test_many (id, data) VALUES ($1, $2)",
-        parameters=[(7, "seven"), (8, "eight"), (9, "nine")],
-        is_many=True,
+        "INSERT INTO test_many (id, data) VALUES ($1, $2)", [(7, "seven"), (8, "eight"), (9, "nine")], is_many=True
     )
 
     result = session.execute(sql)

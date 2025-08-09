@@ -3,7 +3,7 @@
 import sqlite3
 import threading
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union, cast
 
 from typing_extensions import NotRequired
 
@@ -153,7 +153,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
     def __init__(
         self,
         *,
-        pool_config: "Optional[SqliteConnectionParams]" = None,
+        pool_config: "Optional[Union[SqliteConnectionParams, dict[str, Any]]]" = None,
         pool_instance: "Optional[SqliteConnectionPool]" = None,
         statement_config: "Optional[StatementConfig]" = None,
         migration_config: "Optional[dict[str, Any]]" = None,

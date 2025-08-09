@@ -420,11 +420,13 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDr
 
     non_strict_config = StatementConfig(enable_parsing=False, enable_validation=False)
 
-    await aiosqlite_session.execute("ATTACH DATABASE ':memory:' AS temp_db", _config=non_strict_config)
+    await aiosqlite_session.execute("ATTACH DATABASE ':memory:' AS temp_db", statement_config=non_strict_config)
     await aiosqlite_session.execute(
-        "CREATE TABLE temp_db.temp_table (id INTEGER, name TEXT)", _config=non_strict_config
+        "CREATE TABLE temp_db.temp_table (id INTEGER, name TEXT)", statement_config=non_strict_config
     )
-    await aiosqlite_session.execute("INSERT INTO temp_db.temp_table VALUES (1, 'temp')", _config=non_strict_config)
+    await aiosqlite_session.execute(
+        "INSERT INTO temp_db.temp_table VALUES (1, 'temp')", statement_config=non_strict_config
+    )
 
     temp_result = await aiosqlite_session.execute("SELECT * FROM temp_db.temp_table")
     assert isinstance(temp_result, SQLResult)
@@ -433,7 +435,7 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDr
     assert temp_result.data[0]["name"] == "temp"
 
     try:
-        await aiosqlite_session.execute("DETACH DATABASE temp_db", _config=non_strict_config)
+        await aiosqlite_session.execute("DETACH DATABASE temp_db", statement_config=non_strict_config)
     except Exception:
         # Database might be locked, which is fine for this test
         pass

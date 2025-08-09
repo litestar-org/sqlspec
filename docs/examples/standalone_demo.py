@@ -172,7 +172,7 @@ def create_sample_database() -> Any:
                     INSERT INTO users (id, name, email, department, age, salary, hire_date, active)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                    parameters=(
+                    (
                         i,
                         fake.name(),
                         fake.unique.email(),
@@ -193,7 +193,7 @@ def create_sample_database() -> Any:
                     INSERT INTO products (id, name, category, price, stock_quantity, created_at)
                     VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                    parameters=(
+                    (
                         i,
                         fake.catch_phrase(),
                         fake.random_element(categories),
@@ -214,7 +214,7 @@ def create_sample_database() -> Any:
                     INSERT INTO orders (id, user_id, product_id, quantity, total_amount, order_date, status)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                    parameters=(
+                    (
                         i,
                         fake.random_int(min=1, max=50),
                         fake.random_int(min=1, max=30),
@@ -549,7 +549,7 @@ def demo_insert_returning() -> None:
         VALUES (?, ?, ?, ?, ?, ?)
         RETURNING id, name, email
     """,
-        parameters=("John Doe", "john@example.com", "Engineering", 30, 75000, datetime.now()),
+        ("John Doe", "john@example.com", "Engineering", 30, 75000, datetime.now()),
     )
 
     display_sql_with_syntax(query)
@@ -700,7 +700,7 @@ def show_interactive_help() -> None:
 Start with [green]sql.[/green] to build queries:
 • [yellow]sql.select("*").from_("users")[/yellow]
 • [yellow]sql.insert("users").values(...)[/yellow]
-• [yellow]SQL("SELECT * FROM users WHERE id = ?", parameters=[1])[/yellow]
+• [yellow]SQL("SELECT * FROM users WHERE id = ?", [1])[/yellow]
 
 [bold cyan]Available Objects:[/bold cyan]
 • sql - Query builder factory object

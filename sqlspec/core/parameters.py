@@ -957,6 +957,10 @@ class ParameterProcessor:
         current_styles = {p.style for p in param_info}
         target_style = config.default_execution_parameter_style
 
+        # Check for mixed styles - if not allowed, force conversion to single style
+        if len(current_styles) > 1 and not config.allow_mixed_parameter_styles:
+            return True
+
         return not (len(current_styles) == 1 and target_style in current_styles)
 
     def _needs_sqlglot_normalization(self, param_info: "list[ParameterInfo]", dialect: Optional[str] = None) -> bool:
