@@ -350,6 +350,7 @@ _PARAMETER_REGEX = re.compile(
     (?P<positional_colon>:(?P<colon_num>\d+)) |
     (?P<named_colon>:(?P<colon_name>\w+)) |
     (?P<named_at>@(?P<at_name>\w+)) |
+    (?P<numeric>\$(?P<numeric_num>\d+)) |
     (?P<named_dollar_param>\$(?P<dollar_param_name>\w+)) |
     (?P<qmark>\?)
     """,
@@ -434,6 +435,9 @@ class ParameterValidator:
             elif match.group("named_at"):
                 style = ParameterStyle.NAMED_AT
                 name = match.group("at_name")
+            elif match.group("numeric"):
+                style = ParameterStyle.NUMERIC
+                name = match.group("numeric_num")
             elif match.group("named_dollar_param"):
                 style = ParameterStyle.NAMED_DOLLAR
                 name = match.group("dollar_param_name")
@@ -997,6 +1001,13 @@ class ParameterProcessor:
             return False
 
         current_styles = {p.style for p in param_info}
+
+        # Check if mixed styles are explicitly allowed AND the execution environment supports multiple styles
+        if (config.allow_mixed_parameter_styles and len(current_styles) > 1 and
+            config.supported_execution_parameter_styles is not None and
+            len(config.supported_execution_parameter_styles) > 1 and
+            all(style in config.supported_execution_parameter_styles for style in current_styles)):
+            return False
 
         # Check for mixed styles - if not allowed, force conversion to single style
         if len(current_styles) > 1:

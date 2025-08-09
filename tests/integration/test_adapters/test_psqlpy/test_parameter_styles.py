@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
 
 import pytest
@@ -86,7 +87,7 @@ async def test_parameter_types(psqlpy_session: PsqlpyDriver) -> None:
             $4::bool as bool_val,
             $5::json as json_val
     """,
-        ("string_value", 42, 3.14, True, '{"key": "value"}'),
+        ("string_value", 42, math.pi, True, {"key": "value"}),
     )
 
     assert isinstance(result, SQLResult)
@@ -96,9 +97,9 @@ async def test_parameter_types(psqlpy_session: PsqlpyDriver) -> None:
     row = result.data[0]
     assert row["text_val"] == "string_value"
     assert row["int_val"] == 42
-    assert abs(row["float_val"] - 3.14) < 0.001
+    assert abs(row["float_val"] - math.pi) < 0.001
     assert row["bool_val"] is True
-    assert '"key"' in str(row["json_val"])
+    assert "key" in row["json_val"]
 
 
 async def test_null_parameters(psqlpy_session: PsqlpyDriver) -> None:

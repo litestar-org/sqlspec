@@ -21,7 +21,16 @@ from mypy_extensions import trait
 from sqlglot import exp
 
 from sqlspec.builder import QueryBuilder
-from sqlspec.core import SQL, OperationType, ParameterStyle, SQLResult, Statement, StatementConfig, TypedParameter
+from sqlspec.core import (
+    SQL,
+    OperationType,
+    ParameterStyle,
+    SQLProcessor,
+    SQLResult,
+    Statement,
+    StatementConfig,
+    TypedParameter,
+)
 from sqlspec.core.cache import get_cache_config, sql_cache
 from sqlspec.core.splitter import split_sql_script
 from sqlspec.exceptions import ImproperConfigurationError
@@ -395,11 +404,58 @@ class CommonDriverAttributesMixin:
         """
         if not parameters:
             return []
-        return (
-            [self._format_parameter_set(param_set, statement_config) for param_set in parameters]
-            if is_many
-            else self._format_parameter_set(parameters, statement_config)
-        )
+
+        if is_many:
+            # For execute_many, parameters is already a list of parameter sets
+            # Apply formatting to each parameter set without array conversion
+            if isinstance(parameters, list):
+                return [self._format_parameter_set_for_many(param_set, statement_config) for param_set in parameters]
+            # If not a list, treat as single parameter set wrapped in a list
+            return [self._format_parameter_set_for_many(parameters, statement_config)]
+        return self._format_parameter_set(parameters, statement_config)
+
+    def _format_parameter_set_for_many(self, parameters: Any, statement_config: "StatementConfig") -> Any:
+        """Prepare a single parameter set for execute_many operations.
+
+        Unlike _format_parameter_set, this method handles parameter sets without
+        converting the structure itself to array format.
+
+        Args:
+            parameters: Single parameter set (tuple, list, or dict)
+            statement_config: Statement configuration for parameter style detection
+
+        Returns:
+            Processed parameter set with individual values coerced but structure preserved
+        """
+        if not parameters:
+            return []
+
+        def apply_type_coercion(value: Any) -> Any:
+            """Apply type coercion to a single value without structure conversion."""
+            unwrapped_value = value.value if isinstance(value, TypedParameter) else value
+
+            if statement_config.parameter_config.type_coercion_map:
+                for type_check, converter in statement_config.parameter_config.type_coercion_map.items():
+                    # Skip list/tuple conversion for execute_many parameter structure
+                    if type_check in {list, tuple} and isinstance(unwrapped_value, (list, tuple)):
+                        # Only apply if this is clearly a data value, not a parameter structure
+                        # For now, skip array conversion in execute_many context
+                        continue
+                    if isinstance(unwrapped_value, type_check):
+                        return converter(unwrapped_value)
+
+            return unwrapped_value
+
+        if isinstance(parameters, dict):
+            return {k: apply_type_coercion(v) for k, v in parameters.items()}
+
+        if isinstance(parameters, (list, tuple)):
+            # For execute_many, preserve structure but coerce individual values
+            coerced_params = [apply_type_coercion(p) for p in parameters]
+            return tuple(coerced_params) if isinstance(parameters, tuple) else coerced_params
+
+        # Single scalar parameter - just coerce it
+        return apply_type_coercion(parameters)
 
     def _format_parameter_set(self, parameters: Any, statement_config: "StatementConfig") -> Any:
         """Prepare a single parameter set for database driver consumption using core processing.
@@ -489,9 +545,10 @@ class CommonDriverAttributesMixin:
                         sql, prepared_parameters
                     )
                 return sql, prepared_parameters
-        # Use the simplified compile interface from core.statement.SQL
-        # Parameter style conversion is handled internally by the core processing
-        sql, parameters = statement.compile()
+        # Use the driver's statement_config for proper parameter style conversion
+        # This ensures the SQL is compiled with the driver's parameter style requirements
+        compiled = SQLProcessor(statement_config).compile(statement._raw_sql or statement.sql, statement.parameters)
+        sql, parameters = compiled.compiled_sql, compiled.execution_parameters
 
         if cache_key is not None:
             sql_cache.set(cache_key, (sql, parameters))
@@ -512,17 +569,15 @@ class CommonDriverAttributesMixin:
         that affect SQL compilation, preventing cache contamination between
         different compilation contexts. Enhanced with core processing.
         """
-        context_hash = hash(
-            (
-                config.parameter_config.hash(),
-                config.dialect,
-                statement.is_script,
-                statement.is_many,
-                flatten_single_parameters,
-                bool(config.parameter_config.output_transformer),
-                bool(config.parameter_config.needs_static_script_compilation),
-            )
-        )
+        context_hash = hash((
+            config.parameter_config.hash(),
+            config.dialect,
+            statement.is_script,
+            statement.is_many,
+            flatten_single_parameters,
+            bool(config.parameter_config.output_transformer),
+            bool(config.parameter_config.needs_static_script_compilation),
+        ))
 
         # Create simple hash for core.statement.SQL (different from old SQL type)
         # Convert parameters to hashable representation safely

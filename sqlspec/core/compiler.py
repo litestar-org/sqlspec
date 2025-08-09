@@ -397,10 +397,8 @@ class SQLProcessor:
             # No AST available, use string-based transformation
             return self._config.output_transformer(sql, parameters)
 
-        # No transformer configured
-        if expression is not None:
-            # Regenerate SQL from AST to ensure consistency
-            return expression.sql(dialect=dialect_str), parameters
+        # No transformer configured - use the processed SQL to preserve parameter style
+        # The processed_sql already has the correct parameter style conversion
         return sql, parameters
 
     def _apply_null_parameter_removal(

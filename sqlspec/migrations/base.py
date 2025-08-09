@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Generic, Optional, TypeVar
 
-from sqlspec import sql
+from sqlspec._sql import sql
 from sqlspec.builder._ddl import CreateTable
 from sqlspec.core.statement import SQL
 from sqlspec.loader import SQLFileLoader

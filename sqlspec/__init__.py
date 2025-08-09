@@ -1,8 +1,8 @@
 """SQLSpec: Safe and elegant SQL query building for Python."""
 
-from sqlspec import adapters, base, builder, core, driver, exceptions, extensions, loader, typing, utils
+from sqlspec import adapters, base, builder, core, driver, exceptions, extensions, loader, migrations, typing, utils
 from sqlspec.__metadata__ import __version__
-from sqlspec._sql import SQLFactory
+from sqlspec._sql import SQLFactory, sql
 from sqlspec.base import SQLSpec
 from sqlspec.builder import (
     Column,
@@ -18,10 +18,20 @@ from sqlspec.builder import (
     Update,
 )
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
-from sqlspec.core.cache import CacheConfig, CacheStats
-from sqlspec.core.parameters import ParameterConverter, ParameterProcessor, ParameterStyle, ParameterStyleConfig
-from sqlspec.core.result import ArrowResult, SQLResult
-from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core import (
+    SQL,
+    ArrowResult,
+    CacheConfig,
+    CacheStats,
+    ParameterConverter,
+    ParameterProcessor,
+    ParameterStyle,
+    ParameterStyleConfig,
+    SQLResult,
+    Statement,
+    StatementConfig,
+)
+from sqlspec.core import filters as filters
 from sqlspec.driver import AsyncDriverAdapterBase, ExecutionResult, SyncDriverAdapterBase
 from sqlspec.exceptions import (
     NotFoundError,
@@ -34,8 +44,6 @@ from sqlspec.exceptions import (
 )
 from sqlspec.loader import SQLFile, SQLFileLoader
 from sqlspec.typing import ConnectionT, DictRow, ModelDTOT, ModelT, RowT, StatementParameters, SupportedSchemaModel
-
-sql = SQLFactory()
 
 __all__ = (
     "SQL",
@@ -76,6 +84,7 @@ __all__ = (
     "SQLSpec",
     "SQLValidationError",
     "Select",
+    "Statement",
     "StatementConfig",
     "StatementParameters",
     "SupportedSchemaModel",
@@ -90,7 +99,9 @@ __all__ = (
     "driver",
     "exceptions",
     "extensions",
+    "filters",
     "loader",
+    "migrations",
     "sql",
     "typing",
     "utils",

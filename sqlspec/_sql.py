@@ -14,7 +14,7 @@ from sqlglot.errors import ParseError as SQLGlotParseError
 from sqlspec.builder import Column, Delete, Insert, Merge, Select, Truncate, Update
 from sqlspec.exceptions import SQLBuilderError
 
-__all__ = ("Case", "Column", "Delete", "Insert", "Merge", "SQLFactory", "Select", "Truncate", "Update")
+__all__ = ("Case", "Column", "Delete", "Insert", "Merge", "SQLFactory", "Select", "Truncate", "Update", "sql")
 
 logger = logging.getLogger("sqlspec")
 
@@ -1118,3 +1118,7 @@ class Case:
             Complete CASE expression.
         """
         return exp.Case(ifs=self._conditions, default=self._default)
+
+
+# Create a default SQL factory instance
+sql = SQLFactory()

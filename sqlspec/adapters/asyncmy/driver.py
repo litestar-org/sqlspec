@@ -36,6 +36,8 @@ from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.utils.serializers import to_json
 
+# AsyncMy parameter configuration uses core system's built-in conversion
+
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
@@ -65,7 +67,7 @@ asyncmy_statement_config = StatementConfig(
         },
         has_native_list_expansion=False,
         needs_static_script_compilation=True,
-        preserve_parameter_format=True,
+        preserve_parameter_format=True,  # Core system handles conversion automatically
     ),
     # Core processing features enabled for performance
     enable_parsing=True,
