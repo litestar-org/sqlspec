@@ -39,17 +39,28 @@ def create_migration_file(migrations_dir: Path, version: str, message: str, file
 Version: {version}
 Created: {datetime.now(timezone.utc).isoformat()}
 Author: {get_author()}
+
+Migration functions can use either naming convention:
+- Preferred: up()/down()
+- Legacy: migrate_up()/migrate_down()
+
+Both can be synchronous or asynchronous:
+- def up(): ...
+- async def up(): ...
 """
 
 from typing import List, Union
 
 
-def migrate_up() -> Union[str, List[str]]:
+def up() -> Union[str, List[str]]:
     """Apply the migration (upgrade).
 
     Returns:
         SQL statement(s) to execute for upgrade.
         Can return a single string or list of strings.
+
+    Note: You can use either 'up()' or 'migrate_up()' for function names.
+    Both support async versions: 'async def up()' or 'async def migrate_up()'
     """
     # TODO: Add your upgrade SQL statements here
     # Example:
@@ -61,13 +72,16 @@ def migrate_up() -> Union[str, List[str]]:
     """
 
 
-def migrate_down() -> Union[str, List[str]]:
+def down() -> Union[str, List[str]]:
     """Reverse the migration (downgrade).
 
     Returns:
         SQL statement(s) to execute for downgrade.
         Can return a single string or list of strings.
         Return empty string or empty list if downgrade is not supported.
+
+    Note: You can use either 'down()' or 'migrate_down()' for function names.
+    Both support async versions: 'async def down()' or 'async def migrate_down()'
     """
     # TODO: Add your downgrade SQL statements here (optional)
     # Example:

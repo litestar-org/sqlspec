@@ -101,9 +101,10 @@ psycopg_statement_config = StatementConfig(
             ParameterStyle.NUMERIC,
         },
         type_coercion_map={
-            dict: to_json,
-            list: _convert_list_to_postgres_array,
-            tuple: lambda v: _convert_list_to_postgres_array(list(v)),
+            dict: to_json
+            # Note: Psycopg3 handles Python lists natively, so no conversion needed
+            # list: _convert_list_to_postgres_array,
+            # tuple: lambda v: _convert_list_to_postgres_array(list(v)),
         },
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
@@ -375,10 +376,10 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        # Enhanced parameter validation for executemany
+        # Handle empty parameter list case
         if not prepared_parameters:
-            msg = "execute_many requires parameters"
-            raise ValueError(msg)
+            # For empty parameter list, return a result with no rows affected
+            return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
         cursor.executemany(sql, prepared_parameters)
 
@@ -677,10 +678,10 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        # Enhanced parameter validation for executemany
+        # Handle empty parameter list case
         if not prepared_parameters:
-            msg = "execute_many requires parameters"
-            raise ValueError(msg)
+            # For empty parameter list, return a result with no rows affected
+            return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
         await cursor.executemany(sql, prepared_parameters)
 

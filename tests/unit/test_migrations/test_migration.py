@@ -271,8 +271,8 @@ DROP TABLE users;
         assert len(metadata["checksum"]) == 32  # MD5 length
 
 
-def test_load_migration_metadata_python_file() -> None:
-    """Test loading metadata from Python migration file."""
+def test_load_migration_metadata_python_file_sync() -> None:
+    """Test loading metadata from Python migration file with sync functions."""
     with tempfile.TemporaryDirectory() as temp_dir:
         migrations_path = Path(temp_dir)
 
@@ -311,6 +311,264 @@ def down():
         assert metadata["file_path"] == migration_file
         assert metadata["has_upgrade"] is True
         assert metadata["has_downgrade"] is True
+
+
+def test_load_migration_metadata_python_file_async() -> None:
+    """Test loading metadata from Python migration file with async functions."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        migrations_path = Path(temp_dir)
+
+        # Create Python migration file with async functions
+        migration_file = migrations_path / "0001_async_migration.py"
+        migration_content = '''
+import asyncio
+
+async def up():
+    """Upgrade migration."""
+    await asyncio.sleep(0.001)  # Simulate async work
+    return ["INSERT INTO users (name, email) VALUES ('admin', 'admin@example.com');"]
+
+async def down():
+    """Downgrade migration."""
+    await asyncio.sleep(0.001)  # Simulate async work
+    return ["DELETE FROM users WHERE name = 'admin';"]
+'''
+        migration_file.write_text(migration_content)
+
+        runner = MockMigrationRunner(migrations_path)
+
+        with (
+            patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
+            patch("sqlspec.migrations.base.run_") as mock_run,
+        ):
+            mock_loader = Mock()
+            mock_loader.validate_migration_file = Mock()
+            mock_loader.get_up_sql = Mock()
+            mock_loader.get_down_sql = Mock()
+            mock_get_loader.return_value = mock_loader
+
+            # Mock run_ to simulate successful down_sql call
+            mock_run.return_value = Mock(return_value=True)
+
+            metadata = runner._load_migration_metadata(migration_file)
+
+        assert metadata["version"] == "0001"
+        assert metadata["description"] == "async_migration"
+        assert metadata["file_path"] == migration_file
+        assert metadata["has_upgrade"] is True
+        assert metadata["has_downgrade"] is True
+
+
+def test_load_migration_metadata_python_file_mixed() -> None:
+    """Test loading metadata from Python migration file with mixed sync/async functions."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        migrations_path = Path(temp_dir)
+
+        # Create Python migration file with mixed sync/async functions
+        migration_file = migrations_path / "0001_mixed_migration.py"
+        migration_content = '''
+import asyncio
+
+def up():
+    """Sync upgrade migration."""
+    return ["INSERT INTO users (name, email) VALUES ('admin', 'admin@example.com');"]
+
+async def down():
+    """Async downgrade migration."""
+    await asyncio.sleep(0.001)  # Simulate async work
+    return ["DELETE FROM users WHERE name = 'admin';"]
+'''
+        migration_file.write_text(migration_content)
+
+        runner = MockMigrationRunner(migrations_path)
+
+        with (
+            patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
+            patch("sqlspec.migrations.base.run_") as mock_run,
+        ):
+            mock_loader = Mock()
+            mock_loader.validate_migration_file = Mock()
+            mock_loader.get_up_sql = Mock()
+            mock_loader.get_down_sql = Mock()
+            mock_get_loader.return_value = mock_loader
+
+            # Mock run_ to simulate successful down_sql call
+            mock_run.return_value = Mock(return_value=True)
+
+            metadata = runner._load_migration_metadata(migration_file)
+
+        assert metadata["version"] == "0001"
+        assert metadata["description"] == "mixed_migration"
+        assert metadata["file_path"] == migration_file
+        assert metadata["has_upgrade"] is True
+        assert metadata["has_downgrade"] is True
+
+
+def test_load_multiple_mixed_migrations() -> None:
+    """Test loading multiple migrations with mixed SQL and Python (sync/async) files."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        migrations_path = Path(temp_dir)
+
+        # Create SQL migration file
+        sql_migration = migrations_path / "0001_create_tables.sql"
+        sql_content = """
+-- up
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE posts (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER,
+    title TEXT NOT NULL,
+    content TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+-- down
+DROP TABLE posts;
+DROP TABLE users;
+"""
+        sql_migration.write_text(sql_content)
+
+        # Create Python sync migration file
+        python_sync_migration = migrations_path / "0002_seed_data.py"
+        python_sync_content = '''
+def up():
+    """Sync upgrade migration to seed initial data."""
+    return [
+        "INSERT INTO users (name, email) VALUES ('admin', 'admin@example.com');",
+        "INSERT INTO users (name, email) VALUES ('user1', 'user1@example.com');",
+        "INSERT INTO posts (user_id, title, content) VALUES (1, 'Welcome Post', 'Welcome to our platform!');"
+    ]
+
+def down():
+    """Sync downgrade migration to remove seeded data."""
+    return [
+        "DELETE FROM posts WHERE title = 'Welcome Post';",
+        "DELETE FROM users WHERE email IN ('admin@example.com', 'user1@example.com');"
+    ]
+'''
+        python_sync_migration.write_text(python_sync_content)
+
+        # Create Python async migration file
+        python_async_migration = migrations_path / "0003_async_data_processing.py"
+        python_async_content = '''
+import asyncio
+
+async def up():
+    """Async upgrade migration for data processing."""
+    await asyncio.sleep(0.001)  # Simulate async work
+    return [
+        "UPDATE users SET name = UPPER(name) WHERE id > 0;",
+        "INSERT INTO posts (user_id, title, content) VALUES (2, 'Async Post', 'Posted via async migration');"
+    ]
+
+async def down():
+    """Async downgrade migration to reverse data processing."""
+    await asyncio.sleep(0.001)  # Simulate async work
+    return [
+        "DELETE FROM posts WHERE title = 'Async Post';",
+        "UPDATE users SET name = LOWER(name) WHERE id > 0;"
+    ]
+'''
+        python_async_migration.write_text(python_async_content)
+
+        # Create another SQL migration file
+        sql_migration2 = migrations_path / "0004_add_indexes.sql"
+        sql_content2 = """
+-- up
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_posts_user_id ON posts(user_id);
+CREATE INDEX idx_posts_title ON posts(title);
+
+-- down
+DROP INDEX idx_posts_title;
+DROP INDEX idx_posts_user_id;
+DROP INDEX idx_users_email;
+"""
+        sql_migration2.write_text(sql_content2)
+
+        # Create mixed sync/async Python migration
+        python_mixed_migration = migrations_path / "0005_mixed_operations.py"
+        python_mixed_content = '''
+import asyncio
+
+def up():
+    """Sync upgrade for mixed operations."""
+    return ["ALTER TABLE users ADD COLUMN last_login TIMESTAMP;"]
+
+async def down():
+    """Async downgrade for mixed operations."""
+    await asyncio.sleep(0.001)  # Simulate async cleanup work
+    return ["ALTER TABLE users DROP COLUMN last_login;"]
+'''
+        python_mixed_migration.write_text(python_mixed_content)
+
+        runner = MockMigrationRunner(migrations_path)
+
+        # Mock the SQL loader for SQL files
+        runner.loader.has_query = Mock(return_value=True)  # Both up and down queries exist
+        runner.loader.load_sql = Mock()
+        runner.loader.clear_cache = Mock()
+
+        # Get all migration files in proper numerical order
+        migration_files = sorted(migrations_path.glob("*"), key=lambda p: p.name)
+
+        with (
+            patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
+            patch("sqlspec.migrations.base.run_") as mock_run,
+        ):
+            mock_loader = Mock()
+            mock_loader.validate_migration_file = Mock()
+            mock_loader.get_up_sql = Mock()
+            mock_loader.get_down_sql = Mock()
+            mock_get_loader.return_value = mock_loader
+
+            # Mock run_ to simulate successful execution for Python files
+            mock_run.return_value = Mock(return_value=True)
+
+            # Test loading metadata for all migrations
+            all_metadata = []
+            for migration_file in migration_files:
+                metadata = runner._load_migration_metadata(migration_file)
+                all_metadata.append(metadata)
+
+        # Verify we have 5 migrations
+        assert len(all_metadata) == 5
+
+        # Verify SQL migrations
+        sql_metadata = [m for m in all_metadata if m["file_path"].suffix == ".sql"]
+        assert len(sql_metadata) == 2
+
+        # Verify Python migrations
+        python_metadata = [m for m in all_metadata if m["file_path"].suffix == ".py"]
+        assert len(python_metadata) == 3
+
+        # Check specific migration details
+        expected_migrations = [
+            {"version": "0001", "description": "create_tables", "type": "sql"},
+            {"version": "0002", "description": "seed_data", "type": "python_sync"},
+            {"version": "0003", "description": "async_data_processing", "type": "python_async"},
+            {"version": "0004", "description": "add_indexes", "type": "sql"},
+            {"version": "0005", "description": "mixed_operations", "type": "python_mixed"},
+        ]
+
+        for i, expected in enumerate(expected_migrations):
+            metadata = all_metadata[i]
+            assert metadata["version"] == expected["version"]
+            assert metadata["description"] == expected["description"]
+            assert metadata["has_upgrade"] is True
+            assert metadata["has_downgrade"] is True
+
+            # Verify file type
+            if expected["type"] == "sql":
+                assert metadata["file_path"].suffix == ".sql"
+            else:
+                assert metadata["file_path"].suffix == ".py"
 
 
 def test_load_migration_metadata_no_downgrade() -> None:

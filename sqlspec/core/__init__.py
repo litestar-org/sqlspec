@@ -31,6 +31,13 @@ from sqlspec.core import filters
 from sqlspec.core.cache import CacheConfig, CacheStats, UnifiedCache, get_statement_cache
 from sqlspec.core.compiler import OperationType, SQLProcessor
 from sqlspec.core.filters import StatementFilter
+from sqlspec.core.hashing import (
+    hash_expression,
+    hash_expression_node,
+    hash_optimized_expression,
+    hash_parameters,
+    hash_sql_statement,
+)
 from sqlspec.core.parameters import (
     ParameterConverter,
     ParameterProcessor,
@@ -61,4 +68,9 @@ __all__ = (
     "UnifiedCache",
     "filters",
     "get_statement_cache",
+    "hash_expression",
+    "hash_expression_node",
+    "hash_optimized_expression",
+    "hash_parameters",
+    "hash_sql_statement",
 )

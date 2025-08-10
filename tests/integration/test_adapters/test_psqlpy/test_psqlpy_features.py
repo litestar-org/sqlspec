@@ -138,40 +138,6 @@ async def test_psqlpy_large_result_sets(psqlpy_session: PsqlpyDriver) -> None:
         assert row["name"] == f"large_result_{i}"
 
 
-async def test_psqlpy_concurrent_operations() -> None:
-    """Test PSQLPy concurrent operation capabilities."""
-    from sqlspec.adapters.psqlpy import PsqlpyConfig
-
-    # Create separate config for this test
-    # This would need actual PostgreSQL connection details
-    # For now, we'll simulate the test structure
-
-    async def concurrent_task(task_id: int, config: PsqlpyConfig) -> int:
-        """Execute a task concurrently."""
-        async with config.provide_session() as session:
-            # Create temporary table for this task
-            await session.execute_script(f"""
-                CREATE TEMP TABLE task_{task_id}_table (
-                    id SERIAL PRIMARY KEY,
-                    data TEXT
-                )
-            """)
-
-            # Insert data
-            await session.execute(f"INSERT INTO task_{task_id}_table (data) VALUES ($1)", (f"task_{task_id}_data",))
-
-            # Query data
-            result = await session.execute(f"SELECT COUNT(*) as count FROM task_{task_id}_table")
-            assert isinstance(result, SQLResult)
-            from typing import cast
-
-            return cast(int, result.data[0]["count"])
-
-    # This test would need actual PostgreSQL connection
-    # Skipping actual execution but keeping structure for reference
-    pytest.skip("Concurrent test requires separate connection setup")
-
-
 async def test_psqlpy_transaction_behavior(psqlpy_session: PsqlpyDriver) -> None:
     """Test PSQLPy transaction handling."""
     # Test explicit transaction

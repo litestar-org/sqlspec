@@ -22,7 +22,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig, TypedParameter
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
@@ -93,6 +93,15 @@ def _transform_adbc_parameters(parameters: Any) -> Any:
 
 def _coerce_parameter_for_adbc(param: Any) -> Any:
     """Coerce individual parameter for ADBC compatibility."""
+    # Handle TypedParameter wrappers by extracting the underlying value
+    # while preserving the original type information for proper ADBC handling
+    if isinstance(param, TypedParameter):
+        # For bytes, preserve the original value to prevent string conversion
+        if param.original_type is bytes:
+            return param.value
+        # For other types, apply normal coercion to the underlying value
+        param = param.value
+
     # Handle array types for PostgreSQL and other array-supporting databases
     if isinstance(param, (list, tuple)) and param:
         return _convert_array_for_postgres_adbc(param)
@@ -108,6 +117,10 @@ def _coerce_parameter_for_adbc(param: Any) -> Any:
     # Handle JSON/dict types for PostgreSQL
     if isinstance(param, dict):
         return to_json(param)
+
+    # Handle bytes specifically to ensure proper ADBC/Arrow handling
+    if isinstance(param, bytes):
+        return param  # Preserve bytes as-is for ADBC
 
     return param
 
@@ -127,10 +140,8 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
         supported_execution_parameter_styles=set(supported_styles),
         type_coercion_map=type_map,
         has_native_list_expansion=True,
-        needs_static_script_compilation=True,
+        needs_static_script_compilation=False,  # Use parameter binding for ADBC/Arrow compatibility
         preserve_parameter_format=True,
-        # ADBC NULL parameter handling: Enable AST-based NULL parameter removal
-        # This provides Arrow type inference compatibility by removing NULL placeholders
         remove_null_parameters=True,
     )
 

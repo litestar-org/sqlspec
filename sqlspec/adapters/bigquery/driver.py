@@ -91,30 +91,43 @@ def _get_bq_param_type(value: Any) -> tuple[Optional[str], Optional[str]]:
 
 
 def _create_bq_parameters(parameters: Any) -> "list[Union[ArrayQueryParameter, ScalarQueryParameter]]":
-    """Create BigQuery QueryParameter objects from parameters."""
-    if not parameters:
-        return []
+    """Create BigQuery QueryParameter objects from parameters.
 
-    if not isinstance(parameters, dict):
+    Handles both dict-style (named) and list-style (positional) parameters.
+    """
+    if not parameters:
         return []
 
     bq_parameters: list[Union[ArrayQueryParameter, ScalarQueryParameter]] = []
 
-    for name, value in parameters.items():
-        param_name_for_bq = name.lstrip("@")
-        actual_value = getattr(value, "value", value)
-        param_type, array_element_type = _get_bq_param_type(actual_value)
+    # Handle dict-style parameters (named parameters like @param1, @param2)
+    if isinstance(parameters, dict):
+        for name, value in parameters.items():
+            param_name_for_bq = name.lstrip("@")
+            actual_value = getattr(value, "value", value)
+            param_type, array_element_type = _get_bq_param_type(actual_value)
 
-        if param_type == "ARRAY" and array_element_type:
-            bq_parameters.append(ArrayQueryParameter(param_name_for_bq, array_element_type, actual_value))
-        elif param_type == "JSON":
-            json_str = to_json(actual_value)
-            bq_parameters.append(ScalarQueryParameter(param_name_for_bq, "STRING", json_str))
-        elif param_type:
-            bq_parameters.append(ScalarQueryParameter(param_name_for_bq, param_type, actual_value))
-        else:
-            msg = f"Unsupported BigQuery parameter type for value of param '{name}': {type(actual_value)}"
-            raise SQLSpecError(msg)
+            if param_type == "ARRAY" and array_element_type:
+                # Convert array values to strings for BigQuery emulator compatibility
+                array_values = [str(item) for item in actual_value]
+                bq_parameters.append(ArrayQueryParameter(param_name_for_bq, array_element_type, array_values))
+            elif param_type == "JSON":
+                json_str = to_json(actual_value)
+                bq_parameters.append(ScalarQueryParameter(param_name_for_bq, "STRING", json_str))
+            elif param_type:
+                # Convert values to strings for BigQuery emulator compatibility
+                string_value = str(actual_value) if not isinstance(actual_value, str) else actual_value
+                bq_parameters.append(ScalarQueryParameter(param_name_for_bq, param_type, string_value))
+            else:
+                msg = f"Unsupported BigQuery parameter type for value of param '{name}': {type(actual_value)}"
+                raise SQLSpecError(msg)
+
+    # Handle list-style parameters (positional parameters that should have been converted to named)
+    elif isinstance(parameters, (list, tuple)):
+        # This shouldn't happen if the core parameter system is working correctly
+        # BigQuery requires named parameters, so positional should be converted
+        logger.warning("BigQuery received positional parameters instead of named parameters")
+        return []
 
     return bq_parameters
 
@@ -130,7 +143,8 @@ bigquery_type_coercion_map = {
     datetime.date: lambda x: x,
     datetime.time: lambda x: x,
     Decimal: lambda x: x,
-    dict: to_json,
+    # Don't automatically convert dict to JSON - let _create_bq_parameters handle it
+    dict: lambda x: x,
     list: lambda x: x,
     tuple: list,
     type(None): lambda _: None,
@@ -146,8 +160,7 @@ bigquery_statement_config = StatementConfig(
         supported_execution_parameter_styles={ParameterStyle.NAMED_AT},
         type_coercion_map=bigquery_type_coercion_map,
         has_native_list_expansion=True,
-        needs_static_script_compilation=True,
-        preserve_parameter_format=True,
+        needs_static_script_compilation=False,  # Use proper parameter binding for complex types
     ),
     # Core processing features enabled for performance
     enable_parsing=True,

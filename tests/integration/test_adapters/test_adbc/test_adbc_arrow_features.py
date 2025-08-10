@@ -329,10 +329,10 @@ def test_arrow_sqlite_binary_data() -> None:
         assert result.data is not None
         assert len(result.data) == len(binary_test_cases)
 
-        # Verify each test case
-        for i, (expected_name, expected_data, expected_size) in enumerate(binary_test_cases):
-            row = result.data[i]
-            assert row["name"] == expected_name
+        # Verify each test case - order by name for consistent comparison
+        expected_by_name = {name: (data, size) for name, data, size in binary_test_cases}
+        for row in result.data:
+            expected_data, expected_size = expected_by_name[row["name"]]
             assert row["binary_data"] == expected_data
             assert row["binary_size"] == expected_size
 

@@ -154,15 +154,15 @@ exclude = [
 
 ]
 include = [
-  "sqlspec/core/**/*.py", # Core module
-  "sqlspec/loader.py",    # Loader module
+  "sqlspec/core/**/*.py",     # Core module
+  "sqlspec/adapters/**/*.py", # Adapter modules
+  "sqlspec/loader.py",        # Loader module
 
   # === UTILITY MODULES ===
-  "sqlspec/utils/statement_hashing.py", # Statement hashing utilities
-  "sqlspec/utils/text.py",              # Text utilities
-  "sqlspec/utils/sync_tools.py",        # Synchronous utility functions
-  "sqlspec/utils/type_guards.py",       # Type guard utilities
-  "sqlspec/utils/fixtures.py",          # File fixture loading
+  "sqlspec/utils/text.py",        # Text utilities
+  "sqlspec/utils/sync_tools.py",  # Synchronous utility functions
+  "sqlspec/utils/type_guards.py", # Type guard utilities
+  "sqlspec/utils/fixtures.py",    # File fixture loading
 ]
 mypy-args = [
   "--ignore-missing-imports",

@@ -17,11 +17,11 @@ from sqlglot.optimizer import optimize
 from typing_extensions import Self
 
 from sqlspec.core.cache import CacheKey, get_cache_config, get_default_cache
+from sqlspec.core.hashing import hash_optimized_expression
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.statement_hashing import hash_optimized_expression
 from sqlspec.utils.type_guards import has_sql_method, has_with_method
 
 if TYPE_CHECKING:

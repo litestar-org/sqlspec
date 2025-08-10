@@ -128,9 +128,9 @@ def hash_parameters(
             if is_typed_parameter(value):
                 # For TypedParameter, hash its value with type info
                 if isinstance(value.value, (list, dict)):
-                    hashable_items.append((key, (repr(value.value), value.type_hint)))
+                    hashable_items.append((key, (repr(value.value), value.original_type)))
                 else:
-                    hashable_items.append((key, (value.value, value.type_hint)))
+                    hashable_items.append((key, (value.value, value.original_type)))
             elif isinstance(value, (list, dict)):
                 hashable_items.append((key, (repr(value), "unhashable")))
             else:

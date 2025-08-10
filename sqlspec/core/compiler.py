@@ -254,12 +254,16 @@ class SQLProcessor:
         """
         try:
             # Phase 1: Process parameters using integrated processor
+            dialect_str = str(self._config.dialect) if self._config.dialect else None
             processed_sql, processed_params = self._parameter_processor.process(
-                sql=sql, parameters=parameters, config=self._config.parameter_config, is_many=is_many
+                sql=sql,
+                parameters=parameters,
+                config=self._config.parameter_config,
+                dialect=dialect_str,
+                is_many=is_many,
             )
 
             # Phase 2: Get SQLGlot-compatible SQL for parsing and operation detection
-            dialect_str = str(self._config.dialect) if self._config.dialect else None
 
             # If static compilation was applied (processed_params is None), use the processed_sql
             # for both execution and SQLGlot parsing, as parameters are already embedded
@@ -472,10 +476,23 @@ class SQLProcessor:
         Uses SQLGlot AST transformation to find and replace parameter nodes
         with NULL literal nodes, following the pattern from pipeline_steps.py.
         """
+        # For QMARK style (?), we need to track position by order since placeholders don't have numbers
+        qmark_position = [0]  # Use list to allow modification in nested function
 
         def transform_node(node: "exp.Expression") -> "exp.Expression":
+            # Handle QMARK-style placeholders (?, ?, ?) - most common for SQLite, MySQL, etc.
+            if isinstance(node, exp.Placeholder) and (not hasattr(node, "this") or node.this is None):
+                current_pos = qmark_position[0]
+                qmark_position[0] += 1
+
+                if current_pos in null_positions:
+                    # Replace with NULL literal
+                    return exp.Null()
+                # For remaining placeholders, don't change them (parameter list will be adjusted)
+                return node
+
             # Handle PostgreSQL-style placeholders ($1, $2, etc.)
-            if isinstance(node, exp.Placeholder) and hasattr(node, "this"):
+            if isinstance(node, exp.Placeholder) and hasattr(node, "this") and node.this is not None:
                 return self._transform_postgres_placeholder(node, null_positions)
 
             # Handle generic parameter nodes

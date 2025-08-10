@@ -184,6 +184,12 @@ def _(value: date, semantic_name: Optional[str] = None) -> TypedParameter:
     return TypedParameter(value, date, semantic_name)
 
 
+@_wrap_parameter_by_type.register
+def _(value: bytes, semantic_name: Optional[str] = None) -> TypedParameter:
+    """Wrap bytes values to prevent string conversion issues in ADBC/Arrow."""
+    return TypedParameter(value, bytes, semantic_name)
+
+
 # @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
 class ParameterInfo:
     """Information about a detected parameter in SQL.
@@ -269,11 +275,11 @@ class ParameterStyleConfig:
         default_execution_parameter_style: Optional[ParameterStyle] = None,
         type_coercion_map: Optional[dict[type, Callable[[Any], Any]]] = None,
         has_native_list_expansion: bool = False,
-        output_transformer: Optional[Callable[[str, Any], tuple[str, Any]]] = None,
         needs_static_script_compilation: bool = False,
         allow_mixed_parameter_styles: bool = False,
-        preserve_parameter_format: bool = False,
+        preserve_parameter_format: bool = True,
         remove_null_parameters: bool = False,
+        output_transformer: Optional[Callable[[str, Any], tuple[str, Any]]] = None,
     ) -> None:
         """Initialize with complete compatibility.
 
@@ -358,7 +364,7 @@ _PARAMETER_REGEX = re.compile(
 )
 
 
-# @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterValidator:
     """Parameter validation and extraction with comprehensive dialect support.
 
@@ -498,7 +504,7 @@ class ParameterValidator:
         return base_incompatible
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterConverter:
     """Parameter style conversion with complete format support.
 
@@ -770,11 +776,33 @@ class ParameterConverter:
         if not param_info:
             return sql, None
 
+        # Build a mapping of unique parameters to their ordinals
+        # This handles repeated parameters like $1, $2, $1 correctly, but not
+        # sequential positional parameters like ?, ? which should use different values
+        unique_params: dict[str, int] = {}
+        for param in param_info:
+            # Create a unique key for each parameter based on what makes it distinct
+            if param.style in {ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT}:
+                # For sequential positional parameters, each occurrence gets its own value
+                param_key = f"{param.placeholder_text}_{param.ordinal}"
+            elif param.style == ParameterStyle.NUMERIC and param.name:
+                # For numeric parameters like $1, $2, $1, reuse based on the number
+                param_key = param.placeholder_text  # e.g., "$1", "$2", "$1"
+            elif param.name:
+                # For named parameters like :name, :other, :name, reuse based on name
+                param_key = param.placeholder_text  # e.g., ":name", ":other", ":name"
+            else:
+                # Fallback: treat each occurrence as unique
+                param_key = f"{param.placeholder_text}_{param.ordinal}"
+
+            if param_key not in unique_params:
+                unique_params[param_key] = len(unique_params)
+
         # Work backwards through parameters to maintain position accuracy
         static_sql = sql
         for param in reversed(param_info):
-            # Get parameter value
-            param_value = self._get_parameter_value(parameters, param)
+            # Get parameter value using unique parameter mapping
+            param_value = self._get_parameter_value_with_reuse(parameters, param, unique_params)
 
             # Convert to SQL literal
             if param_value is None:
@@ -814,6 +842,53 @@ class ParameterConverter:
 
         return None
 
+    def _get_parameter_value_with_reuse(
+        self, parameters: Any, param: ParameterInfo, unique_params: "dict[str, int]"
+    ) -> Any:
+        """Extract parameter value handling parameter reuse correctly.
+
+        Args:
+            parameters: Parameter values in any format
+            param: Parameter information
+            unique_params: Mapping of unique placeholders to their ordinal positions
+
+        Returns:
+            Parameter value, correctly handling reused parameters
+        """
+        # Build the parameter key using the same logic as in _embed_static_parameters
+        if param.style in {ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT}:
+            # For sequential positional parameters, each occurrence gets its own value
+            param_key = f"{param.placeholder_text}_{param.ordinal}"
+        elif param.style == ParameterStyle.NUMERIC and param.name:
+            # For numeric parameters like $1, $2, $1, reuse based on the number
+            param_key = param.placeholder_text  # e.g., "$1", "$2", "$1"
+        elif param.name:
+            # For named parameters like :name, :other, :name, reuse based on name
+            param_key = param.placeholder_text  # e.g., ":name", ":other", ":name"
+        else:
+            # Fallback: treat each occurrence as unique
+            param_key = f"{param.placeholder_text}_{param.ordinal}"
+
+        # Get the unique ordinal for this parameter key
+        unique_ordinal = unique_params.get(param_key)
+        if unique_ordinal is None:
+            return None
+
+        if isinstance(parameters, Mapping):
+            # For named parameters, try different key formats
+            if param.name and param.name in parameters:
+                return parameters[param.name]
+            if f"param_{unique_ordinal}" in parameters:
+                return parameters[f"param_{unique_ordinal}"]
+            if str(unique_ordinal + 1) in parameters:  # 1-based ordinal
+                return parameters[str(unique_ordinal + 1)]
+        elif isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
+            # Use the unique ordinal to get the correct parameter value
+            if unique_ordinal < len(parameters):
+                return parameters[unique_ordinal]
+
+        return None
+
     # Format converter methods for different parameter styles
     def _convert_to_positional_format(self, parameters: Any, param_info: "list[ParameterInfo]") -> Any:
         """Convert parameters to positional format (list/tuple)."""
@@ -847,7 +922,7 @@ class ParameterConverter:
         )
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterProcessor:
     """HIGH-LEVEL parameter processing engine with complete pipeline.
 
@@ -1240,6 +1315,21 @@ class ParameterProcessor:
         """
 
         def coerce_value(value: Any) -> Any:
+            # Handle TypedParameter objects - use the wrapped value and original type
+            if isinstance(value, TypedParameter):
+                wrapped_value = value.value
+                original_type = value.original_type
+                if original_type in type_coercion_map:
+                    coerced = type_coercion_map[original_type](wrapped_value)
+                    # Recursively apply coercion to elements in the coerced result if it's a sequence
+                    if isinstance(coerced, (list, tuple)) and not isinstance(coerced, (str, bytes)):
+                        coerced = [coerce_value(item) for item in coerced]
+                    elif isinstance(coerced, dict):
+                        coerced = {k: coerce_value(v) for k, v in coerced.items()}
+                    return coerced
+                return wrapped_value
+
+            # Handle regular values
             value_type = type(value)
             if value_type in type_coercion_map:
                 coerced = type_coercion_map[value_type](value)

@@ -175,7 +175,10 @@ class PythonFileLoader(BaseMigrationLoader):
         self.project_root = project_root if project_root is not None else self._find_project_root(migrations_dir)
 
     async def get_up_sql(self, path: Path) -> list[str]:
-        """Load Python migration and execute 'migrate_up' function.
+        """Load Python migration and execute upgrade function.
+
+        Supports both 'up()' and 'migrate_up()' function names.
+        Functions can be sync or async.
 
         Args:
             path: Path to Python migration file.
@@ -189,24 +192,36 @@ class PythonFileLoader(BaseMigrationLoader):
         with self._temporary_project_path():
             module = self._load_module_from_path(path)
 
-            if not hasattr(module, "migrate_up"):
-                msg = f"'migrate_up' function not found in {path}"
-                raise MigrationLoadError(msg)
+            # Try both 'up' and 'migrate_up' function names
+            upgrade_func = None
+            func_name = None
 
-            migrate_up_func = module.migrate_up
-            if not callable(migrate_up_func):
-                msg = f"'migrate_up' is not callable in {path}"
-                raise MigrationLoadError(msg)
-
-            if inspect.iscoroutinefunction(migrate_up_func):
-                sql_result = await migrate_up_func()
+            if hasattr(module, "up") and callable(module.up):
+                upgrade_func = module.up
+                func_name = "up"
+            elif hasattr(module, "migrate_up") and callable(module.migrate_up):
+                upgrade_func = module.migrate_up
+                func_name = "migrate_up"
             else:
-                sql_result = migrate_up_func()
+                msg = f"No upgrade function found in {path}. Expected 'up()' or 'migrate_up()'"
+                raise MigrationLoadError(msg)
+
+            if not callable(upgrade_func):
+                msg = f"'{func_name}' is not callable in {path}"
+                raise MigrationLoadError(msg)
+
+            if inspect.iscoroutinefunction(upgrade_func):
+                sql_result = await upgrade_func()
+            else:
+                sql_result = upgrade_func()
 
             return self._normalize_and_validate_sql(sql_result, path)
 
     async def get_down_sql(self, path: Path) -> list[str]:
-        """Load Python migration and execute 'migrate_down' function.
+        """Load Python migration and execute downgrade function.
+
+        Supports both 'down()' and 'migrate_down()' function names.
+        Functions can be sync or async.
 
         Args:
             path: Path to Python migration file.
@@ -217,22 +232,30 @@ class PythonFileLoader(BaseMigrationLoader):
         with self._temporary_project_path():
             module = self._load_module_from_path(path)
 
-            if not hasattr(module, "migrate_down"):
-                return []
+            # Try both 'down' and 'migrate_down' function names
+            downgrade_func = None
 
-            migrate_down_func = module.migrate_down
-            if not callable(migrate_down_func):
-                return []
-
-            if inspect.iscoroutinefunction(migrate_down_func):
-                sql_result = await migrate_down_func()
+            if hasattr(module, "down") and callable(module.down):
+                downgrade_func = module.down
+            elif hasattr(module, "migrate_down") and callable(module.migrate_down):
+                downgrade_func = module.migrate_down
             else:
-                sql_result = migrate_down_func()
+                return []
+
+            if not callable(downgrade_func):
+                return []
+
+            if inspect.iscoroutinefunction(downgrade_func):
+                sql_result = await downgrade_func()
+            else:
+                sql_result = downgrade_func()
 
             return self._normalize_and_validate_sql(sql_result, path)
 
     def validate_migration_file(self, path: Path) -> None:
-        """Validate Python migration file has required migrate_up function.
+        """Validate Python migration file has required upgrade function.
+
+        Supports both 'up()' and 'migrate_up()' function names.
 
         Args:
             path: Path to Python migration file.
@@ -243,13 +266,22 @@ class PythonFileLoader(BaseMigrationLoader):
         with self._temporary_project_path():
             module = self._load_module_from_path(path)
 
-            if not hasattr(module, "migrate_up"):
-                msg = f"Migration {path} missing required 'migrate_up' function"
+            # Check for either 'up' or 'migrate_up' function
+            upgrade_func = None
+            func_name = None
+
+            if hasattr(module, "up") and callable(module.up):
+                upgrade_func = module.up
+                func_name = "up"
+            elif hasattr(module, "migrate_up") and callable(module.migrate_up):
+                upgrade_func = module.migrate_up
+                func_name = "migrate_up"
+            else:
+                msg = f"Migration {path} missing required upgrade function. Expected 'up()' or 'migrate_up()'"
                 raise MigrationLoadError(msg)
 
-            migrate_up_func = module.migrate_up
-            if not callable(migrate_up_func):
-                msg = f"Migration {path} 'migrate_up' is not callable"
+            if not callable(upgrade_func):
+                msg = f"Migration {path} '{func_name}' is not callable"
                 raise MigrationLoadError(msg)
 
     def _find_project_root(self, start_path: Path) -> Path:

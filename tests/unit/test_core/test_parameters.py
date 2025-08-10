@@ -221,7 +221,7 @@ def test_parameter_style_config_basic() -> None:
     assert config.type_coercion_map == {}
     assert not config.has_native_list_expansion
     assert config.output_transformer is None
-    assert config.needs_static_script_compilation is True
+    assert config.needs_static_script_compilation is False
 
 
 def test_parameter_style_config_advanced() -> None:
@@ -535,6 +535,32 @@ def test_convert_static_embedding(converter: ParameterConverter) -> None:
     assert "TRUE" in converted_sql
     assert "?" not in converted_sql
     assert converted_params is None  # No parameters needed for static
+
+
+def test_convert_static_embedding_parameter_reuse(converter: ParameterConverter) -> None:
+    """Test STATIC style parameter embedding with parameter reuse."""
+    # Test numeric parameter reuse
+    sql = "SELECT $1, $2, $1, $3, $1"
+    parameters = [100, 200, 300]
+
+    converted_sql, converted_params = converter.convert_placeholder_style(sql, parameters, ParameterStyle.STATIC)
+
+    # Parameters should be embedded with correct reuse
+    expected = "SELECT 100, 200, 100, 300, 100"
+    assert converted_sql == expected
+    assert converted_params is None
+
+    # Test named parameter reuse
+    sql_named = "SELECT :value, :other, :value"
+    params_named = {"value": "hello", "other": 42}
+
+    converted_sql_named, converted_params_named = converter.convert_placeholder_style(
+        sql_named, params_named, ParameterStyle.STATIC
+    )
+
+    expected_named = "SELECT 'hello', 42, 'hello'"
+    assert converted_sql_named == expected_named
+    assert converted_params_named is None
 
 
 def test_convert_parameter_format_preservation(converter: ParameterConverter) -> None:

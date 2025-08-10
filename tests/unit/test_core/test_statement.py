@@ -295,7 +295,7 @@ def test_sql_single_pass_processing_triggered_by_sql_property() -> None:
 
         # Verify processor was created and called
         mock_processor_class.assert_called_once_with(stmt._statement_config)
-        mock_processor.compile.assert_called_once_with(stmt._raw_sql, [])
+        mock_processor.compile.assert_called_once_with(stmt._raw_sql, [], is_many=False)
         assert sql_result == "SELECT * FROM users"
 
         # Processing state is now populated
