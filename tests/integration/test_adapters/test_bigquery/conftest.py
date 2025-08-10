@@ -42,3 +42,34 @@ def bigquery_session(bigquery_config: BigQueryConfig) -> Generator[BigQueryDrive
     finally:
         # Cleanup if needed
         pass
+
+
+@pytest.fixture
+def bigquery_test_table(
+    bigquery_session: BigQueryDriver, bigquery_service: "BigQueryService"
+) -> Generator[str, None, None]:
+    """Create and cleanup test table."""
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+
+    # Drop table if exists and recreate
+    try:
+        bigquery_session.execute_script(f"DROP TABLE {table_name}")
+    except Exception:
+        pass  # Table doesn't exist, ignore
+
+    bigquery_session.execute_script(f"""
+        CREATE TABLE {table_name} (
+            id INT64,
+            name STRING NOT NULL,
+            value INT64,
+            created_at TIMESTAMP
+        )
+    """)
+
+    yield table_name
+
+    # Cleanup
+    try:
+        bigquery_session.execute_script(f"DROP TABLE {table_name}")
+    except Exception:
+        pass  # Already dropped or doesn't exist

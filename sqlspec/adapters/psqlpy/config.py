@@ -5,25 +5,16 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union
 
-from psqlpy import Connection, ConnectionPool
+from psqlpy import ConnectionPool
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.psqlpy.driver import PsqlpyDriver, psqlpy_statement_config
+from sqlspec.adapters.psqlpy._types import PsqlpyConnection
+from sqlspec.adapters.psqlpy.driver import PsqlpyCursor, PsqlpyDriver, psqlpy_statement_config
 from sqlspec.config import AsyncDatabaseConfig
 from sqlspec.core.statement import StatementConfig
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    from typing_extensions import TypeAlias
-
-    from sqlspec.adapters.psqlpy.driver import PsqlpyCursor, PsqlpyDriver
-
-    PsqlpyConnection: TypeAlias = Connection
-else:
-    from psqlpy import Connection as PsqlpyConnection
-
-    from sqlspec.adapters.psqlpy.driver import PsqlpyCursor, PsqlpyDriver
 
 
 logger = logging.getLogger("sqlspec.adapters.psqlpy")
@@ -111,12 +102,11 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
         if "extra" in processed_pool_config:
             extras = processed_pool_config.pop("extra")
             processed_pool_config.update(extras)
-        statement_config = statement_config or psqlpy_statement_config
         super().__init__(
             pool_config=processed_pool_config,
             pool_instance=pool_instance,
             migration_config=migration_config,
-            statement_config=statement_config,
+            statement_config=statement_config or psqlpy_statement_config,
         )
 
     def _get_pool_config_dict(self) -> dict[str, Any]:

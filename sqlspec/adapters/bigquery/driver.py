@@ -53,30 +53,39 @@ logger = logging.getLogger(__name__)
 __all__ = ("BigQueryCursor", "BigQueryDriver", "bigquery_statement_config")
 
 
+_BQ_TYPE_MAP: dict[type, tuple[str, Optional[str]]] = {
+    bool: ("BOOL", None),
+    int: ("INT64", None),
+    float: ("FLOAT64", None),
+    Decimal: ("BIGNUMERIC", None),
+    str: ("STRING", None),
+    bytes: ("BYTES", None),
+    datetime.date: ("DATE", None),
+    datetime.time: ("TIME", None),
+    dict: ("JSON", None),
+}
+
+
 def _get_bq_param_type(value: Any) -> tuple[Optional[str], Optional[str]]:
-    """Determine BigQuery parameter type from Python value."""
+    """Determine BigQuery parameter type from Python value using hash map dispatch.
+
+    Uses O(1) hash map lookup for common types, with special handling for
+    datetime and array types.
+    """
     if value is None:
         return ("STRING", None)
 
     value_type = type(value)
+
+    # Special case for datetime (needs timezone check)
     if value_type is datetime.datetime:
         return ("TIMESTAMP" if value.tzinfo else "DATETIME", None)
 
-    type_map = {
-        bool: ("BOOL", None),
-        int: ("INT64", None),
-        float: ("FLOAT64", None),
-        Decimal: ("BIGNUMERIC", None),
-        str: ("STRING", None),
-        bytes: ("BYTES", None),
-        datetime.date: ("DATE", None),
-        datetime.time: ("TIME", None),
-        dict: ("JSON", None),
-    }
+    # Use hash map for O(1) type lookup
+    if value_type in _BQ_TYPE_MAP:
+        return _BQ_TYPE_MAP[value_type]
 
-    if value_type in type_map:
-        return type_map[value_type]
-
+    # Handle array types
     if isinstance(value, (list, tuple)):
         if not value:
             msg = "Cannot determine BigQuery ARRAY type for empty sequence."
@@ -90,10 +99,21 @@ def _get_bq_param_type(value: Any) -> tuple[Optional[str], Optional[str]]:
     return None, None
 
 
+# Hash map for BigQuery parameter type creation
+_BQ_PARAM_CREATOR_MAP: dict[str, Any] = {
+    "ARRAY": lambda name, value, array_type: ArrayQueryParameter(
+        name, array_type, [] if value is None else list(value)
+    ),
+    "JSON": lambda name, value, _: ScalarQueryParameter(name, "STRING", to_json(value)),
+    "SCALAR": lambda name, value, param_type: ScalarQueryParameter(name, param_type, value),
+}
+
+
 def _create_bq_parameters(parameters: Any) -> "list[Union[ArrayQueryParameter, ScalarQueryParameter]]":
-    """Create BigQuery QueryParameter objects from parameters.
+    """Create BigQuery QueryParameter objects from parameters using hash map dispatch.
 
     Handles both dict-style (named) and list-style (positional) parameters.
+    Uses O(1) hash map lookup for parameter type creation.
     """
     if not parameters:
         return []
@@ -108,15 +128,17 @@ def _create_bq_parameters(parameters: Any) -> "list[Union[ArrayQueryParameter, S
             param_type, array_element_type = _get_bq_param_type(actual_value)
 
             if param_type == "ARRAY" and array_element_type:
-                # Handle array values
-                array_values = [] if actual_value is None else list(actual_value)
-                bq_parameters.append(ArrayQueryParameter(param_name_for_bq, array_element_type, array_values))
+                # Use hash map for array parameter creation
+                creator = _BQ_PARAM_CREATOR_MAP["ARRAY"]
+                bq_parameters.append(creator(param_name_for_bq, actual_value, array_element_type))
             elif param_type == "JSON":
-                json_str = to_json(actual_value)
-                bq_parameters.append(ScalarQueryParameter(param_name_for_bq, "STRING", json_str))
+                # Use hash map for JSON parameter creation
+                creator = _BQ_PARAM_CREATOR_MAP["JSON"]
+                bq_parameters.append(creator(param_name_for_bq, actual_value, None))
             elif param_type:
-                # Use the actual value with its correct BigQuery type
-                bq_parameters.append(ScalarQueryParameter(param_name_for_bq, param_type, actual_value))
+                # Use hash map for scalar parameter creation
+                creator = _BQ_PARAM_CREATOR_MAP["SCALAR"]
+                bq_parameters.append(creator(param_name_for_bq, actual_value, param_type))
             else:
                 msg = f"Unsupported BigQuery parameter type for value of param '{name}': {type(actual_value)}"
                 raise SQLSpecError(msg)
@@ -132,7 +154,11 @@ def _create_bq_parameters(parameters: Any) -> "list[Union[ArrayQueryParameter, S
 
 
 # Enhanced BigQuery type coercion with core optimization
+# This map is used by the core parameter system to coerce types before BigQuery sees them
 bigquery_type_coercion_map = {
+    # Convert tuples to lists for BigQuery array compatibility
+    tuple: list,
+    # Keep other types as-is (BigQuery handles them natively)
     bool: lambda x: x,
     int: lambda x: x,
     float: lambda x: x,
@@ -142,10 +168,8 @@ bigquery_type_coercion_map = {
     datetime.date: lambda x: x,
     datetime.time: lambda x: x,
     Decimal: lambda x: x,
-    # Don't automatically convert dict to JSON - let _create_bq_parameters handle it
-    dict: lambda x: x,
+    dict: lambda x: x,  # BigQuery handles JSON natively
     list: lambda x: x,
-    tuple: list,
     type(None): lambda _: None,
 }
 
@@ -160,6 +184,7 @@ bigquery_statement_config = StatementConfig(
         type_coercion_map=bigquery_type_coercion_map,
         has_native_list_expansion=True,
         needs_static_script_compilation=False,  # Use proper parameter binding for complex types
+        preserve_original_params_for_many=True,  # BigQuery needs original list of tuples for execute_many
     ),
     # Core processing features enabled for performance
     enable_parsing=True,
@@ -240,7 +265,11 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
     @contextmanager
     def with_cursor(self, connection: "BigQueryConnection") -> "Any":
-        """Create and return a context manager for cursor acquisition and cleanup with enhanced resource management."""
+        """Create and return a context manager for cursor acquisition and cleanup with enhanced resource management.
+
+        Yields:
+            BigQueryCursor: Cursor object for query execution
+        """
         cursor = BigQueryCursor(connection)
         try:
             yield cursor
@@ -260,7 +289,11 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
     @contextmanager
     def handle_database_exceptions(self) -> "Generator[None, None, None]":
-        """Handle BigQuery-specific exceptions with comprehensive error categorization."""
+        """Handle BigQuery-specific exceptions with comprehensive error categorization.
+
+        Yields:
+            None: Context manager yields nothing
+        """
         try:
             yield
         except GoogleCloudError as e:
@@ -363,19 +396,23 @@ class BigQueryDriver(SyncDriverAdapterBase):
             # If we can't parse, fall back to original SQL
             return sql
 
+        # Track placeholder index for positional parameters
+        placeholder_counter = {"index": 0}
+
         def replace_placeholder(node: exp.Expression) -> exp.Expression:
             """Replace placeholder nodes with literal values using enhanced type handling."""
             if isinstance(node, exp.Placeholder):
                 # Handle positional parameters (?, :1, etc.)
-                if isinstance(parameters, (list, tuple)) and len(parameters) > 0:
-                    # For positional parameters, use index-based replacement
-                    placeholder_index = getattr(node, "index", 0)
-                    if placeholder_index < len(parameters):
-                        return self._create_literal_node(parameters[placeholder_index])
+                if isinstance(parameters, (list, tuple)):
+                    # Use the current placeholder index
+                    current_index = placeholder_counter["index"]
+                    placeholder_counter["index"] += 1
+                    if current_index < len(parameters):
+                        return self._create_literal_node(parameters[current_index])
                 return node
             if isinstance(node, exp.Parameter):
                 # Handle named parameters (@param1, :name, etc.)
-                param_name = node.this
+                param_name = str(node.this) if hasattr(node.this, "__str__") else node.this
                 if isinstance(parameters, dict):
                     # Try different parameter name formats
                     possible_names = [param_name, f"@{param_name}", f":{param_name}", f"param_{param_name}"]
@@ -385,14 +422,19 @@ class BigQueryDriver(SyncDriverAdapterBase):
                             return self._create_literal_node(actual_value)
                     return node
                 if isinstance(parameters, (list, tuple)):
-                    # For positional parameters passed as list/tuple
+                    # For named parameters with positional values (e.g., @param_0, @param_1)
                     try:
                         # Try to extract numeric index from parameter name
                         if param_name.startswith("param_"):
                             param_index = int(param_name[6:])  # Remove "param_" prefix
                             if param_index < len(parameters):
                                 return self._create_literal_node(parameters[param_index])
-                    except (ValueError, IndexError):
+                        # Also try simple numeric parameters like @0, @1
+                        if param_name.isdigit():
+                            param_index = int(param_name)
+                            if param_index < len(parameters):
+                                return self._create_literal_node(parameters[param_index])
+                    except (ValueError, IndexError, AttributeError):
                         pass
                 return node
             return node
@@ -450,45 +492,40 @@ class BigQueryDriver(SyncDriverAdapterBase):
         )
 
     def _execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:
-        """BigQuery execute_many implementation using static parameter style rendering.
+        """BigQuery execute_many implementation using script-based execution.
 
-        Uses the existing parameter system with STATIC style to render SQL statements
-        with embedded literals, then combines them into a script for execution.
+        BigQuery doesn't support traditional execute_many with parameter batching.
+        Instead, we generate a script with multiple INSERT statements using
+        AST transformation to embed literals safely.
         """
-        # Check if we have parameters for execute_many
-        if not statement.parameters or not isinstance(statement.parameters, (list, tuple)):
-            return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
-
+        # Get parameters from statement (will be original list due to preserve_original_params_for_many flag)
         parameters_list = statement.parameters
 
-        # Create a temporary config with STATIC parameter style for literal rendering
-        from sqlspec.core.parameters import ParameterStyle
+        # Check if we have parameters for execute_many
+        if not parameters_list or not isinstance(parameters_list, (list, tuple)):
+            return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
-        static_config = self.statement_config.replace(
-            parameter_config=self.statement_config.parameter_config.replace(
-                default_execution_parameter_style=ParameterStyle.STATIC
-            )
-        )
+        # Get the base SQL from statement
+        base_sql = statement.sql
 
-        # Build a script with all statements using static parameter rendering
+        # Build a script with all statements using AST transformation
         script_statements = []
         for param_set in parameters_list:
-            # Create individual statement with current parameter set
-            individual_statement = statement.replace(parameters=param_set)
-            # Use static parameter style to get SQL with embedded literals
-            rendered_sql, _ = self._get_compiled_sql(individual_statement, static_config)
-            script_statements.append(rendered_sql)
+            # Use AST transformation to embed literals safely
+            transformed_sql = self._transform_ast_with_literals(base_sql, param_set)
+            script_statements.append(transformed_sql)
 
         # Combine into a single script
-        script_sql = ";\n".join(script_statements) + ";"
+        script_sql = ";\n".join(script_statements)
 
         # Execute the script as a single job
         cursor.job = self._run_query_job(script_sql, None, connection=cursor.connection)
         cursor.job.result()  # Wait for completion
 
-        # BigQuery script jobs may not report accurate affected row counts
-        # Use the parameter count as a reasonable estimate
-        affected_rows = cursor.job.num_dml_affected_rows or len(parameters_list)
+        # Get the actual affected row count from the job
+        affected_rows = (
+            cursor.job.num_dml_affected_rows if cursor.job.num_dml_affected_rows is not None else len(parameters_list)
+        )
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def _execute_statement(self, cursor: Any, statement: "SQL") -> ExecutionResult:

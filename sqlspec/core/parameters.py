@@ -51,7 +51,28 @@ __all__ = (
 )
 
 
-# PRESERVED - Exact same ParameterStyle enum from current parameters.py
+_PARAMETER_REGEX = re.compile(
+    r"""
+    (?P<dquote>"(?:[^"\\]|\\.)*") |
+    (?P<squote>'(?:[^'\\]|\\.)*') |
+    (?P<dollar_quoted_string>\$(?P<dollar_quote_tag_inner>\w*)?\$[\s\S]*?\$\4\$) |
+    (?P<line_comment>--[^\r\n]*) |
+    (?P<block_comment>/\*(?:[^*]|\*(?!/))*\*/) |
+    (?P<pg_q_operator>\?\?|\?\||\?&) |
+    (?P<pg_cast>::(?P<cast_type>\w+)) |
+    (?P<pyformat_named>%\((?P<pyformat_name>\w+)\)s) |
+    (?P<pyformat_pos>%s) |
+    (?P<positional_colon>:(?P<colon_num>\d+)) |
+    (?P<named_colon>:(?P<colon_name>\w+)) |
+    (?P<named_at>@(?P<at_name>\w+)) |
+    (?P<numeric>\$(?P<numeric_num>\d+)) |
+    (?P<named_dollar_param>\$(?P<dollar_param_name>\w+)) |
+    (?P<qmark>\?)
+    """,
+    re.VERBOSE | re.IGNORECASE | re.MULTILINE | re.DOTALL,
+)
+
+
 class ParameterStyle(str, Enum):
     """Parameter style enumeration - preserved interface.
 
@@ -190,7 +211,7 @@ def _(value: bytes, semantic_name: Optional[str] = None) -> TypedParameter:
     return TypedParameter(value, bytes, semantic_name)
 
 
-# @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterInfo:
     """Information about a detected parameter in SQL.
 
@@ -234,7 +255,7 @@ class ParameterInfo:
         )
 
 
-# @mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterStyleConfig:
     """Enhanced ParameterStyleConfig with complete backward compatibility.
 
@@ -260,6 +281,7 @@ class ParameterStyleConfig:
         "has_native_list_expansion",
         "needs_static_script_compilation",
         "output_transformer",
+        "preserve_original_params_for_many",
         "preserve_parameter_format",
         "remove_null_parameters",
         "supported_execution_parameter_styles",
@@ -278,6 +300,7 @@ class ParameterStyleConfig:
         needs_static_script_compilation: bool = False,
         allow_mixed_parameter_styles: bool = False,
         preserve_parameter_format: bool = True,
+        preserve_original_params_for_many: bool = False,
         remove_null_parameters: bool = False,
         output_transformer: Optional[Callable[[str, Any], tuple[str, Any]]] = None,
     ) -> None:
@@ -294,6 +317,7 @@ class ParameterStyleConfig:
             needs_static_script_compilation: Embed parameters directly in SQL
             allow_mixed_parameter_styles: Support mixed styles in single query
             preserve_parameter_format: Maintain original parameter structure
+            preserve_original_params_for_many: Return original list of tuples for execute_many
             remove_null_parameters: Filter null parameters before execution
         """
         self.default_parameter_style = default_parameter_style
@@ -308,6 +332,7 @@ class ParameterStyleConfig:
         self.needs_static_script_compilation = needs_static_script_compilation
         self.allow_mixed_parameter_styles = allow_mixed_parameter_styles
         self.preserve_parameter_format = preserve_parameter_format
+        self.preserve_original_params_for_many = preserve_original_params_for_many
         self.remove_null_parameters = remove_null_parameters
 
     def hash(self) -> int:
@@ -331,6 +356,7 @@ class ParameterStyleConfig:
             self.default_execution_parameter_style.value,
             tuple(sorted(self.type_coercion_map.keys(), key=str)) if self.type_coercion_map else None,
             self.has_native_list_expansion,
+            self.preserve_original_params_for_many,
             bool(self.output_transformer),  # Can't hash function, just presence
             self.needs_static_script_compilation,
             self.allow_mixed_parameter_styles,
@@ -338,30 +364,6 @@ class ParameterStyleConfig:
             self.remove_null_parameters,
         )
         return hash(hash_components)
-
-
-# PRESERVED - Exact same parameter regex from current parameters.py:308-336
-# This regex is critical for parameter detection and must be preserved exactly
-_PARAMETER_REGEX = re.compile(
-    r"""
-    (?P<dquote>"(?:[^"\\]|\\.)*") |
-    (?P<squote>'(?:[^'\\]|\\.)*') |
-    (?P<dollar_quoted_string>\$(?P<dollar_quote_tag_inner>\w*)?\$[\s\S]*?\$\4\$) |
-    (?P<line_comment>--[^\r\n]*) |
-    (?P<block_comment>/\*(?:[^*]|\*(?!/))*\*/) |
-    (?P<pg_q_operator>\?\?|\?\||\?&) |
-    (?P<pg_cast>::(?P<cast_type>\w+)) |
-    (?P<pyformat_named>%\((?P<pyformat_name>\w+)\)s) |
-    (?P<pyformat_pos>%s) |
-    (?P<positional_colon>:(?P<colon_num>\d+)) |
-    (?P<named_colon>:(?P<colon_name>\w+)) |
-    (?P<named_at>@(?P<at_name>\w+)) |
-    (?P<numeric>\$(?P<numeric_num>\d+)) |
-    (?P<named_dollar_param>\$(?P<dollar_param_name>\w+)) |
-    (?P<qmark>\?)
-    """,
-    re.VERBOSE | re.IGNORECASE | re.MULTILINE | re.DOTALL,
-)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -1055,11 +1057,22 @@ class ParameterProcessor:
 
         # Phase E: Phase 2 - Execution format conversion
         if needs_execution_conversion or needs_sqlglot_normalization:
-            # Determine target style: preserve original if supported, otherwise use default
-            target_style = self._determine_target_execution_style(original_styles, config)
-            processed_sql, processed_parameters = self._converter.convert_placeholder_style(
-                processed_sql, processed_parameters, target_style, is_many
-            )
+            # Check if we should preserve original parameters for execute_many
+            if is_many and config.preserve_original_params_for_many and isinstance(parameters, (list, tuple)):
+                # For execute_many with preserve flag, keep original parameter list
+                # but still convert the SQL placeholders to the target style
+                target_style = self._determine_target_execution_style(original_styles, config)
+                processed_sql, _ = self._converter.convert_placeholder_style(
+                    processed_sql, processed_parameters, target_style, is_many
+                )
+                # Keep the original parameter list for drivers that need it (like BigQuery)
+                processed_parameters = parameters
+            else:
+                # Normal execution format conversion
+                target_style = self._determine_target_execution_style(original_styles, config)
+                processed_sql, processed_parameters = self._converter.convert_placeholder_style(
+                    processed_sql, processed_parameters, target_style, is_many
+                )
 
         # Phase F: Output transformation (custom hooks)
         if config.output_transformer:

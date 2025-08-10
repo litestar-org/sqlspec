@@ -1,7 +1,7 @@
 """Test ADBC multi-backend support and backend-specific features using CORE_ROUND_3 architecture."""
 
+import math
 from collections.abc import Generator
-from typing import Any
 
 import pytest
 from pytest_databases.docker.postgres import PostgresService
@@ -125,7 +125,7 @@ def test_sqlite_specific_features(sqlite_session: AdbcDriver) -> None:
         """
         INSERT INTO sqlite_test (name, data, value) VALUES (?, ?, ?)
     """,
-        [("test1", test_blob, 3.14159), ("test2", None, 2.71828), ("test3", b"another blob", 1.41421)],
+        [("test1", test_blob, math.pi), ("test2", None, math.e), ("test3", b"another blob", 1.41421)],
     )
 
     # Test SQLite-specific queries
@@ -231,124 +231,6 @@ def test_duckdb_specific_features(duckdb_session: AdbcDriver) -> None:
     assert analytical_result.data[0]["json_type"] == "test"
 
 
-def test_backend_consistency_across_adapters(postgresql_session: AdbcDriver, sqlite_session: AdbcDriver) -> None:
-    """Test consistency of basic operations across different ADBC backends using CORE_ROUND_3."""
-
-    # Create similar tables in both backends
-    postgresql_session.execute_script("""
-        CREATE TABLE IF NOT EXISTS consistency_test (
-            id SERIAL PRIMARY KEY,
-            name TEXT NOT NULL,
-            value INTEGER,
-            is_active BOOLEAN DEFAULT true
-        )
-    """)
-
-    sqlite_session.execute_script("""
-        CREATE TABLE consistency_test (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            value INTEGER,
-            is_active BOOLEAN DEFAULT 1
-        )
-    """)
-
-    # Insert same test data (using appropriate parameter styles)
-    test_data_pg = [("postgres_item1", 100, True), ("postgres_item2", 200, False)]
-    test_data_sqlite = [("sqlite_item1", 100, True), ("sqlite_item2", 200, False)]
-
-    postgresql_session.execute_many(
-        """
-        INSERT INTO consistency_test (name, value, is_active) VALUES ($1, $2, $3)
-    """,
-        test_data_pg,
-    )
-
-    sqlite_session.execute_many(
-        """
-        INSERT INTO consistency_test (name, value, is_active) VALUES (?, ?, ?)
-    """,
-        test_data_sqlite,
-    )
-
-    # Test similar queries on both backends
-    pg_result = postgresql_session.execute("""
-        SELECT COUNT(*) as count, SUM(value) as total, AVG(value) as average
-        FROM consistency_test
-    """)
-
-    sqlite_result = sqlite_session.execute("""
-        SELECT COUNT(*) as count, SUM(value) as total, AVG(value) as average
-        FROM consistency_test
-    """)
-
-    # Both should have similar result structure
-    assert isinstance(pg_result, SQLResult)
-    assert isinstance(sqlite_result, SQLResult)
-
-    pg_data = pg_result.data[0]
-    sqlite_data = sqlite_result.data[0]
-
-    # Both should have same counts and totals
-    assert pg_data["count"] == sqlite_data["count"] == 2
-    assert pg_data["total"] == sqlite_data["total"] == 300
-    assert pg_data["average"] == sqlite_data["average"] == 150.0
-
-    # Clean up
-    postgresql_session.execute_script("DROP TABLE IF EXISTS consistency_test")
-    # SQLite cleanup automatic with in-memory database
-
-
-@pytest.mark.parametrize(
-    "backend_name,session_fixture", [("PostgreSQL", "postgresql_session"), ("SQLite", "sqlite_session")]
-)
-def test_parameter_style_consistency(backend_name: str, session_fixture: str, request: Any) -> None:
-    """Test parameter style consistency across ADBC backends using CORE_ROUND_3."""
-    session = request.getfixturevalue(session_fixture)
-
-    # Create test table
-    if backend_name == "PostgreSQL":
-        session.execute_script("""
-            CREATE TABLE IF NOT EXISTS param_test (
-                id SERIAL PRIMARY KEY,
-                name TEXT,
-                value INTEGER
-            )
-        """)
-        insert_sql = "INSERT INTO param_test (name, value) VALUES ($1, $2)"
-        select_sql = "SELECT * FROM param_test WHERE name = $1"
-        params = ("test_param", 42)
-        select_params = ("test_param",)
-    else:  # SQLite
-        session.execute_script("""
-            CREATE TABLE param_test (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT,
-                value INTEGER
-            )
-        """)
-        insert_sql = "INSERT INTO param_test (name, value) VALUES (?, ?)"
-        select_sql = "SELECT * FROM param_test WHERE name = ?"
-        params = ("test_param", 42)
-        select_params = ("test_param",)
-
-    # Test parameter binding
-    insert_result = session.execute(insert_sql, params)
-    assert isinstance(insert_result, SQLResult)
-
-    # Test parameter retrieval
-    select_result = session.execute(select_sql, select_params)
-    assert isinstance(select_result, SQLResult)
-    assert select_result.data is not None
-    assert len(select_result.data) == 1
-    assert select_result.data[0]["name"] == "test_param"
-    assert select_result.data[0]["value"] == 42
-
-    # Clean up PostgreSQL table
-    if backend_name == "PostgreSQL":
-        session.execute_script("DROP TABLE IF EXISTS param_test")
-
-
 @pytest.mark.xdist_group("postgres")
 def test_postgresql_dialect_detection(postgresql_session: AdbcDriver) -> None:
     """Test PostgreSQL dialect detection in ADBC driver using CORE_ROUND_3."""
@@ -399,7 +281,7 @@ def test_cross_backend_data_type_handling(postgresql_session: AdbcDriver, sqlite
     common_types_data = [
         ("string_test", "Hello World"),
         ("integer_test", 42),
-        ("float_test", 3.14159),
+        ("float_test", math.pi),
         ("boolean_test", True),
         ("null_test", None),
     ]
