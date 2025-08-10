@@ -105,7 +105,6 @@ def parameter_style_config_basic() -> ParameterStyleConfig:
         needs_static_script_compilation=True,
         allow_mixed_parameter_styles=False,
         preserve_parameter_format=False,
-        remove_null_parameters=False,
     )
 
 
@@ -137,7 +136,6 @@ def parameter_style_config_advanced() -> ParameterStyleConfig:
         needs_static_script_compilation=False,
         allow_mixed_parameter_styles=True,
         preserve_parameter_format=True,
-        remove_null_parameters=False,
     )
 
 

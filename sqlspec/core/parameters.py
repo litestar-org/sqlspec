@@ -276,6 +276,7 @@ class ParameterStyleConfig:
 
     __slots__ = (
         "allow_mixed_parameter_styles",
+        "ast_transformer",
         "default_execution_parameter_style",
         "default_parameter_style",
         "has_native_list_expansion",
@@ -283,7 +284,6 @@ class ParameterStyleConfig:
         "output_transformer",
         "preserve_original_params_for_many",
         "preserve_parameter_format",
-        "remove_null_parameters",
         "supported_execution_parameter_styles",
         "supported_parameter_styles",
         "type_coercion_map",
@@ -301,8 +301,8 @@ class ParameterStyleConfig:
         allow_mixed_parameter_styles: bool = False,
         preserve_parameter_format: bool = True,
         preserve_original_params_for_many: bool = False,
-        remove_null_parameters: bool = False,
         output_transformer: Optional[Callable[[str, Any], tuple[str, Any]]] = None,
+        ast_transformer: Optional[Callable[[Any, Any], tuple[Any, Any]]] = None,
     ) -> None:
         """Initialize with complete compatibility.
 
@@ -318,7 +318,7 @@ class ParameterStyleConfig:
             allow_mixed_parameter_styles: Support mixed styles in single query
             preserve_parameter_format: Maintain original parameter structure
             preserve_original_params_for_many: Return original list of tuples for execute_many
-            remove_null_parameters: Filter null parameters before execution
+            ast_transformer: AST-based transformation hook for advanced SQL/parameter manipulation
         """
         self.default_parameter_style = default_parameter_style
         self.supported_parameter_styles = (
@@ -329,11 +329,11 @@ class ParameterStyleConfig:
         self.type_coercion_map = type_coercion_map or {}
         self.has_native_list_expansion = has_native_list_expansion
         self.output_transformer = output_transformer
+        self.ast_transformer = ast_transformer
         self.needs_static_script_compilation = needs_static_script_compilation
         self.allow_mixed_parameter_styles = allow_mixed_parameter_styles
         self.preserve_parameter_format = preserve_parameter_format
         self.preserve_original_params_for_many = preserve_original_params_for_many
-        self.remove_null_parameters = remove_null_parameters
 
     def hash(self) -> int:
         """Generate hash for cache key generation - preserved interface.
@@ -361,7 +361,7 @@ class ParameterStyleConfig:
             self.needs_static_script_compilation,
             self.allow_mixed_parameter_styles,
             self.preserve_parameter_format,
-            self.remove_null_parameters,
+            bool(self.ast_transformer),  # Can't hash function, just presence
         )
         return hash(hash_components)
 
@@ -710,7 +710,7 @@ class ParameterConverter:
 
         return converted_sql
 
-    def _convert_parameter_format(
+    def _convert_parameter_format(  # noqa: C901
         self,
         parameters: Any,
         param_info: "list[ParameterInfo]",
@@ -756,16 +756,49 @@ class ParameterConverter:
         elif isinstance(parameters, Mapping):
             # Convert named to positional
             param_values = []
-            for param in param_info:
-                if param.name and param.name in parameters:
-                    param_values.append(parameters[param.name])
-                elif f"param_{param.ordinal}" in parameters:
-                    param_values.append(parameters[f"param_{param.ordinal}"])
-                else:
-                    # Try to match by ordinal key
-                    ordinal_key = str(param.ordinal + 1)  # 1-based for some styles
-                    if ordinal_key in parameters:
-                        param_values.append(parameters[ordinal_key])
+
+            # Handle mixed parameter styles by creating a comprehensive parameter mapping
+            parameter_styles = {p.style for p in param_info}
+            has_mixed_styles = len(parameter_styles) > 1
+
+            if has_mixed_styles:
+                # For mixed styles, we need to create a mapping that handles both named and positional parameters
+                # Strategy: Map parameters based on their ordinal position in the SQL
+                param_keys = list(parameters.keys())
+
+                for param in param_info:
+                    value_found = False
+
+                    # First, try direct name mapping for named parameters
+                    if param.name and param.name in parameters:
+                        param_values.append(parameters[param.name])
+                        value_found = True
+                    # For numeric parameters like $1, $2, map by ordinal position
+                    elif param.style == ParameterStyle.NUMERIC and param.name and param.name.isdigit():
+                        # $2 means the second parameter - use ordinal position to find corresponding key
+                        if param.ordinal < len(param_keys):
+                            key_to_use = param_keys[param.ordinal]
+                            param_values.append(parameters[key_to_use])
+                            value_found = True
+
+                    # Fallback to original logic if no value found yet
+                    if not value_found:
+                        if f"param_{param.ordinal}" in parameters:
+                            param_values.append(parameters[f"param_{param.ordinal}"])
+                        elif str(param.ordinal + 1) in parameters:  # 1-based for some styles
+                            param_values.append(parameters[str(param.ordinal + 1)])
+            else:
+                # Original logic for single parameter style
+                for param in param_info:
+                    if param.name and param.name in parameters:
+                        param_values.append(parameters[param.name])
+                    elif f"param_{param.ordinal}" in parameters:
+                        param_values.append(parameters[f"param_{param.ordinal}"])
+                    else:
+                        # Try to match by ordinal key
+                        ordinal_key = str(param.ordinal + 1)  # 1-based for some styles
+                        if ordinal_key in parameters:
+                            param_values.append(parameters[ordinal_key])
 
             # Preserve original container type if preserve_parameter_format=True and we have the original
             if preserve_parameter_format and original_parameters is not None:
@@ -1183,153 +1216,6 @@ class ParameterProcessor:
         if isinstance(parameters, Mapping):
             return {k: _wrap_parameter_by_type(v) for k, v in parameters.items()}
         return _wrap_parameter_by_type(parameters)
-
-    def _remove_null_parameters(
-        self, sql: str, parameters: Any, param_info: "list[ParameterInfo]"
-    ) -> "tuple[str, Any]":
-        """Remove NULL parameters and replace with NULL literals in SQL using AST manipulation.
-
-        This method implements the ADBC-specific NULL parameter handling that was
-        previously in the pipeline_steps.py. It uses SQLGlot AST transformation
-        to replace parameter placeholders with NULL literals when the parameter
-        value is None, preventing Arrow type inference issues.
-
-        Args:
-            sql: SQL string (possibly SQLGlot-normalized)
-            parameters: Parameter values that may contain None
-            param_info: Parameter information from validation
-
-        Returns:
-            Tuple of (modified_sql, cleaned_parameters)
-        """
-        # 1. Analyze NULL parameters
-        null_positions = self._analyze_null_positions(parameters)
-        if not null_positions:
-            return sql, parameters
-
-        # 2. Parse SQL for AST manipulation
-        try:
-            import sqlglot
-
-            expression = sqlglot.parse_one(sql)
-        except Exception:
-            # Fallback to original if parsing fails
-            return sql, parameters
-
-        # 3. Transform AST to replace NULL placeholders with NULL literals
-        modified_expression = self._replace_null_placeholders_in_ast(expression, null_positions)
-
-        # 4. Generate modified SQL
-        modified_sql = modified_expression.sql()
-
-        # 5. Remove NULL parameters from parameter list
-        cleaned_parameters = self._clean_null_parameters(parameters, null_positions)
-
-        return modified_sql, cleaned_parameters
-
-    def _analyze_null_positions(self, parameters: Any) -> "dict[int, Any]":
-        """Analyze parameters to find NULL positions."""
-        null_positions: dict[int, Any] = {}
-
-        if isinstance(parameters, (list, tuple)):
-            for i, param in enumerate(parameters):
-                if param is None:
-                    null_positions[i] = None
-        elif isinstance(parameters, dict):
-            for key, param in parameters.items():
-                if param is None:
-                    # Handle different key formats
-                    if isinstance(key, str) and key.lstrip("$").isdigit():
-                        param_num = int(key.lstrip("$"))
-                        null_positions[param_num - 1] = None  # Convert to 0-based index
-                    elif isinstance(key, int):
-                        null_positions[key] = None
-
-        return null_positions
-
-    def _replace_null_placeholders_in_ast(self, expression: Any, null_positions: "dict[int, Any]") -> Any:
-        """Replace NULL parameter placeholders with NULL literals in AST.
-
-        Uses SQLGlot AST transformation to find and replace parameter nodes
-        with NULL literal nodes, following the pattern from pipeline_steps.py.
-        """
-        import sqlglot.expressions as exp
-
-        def transform_node(node: Any) -> Any:
-            # Handle PostgreSQL-style placeholders ($1, $2, etc.)
-            if isinstance(node, exp.Placeholder) and hasattr(node, "this"):
-                return self._transform_postgres_placeholder(node, null_positions)
-
-            # Handle generic parameter nodes
-            if isinstance(node, exp.Parameter) and hasattr(node, "this"):
-                return self._transform_parameter_node(node, null_positions)
-
-            return node
-
-        return expression.transform(transform_node)
-
-    def _transform_postgres_placeholder(self, node: Any, null_positions: "dict[int, Any]") -> Any:
-        """Transform PostgreSQL-style placeholders ($1, $2, etc.)."""
-        import sqlglot.expressions as exp
-
-        try:
-            param_str = node.this.lstrip("$")
-            param_num = int(param_str)
-            param_index = param_num - 1  # Convert to 0-based
-
-            if param_index in null_positions:
-                # Replace with NULL literal
-                return exp.Null()
-            # Renumber placeholder to account for removed NULLs
-            nulls_before = sum(1 for idx in null_positions if idx < param_index)
-            new_param_num = param_num - nulls_before
-            return exp.Placeholder(this=f"${new_param_num}")
-
-        except (ValueError, AttributeError):
-            # Return original if parsing fails
-            return node
-
-    def _transform_parameter_node(self, node: Any, null_positions: "dict[int, Any]") -> Any:
-        """Transform generic parameter nodes."""
-        import sqlglot.expressions as exp
-
-        try:
-            param_str = str(node.this)
-            param_num = int(param_str)
-            param_index = param_num - 1  # Convert to 0-based
-
-            if param_index in null_positions:
-                # Replace with NULL literal
-                return exp.Null()
-            # Renumber parameter to account for removed NULLs
-            nulls_before = sum(1 for idx in null_positions if idx < param_index)
-            new_param_num = param_num - nulls_before
-            return exp.Parameter(this=str(new_param_num))
-
-        except (ValueError, AttributeError):
-            # Return original if parsing fails
-            return node
-
-    def _clean_null_parameters(self, parameters: Any, null_positions: "dict[int, Any]") -> Any:
-        """Remove NULL parameters from parameter list."""
-        if isinstance(parameters, (list, tuple)):
-            return [param for i, param in enumerate(parameters) if i not in null_positions]
-        if isinstance(parameters, dict):
-            cleaned_dict = {}
-            param_keys = sorted(
-                parameters.keys(),
-                key=lambda k: int(k.lstrip("$")) if isinstance(k, str) and k.lstrip("$").isdigit() else 0,
-            )
-
-            new_param_num = 1
-            for key in param_keys:
-                if parameters[key] is not None:
-                    cleaned_dict[str(new_param_num)] = parameters[key]
-                    new_param_num += 1
-
-            return cleaned_dict
-
-        return parameters
 
     def _apply_type_coercions(
         self, parameters: Any, type_coercion_map: "dict[type, Callable[[Any], Any]]", is_many: bool = False

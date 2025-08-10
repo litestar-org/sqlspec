@@ -365,7 +365,8 @@ def test_cache_lru_behavior(basic_statement_config: "StatementConfig") -> None:
         ("CREATE TABLE test (id INT)", "DDL"),
         ("DROP TABLE test", "DDL"),
         ("ALTER TABLE test ADD COLUMN name TEXT", "DDL"),
-        ("COPY users FROM 'file.csv'", "COPY"),
+        ("COPY users FROM 'file.csv'", "COPY_FROM"),
+        ("COPY users TO 'file.csv'", "COPY_TO"),
         ("EXECUTE my_proc()", "EXECUTE"),
     ],
 )

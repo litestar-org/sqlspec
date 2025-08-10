@@ -271,10 +271,10 @@ def test_sql_lazy_processing_not_triggered_initially() -> None:
 
 
 def test_sql_single_pass_processing_triggered_by_sql_property() -> None:
-    """Test accessing .sql property triggers single-pass processing."""
+    """Test accessing .sql property returns raw SQL without processing."""
     stmt = SQL("SELECT * FROM users")
 
-    # Mock the SQLProcessor to verify it's called exactly once
+    # Mock the SQLProcessor to verify it's NOT called for .sql property
     with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
         mock_processor = MagicMock()
         mock_processor_class.return_value = mock_processor
@@ -290,28 +290,28 @@ def test_sql_single_pass_processing_triggered_by_sql_property() -> None:
         )
         mock_processor.compile.return_value = mock_compiled
 
-        # First access triggers processing
+        # Accessing .sql should return raw SQL without processing
         sql_result = stmt.sql
 
-        # Verify processor was created and called
+        # Verify processor was NOT called
+        mock_processor_class.assert_not_called()
+        assert sql_result == "SELECT * FROM users"  # Raw SQL
+
+        # Processing state is still empty
+        assert stmt._processed_state is Empty
+
+        # Calling compile() triggers processing
+        compiled_sql, params = stmt.compile()
+
+        # Now processor should be called
         mock_processor_class.assert_called_once_with(stmt._statement_config)
         mock_processor.compile.assert_called_once_with(stmt._raw_sql, [], is_many=False)
-        assert sql_result == "SELECT * FROM users"
-
-        # Processing state is now populated
-        assert stmt._processed_state is not Empty
-
-        # Second access should not trigger processing again
-        mock_processor.compile.reset_mock()
-        sql_result2 = stmt.sql
-
-        # Processor not called again
-        mock_processor.compile.assert_not_called()
-        assert sql_result2 == sql_result
+        assert compiled_sql == "SELECT * FROM users"
+        assert params == []
 
 
 def test_sql_single_pass_processing_triggered_by_parameters_property() -> None:
-    """Test accessing .parameters property triggers processing."""
+    """Test accessing .parameters property returns original parameters."""
     stmt = SQL("SELECT * FROM users WHERE id = ?", 1)
 
     with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
@@ -328,15 +328,17 @@ def test_sql_single_pass_processing_triggered_by_parameters_property() -> None:
         )
         mock_processor.compile.return_value = mock_compiled
 
-        # Access parameters triggers processing
+        # Access parameters returns original without processing
         params = stmt.parameters
 
-        assert params == [1]
-        assert stmt._processed_state is not Empty
+        # No processing triggered
+        mock_processor_class.assert_not_called()
+        assert params == [1]  # Original parameters
+        assert stmt._processed_state is Empty
 
 
 def test_sql_single_pass_processing_triggered_by_operation_type_property() -> None:
-    """Test accessing .operation_type property triggers processing."""
+    """Test accessing .operation_type property returns UNKNOWN without processing."""
     stmt = SQL("INSERT INTO users (name) VALUES ('john')")
 
     with patch("sqlspec.core.statement.SQLProcessor") as mock_processor_class:
@@ -353,11 +355,13 @@ def test_sql_single_pass_processing_triggered_by_operation_type_property() -> No
         )
         mock_processor.compile.return_value = mock_compiled
 
-        # Access operation_type triggers processing
+        # Access operation_type returns UNKNOWN without processing
         op_type = stmt.operation_type
 
-        assert op_type == "INSERT"
-        assert stmt._processed_state is not Empty
+        # No processing triggered
+        mock_processor_class.assert_not_called()
+        assert op_type == "UNKNOWN"  # Default when not processed
+        assert stmt._processed_state is Empty
 
 
 def test_sql_processing_fallback_on_error() -> None:
@@ -369,11 +373,17 @@ def test_sql_processing_fallback_on_error() -> None:
         mock_processor_class.return_value = mock_processor
         mock_processor.compile.side_effect = Exception("Processing failed")
 
-        # Should fall back gracefully
+        # .sql returns raw SQL without processing
         sql_result = stmt.sql
+        assert sql_result == "INVALID SQL SYNTAX"
+        assert stmt._processed_state is Empty  # No processing yet
+
+        # compile() triggers processing and handles fallback
+        compiled_sql, params = stmt.compile()
 
         # Fallback processing creates basic ProcessedState
-        assert sql_result == "INVALID SQL SYNTAX"
+        assert compiled_sql == "INVALID SQL SYNTAX"
+        assert params == []
         assert stmt.operation_type == "UNKNOWN"
         assert stmt._processed_state is not Empty
 
@@ -399,7 +409,13 @@ def test_sql_expression_caching_enabled() -> None:
         )
         mock_processor.compile.return_value = mock_compiled
 
-        # First access
+        # Expression is None before compilation
+        assert stmt.expression is None
+
+        # Compile to populate expression
+        stmt.compile()
+
+        # Now expression is available
         expr1 = stmt.expression
         # Second access should return cached
         expr2 = stmt.expression
@@ -560,6 +576,8 @@ def test_sql_operation_type_detection(sql_statement: str, expected_operation_typ
         )
         mock_processor.compile.return_value = mock_compiled
 
+        # Trigger compilation to populate operation_type
+        stmt.compile()
         assert stmt.operation_type == expected_operation_type
 
 
@@ -861,11 +879,12 @@ def test_sql_processing_caching_performance() -> None:
         )
         mock_processor.compile.return_value = mock_compiled
 
-        # First access triggers processing and caches result
-        result1 = stmt.sql
+        # First compile triggers processing and caches result
+        stmt.compile()
         assert stmt._processed_state is not Empty
 
         # Subsequent accesses use cached result
+        result1 = stmt.sql
         result2 = stmt.sql
 
         # All return consistent results

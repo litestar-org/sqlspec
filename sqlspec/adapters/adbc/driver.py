@@ -21,8 +21,10 @@ import decimal
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional, cast
 
+from sqlglot import exp
+
 from sqlspec.core.cache import get_cache_config
-from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig, TypedParameter
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import MissingDependencyError, SQLParsingError, SQLSpecError
@@ -64,177 +66,115 @@ DIALECT_PARAMETER_STYLES = {
 }
 
 
-def _adbc_output_transformer(sql: str, parameters: Any) -> "tuple[str, Any]":
-    """ADBC-specific output transformer that handles SQL and parameter transformations.
+def _adbc_ast_transformer(expression: Any, parameters: Any) -> tuple[Any, Any]:
+    """ADBC-specific AST transformer for NULL parameter handling.
 
-    This transformer replicates the functionality that was previously in pipeline_steps.py
-    for ADBC-specific SQL processing, including:
-    - SQL dialect-specific formatting for optimal Arrow performance
-    - Parameter binding optimizations for Arrow/ADBC type inference
-    - Type coercion adjustments for ADBC compatibility
-    - Array parameter handling for PostgreSQL and other array-supporting dialects
-    - Enhanced NULL parameter handling with SQL context analysis
-    """
+    For PostgreSQL, this transformer replaces NULL parameter placeholders with NULL literals
+    in the AST to prevent Arrow from inferring 'na' types which cause binding errors.
 
-    return sql, _transform_adbc_parameters_with_context(sql, parameters)
-
-
-def _transform_adbc_parameters_with_context(sql: str, parameters: Any) -> Any:
-    """Transform parameters for ADBC compatibility with SQL context analysis.
-
-    Analyzes the SQL statement to infer appropriate types for NULL parameters,
-    preventing Arrow 'na' type mapping errors.
+    The transformer:
+    1. Detects None parameters in the parameter list
+    2. Replaces corresponding placeholders in the AST with NULL literals
+    3. Removes the None parameters from the list
+    4. Renumbers remaining placeholders to maintain correct mapping
 
     Args:
-        sql: The SQL statement for context analysis (currently unused, reserved for future SQL parsing)
-        parameters: Parameters to transform
+        expression: SQLGlot AST expression
+        parameters: Parameter values that may contain None
 
     Returns:
-        Transformed parameters with proper Arrow type hints
+        Tuple of (modified_expression, cleaned_parameters)
     """
-    _ = sql  # Reserved for future SQL context analysis
     if not parameters:
-        return parameters
+        return expression, parameters
 
-    # Apply ADBC-specific NULL parameter handling with better type inference
-    transformed = _transform_adbc_parameters(parameters)
-
-    # If we still have None parameters that could cause Arrow 'na' type issues,
-    # apply a more conservative approach
-    if isinstance(transformed, (list, tuple)) and any(p is None for p in transformed):
-        return _apply_conservative_null_typing(transformed)
-
-    return transformed
-
-
-def _apply_conservative_null_typing(parameters: Any) -> Any:
-    """Apply conservative typing for NULL parameters to avoid Arrow 'na' issues.
-
-    Uses a strategy that tries to let PostgreSQL handle type inference while
-    providing enough type information for Arrow to avoid 'na' type errors.
-    """
-    from sqlspec.typing import PYARROW_INSTALLED
-
-    if not PYARROW_INSTALLED:
-        return parameters
-
-    if not isinstance(parameters, (list, tuple)):
-        return parameters
-
-    import pyarrow as pa
-
-    # Process list/tuple parameters
-    result = []
-    for param in parameters:
-        if param is None:
-            # Use a typed NULL that PostgreSQL can handle
-            # String type is safest default for unknown NULL values
-            result.append(pa.scalar(None, type=pa.string()))
-        else:
-            result.append(param)
-    return result
-
-
-def _transform_adbc_parameters(parameters: Any) -> Any:
-    """Transform parameters for ADBC compatibility.
-
-    Handles type coercion and format conversion that helps Arrow type inference
-    and prevents binding issues with ADBC drivers. Special handling for NULL
-    parameters to ensure proper Arrow type mapping.
-    """
+    # Detect NULL parameter positions
+    null_positions = set()
     if isinstance(parameters, (list, tuple)):
-        return [_coerce_parameter_for_adbc(param) for param in parameters]
-    if isinstance(parameters, dict):
-        return {key: _coerce_parameter_for_adbc(param) for key, param in parameters.items()}
-    return _coerce_parameter_for_adbc(parameters) if parameters is not None else parameters
+        for i, param in enumerate(parameters):
+            if param is None:
+                null_positions.add(i)
+    elif isinstance(parameters, dict):
+        for key, param in parameters.items():
+            if param is None:
+                try:
+                    if isinstance(key, str) and key.lstrip("$").isdigit():
+                        param_num = int(key.lstrip("$"))
+                        null_positions.add(param_num - 1)
+                except ValueError:
+                    pass
 
+    if not null_positions:
+        return expression, parameters
 
-def _create_typed_null_for_arrow(param_type: type) -> Any:
-    """Create a typed NULL value for Arrow type inference.
+    # Track position for QMARK-style placeholders
+    qmark_position = [0]
 
-    Args:
-        param_type: The original parameter type for the NULL value
+    def transform_node(node: Any) -> Any:
+        """Transform parameter nodes to NULL literals and renumber remaining ones."""
+        # Handle QMARK-style placeholders (?, ?, ?)
+        if isinstance(node, exp.Placeholder) and (not hasattr(node, "this") or node.this is None):
+            current_pos = qmark_position[0]
+            qmark_position[0] += 1
 
-    Returns:
-        PyArrow scalar with proper type, or None if PyArrow not available
-    """
-    from sqlspec.typing import PYARROW_INSTALLED
+            if current_pos in null_positions:
+                return exp.Null()
+            # Don't renumber QMARK placeholders - they stay as ?
+            return node
 
-    if not PYARROW_INSTALLED:
-        return None
+        # Handle PostgreSQL-style placeholders ($1, $2, etc.)
+        if isinstance(node, exp.Placeholder) and hasattr(node, "this") and node.this is not None:
+            try:
+                param_str = str(node.this).lstrip("$")
+                param_num = int(param_str)
+                param_index = param_num - 1  # Convert to 0-based
 
-    import pyarrow as pa
+                if param_index in null_positions:
+                    return exp.Null()
+                # Renumber placeholder to account for removed NULLs
+                nulls_before = sum(1 for idx in null_positions if idx < param_index)
+                new_param_num = param_num - nulls_before
+                return exp.Placeholder(this=f"${new_param_num}")
+            except (ValueError, AttributeError):
+                pass
 
-    # Map Python types to Arrow types for better type inference
-    type_mapping = {
-        str: pa.string(),
-        int: pa.int64(),
-        float: pa.float64(),
-        bool: pa.bool_(),
-        bytes: pa.binary(),
-        list: pa.list_(pa.string()),
-        tuple: pa.list_(pa.string()),
-        decimal.Decimal: pa.decimal128(38, 9),  # PostgreSQL NUMERIC default
-        datetime.datetime: pa.timestamp("us"),
-        datetime.date: pa.date32(),
-    }
+        # Handle generic parameter nodes
+        if isinstance(node, exp.Parameter) and hasattr(node, "this"):
+            try:
+                param_str = str(node.this)
+                param_num = int(param_str)
+                param_index = param_num - 1  # Convert to 0-based
 
-    arrow_type = type_mapping.get(param_type, pa.string())  # Default to string
-    return pa.scalar(None, type=arrow_type)
+                if param_index in null_positions:
+                    return exp.Null()
+                # Renumber parameter to account for removed NULLs
+                nulls_before = sum(1 for idx in null_positions if idx < param_index)
+                new_param_num = param_num - nulls_before
+                return exp.Parameter(this=str(new_param_num))
+            except (ValueError, AttributeError):
+                pass
 
+        return node
 
-def _coerce_parameter_for_adbc(param: Any) -> Any:
-    """Coerce individual parameter for ADBC compatibility.
+    # Transform the AST
+    modified_expression = expression.transform(transform_node)
 
-    Special handling for NULL parameters to provide type hints for Arrow.
-    """
-    # Handle TypedParameter wrappers by extracting the underlying value
-    # while preserving the original type information for proper ADBC handling
-    if isinstance(param, TypedParameter):
-        # For NULL TypedParameter, we can provide better type hints using PyArrow
-        if param.value is None and param.original_type is not type(None):
-            # Try to create a typed null value for Arrow
-            typed_null = _create_typed_null_for_arrow(param.original_type)
-            if typed_null is not None:
-                return typed_null
-            # Fallback to the TypedParameter wrapper
-            return param
-        # For bytes, preserve the original value to prevent string conversion
-        if param.original_type is bytes:
-            return param.value
-        # For other types, apply normal coercion to the underlying value
-        param = param.value
+    # Remove NULL parameters from the parameter list
+    cleaned_params: Any
+    if isinstance(parameters, (list, tuple)):
+        cleaned_params = [p for i, p in enumerate(parameters) if i not in null_positions]
+    elif isinstance(parameters, dict):
+        cleaned_params_dict = {}
+        new_num = 1
+        for val in parameters.values():
+            if val is not None:
+                cleaned_params_dict[str(new_num)] = val
+                new_num += 1
+        cleaned_params = cleaned_params_dict
+    else:
+        cleaned_params = parameters
 
-    # CRITICAL: Handle NULL parameters for Arrow type inference
-    # Arrow needs type hints for NULL values to avoid 'na' type mapping errors
-    if param is None:
-        # For standalone None parameters, we can't reliably infer the type
-        # Fallback to plain None and let the database handle type resolution
-        # This may cause 'na' type issues in some cases, but PostgreSQL
-        # can often resolve types from context when using proper SQL
-        return param
-
-    # Handle array types for PostgreSQL and other array-supporting databases
-    if isinstance(param, (list, tuple)) and param:
-        return _convert_array_for_postgres_adbc(param)
-
-    # Handle decimal types that might cause Arrow issues
-    if isinstance(param, decimal.Decimal):
-        return float(param)
-
-    # Handle datetime types for consistent Arrow representation
-    if isinstance(param, (datetime.datetime, datetime.date, datetime.time)):
-        return param  # Arrow handles these natively
-
-    # Handle JSON/dict types for PostgreSQL
-    if isinstance(param, dict):
-        return to_json(param)
-
-    # Handle bytes specifically to ensure proper ADBC/Arrow handling
-    if isinstance(param, bytes):
-        return param  # Preserve bytes as-is for ADBC
-
-    return param
+    return modified_expression, cleaned_params
 
 
 def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
@@ -245,6 +185,9 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
 
     type_map = get_type_coercion_map(detected_dialect)
 
+    # Normalize dialect for SQLGlot compatibility
+    sqlglot_dialect = "postgres" if detected_dialect == "postgresql" else detected_dialect
+
     parameter_config = ParameterStyleConfig(
         default_parameter_style=default_style,
         supported_parameter_styles=set(supported_styles),
@@ -254,19 +197,18 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
         has_native_list_expansion=True,
         needs_static_script_compilation=False,  # Use parameter binding for ADBC/Arrow compatibility
         preserve_parameter_format=True,
-        remove_null_parameters=False,  # CRITICAL: ADBC requires NULL parameters for proper binding
+        # Use AST transformer for PostgreSQL to handle NULL parameters
+        ast_transformer=_adbc_ast_transformer if detected_dialect in {"postgres", "postgresql"} else None,
     )
 
     return StatementConfig(
-        dialect=detected_dialect,
+        dialect=sqlglot_dialect,
         parameter_config=parameter_config,
         # Core processing features enabled for performance
         enable_parsing=True,
         enable_validation=True,
         enable_caching=True,
         enable_parameter_type_wrapping=True,
-        # ADBC-specific output transformer for SQL and parameter processing
-        output_transformer=_adbc_output_transformer,
     )
 
 
@@ -374,11 +316,11 @@ class AdbcDriver(SyncDriverAdapterBase):
         if statement_config is None:
             cache_config = get_cache_config()
             base_config = get_adbc_statement_config(self._detected_dialect)
+            # Don't override the dialect - get_adbc_statement_config already normalized it
             enhanced_config = base_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled,
                 enable_parsing=True,  # Default to enabled
                 enable_validation=True,  # Default to enabled
-                dialect=self._detected_dialect,  # Use adapter-detected dialect
             )
             statement_config = enhanced_config
 
@@ -513,12 +455,8 @@ class AdbcDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         try:
-            # Enhanced parameter processing for ADBC compatibility
             postgres_compatible_params = self._handle_postgres_empty_parameters(prepared_parameters)
-            parameters = self.prepare_driver_parameters(
-                postgres_compatible_params, self.statement_config, is_many=False
-            )
-            cursor.execute(sql, parameters=parameters)
+            cursor.execute(sql, parameters=postgres_compatible_params)
 
         except Exception:
             self._handle_postgres_rollback(cursor)
@@ -546,6 +484,49 @@ class AdbcDriver(SyncDriverAdapterBase):
         # Enhanced non-SELECT result processing
         row_count = cursor.rowcount if cursor.rowcount is not None else -1
         return self.create_execution_result(cursor, rowcount_override=row_count)
+
+    def _execute_script(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
+        """Execute SQL script with ADBC-specific handling for transaction isolation.
+
+        ADBC drivers may have transaction isolation issues where individual statements
+        in a script run in separate transactions. This implementation ensures proper
+        transaction handling for script execution.
+        """
+        # For scripts, use the raw SQL directly since _get_compiled_sql only processes the first statement
+        if statement.is_script:
+            sql = statement._raw_sql
+            prepared_parameters: list[Any] = []  # Scripts use static compilation, so no parameters
+        else:
+            sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+
+        statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
+
+        successful_count = 0
+        last_rowcount = 0
+
+        # Execute statements individually to ensure proper execution
+        try:
+            for stmt in statements:
+                if prepared_parameters:
+                    postgres_compatible_params = self._handle_postgres_empty_parameters(prepared_parameters)
+                    cursor.execute(stmt, parameters=postgres_compatible_params)
+                else:
+                    cursor.execute(stmt)
+                successful_count += 1
+                if cursor.rowcount is not None:
+                    last_rowcount = cursor.rowcount
+        except Exception:
+            self._handle_postgres_rollback(cursor)
+            logger.exception("ADBC script execution failed")
+            raise
+
+        return self.create_execution_result(
+            cursor,
+            statement_count=len(statements),
+            successful_statements=successful_count,
+            rowcount_override=last_rowcount,
+            is_script_result=True,
+        )
 
     # Enhanced transaction management with ADBC-specific optimizations
     def begin(self) -> None:

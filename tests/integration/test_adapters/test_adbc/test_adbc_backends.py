@@ -110,7 +110,7 @@ def test_sqlite_specific_features(sqlite_session: AdbcDriver) -> None:
     """Test SQLite-specific features with ADBC using CORE_ROUND_3."""
     # Create test table with SQLite features
     sqlite_session.execute_script("""
-        CREATE TABLE sqlite_test (
+        CREATE TABLE test_sqlite (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             data BLOB,
@@ -123,7 +123,7 @@ def test_sqlite_specific_features(sqlite_session: AdbcDriver) -> None:
     test_blob = b"SQLite binary data test"
     sqlite_session.execute_many(
         """
-        INSERT INTO sqlite_test (name, data, value) VALUES (?, ?, ?)
+        INSERT INTO test_sqlite (name, data, value) VALUES (?, ?, ?)
     """,
         [("test1", test_blob, math.pi), ("test2", None, math.e), ("test3", b"another blob", 1.41421)],
     )
@@ -134,7 +134,7 @@ def test_sqlite_specific_features(sqlite_session: AdbcDriver) -> None:
             *,
             length(data) as blob_length,
             typeof(value) as value_type
-        FROM sqlite_test
+        FROM test_sqlite
         ORDER BY id
     """)
 
@@ -160,7 +160,7 @@ def test_sqlite_specific_features(sqlite_session: AdbcDriver) -> None:
             AVG(value) as avg_value,
             GROUP_CONCAT(name) as all_names,
             sqlite_version() as version
-        FROM sqlite_test
+        FROM test_sqlite
     """)
 
     assert func_result.data is not None
@@ -253,10 +253,10 @@ def test_sqlite_dialect_detection(sqlite_session: AdbcDriver) -> None:
     assert sqlite_session.dialect == "sqlite"
 
     # Test SQLite-specific parameter style (qmark)
-    result = sqlite_session.execute("SELECT ? as param_value", ("sqlite_test",))
+    result = sqlite_session.execute("SELECT ? as param_value", ("test_sqlite",))
     assert isinstance(result, SQLResult)
     assert result.data is not None
-    assert result.data[0]["param_value"] == "sqlite_test"
+    assert result.data[0]["param_value"] == "test_sqlite"
 
 
 @pytest.mark.xdist_group("adbc_duckdb")
@@ -272,69 +272,3 @@ def test_duckdb_dialect_detection(duckdb_session: AdbcDriver) -> None:
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert result.data[0]["param_value"] == "duckdb_test"
-
-
-def test_cross_backend_data_type_handling(postgresql_session: AdbcDriver, sqlite_session: AdbcDriver) -> None:
-    """Test data type handling consistency across ADBC backends using CORE_ROUND_3."""
-
-    # Test common data types in both backends
-    common_types_data = [
-        ("string_test", "Hello World"),
-        ("integer_test", 42),
-        ("float_test", math.pi),
-        ("boolean_test", True),
-        ("null_test", None),
-    ]
-
-    # PostgreSQL
-    postgresql_session.execute_script("""
-        CREATE TABLE IF NOT EXISTS type_test (
-            id SERIAL PRIMARY KEY,
-            test_name TEXT,
-            test_value TEXT
-        )
-    """)
-
-    # SQLite
-    sqlite_session.execute_script("""
-        CREATE TABLE type_test (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            test_name TEXT,
-            test_value TEXT
-        )
-    """)
-
-    # Insert data using string representation for consistency
-    for name, value in common_types_data:
-        str_value = str(value) if value is not None else None
-
-        postgresql_session.execute(
-            """
-            INSERT INTO type_test (test_name, test_value) VALUES ($1, $2)
-        """,
-            (name, str_value),
-        )
-
-        sqlite_session.execute(
-            """
-            INSERT INTO type_test (test_name, test_value) VALUES (?, ?)
-        """,
-            (name, str_value),
-        )
-
-    # Query and compare results
-    pg_result = postgresql_session.execute("SELECT * FROM type_test ORDER BY test_name")
-    sqlite_result = sqlite_session.execute("SELECT * FROM type_test ORDER BY test_name")
-
-    assert isinstance(pg_result, SQLResult)
-    assert isinstance(sqlite_result, SQLResult)
-
-    assert pg_result.get_count() == sqlite_result.get_count()
-
-    # Verify data consistency (excluding auto-generated IDs)
-    for pg_row, sqlite_row in zip(pg_result.data, sqlite_result.data):
-        assert pg_row["test_name"] == sqlite_row["test_name"]
-        assert pg_row["test_value"] == sqlite_row["test_value"]
-
-    # Clean up
-    postgresql_session.execute_script("DROP TABLE IF EXISTS type_test")

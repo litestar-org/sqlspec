@@ -40,7 +40,20 @@ if TYPE_CHECKING:
     from sqlspec.core.statement import StatementConfig
 
 # Define OperationType here to avoid circular import
-OperationType = Literal["SELECT", "INSERT", "UPDATE", "DELETE", "COPY", "EXECUTE", "SCRIPT", "DDL", "PRAGMA", "UNKNOWN"]
+OperationType = Literal[
+    "SELECT",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "COPY",
+    "COPY_FROM",
+    "COPY_TO",
+    "EXECUTE",
+    "SCRIPT",
+    "DDL",
+    "PRAGMA",
+    "UNKNOWN",
+]
 
 
 __all__ = ("CompiledSQL", "OperationType", "SQLProcessor")
@@ -54,6 +67,8 @@ _OPERATION_TYPES = {
     "UPDATE": "UPDATE",
     "DELETE": "DELETE",
     "COPY": "COPY",
+    "COPY_FROM": "COPY_FROM",
+    "COPY_TO": "COPY_TO",
     "EXECUTE": "EXECUTE",
     "SCRIPT": "SCRIPT",
     "DDL": "DDL",
@@ -277,6 +292,7 @@ class SQLProcessor:
 
             # Initialize variables that might be modified later
             final_parameters = processed_params
+            ast_was_transformed = False
 
             if self._config.enable_parsing:
                 try:
@@ -284,9 +300,12 @@ class SQLProcessor:
                     expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)
                     operation_type = self._detect_operation_type(expression)
 
-                    # Apply NULL parameter handling if needed (modifies both AST and parameters)
-                    if self._config.parameter_config.remove_null_parameters:
-                        expression, final_parameters = self._apply_null_parameter_removal(expression, processed_params)
+                    # Apply AST-based transformations if configured
+                    if self._config.parameter_config.ast_transformer:
+                        expression, final_parameters = self._config.parameter_config.ast_transformer(
+                            expression, processed_params
+                        )
+                        ast_was_transformed = True
 
                 except ParseError:
                     # Fallback for unparsable SQL
@@ -296,11 +315,20 @@ class SQLProcessor:
                 expression = None
                 operation_type = "EXECUTE"
 
-            # Phase 3: Apply final transformations (always work with AST when available)
+            # Phase 3: Generate final SQL - only once!
             # For static compilation, preserve the processed SQL and parameters as-is
             if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
                 final_sql, final_params = processed_sql, processed_params
+            elif ast_was_transformed and expression is not None:
+                # AST was transformed - generate SQL from the transformed AST
+                final_sql = expression.sql(dialect=dialect_str)
+                final_params = final_parameters
+                logger.debug("AST was transformed - final SQL: %s, final params: %s", final_sql, final_params)
+                # Apply output transformer if configured
+                if self._config.output_transformer:
+                    final_sql, final_params = self._config.output_transformer(final_sql, final_params)
             else:
+                # No AST transformation - use existing final transformation logic
                 final_sql, final_params = self._apply_final_transformations(
                     expression, processed_sql, final_parameters, dialect_str
                 )
@@ -380,6 +408,11 @@ class SQLProcessor:
         if isinstance(expression, (exp.Create, exp.Drop, exp.Alter)):
             return _OPERATION_TYPES["DDL"]
         if isinstance(expression, exp.Copy):
+            # SQLGlot uses 'kind' in args: True for FROM, False for TO
+            if expression.args["kind"] is True:
+                return _OPERATION_TYPES["COPY_FROM"]
+            if expression.args["kind"] is False:
+                return _OPERATION_TYPES["COPY_TO"]
             return _OPERATION_TYPES["COPY"]
         if isinstance(expression, exp.Pragma):
             return _OPERATION_TYPES["PRAGMA"]
@@ -417,152 +450,6 @@ class SQLProcessor:
         # No transformer configured - use the processed SQL to preserve parameter style
         # The processed_sql already has the correct parameter style conversion
         return sql, parameters
-
-    def _apply_null_parameter_removal(
-        self, expression: "exp.Expression", parameters: Any
-    ) -> "tuple[exp.Expression, Any]":
-        """Apply ADBC-specific NULL parameter removal using AST transformation.
-
-        This method implements the NULL parameter handling from the old pipeline_steps.py
-        using SQLGlot AST transformation. It replaces NULL parameter placeholders with
-        NULL literals and removes the corresponding parameters to prevent Arrow type
-        inference issues.
-
-        Args:
-            expression: Parsed SQLGlot AST expression
-            parameters: Parameter values that may contain None
-
-        Returns:
-            Tuple of (modified_expression, cleaned_parameters)
-        """
-        # 1. Analyze NULL parameters
-        null_positions = self._analyze_null_positions(parameters)
-        if not null_positions:
-            return expression, parameters
-
-        # 2. Transform AST to replace NULL placeholders with NULL literals
-        modified_expression = self._replace_null_placeholders_in_ast(expression, null_positions)
-
-        # 3. Remove NULL parameters from parameter list
-        cleaned_parameters = self._clean_null_parameters(parameters, null_positions)
-
-        return modified_expression, cleaned_parameters
-
-    def _analyze_null_positions(self, parameters: Any) -> "dict[int, Any]":
-        """Analyze parameters to find NULL positions."""
-        null_positions: dict[int, Any] = {}
-
-        if isinstance(parameters, (list, tuple)):
-            for i, param in enumerate(parameters):
-                if param is None:
-                    null_positions[i] = None
-        elif isinstance(parameters, dict):
-            for key, param in parameters.items():
-                if param is None:
-                    # Handle different key formats
-                    if isinstance(key, str) and key.lstrip("$").isdigit():
-                        param_num = int(key.lstrip("$"))
-                        null_positions[param_num - 1] = None  # Convert to 0-based index
-                    elif isinstance(key, int):
-                        null_positions[key] = None
-
-        return null_positions
-
-    def _replace_null_placeholders_in_ast(
-        self, expression: "exp.Expression", null_positions: "dict[int, Any]"
-    ) -> "exp.Expression":
-        """Replace NULL parameter placeholders with NULL literals in AST.
-
-        Uses SQLGlot AST transformation to find and replace parameter nodes
-        with NULL literal nodes, following the pattern from pipeline_steps.py.
-        """
-        # For QMARK style (?), we need to track position by order since placeholders don't have numbers
-        qmark_position = [0]  # Use list to allow modification in nested function
-
-        def transform_node(node: "exp.Expression") -> "exp.Expression":
-            # Handle QMARK-style placeholders (?, ?, ?) - most common for SQLite, MySQL, etc.
-            if isinstance(node, exp.Placeholder) and (not hasattr(node, "this") or node.this is None):
-                current_pos = qmark_position[0]
-                qmark_position[0] += 1
-
-                if current_pos in null_positions:
-                    # Replace with NULL literal
-                    return exp.Null()
-                # For remaining placeholders, don't change them (parameter list will be adjusted)
-                return node
-
-            # Handle PostgreSQL-style placeholders ($1, $2, etc.)
-            if isinstance(node, exp.Placeholder) and hasattr(node, "this") and node.this is not None:
-                return self._transform_postgres_placeholder(node, null_positions)
-
-            # Handle generic parameter nodes
-            if isinstance(node, exp.Parameter) and hasattr(node, "this"):
-                return self._transform_parameter_node(node, null_positions)
-
-            return node
-
-        return expression.transform(transform_node)
-
-    def _transform_postgres_placeholder(
-        self, node: "exp.Placeholder", null_positions: "dict[int, Any]"
-    ) -> "exp.Expression":
-        """Transform PostgreSQL-style placeholders ($1, $2, etc.)."""
-        try:
-            param_str = str(node.this).lstrip("$")
-            param_num = int(param_str)
-            param_index = param_num - 1  # Convert to 0-based
-
-            if param_index in null_positions:
-                # Replace with NULL literal
-                return exp.Null()
-            # Renumber placeholder to account for removed NULLs
-            nulls_before = sum(1 for idx in null_positions if idx < param_index)
-            new_param_num = param_num - nulls_before
-            return exp.Placeholder(this=f"${new_param_num}")
-
-        except (ValueError, AttributeError):
-            # Return original if parsing fails
-            return node
-
-    def _transform_parameter_node(self, node: "exp.Parameter", null_positions: "dict[int, Any]") -> "exp.Expression":
-        """Transform generic parameter nodes."""
-        try:
-            param_str = str(node.this)
-            param_num = int(param_str)
-            param_index = param_num - 1  # Convert to 0-based
-
-            if param_index in null_positions:
-                # Replace with NULL literal
-                return exp.Null()
-            # Renumber parameter to account for removed NULLs
-            nulls_before = sum(1 for idx in null_positions if idx < param_index)
-            new_param_num = param_num - nulls_before
-            return exp.Parameter(this=str(new_param_num))
-
-        except (ValueError, AttributeError):
-            # Return original if parsing fails
-            return node
-
-    def _clean_null_parameters(self, parameters: Any, null_positions: "dict[int, Any]") -> Any:
-        """Remove NULL parameters from parameter list."""
-        if isinstance(parameters, (list, tuple)):
-            return [param for i, param in enumerate(parameters) if i not in null_positions]
-        if isinstance(parameters, dict):
-            cleaned_dict = {}
-            param_keys = sorted(
-                parameters.keys(),
-                key=lambda k: int(k.lstrip("$")) if isinstance(k, str) and k.lstrip("$").isdigit() else 0,
-            )
-
-            new_param_num = 1
-            for key in param_keys:
-                if parameters[key] is not None:
-                    cleaned_dict[str(new_param_num)] = parameters[key]
-                    new_param_num += 1
-
-            return cleaned_dict
-
-        return parameters
 
     def clear_cache(self) -> None:
         """Clear compilation cache.

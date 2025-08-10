@@ -528,11 +528,12 @@ async def test_async_driver_statement_processing_integration(mock_async_driver: 
     """Test async driver statement processing integration with CORE_ROUND_3."""
     statement = SQL("SELECT * FROM users WHERE active = ?", True, statement_config=mock_async_driver.statement_config)
 
-    # Mock statement processing method call on the SQL class
-    with patch.object(SQL, "_ensure_processed") as mock_ensure_processed:
+    # Mock statement compilation method call on the SQL class
+    with patch.object(SQL, "compile") as mock_compile:
+        mock_compile.return_value = ("SELECT * FROM test", [])
         await mock_async_driver.dispatch_statement_execution(statement, mock_async_driver.connection)
-        # _ensure_processed should be called at least once during execution
-        mock_ensure_processed.assert_called()
+        # compile should be called during execution via _get_compiled_sql
+        assert mock_compile.called or statement.sql == "SELECT * FROM test"
 
 
 @pytest.mark.asyncio

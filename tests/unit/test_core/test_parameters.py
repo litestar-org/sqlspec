@@ -197,6 +197,115 @@ def test_parameter_info_creation(
     assert param_info.placeholder_text == placeholder_text
 
 
+def test_mixed_named_and_numeric_parameters() -> None:
+    """Test mixed named (:name) and numeric ($2) parameters."""
+    sql = "SELECT :name::text as name, $2::int as age"
+    parameters = {"name": "Mixed", "age": 25}
+
+    # Create converter
+    converter = ParameterConverter()
+
+    # Convert to numeric style (like psqlpy)
+    converted_sql, converted_params = converter.convert_placeholder_style(
+        sql, parameters, ParameterStyle.NUMERIC, is_many=False
+    )
+
+    # Should convert to two numeric parameters in correct order
+    assert converted_sql == "SELECT $1::text as name, $2::int as age"
+    assert converted_params == ("Mixed", 25)
+    assert len(converted_params) == 2
+
+
+def test_mixed_parameter_style_with_processor() -> None:
+    """Test mixed parameter styles through the full processor pipeline."""
+    sql = "SELECT :name::text as name, $2::int as age"
+    parameters = {"name": "Test", "age": 30}
+
+    # Create processor with psqlpy-like config
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NUMERIC,
+        supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
+        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+        allow_mixed_parameter_styles=False,  # psqlpy setting
+        preserve_parameter_format=True,
+    )
+
+    processor = ParameterProcessor()
+    processed_sql, processed_params = processor.process(
+        sql=sql, parameters=parameters, config=config, dialect="postgres", is_many=False
+    )
+
+    # Should produce correct number of parameters
+    assert processed_sql == "SELECT $1::text as name, $2::int as age"
+    assert processed_params == ("Test", 30)
+    assert len(processed_params) == 2
+
+
+def test_mixed_parameters_order_sensitivity() -> None:
+    """Test that mixed parameters maintain correct order mapping."""
+    # Test case where order matters
+    sql = "SELECT $1::text as first, :middle::text as mid, $3::int as last"
+    parameters = {"first": "A", "middle": "B", "last": "C"}
+
+    converter = ParameterConverter()
+    converted_sql, converted_params = converter.convert_placeholder_style(
+        sql, parameters, ParameterStyle.NUMERIC, is_many=False
+    )
+
+    # Should maintain correct positional mapping
+    assert converted_sql == "SELECT $1::text as first, $2::text as mid, $3::int as last"
+    # Parameters should be mapped by ordinal position: first, middle, last
+    assert converted_params == ("A", "B", "C")
+    assert len(converted_params) == 3
+
+
+def test_mixed_parameters_with_repeated_numeric() -> None:
+    """Test mixed parameters with repeated numeric parameters."""
+    sql = "SELECT :name::text as name, $2::int as age, $2::int as age2"
+    parameters = {"name": "User", "age": 25}
+
+    converter = ParameterConverter()
+    converted_sql, converted_params = converter.convert_placeholder_style(
+        sql, parameters, ParameterStyle.NUMERIC, is_many=False
+    )
+
+    # Should handle repeated $2 parameter correctly
+    assert converted_sql == "SELECT $1::text as name, $2::int as age, $2::int as age2"
+    assert converted_params == ("User", 25)
+    assert len(converted_params) == 2
+
+
+def test_edge_case_all_numeric_parameters() -> None:
+    """Test that non-mixed numeric parameters still work correctly."""
+    sql = "SELECT $1::text as name, $2::int as age"
+    parameters = ("Alice", 30)
+
+    converter = ParameterConverter()
+    converted_sql, converted_params = converter.convert_placeholder_style(
+        sql, parameters, ParameterStyle.NUMERIC, is_many=False
+    )
+
+    # Should pass through unchanged for pure numeric
+    assert converted_sql == "SELECT $1::text as name, $2::int as age"
+    assert converted_params == ("Alice", 30)
+
+
+def test_edge_case_all_named_parameters() -> None:
+    """Test that non-mixed named parameters still work correctly."""
+    sql = "SELECT :name::text as name, :age::int as age"
+    parameters = {"name": "Bob", "age": 35}
+
+    converter = ParameterConverter()
+    converted_sql, converted_params = converter.convert_placeholder_style(
+        sql, parameters, ParameterStyle.NUMERIC, is_many=False
+    )
+
+    # Should convert all to numeric style
+    assert converted_sql == "SELECT $1::text as name, $2::int as age"
+    assert converted_params == ("Bob", 35)
+
+
 def test_parameter_info_repr() -> None:
     """Test ParameterInfo string representation."""
     param = ParameterInfo("test_param", ParameterStyle.NAMED_COLON, 10, 0, ":test_param")
@@ -242,7 +351,6 @@ def test_parameter_style_config_advanced() -> None:
         needs_static_script_compilation=False,
         allow_mixed_parameter_styles=True,
         preserve_parameter_format=True,
-        remove_null_parameters=True,
     )
 
     assert config.default_parameter_style == ParameterStyle.NAMED_COLON
@@ -255,7 +363,6 @@ def test_parameter_style_config_advanced() -> None:
     assert config.needs_static_script_compilation is False
     assert config.allow_mixed_parameter_styles is True
     assert config.preserve_parameter_format is True
-    assert config.remove_null_parameters is True
 
 
 def test_parameter_style_config_hash() -> None:

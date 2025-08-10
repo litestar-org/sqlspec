@@ -21,16 +21,7 @@ from mypy_extensions import trait
 from sqlglot import exp
 
 from sqlspec.builder import QueryBuilder
-from sqlspec.core import (
-    SQL,
-    OperationType,
-    ParameterStyle,
-    SQLProcessor,
-    SQLResult,
-    Statement,
-    StatementConfig,
-    TypedParameter,
-)
+from sqlspec.core import SQL, OperationType, ParameterStyle, SQLResult, Statement, StatementConfig, TypedParameter
 from sqlspec.core.cache import get_cache_config, sql_cache
 from sqlspec.core.splitter import split_sql_script
 from sqlspec.exceptions import ImproperConfigurationError
@@ -526,6 +517,9 @@ class CommonDriverAttributesMixin:
     ) -> tuple[str, Any]:
         """Get compiled SQL with optimal parameter style and enhanced core caching.
 
+        This method ensures single compilation by explicitly compiling the SQL object
+        and using the compiled result directly.
+
         Args:
             statement: SQL statement to compile
             statement_config: Complete statement configuration including parameter config, dialect, etc.
@@ -540,48 +534,27 @@ class CommonDriverAttributesMixin:
             cache_key = self._generate_compilation_cache_key(statement, statement_config, flatten_single_parameters)
             cached_result = sql_cache.get(cache_key)
             if cached_result is not None:
-                sql, parameters = cached_result
-                prepared_parameters = self.prepare_driver_parameters(
-                    parameters, statement_config, is_many=statement.is_many
-                )
-                if statement_config.parameter_config.output_transformer:
-                    sql, prepared_parameters = statement_config.parameter_config.output_transformer(
-                        sql, prepared_parameters
-                    )
-                return sql, prepared_parameters
-        # Use the driver's statement_config for proper parameter style conversion
-        # This ensures the SQL is compiled with the driver's parameter style requirements
+                return cached_result
 
-        # For static compilation, if the statement already has processed SQL (different from raw), use it
-        # This preserves static parameter embedding that was already done
-        source_sql = statement.sql
-        source_params = statement.parameters
-        if (
-            statement_config.parameter_config.needs_static_script_compilation
-            and hasattr(statement, "_raw_sql")
-            and statement._raw_sql != statement.sql
-            and statement.parameters is None
-        ):
-            # Static compilation was already applied, use the processed SQL
-            source_sql = statement.sql
-            source_params = statement.parameters
-        else:
-            # Use raw SQL for normal processing
-            source_sql = statement._raw_sql or statement.sql
-            source_params = statement.parameters
+        # Explicitly compile the statement to get compiled SQL and parameters
+        compiled_sql, execution_parameters = statement.compile()
 
-        compiled = SQLProcessor(statement_config).compile(source_sql, source_params, is_many=statement.is_many)
-        sql, parameters = compiled.compiled_sql, compiled.execution_parameters
+        # Prepare parameters for the driver
+        prepared_parameters = self.prepare_driver_parameters(
+            execution_parameters, statement_config, is_many=statement.is_many
+        )
 
-        if cache_key is not None:
-            sql_cache.set(cache_key, (sql, parameters))
-
-        prepared_parameters = self.prepare_driver_parameters(parameters, statement_config, is_many=statement.is_many)
-
+        # Apply output transformer if configured (post-compilation)
         if statement_config.parameter_config.output_transformer:
-            sql, prepared_parameters = statement_config.parameter_config.output_transformer(sql, prepared_parameters)
+            compiled_sql, prepared_parameters = statement_config.parameter_config.output_transformer(
+                compiled_sql, prepared_parameters
+            )
 
-        return sql, prepared_parameters
+        # Cache the result
+        if cache_key is not None:
+            sql_cache.set(cache_key, (compiled_sql, prepared_parameters))
+
+        return compiled_sql, prepared_parameters
 
     def _generate_compilation_cache_key(
         self, statement: "SQL", config: "StatementConfig", flatten_single_parameters: bool
@@ -600,13 +573,15 @@ class CommonDriverAttributesMixin:
                 statement.is_many,
                 flatten_single_parameters,
                 bool(config.parameter_config.output_transformer),
+                bool(config.parameter_config.ast_transformer),
                 bool(config.parameter_config.needs_static_script_compilation),
             )
         )
 
         # Create simple hash for core.statement.SQL (different from old SQL type)
         # Convert parameters to hashable representation safely
-        params = statement.parameters
+        # IMPORTANT: Access raw attributes directly to avoid triggering any processing
+        params = statement.parameters  # Now safe - returns original parameters without compilation
         params_key: Any
 
         def make_hashable(obj: Any) -> Any:
@@ -636,6 +611,7 @@ class CommonDriverAttributesMixin:
             # If parameters contain unhashable elements, use string representation
             params_key = str(params)
 
+        # Now statement.sql returns raw SQL without compilation
         base_hash = hash((statement.sql, params_key, statement.is_many, statement.is_script))
         return f"compiled:{base_hash}:{context_hash}"
 

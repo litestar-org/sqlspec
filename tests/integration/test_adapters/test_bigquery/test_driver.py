@@ -31,7 +31,7 @@ def bigquery_session(bigquery_service: BigQueryService) -> Generator[BigQueryDri
     with config.provide_session() as session:
         # Create test table (BigQuery emulator doesn't support DEFAULT values)
         session.execute_script(f"""
-            CREATE TABLE IF NOT EXISTS `{bigquery_service.project}.{bigquery_service.dataset}.test_table` (
+            CREATE OR REPLACE TABLE `{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table` (
                 id INT64,
                 name STRING NOT NULL,
                 value INT64,
@@ -41,14 +41,14 @@ def bigquery_session(bigquery_service: BigQueryService) -> Generator[BigQueryDri
         yield session
         # Cleanup
         session.execute_script(
-            f"DROP TABLE IF EXISTS `{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+            f"DROP TABLE IF EXISTS `{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
         )
 
 
 @pytest.mark.xdist_group("bigquery")
 def test_bigquery_basic_crud(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test basic CRUD operations."""
-    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
 
     # INSERT
     insert_result = bigquery_session.execute(
@@ -92,7 +92,7 @@ def test_bigquery_basic_crud(bigquery_session: BigQueryDriver, bigquery_service:
 def test_bigquery_parameter_styles(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test BigQuery named parameter binding (only supported style)."""
     # Use fully qualified table name like main branch
-    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
 
     # Insert test data
     bigquery_session.execute(
@@ -113,7 +113,7 @@ def test_bigquery_parameter_styles(bigquery_session: BigQueryDriver, bigquery_se
 @pytest.mark.xdist_group("bigquery")
 def test_bigquery_execute_many(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test execute_many functionality."""
-    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
     parameters_list = [(1, "name1", 1), (2, "name2", 2), (3, "name3", 3)]
 
     result = bigquery_session.execute_many(
@@ -142,7 +142,7 @@ def test_bigquery_execute_many(bigquery_session: BigQueryDriver, bigquery_servic
 @pytest.mark.xdist_group("bigquery")
 def test_bigquery_execute_script(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test execute_script functionality."""
-    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
     script = f"""
         INSERT INTO {table_name} (id, name, value) VALUES (1, 'script_test1', 999);
         INSERT INTO {table_name} (id, name, value) VALUES (2, 'script_test2', 888);
@@ -170,7 +170,7 @@ def test_bigquery_execute_script(bigquery_session: BigQueryDriver, bigquery_serv
 @pytest.mark.xdist_group("bigquery")
 def test_bigquery_result_methods(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test SQLResult methods."""
-    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
 
     # Insert test data
     bigquery_session.execute_many(
@@ -203,7 +203,7 @@ def test_bigquery_result_methods(bigquery_session: BigQueryDriver, bigquery_serv
 @pytest.mark.xdist_group("bigquery")
 def test_bigquery_error_handling(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test error handling and exception propagation."""
-    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
 
     # Test invalid SQL
     with pytest.raises(Exception):  # google.cloud.exceptions.BadRequest
@@ -225,7 +225,7 @@ def test_bigquery_data_types(bigquery_session: BigQueryDriver, bigquery_service:
     """Test BigQuery data type handling."""
     # Create table with various BigQuery data types
     bigquery_session.execute_script(f"""
-        CREATE TABLE `{bigquery_service.project}.{bigquery_service.dataset}.data_types_test` (
+        CREATE TABLE IF NOT EXISTS `{bigquery_service.project}.{bigquery_service.dataset}.data_types_test` (
             id INT64,
             string_col STRING,
             int_col INT64,
@@ -287,7 +287,7 @@ def test_bigquery_data_types(bigquery_session: BigQueryDriver, bigquery_service:
 @pytest.mark.xdist_group("bigquery")
 def test_bigquery_complex_queries(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test complex SQL queries."""
-    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
 
     # Insert test data
     test_data = [(1, "Alice", 25), (2, "Bob", 30), (3, "Charlie", 35), (4, "Diana", 28)]
@@ -342,7 +342,7 @@ def test_bigquery_schema_operations(bigquery_session: BigQueryDriver, bigquery_s
     """Test schema operations (DDL)."""
     # Create a new table
     bigquery_session.execute_script(f"""
-        CREATE TABLE `{bigquery_service.project}.{bigquery_service.dataset}.schema_test` (
+        CREATE TABLE IF NOT EXISTS `{bigquery_service.project}.{bigquery_service.dataset}.schema_test` (
             id INT64,
             description STRING NOT NULL,
             created_at TIMESTAMP
@@ -369,7 +369,7 @@ def test_bigquery_column_names_and_metadata(
     bigquery_session: BigQueryDriver, bigquery_service: BigQueryService
 ) -> None:
     """Test column names and result metadata."""
-    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
 
     # Insert test data
     bigquery_session.execute(f"INSERT INTO {table_name} (id, name, value) VALUES (?, ?, ?)", (1, "metadata_test", 123))
@@ -397,7 +397,7 @@ def test_bigquery_performance_bulk_operations(
     bigquery_session: BigQueryDriver, bigquery_service: BigQueryService
 ) -> None:
     """Test performance with bulk operations."""
-    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
 
     # Generate bulk data
     bulk_data = [(i, f"bulk_user_{i}", i * 10) for i in range(1, 101)]
@@ -469,7 +469,7 @@ def test_bigquery_specific_features(bigquery_session: BigQueryDriver, bigquery_s
 @pytest.mark.xdist_group("bigquery")
 def test_bigquery_analytical_functions(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test BigQuery analytical and window functions."""
-    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.test_table`"
+    table_name = f"`{bigquery_service.project}.{bigquery_service.dataset}.driver_test_table`"
 
     # Insert test data for analytics
     analytics_data = [

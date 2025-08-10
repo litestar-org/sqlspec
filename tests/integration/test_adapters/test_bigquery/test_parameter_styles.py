@@ -1,5 +1,7 @@
 """BigQuery parameter style tests with CORE_ROUND_3 architecture."""
 
+import math
+
 import pytest
 
 from sqlspec.adapters.bigquery import BigQueryDriver
@@ -51,7 +53,7 @@ def test_bigquery_parameter_type_conversion(bigquery_session: BigQueryDriver, bi
     # Test various parameter types
     bigquery_session.execute(
         f"INSERT INTO {table_name} (id, name, value) VALUES (@int_param, @str_param, @float_param)",
-        {"int_param": 42, "str_param": "type_test", "float_param": 3.14159},
+        {"int_param": 42, "str_param": "type_test", "float_param": math.pi},
     )
 
     # Verify type preservation

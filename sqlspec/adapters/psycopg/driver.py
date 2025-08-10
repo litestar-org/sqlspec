@@ -27,7 +27,6 @@ from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional
 
 import psycopg
-from sqlglot import expressions as exp
 
 from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.core.cache import get_cache_config
@@ -315,8 +314,6 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
     def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
         """Hook for PostgreSQL-specific special operations.
 
-        Uses statement.expression AST to detect COPY operations and other special operations.
-
         Args:
             cursor: Psycopg cursor object
             statement: SQL statement to analyze
@@ -324,16 +321,12 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         Returns:
             SQLResult if special handling was applied, None otherwise
         """
-        # Check for COPY operations using AST
-        if isinstance(statement.expression, exp.Copy):
-            return self._handle_copy_operation(cursor, statement)
+        # Compile the statement to get the operation type
+        statement.compile()
 
-        # Check for other PostgreSQL special operations
-        # LISTEN/NOTIFY don't parse well in SQLGlot, so use string detection
-        sql_text = statement.sql.strip().upper()
-        if "LISTEN" in sql_text or "NOTIFY" in sql_text:
-            # Handle PostgreSQL pub/sub operations
-            pass
+        # Use the operation_type from the statement object
+        if statement.operation_type in {"COPY_FROM", "COPY_TO"}:
+            return self._handle_copy_operation(cursor, statement)
 
         # No special handling needed - proceed with standard execution
         return None
@@ -356,18 +349,8 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         if isinstance(copy_data, list) and len(copy_data) == 1:
             copy_data = copy_data[0]
 
-        # Check COPY direction using AST
-        copy_expr = statement.expression
-        if copy_expr is None:
-            msg = "Invalid COPY statement: missing expression"
-            raise ValueError(msg)
-        files = copy_expr.args.get("files", [])
-
-        # Detect STDIN/STDOUT from files list
-        is_stdin = any(str(f).upper() == "STDIN" for f in files)
-        is_stdout = any(str(f).upper() == "STDOUT" for f in files)
-
-        if is_stdin:
+        # Use the operation_type from the statement
+        if statement.operation_type == "COPY_FROM":
             # COPY FROM STDIN - import data
             if isinstance(copy_data, (str, bytes)):
                 data_file = io.StringIO(copy_data) if isinstance(copy_data, str) else io.BytesIO(copy_data)
@@ -391,7 +374,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
                 data=None, rows_affected=rows_affected, statement=statement, metadata={"copy_operation": "FROM_STDIN"}
             )
 
-        if is_stdout:
+        if statement.operation_type == "COPY_TO":
             # COPY TO STDOUT - export data
             output_data: list[str] = []
             with cursor.copy(sql) as copy_ctx:
@@ -677,8 +660,6 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
     async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
         """Hook for PostgreSQL-specific special operations.
 
-        Uses statement.expression AST to detect COPY operations and other special operations.
-
         Args:
             cursor: Psycopg async cursor object
             statement: SQL statement to analyze
@@ -686,16 +667,10 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         Returns:
             SQLResult if special handling was applied, None otherwise
         """
-        # Check for COPY operations using AST
-        if isinstance(statement.expression, exp.Copy):
+        # Simple COPY detection - if the SQL starts with COPY and has FROM/TO STDIN/STDOUT
+        sql_upper = statement.sql.strip().upper()
+        if sql_upper.startswith("COPY ") and ("FROM STDIN" in sql_upper or "TO STDOUT" in sql_upper):
             return await self._handle_copy_operation_async(cursor, statement)
-
-        # Check for async PostgreSQL special operations
-        # LISTEN/NOTIFY don't parse well in SQLGlot, so use string detection
-        sql_text = statement.sql.strip().upper()
-        if "LISTEN" in sql_text or "NOTIFY" in sql_text:
-            # Handle PostgreSQL async pub/sub operations
-            pass
 
         # No special handling needed - proceed with standard execution
         return None
@@ -718,16 +693,10 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         if isinstance(copy_data, list) and len(copy_data) == 1:
             copy_data = copy_data[0]
 
-        # Check COPY direction using AST
-        copy_expr = statement.expression
-        if copy_expr is None:
-            msg = "Invalid COPY statement: missing expression"
-            raise ValueError(msg)
-        files = copy_expr.args.get("files", [])
-
-        # Detect STDIN/STDOUT from files list
-        is_stdin = any(str(f).upper() == "STDIN" for f in files)
-        is_stdout = any(str(f).upper() == "STDOUT" for f in files)
+        # Simple string-based direction detection
+        sql_upper = sql.upper()
+        is_stdin = "FROM STDIN" in sql_upper
+        is_stdout = "TO STDOUT" in sql_upper
 
         if is_stdin:
             # COPY FROM STDIN - import data

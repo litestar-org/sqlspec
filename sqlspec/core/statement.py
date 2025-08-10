@@ -23,6 +23,7 @@ Performance Optimizations:
 - Direct method calls optimized for MyPyC compilation
 """
 
+import contextlib
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
 import sqlglot
@@ -31,7 +32,7 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 from typing_extensions import TypeAlias
 
-from sqlspec.core.compiler import OperationType, SQLProcessor
+from sqlspec.core.compiler import SQLProcessor
 from sqlspec.core.parameters import ParameterConverter, ParameterStyle, ParameterStyleConfig, ParameterValidator
 from sqlspec.typing import Empty, EmptyEnum
 from sqlspec.utils.logging import get_logger
@@ -276,27 +277,19 @@ class SQL:
     # PRESERVED PROPERTIES - Exact same interface as existing SQL class
     @property
     def sql(self) -> str:
-        """Compiled SQL string - preserved interface."""
-        self._ensure_processed()
-        if self._processed_state is Empty:
-            return self._raw_sql
-        return self._processed_state.compiled_sql
+        """Get the raw SQL string - no compilation triggered."""
+        return self._raw_sql
 
     @property
     def parameters(self) -> Any:
-        """Statement parameters - preserved interface."""
-        self._ensure_processed()
-        if self._processed_state is Empty:
-            # Return original parameters if processing failed
-            if self._named_parameters:
-                return self._named_parameters
-            return self._positional_parameters or []
-        return self._processed_state.execution_parameters
+        """Get the original parameters without triggering compilation."""
+        if self._named_parameters:
+            return self._named_parameters
+        return self._positional_parameters or []
 
     @property
     def operation_type(self) -> str:
-        """SQL operation type - preserved interface."""
-        self._ensure_processed()
+        """SQL operation type - requires explicit compilation."""
         if self._processed_state is Empty:
             return "UNKNOWN"
         return self._processed_state.operation_type
@@ -308,11 +301,12 @@ class SQL:
 
     @property
     def expression(self) -> "Optional[exp.Expression]":
-        """SQLGlot expression - preserved interface."""
-        self._ensure_processed()
-        if self._processed_state is Empty:
-            return None
-        return self._processed_state.parsed_expression
+        """SQLGlot expression - only available after explicit compilation."""
+        # This property should only be accessed after compilation
+        # If not compiled yet, return None
+        if self._processed_state is not Empty:
+            return self._processed_state.parsed_expression
+        return None
 
     @property
     def filters(self) -> "list[StatementFilter]":
@@ -341,8 +335,7 @@ class SQL:
 
     @property
     def validation_errors(self) -> "list[str]":
-        """Validation errors - preserved interface."""
-        self._ensure_processed()
+        """Validation errors - requires explicit compilation."""
         if self._processed_state is Empty:
             return []
         return self._processed_state.validation_errors.copy()
@@ -353,20 +346,13 @@ class SQL:
         return len(self.validation_errors) > 0
 
     def returns_rows(self) -> bool:
-        """Check if statement returns rows - preserved interface."""
-        self._ensure_processed()
-
-        # First check operation type (available even without expression)
-        op_type = self.operation_type.upper()
-        if op_type in {"SELECT", "WITH", "VALUES", "TABLE", "SHOW", "DESCRIBE", "PRAGMA", "COMMAND"}:
+        """Check if statement returns rows - uses simple text analysis."""
+        sql_upper = self._raw_sql.strip().upper()
+        if any(sql_upper.startswith(op) for op in ("SELECT", "WITH", "VALUES", "TABLE", "SHOW", "DESCRIBE", "PRAGMA")):
             return True
 
-        # Check if we have a parsed expression for RETURNING clause detection
-        return (
-            self.expression is not None
-            and hasattr(self.expression, "args")
-            and self.expression.args.get("returning") is not None
-        )
+        # Check for RETURNING clause
+        return "RETURNING" in sql_upper
 
     def is_modifying_operation(self) -> bool:
         """Check if the SQL statement is a modifying operation.
@@ -389,10 +375,35 @@ class SQL:
 
     # PRESERVED METHODS - Exact same interface as existing SQL class
     def compile(self) -> tuple[str, Any]:
-        """Compile to SQL and parameters - preserved interface."""
-        self._ensure_processed()
+        """Explicitly compile the SQL statement."""
         if self._processed_state is Empty:
-            return self._raw_sql, self.parameters
+            try:
+                # Perform compilation on demand
+                current_parameters = self._named_parameters or self._positional_parameters
+                processor = SQLProcessor(self._statement_config)
+
+                # Single-pass compilation
+                compiled_result = processor.compile(self._raw_sql, current_parameters, is_many=self._is_many)
+
+                # Store the result
+                self._processed_state = ProcessedState(
+                    compiled_sql=compiled_result.compiled_sql,
+                    execution_parameters=compiled_result.execution_parameters,
+                    parsed_expression=compiled_result.expression,
+                    operation_type=compiled_result.operation_type,
+                    validation_errors=[],
+                    is_many=self._is_many,
+                )
+            except Exception as e:
+                logger.warning("Processing failed, using fallback: %s", e)
+                # Fallback to basic processing
+                self._processed_state = ProcessedState(
+                    compiled_sql=self._raw_sql,
+                    execution_parameters=self._named_parameters or self._positional_parameters,
+                    operation_type="UNKNOWN",
+                    is_many=self._is_many,
+                )
+
         return self._processed_state.compiled_sql, self._processed_state.execution_parameters
 
     def as_script(self) -> "SQL":
@@ -444,9 +455,10 @@ class SQL:
         Returns:
             New SQL instance with the WHERE condition applied
         """
-        # Ensure we have a parsed expression to work with
-        self._ensure_processed()
-        current_expr = self.expression
+        # Parse the SQL to get an expression to work with
+        current_expr = None
+        with contextlib.suppress(ParseError):
+            current_expr = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
 
         if current_expr is None:
             # Try to parse the current SQL
@@ -483,74 +495,6 @@ class SQL:
         return SQL(
             new_sql_text, *self._original_parameters, statement_config=self._statement_config, is_many=self._is_many
         )
-
-    def _ensure_processed(self) -> None:
-        """Ensure SQL is processed using single-pass pipeline."""
-        if self._processed_state is not Empty:
-            return
-
-        try:
-            # Use SQLProcessor for single-pass compilation
-            current_parameters = self._named_parameters or self._positional_parameters
-            processor = SQLProcessor(self._statement_config)
-
-            # Single-pass compilation that handles both parsing and parameter processing
-            compiled_result = processor.compile(self._raw_sql, current_parameters, is_many=self._is_many)
-
-            # Create processed state from compiled result
-            self._processed_state = ProcessedState(
-                compiled_sql=compiled_result.compiled_sql,
-                execution_parameters=compiled_result.execution_parameters,
-                parsed_expression=compiled_result.expression,
-                operation_type=compiled_result.operation_type,
-                validation_errors=[],
-                is_many=self._is_many,
-            )
-
-        except Exception as e:
-            logger.warning("Processing failed, using fallback: %s", e)
-            # Fallback to basic processing
-            self._processed_state = ProcessedState(
-                compiled_sql=self._raw_sql,
-                execution_parameters=self._named_parameters or self._positional_parameters,
-                operation_type="UNKNOWN",
-                is_many=self._is_many,
-            )
-
-    def _detect_operation_type(self, expression: Any) -> OperationType:
-        """Detect SQL operation type from SQLGlot expression."""
-        if expression is None:
-            return "UNKNOWN"
-
-        # Expression type to operation type mapping
-        operation_type_map = {
-            exp.Select: "SELECT",
-            exp.Insert: "INSERT",
-            exp.Update: "UPDATE",
-            exp.Delete: "DELETE",
-            exp.Create: "CREATE",
-            exp.Drop: "DROP",
-            exp.Alter: "ALTER",
-            exp.Merge: "MERGE",
-            exp.With: "WITH",
-            exp.Values: "VALUES",
-            exp.Command: "COMMAND",
-            exp.Pragma: "PRAGMA",
-            exp.Describe: "DESCRIBE",
-        }
-
-        # Check expression type
-        expr_type = type(expression)
-
-        # Direct lookup with proper type casting
-        if expr_type in operation_type_map:
-            return operation_type_map[expr_type]  # type: ignore[return-value]
-
-        # Check for DDL operations (Create, Drop, Alter are already in map)
-        if isinstance(expression, (exp.Create, exp.Drop, exp.Alter)):
-            return "DDL"
-
-        return "UNKNOWN"
 
     def __hash__(self) -> int:
         """Hash for caching and equality."""

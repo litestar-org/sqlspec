@@ -86,9 +86,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
             The result of the SQL execution with core result processing
         """
         with self.handle_database_exceptions(), self.with_cursor(connection) as cursor:
-            # Core optimization: Ensure statement is processed once
-            statement._ensure_processed()
-
             special_result = self._try_special_handling(cursor, statement)
             if special_result is not None:
                 return special_result
