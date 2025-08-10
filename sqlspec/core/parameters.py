@@ -1201,7 +1201,7 @@ class ParameterProcessor:
 
     def _analyze_null_positions(self, parameters: Any) -> "dict[int, Any]":
         """Analyze parameters to find NULL positions."""
-        null_positions = {}
+        null_positions: dict[int, Any] = {}
 
         if isinstance(parameters, (list, tuple)):
             for i, param in enumerate(parameters):

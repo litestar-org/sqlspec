@@ -879,7 +879,7 @@ class TestFixtureBasedParsing:
         for dialect_info in dialect_fixtures:
             if len(dialect_info) == 2 and dialect_info[1] is not None:
                 dialect_dir, filename = dialect_info
-                fixture_file = fixtures_path / dialect_dir / filename
+                fixture_file = fixtures_path / dialect_dir / filename  # type: ignore[operator]
             else:
                 fixture_file = fixtures_path / dialect_info[0]
 

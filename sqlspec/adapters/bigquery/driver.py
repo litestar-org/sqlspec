@@ -109,7 +109,7 @@ def _create_bq_parameters(parameters: Any) -> "list[Union[ArrayQueryParameter, S
 
             if param_type == "ARRAY" and array_element_type:
                 # Convert array values to strings for BigQuery emulator compatibility
-                array_values = [str(item) for item in actual_value]
+                array_values = [] if actual_value is None else [str(item) for item in actual_value]
                 bq_parameters.append(ArrayQueryParameter(param_name_for_bq, array_element_type, array_values))
             elif param_type == "JSON":
                 json_str = to_json(actual_value)

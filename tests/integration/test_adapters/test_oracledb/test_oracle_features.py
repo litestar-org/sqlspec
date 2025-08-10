@@ -289,7 +289,7 @@ async def test_async_oracle_analytic_functions(oracle_async_session: OracleAsync
 def test_oracle_ddl_script_parsing(oracle_sync_session: OracleSyncDriver) -> None:
     """Test that Oracle DDL script can be parsed and prepared for execution."""
     # Load the Oracle DDL script if it exists
-    Path(__file__).parent.parent.parent.parent / "fixtures" / "oracle.ddl.sql"
+    _ = Path(__file__).parent.parent.parent.parent / "fixtures" / "oracle.ddl.sql"
 
     # If fixture doesn't exist, create a sample Oracle DDL script
     sample_oracle_ddl = """

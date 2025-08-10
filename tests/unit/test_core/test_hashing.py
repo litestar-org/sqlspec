@@ -4,6 +4,7 @@ Tests for SQL statement and expression hashing utilities used for cache key gene
 Covers all hashing functions with edge cases, performance considerations, and circular reference handling.
 """
 
+import math
 from unittest.mock import Mock
 
 import pytest
@@ -88,7 +89,7 @@ def test_hash_expression_nested_structure() -> None:
 def test_hash_value_expression() -> None:
     """Test _hash_value with Expression objects."""
     expr = parse_one("SELECT 1")
-    seen = set()
+    seen: set[int] = set()
     result = _hash_value(expr, seen)
     assert isinstance(result, int)
 
@@ -96,7 +97,7 @@ def test_hash_value_expression() -> None:
 def test_hash_value_list() -> None:
     """Test _hash_value with list values."""
     test_list = [1, "test", True]
-    seen = set()
+    seen: set[int] = set()
     result = _hash_value(test_list, seen)
     assert isinstance(result, int)
 
@@ -108,7 +109,7 @@ def test_hash_value_list() -> None:
 def test_hash_value_dict() -> None:
     """Test _hash_value with dictionary values."""
     test_dict = {"key1": "value1", "key2": 42}
-    seen = set()
+    seen: set[int] = set()
     result = _hash_value(test_dict, seen)
     assert isinstance(result, int)
 
@@ -116,26 +117,26 @@ def test_hash_value_dict() -> None:
 def test_hash_value_tuple() -> None:
     """Test _hash_value with tuple values."""
     test_tuple = (1, "test", True)
-    seen = set()
+    seen: set[int] = set()
     result = _hash_value(test_tuple, seen)
     assert isinstance(result, int)
 
 
 def test_hash_value_primitives() -> None:
     """Test _hash_value with primitive values."""
-    seen = set()
+    seen: set[int] = set()
 
     assert isinstance(_hash_value("string", seen), int)
     assert isinstance(_hash_value(42, seen), int)
     assert isinstance(_hash_value(True, seen), int)
     assert isinstance(_hash_value(None, seen), int)
-    assert isinstance(_hash_value(3.14, seen), int)
+    assert isinstance(_hash_value(math.pi, seen), int)
 
 
 def test_hash_value_nested_structures() -> None:
     """Test _hash_value with nested data structures."""
     nested = {"list": [1, 2, {"inner": "value"}], "tuple": (1, 2, 3)}
-    seen = set()
+    seen: set[int] = set()
     result = _hash_value(nested, seen)
     assert isinstance(result, int)
 
@@ -221,16 +222,16 @@ def test_hash_filters_with_filters() -> None:
 
     # Create test filter classes
     class TestFilter1:
-        def __init__(self):
+        def __init__(self) -> None:
             self.attr1 = "value1"
             self.attr2 = 42
 
     class TestFilter2:
-        def __init__(self):
+        def __init__(self) -> None:
             self.attr3 = "value3"
 
     filters = [TestFilter1(), TestFilter2()]
-    result = hash_filters(filters)
+    result = hash_filters(filters)  # type: ignore[arg-type]
     assert isinstance(result, int)
 
 
@@ -242,7 +243,7 @@ def test_hash_filters_no_dict_attribute() -> None:
     del filter_obj.__dict__  # Remove __dict__ attribute
 
     filters = [filter_obj]
-    result = hash_filters(filters)
+    result = hash_filters(filters)  # type: ignore[arg-type]
     assert isinstance(result, int)
 
 
@@ -250,12 +251,12 @@ def test_hash_filters_unhashable_attributes() -> None:
     """Test hash_filters with filters having unhashable attributes."""
 
     class FilterWithUnhashable:
-        def __init__(self):
+        def __init__(self) -> None:
             self.list_attr = [1, 2, 3]
             self.dict_attr = {"key": "value"}
 
     filters = [FilterWithUnhashable()]
-    result = hash_filters(filters)
+    result = hash_filters(filters)  # type: ignore[arg-type]
     assert isinstance(result, int)
 
 

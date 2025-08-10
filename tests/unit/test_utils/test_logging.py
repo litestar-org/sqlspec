@@ -35,11 +35,13 @@ def test_correlation_id_initial_state() -> None:
     """Test that initial correlation ID is None."""
     assert get_correlation_id() is None
 
+
 def test_correlation_id_set_and_get() -> None:
     """Test setting and getting correlation ID."""
     test_id = "test-correlation-123"
     set_correlation_id(test_id)
     assert get_correlation_id() == test_id
+
 
 def test_correlation_id_set_none_clears() -> None:
     """Test that setting None clears the correlation ID."""
@@ -48,6 +50,7 @@ def test_correlation_id_set_none_clears() -> None:
 
     set_correlation_id(None)
     assert get_correlation_id() is None
+
 
 def test_correlation_id_context_isolation_between_threads() -> None:
     """Test that correlation IDs are isolated between threads."""
@@ -80,6 +83,7 @@ def test_correlation_id_context_isolation_between_threads() -> None:
     for i in range(3):
         assert thread_results[f"initial_{i}"] is None
         assert thread_results[f"after_set_{i}"] == f"thread-{i}"
+
 
 def test_correlation_id_context_variable_copy() -> None:
     """Test that context variables work correctly with copy_context."""
@@ -136,6 +140,7 @@ def test_structured_formatter_basic_log_formatting() -> None:
     assert parsed["function"] == "test_function"
     assert parsed["line"] == 42
 
+
 def test_structured_formatter_with_correlation_id() -> None:
     """Test log formatting includes correlation ID when set."""
     formatter = StructuredFormatter()
@@ -160,6 +165,7 @@ def test_structured_formatter_with_correlation_id() -> None:
     assert parsed["message"] == "Warning message"
     assert parsed["level"] == "WARNING"
 
+
 def test_structured_formatter_without_correlation_id() -> None:
     """Test log formatting when no correlation ID is set."""
     formatter = StructuredFormatter()
@@ -182,6 +188,7 @@ def test_structured_formatter_without_correlation_id() -> None:
 
     assert "correlation_id" not in parsed
     assert parsed["message"] == "Error message"
+
 
 def test_structured_formatter_with_extra_fields() -> None:
     """Test that extra fields are included in formatted output."""
@@ -206,6 +213,7 @@ def test_structured_formatter_with_extra_fields() -> None:
     assert parsed["action"] == "login"
     assert parsed["duration"] == 1.5
     assert parsed["message"] == "Message with extra"
+
 
 def test_structured_formatter_with_exception() -> None:
     """Test log formatting includes exception information."""
@@ -235,6 +243,7 @@ def test_structured_formatter_with_exception() -> None:
     assert "exception" in parsed
     assert "ValueError: Test exception" in parsed["exception"]
     assert "Traceback" in parsed["exception"]
+
 
 def test_structured_formatter_custom_date_format() -> None:
     """Test formatter with custom date format."""
@@ -282,7 +291,8 @@ def test_correlation_id_filter_adds_correlation_id() -> None:
 
     assert result is True
     assert hasattr(record, "correlation_id")
-    assert record.correlation_id == "filter-test-id"
+    assert getattr(record, "correlation_id") == "filter-test-id"
+
 
 def test_correlation_id_filter_without_correlation_id() -> None:
     """Test filter behavior when no correlation ID is set."""
@@ -305,6 +315,7 @@ def test_correlation_id_filter_without_correlation_id() -> None:
     assert result is True
     assert not hasattr(record, "correlation_id")
 
+
 def test_correlation_id_filter_always_returns_true() -> None:
     """Test that filter always passes records through."""
     filter_obj = CorrelationIDFilter()
@@ -326,16 +337,19 @@ def test_get_logger_default() -> None:
     assert logger.name == "sqlspec"
     assert isinstance(logger, logging.Logger)
 
+
 def test_get_logger_named() -> None:
     """Test getting named logger with sqlspec prefix."""
     logger = get_logger("database.postgres")
     assert logger.name == "sqlspec.database.postgres"
     assert isinstance(logger, logging.Logger)
 
+
 def test_get_logger_already_prefixed() -> None:
     """Test that sqlspec prefix isn't double-added."""
     logger = get_logger("sqlspec.already.prefixed")
     assert logger.name == "sqlspec.already.prefixed"
+
 
 def test_get_logger_has_correlation_filter() -> None:
     """Test that returned logger has CorrelationIDFilter added."""
@@ -344,6 +358,7 @@ def test_get_logger_has_correlation_filter() -> None:
     # Should have at least one CorrelationIDFilter
     correlation_filters = [f for f in logger.filters if isinstance(f, CorrelationIDFilter)]
     assert len(correlation_filters) >= 1
+
 
 def test_get_logger_filter_not_duplicated() -> None:
     """Test that multiple calls don't duplicate the correlation filter."""
@@ -355,6 +370,7 @@ def test_get_logger_filter_not_duplicated() -> None:
 
     assert logger1 is logger2  # Should be same logger instance
     assert initial_filter_count == final_filter_count  # Filter count shouldn't increase
+
 
 def test_get_logger_different_loggers_independent() -> None:
     """Test that different loggers are independent."""
@@ -573,7 +589,7 @@ class TestEdgeCases:
         """Test formatter handles None values correctly."""
         formatter = StructuredFormatter()
         record = logging.LogRecord(
-            name=None,  # Test None name
+            name="test",
             level=logging.INFO,
             pathname="/path/to/file.py",
             lineno=10,
@@ -581,8 +597,9 @@ class TestEdgeCases:
             args=(),
             exc_info=None,
         )
-        record.module = None
-        record.funcName = None
+        record.name = None  # pyright: ignore
+        record.module = None  # pyright: ignore
+        record.funcName = None  # pyright: ignore
 
         # Should not raise exception
         result = formatter.format(record)

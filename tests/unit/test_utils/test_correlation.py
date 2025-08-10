@@ -3,6 +3,7 @@
 Tests correlation ID tracking for distributed tracing across database operations.
 Covers context management, thread safety, and logging integration.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -24,8 +25,8 @@ def setup_function() -> None:
 
 
 def test_get_initial_state() -> None:
-        """Test that initial correlation ID is None."""
-        assert CorrelationContext.get() is None
+    """Test that initial correlation ID is None."""
+    assert CorrelationContext.get() is None
 
 
 def test_set_and_get() -> None:
@@ -36,12 +37,12 @@ def test_set_and_get() -> None:
 
 
 def test_set_none_clears_id() -> None:
-        """Test that setting None clears the correlation ID."""
-        CorrelationContext.set("test-id")
-        assert CorrelationContext.get() == "test-id"
+    """Test that setting None clears the correlation ID."""
+    CorrelationContext.set("test-id")
+    assert CorrelationContext.get() == "test-id"
 
-        CorrelationContext.set(None)
-        assert CorrelationContext.get() is None
+    CorrelationContext.set(None)
+    assert CorrelationContext.get() is None
 
 
 def test_clear() -> None:
@@ -54,13 +55,13 @@ def test_clear() -> None:
 
 
 def test_generate() -> None:
-        """Test generate method creates valid UUID."""
-        correlation_id = CorrelationContext.generate()
-        assert isinstance(correlation_id, str)
-        assert len(correlation_id) > 0
+    """Test generate method creates valid UUID."""
+    correlation_id = CorrelationContext.generate()
+    assert isinstance(correlation_id, str)
+    assert len(correlation_id) > 0
 
-        # Should be a valid UUID
-        uuid.UUID(correlation_id)  # Will raise ValueError if invalid
+    # Should be a valid UUID
+    uuid.UUID(correlation_id)  # Will raise ValueError if invalid
 
 
 def test_generate_unique_ids() -> None:
@@ -71,15 +72,15 @@ def test_generate_unique_ids() -> None:
 
 
 def test_context_manager_with_provided_id() -> None:
-        """Test context manager with provided correlation ID."""
-        test_id = "provided-id"
+    """Test context manager with provided correlation ID."""
+    test_id = "provided-id"
 
-        with CorrelationContext.context(test_id) as context_id:
-            assert context_id == test_id
-            assert CorrelationContext.get() == test_id
+    with CorrelationContext.context(test_id) as context_id:
+        assert context_id == test_id
+        assert CorrelationContext.get() == test_id
 
-        # Should be cleared after context
-        assert CorrelationContext.get() is None
+    # Should be cleared after context
+    assert CorrelationContext.get() is None
 
 
 def test_context_manager_with_generated_id() -> None:
@@ -97,16 +98,16 @@ def test_context_manager_with_generated_id() -> None:
 
 
 def test_context_manager_restores_previous_id() -> None:
-        """Test that context manager restores previous correlation ID."""
-        original_id = "original-id"
-        CorrelationContext.set(original_id)
+    """Test that context manager restores previous correlation ID."""
+    original_id = "original-id"
+    CorrelationContext.set(original_id)
 
-        with CorrelationContext.context("temporary-id") as temp_id:
-            assert temp_id == "temporary-id"
-            assert CorrelationContext.get() == "temporary-id"
+    with CorrelationContext.context("temporary-id") as temp_id:
+        assert temp_id == "temporary-id"
+        assert CorrelationContext.get() == "temporary-id"
 
-        # Should restore original ID
-        assert CorrelationContext.get() == original_id
+    # Should restore original ID
+    assert CorrelationContext.get() == original_id
 
 
 def test_nested_context_managers() -> None:
@@ -127,19 +128,19 @@ def test_nested_context_managers() -> None:
 
 
 def test_context_manager_exception_handling() -> None:
-        """Test that context manager restores state even on exceptions."""
-        original_id = "original"
-        CorrelationContext.set(original_id)
+    """Test that context manager restores state even on exceptions."""
+    original_id = "original"
+    CorrelationContext.set(original_id)
 
-        try:
-            with CorrelationContext.context("temp"):
-                assert CorrelationContext.get() == "temp"
-                raise ValueError("Test exception")
-        except ValueError:
-            pass
+    try:
+        with CorrelationContext.context("temp"):
+            assert CorrelationContext.get() == "temp"
+            raise ValueError("Test exception")
+    except ValueError:
+        pass
 
-        # Should restore original ID even after exception
-        assert CorrelationContext.get() == original_id
+    # Should restore original ID even after exception
+    assert CorrelationContext.get() == original_id
 
 
 def test_to_dict_with_id() -> None:
@@ -152,10 +153,10 @@ def test_to_dict_with_id() -> None:
 
 
 def test_to_dict_without_id() -> None:
-        """Test to_dict method when no correlation ID is set."""
-        CorrelationContext.clear()
-        result = CorrelationContext.to_dict()
-        assert result == {}
+    """Test to_dict method when no correlation ID is set."""
+    CorrelationContext.clear()
+    result = CorrelationContext.to_dict()
+    assert result == {}
 
 
 def test_thread_safety() -> None:
@@ -167,6 +168,7 @@ def test_thread_safety() -> None:
         CorrelationContext.set(correlation_id)
         # Simulate some work
         import time
+
         time.sleep(0.01)
         results[thread_id] = CorrelationContext.get()
 
@@ -186,13 +188,14 @@ def test_thread_safety() -> None:
 
 # Test correlation_context convenience function
 
-def test_with_provided_id() -> None:
-        """Test correlation_context with provided ID."""
-        test_id = "function-test"
 
-        with correlation_context(test_id) as context_id:
-            assert context_id == test_id
-            assert CorrelationContext.get() == test_id
+def test_with_provided_id() -> None:
+    """Test correlation_context with provided ID."""
+    test_id = "function-test"
+
+    with correlation_context(test_id) as context_id:
+        assert context_id == test_id
+        assert CorrelationContext.get() == test_id
 
 
 def test_with_generated_id() -> None:
@@ -205,28 +208,29 @@ def test_with_generated_id() -> None:
 
 
 def test_compatibility_with_class_method() -> None:
-        """Test that function and class method are compatible."""
-        with CorrelationContext.context("class-method"):
-            with correlation_context("function") as func_id:
-                assert func_id == "function"
-                assert CorrelationContext.get() == "function"
+    """Test that function and class method are compatible."""
+    with CorrelationContext.context("class-method"):
+        with correlation_context("function") as func_id:
+            assert func_id == "function"
+            assert CorrelationContext.get() == "function"
 
-            # Should restore class method context
-            assert CorrelationContext.get() == "class-method"
-
+        # Should restore class method context
+        assert CorrelationContext.get() == "class-method"
 
 
 # Test get_correlation_adapter function
 
+
 def test_creates_logger_adapter() -> None:
-        """Test that get_correlation_adapter creates a LoggerAdapter."""
-        from logging import LoggerAdapter
+    """Test that get_correlation_adapter creates a LoggerAdapter."""
+    from logging import LoggerAdapter
 
-        base_logger = logging.getLogger("test")
-        adapter = get_correlation_adapter(base_logger)
+    base_logger = logging.getLogger("test")
+    adapter = get_correlation_adapter(base_logger)
 
-        assert isinstance(adapter, LoggerAdapter)
-        assert adapter.logger is base_logger
+    assert isinstance(adapter, LoggerAdapter)
+    assert adapter.logger is base_logger
+
 
 def test_adapter_adds_correlation_id() -> None:
     """Test that adapter adds correlation ID to log messages."""
@@ -243,6 +247,7 @@ def test_adapter_adds_correlation_id() -> None:
     assert "extra" in kwargs
     assert kwargs["extra"]["correlation_id"] == "test-correlation"
 
+
 def test_adapter_without_correlation_id() -> None:
     """Test adapter behavior when no correlation ID is set."""
     base_logger = logging.getLogger("test")
@@ -258,6 +263,7 @@ def test_adapter_without_correlation_id() -> None:
     # Should not add correlation_id to extra when none is set
     extra = kwargs.get("extra", {})
     assert "correlation_id" not in extra
+
 
 def test_adapter_preserves_existing_extra() -> None:
     """Test that adapter preserves existing extra fields."""
@@ -277,6 +283,7 @@ def test_adapter_preserves_existing_extra() -> None:
     assert extra["action"] == "login"
     assert extra["correlation_id"] == "test-id"
 
+
 def test_adapter_with_empty_extra() -> None:
     """Test adapter when extra is initially empty dict."""
     base_logger = logging.getLogger("test")
@@ -287,6 +294,7 @@ def test_adapter_with_empty_extra() -> None:
     msg, kwargs = adapter.process("Test message", {"extra": {}})
 
     assert kwargs["extra"]["correlation_id"] == "test-id"
+
 
 @patch("logging.LoggerAdapter")
 def test_creates_adapter_with_empty_extra_dict(mock_adapter_class: Mock) -> None:
@@ -299,14 +307,11 @@ def test_creates_adapter_with_empty_extra_dict(mock_adapter_class: Mock) -> None
 
 def test_database_operation_simulation() -> None:
     """Test correlation tracking in simulated database operations."""
+
     def simulate_db_query(query: str) -> dict[str, Any]:
         """Simulate a database query with correlation logging."""
         correlation_id = CorrelationContext.get()
-        return {
-            "query": query,
-            "correlation_id": correlation_id,
-            "result": "success"
-        }
+        return {"query": query, "correlation_id": correlation_id, "result": "success"}
 
     with correlation_context() as correlation_id:
         # Simulate multiple database operations within same context
@@ -317,15 +322,13 @@ def test_database_operation_simulation() -> None:
         assert result2["correlation_id"] == correlation_id
         assert result1["correlation_id"] == result2["correlation_id"]
 
+
 def test_nested_operation_contexts() -> None:
     """Test nested operations maintain proper correlation context."""
     results = []
 
     def operation(name: str) -> None:
-        results.append({
-            "operation": name,
-            "correlation_id": CorrelationContext.get()
-        })
+        results.append({"operation": name, "correlation_id": CorrelationContext.get()})
 
     with correlation_context("request-123") as outer_id:
         operation("outer-start")
@@ -341,25 +344,24 @@ def test_nested_operation_contexts() -> None:
     assert results[1]["correlation_id"] == "sub-operation-456"
     assert results[2]["correlation_id"] == "request-123"
 
+
 @pytest.mark.asyncio
 async def test_async_context_preservation() -> None:
     """Test that correlation context is preserved across async operations."""
+
     async def async_operation(delay: float) -> str:
         await asyncio.sleep(delay)
         return CorrelationContext.get() or "no-id"
 
     with correlation_context("async-test") as correlation_id:
         # Start multiple async operations
-        tasks = [
-            async_operation(0.01),
-            async_operation(0.02),
-            async_operation(0.005)
-        ]
+        tasks = [async_operation(0.01), async_operation(0.02), async_operation(0.005)]
 
         results = await asyncio.gather(*tasks)
 
         # All should have maintained the same correlation ID
         assert all(result == correlation_id for result in results)
+
 
 def test_logging_integration() -> None:
     """Test integration with actual logging system."""
@@ -390,6 +392,7 @@ def test_logging_integration() -> None:
         # Cleanup
         logger.removeHandler(handler)
 
+
 def test_concurrent_contexts() -> None:
     """Test concurrent correlation contexts don't interfere."""
     import concurrent.futures
@@ -399,6 +402,7 @@ def test_concurrent_contexts() -> None:
         with correlation_context(correlation_id):
             # Simulate some work
             import time
+
             time.sleep(0.01)
             return worker_id, CorrelationContext.get()
 
@@ -417,6 +421,7 @@ def test_context_with_none_id_generates_uuid() -> None:
         assert correlation_id is not None
         uuid.UUID(correlation_id)  # Should be valid UUID
 
+
 def test_multiple_clear_calls() -> None:
     """Test that multiple clear calls don't cause issues."""
     CorrelationContext.set("test")
@@ -426,11 +431,13 @@ def test_multiple_clear_calls() -> None:
 
     assert CorrelationContext.get() is None
 
+
 def test_context_manager_with_empty_string() -> None:
     """Test context manager with empty string ID."""
     with CorrelationContext.context("") as correlation_id:
         assert correlation_id == ""
         assert CorrelationContext.get() == ""
+
 
 def test_to_dict_consistency() -> None:
     """Test that to_dict is consistent with get."""
@@ -445,8 +452,10 @@ def test_to_dict_consistency() -> None:
     assert CorrelationContext.get() == test_id
     assert CorrelationContext.to_dict() == {"correlation_id": test_id}
 
+
 def test_context_var_isolation() -> None:
     """Test that context variables provide proper isolation."""
+
     # This test ensures that the ContextVar behavior is working correctly
     def check_isolation() -> str | None:
         return CorrelationContext.get()
@@ -472,14 +481,17 @@ def test_context_var_isolation() -> None:
     assert CorrelationContext.get() == "main-thread"
 
 
-@pytest.mark.parametrize("test_id", [
-    "simple-id",
-    "complex-id-with-many-parts",
-    "id_with_underscores",
-    "123-numeric-id",
-    "special!@#$%^&*()chars",
-    "unicode-café-test",
-])
+@pytest.mark.parametrize(
+    "test_id",
+    [
+        "simple-id",
+        "complex-id-with-many-parts",
+        "id_with_underscores",
+        "123-numeric-id",
+        "special!@#$%^&*()chars",
+        "unicode-café-test",
+    ],
+)
 def test_various_correlation_id_formats(test_id: str) -> None:
     """Test that various correlation ID formats are handled correctly."""
     CorrelationContext.clear()

@@ -29,6 +29,7 @@ def test_to_json_basic_types() -> None:
     # None
     assert to_json(None) == "null"
 
+
 def test_to_json_collections() -> None:
     """Test serialization of collections."""
     # List
@@ -44,6 +45,7 @@ def test_to_json_collections() -> None:
     # Empty dict
     assert to_json({}) == "{}"
 
+
 def test_to_json_nested_structures() -> None:
     """Test serialization of nested data structures."""
     nested = {
@@ -56,6 +58,7 @@ def test_to_json_nested_structures() -> None:
     parsed = json.loads(result)
     assert parsed == nested
 
+
 def test_to_json_unicode_strings() -> None:
     """Test serialization of Unicode strings."""
     unicode_text = "Hello 世界 🌍 café naïve résumé"
@@ -65,6 +68,7 @@ def test_to_json_unicode_strings() -> None:
     parsed = json.loads(result)
     assert parsed == unicode_text
 
+
 def test_to_json_special_characters() -> None:
     """Test serialization of strings with special characters."""
     special_chars = "Line1\nLine2\tTabbed\"Quoted'Single\\Backslash"
@@ -73,6 +77,7 @@ def test_to_json_special_characters() -> None:
     # Should properly escape and be parseable
     parsed = json.loads(result)
     assert parsed == special_chars
+
 
 def test_to_json_numeric_edge_cases() -> None:
     """Test serialization of edge case numeric values."""
@@ -88,11 +93,13 @@ def test_to_json_numeric_edge_cases() -> None:
     assert to_json(0) == "0"
     assert to_json(0.0) == "0.0"
 
+
 def test_to_json_empty_collections() -> None:
     """Test serialization of empty collections."""
     assert to_json([]) == "[]"
     assert to_json({}) == "{}"
     assert to_json(()) == "[]"  # Tuple serializes as array
+
 
 def test_to_json_tuple_serialization() -> None:
     """Test that tuples are serialized as JSON arrays."""
@@ -104,6 +111,7 @@ def test_to_json_tuple_serialization() -> None:
     parsed = json.loads(result)
     assert parsed == [[1, 2], [3, 4]]
 
+
 def test_to_json_none_in_collections() -> None:
     """Test serialization of None values within collections."""
     data_with_none = {"value": None, "items": [1, None, "text"], "nested": {"null_field": None}}
@@ -111,6 +119,7 @@ def test_to_json_none_in_collections() -> None:
     result = to_json(data_with_none)
     parsed = json.loads(result)
     assert parsed == data_with_none
+
 
 def test_to_json_mixed_type_collections() -> None:
     """Test serialization of collections with mixed types."""
@@ -136,6 +145,7 @@ def test_from_json_basic_types() -> None:
     # None
     assert from_json("null") is None
 
+
 def test_from_json_collections() -> None:
     """Test deserialization of JSON collections."""
     # Array
@@ -148,6 +158,7 @@ def test_from_json_collections() -> None:
 
     # Empty object
     assert from_json("{}") == {}
+
 
 def test_from_json_nested_structures() -> None:
     """Test deserialization of nested JSON structures."""
@@ -171,11 +182,13 @@ def test_from_json_nested_structures() -> None:
     }
     assert result == expected
 
+
 def test_from_json_unicode_strings() -> None:
     """Test deserialization of Unicode strings."""
     unicode_json = '"Hello 世界 🌍 café naïve résumé"'
     result = from_json(unicode_json)
     assert result == "Hello 世界 🌍 café naïve résumé"
+
 
 def test_from_json_escaped_characters() -> None:
     """Test deserialization of strings with escaped characters."""
@@ -183,6 +196,7 @@ def test_from_json_escaped_characters() -> None:
     result = from_json(escaped_json)
     expected = "Line1\nLine2\tTabbed\"Quoted'Single\\Backslash"
     assert result == expected
+
 
 def test_from_json_numeric_edge_cases() -> None:
     """Test deserialization of edge case numeric values."""
@@ -197,17 +211,20 @@ def test_from_json_numeric_edge_cases() -> None:
     assert from_json("0") == 0
     assert from_json("0.0") == 0.0
 
+
 def test_from_json_scientific_notation() -> None:
     """Test deserialization of scientific notation numbers."""
     assert from_json("1e5") == 100000.0
     assert from_json("1.5e-3") == 0.0015
     assert from_json("-2.5e2") == -250.0
 
+
 def test_from_json_whitespace_handling() -> None:
     """Test that whitespace in JSON is handled correctly."""
     # Extra whitespace should be ignored
     assert from_json('  "hello"  ') == "hello"
     assert from_json('\n\t{\n\t  "key": "value"\n\t}\n') == {"key": "value"}
+
 
 def test_from_json_invalid_json_raises_error() -> None:
     """Test that invalid JSON raises appropriate errors."""
@@ -222,6 +239,7 @@ def test_from_json_invalid_json_raises_error() -> None:
 
     with pytest.raises((ValueError, json.JSONDecodeError)):
         from_json("")
+
 
 def test_from_json_trailing_commas_error() -> None:
     """Test that trailing commas cause errors (strict JSON)."""
@@ -240,6 +258,7 @@ def test_round_trip_basic() -> None:
         serialized = to_json(data)
         deserialized = from_json(serialized)
         assert deserialized == data
+
 
 def test_round_trip_complex() -> None:
     """Test round-trip with complex nested structures."""
@@ -261,6 +280,7 @@ def test_round_trip_complex() -> None:
     deserialized = from_json(serialized)
     assert deserialized == complex_data
 
+
 def test_round_trip_unicode() -> None:
     """Test round-trip with Unicode data."""
     unicode_data = {
@@ -276,6 +296,7 @@ def test_round_trip_unicode() -> None:
     deserialized = from_json(serialized)
     assert deserialized == unicode_data
 
+
 def test_round_trip_numeric_precision() -> None:
     """Test that numeric precision is maintained in round-trip."""
     numeric_data = {
@@ -289,6 +310,7 @@ def test_round_trip_numeric_precision() -> None:
     serialized = to_json(numeric_data)
     deserialized = from_json(serialized)
     assert deserialized == numeric_data
+
 
 def test_round_trip_empty_structures() -> None:
     """Test round-trip with empty data structures."""
@@ -311,6 +333,7 @@ def test_edge_case_very_long_strings() -> None:
     deserialized = from_json(serialized)
     assert deserialized == long_string
 
+
 def test_edge_case_deeply_nested_structures() -> None:
     """Test deeply nested data structures."""
     # Create deeply nested structure
@@ -328,12 +351,14 @@ def test_edge_case_deeply_nested_structures() -> None:
         current = current["data"]
     assert current == "base"
 
+
 def test_edge_case_large_arrays() -> None:
     """Test serialization of large arrays."""
     large_array = list(range(10000))  # 10K element array
     serialized = to_json(large_array)
     deserialized = from_json(serialized)
     assert deserialized == large_array
+
 
 def test_edge_case_dict_with_numeric_keys() -> None:
     """Test that dict keys are properly handled."""
@@ -342,6 +367,7 @@ def test_edge_case_dict_with_numeric_keys() -> None:
     serialized = to_json(data)
     deserialized = from_json(serialized)
     assert deserialized == data
+
 
 def test_edge_case_special_float_values() -> None:
     """Test handling of special float values."""
@@ -370,6 +396,7 @@ def test_compatibility_produces_valid_json() -> None:
     stdlib_parsed = json.loads(serialized)
     assert stdlib_parsed == test_data
 
+
 def test_compatibility_parses_stdlib_json_output() -> None:
     """Test that from_json can parse output from stdlib json."""
     test_data = {"string": "hello", "number": 42, "array": [1, 2, 3], "nested": {"key": "value"}}
@@ -377,6 +404,7 @@ def test_compatibility_parses_stdlib_json_output() -> None:
     stdlib_serialized = json.dumps(test_data)
     our_parsed = from_json(stdlib_serialized)
     assert our_parsed == test_data
+
 
 def test_compatibility_consistent_formatting() -> None:
     """Test that formatting is consistent with expectations."""

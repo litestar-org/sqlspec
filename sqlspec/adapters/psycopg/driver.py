@@ -295,6 +295,9 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
 
         # Check COPY direction using AST
         copy_expr = statement.expression
+        if copy_expr is None:
+            msg = "Invalid COPY statement: missing expression"
+            raise ValueError(msg)
         files = copy_expr.args.get("files", [])
 
         # Detect STDIN/STDOUT from files list
@@ -314,7 +317,10 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
 
             # Use context manager for COPY FROM (sync version)
             with cursor.copy(sql) as copy_ctx:
-                copy_ctx.write(data_file.read().encode() if hasattr(data_file, "read") else str(copy_data).encode())
+                data_to_write = data_file.read() if hasattr(data_file, "read") else str(copy_data)  # pyright: ignore
+                if isinstance(data_to_write, str):
+                    data_to_write = data_to_write.encode()
+                copy_ctx.write(data_to_write)
 
             rows_affected = max(cursor.rowcount, 0)
 
@@ -324,7 +330,7 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
 
         if is_stdout:
             # COPY TO STDOUT - export data
-            output_data = []
+            output_data: list[str] = []
             with cursor.copy(sql) as copy_ctx:
                 output_data.extend(row.decode() if isinstance(row, bytes) else str(row) for row in copy_ctx)
 
@@ -595,6 +601,9 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
 
         # Check COPY direction using AST
         copy_expr = statement.expression
+        if copy_expr is None:
+            msg = "Invalid COPY statement: missing expression"
+            raise ValueError(msg)
         files = copy_expr.args.get("files", [])
 
         # Detect STDIN/STDOUT from files list
@@ -614,9 +623,10 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
 
             # Use async context manager for COPY FROM
             async with cursor.copy(sql) as copy_ctx:
-                await copy_ctx.write(
-                    data_file.read().encode() if hasattr(data_file, "read") else str(copy_data).encode()
-                )
+                data_to_write = data_file.read() if hasattr(data_file, "read") else str(copy_data)  # pyright: ignore
+                if isinstance(data_to_write, str):
+                    data_to_write = data_to_write.encode()
+                await copy_ctx.write(data_to_write)
 
             rows_affected = max(cursor.rowcount, 0)
 
@@ -626,7 +636,7 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
 
         if is_stdout:
             # COPY TO STDOUT - export data
-            output_data = []
+            output_data: list[str] = []
             async with cursor.copy(sql) as copy_ctx:
                 output_data.extend([row.decode() if isinstance(row, bytes) else str(row) async for row in copy_ctx])
 
