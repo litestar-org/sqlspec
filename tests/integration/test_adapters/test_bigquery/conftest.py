@@ -1,12 +1,14 @@
 """BigQuery integration test fixtures with CORE_ROUND_3 architecture."""
 
-from typing import TYPE_CHECKING
+from collections.abc import Generator
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from google.api_core.client_options import ClientOptions
 from google.auth.credentials import AnonymousCredentials
 
 from sqlspec.adapters.bigquery.config import BigQueryConfig
+from sqlspec.adapters.bigquery.driver import BigQueryDriver
 
 if TYPE_CHECKING:
     from pytest_databases.docker.bigquery import BigQueryService
@@ -19,8 +21,8 @@ def table_schema_prefix(bigquery_service: "BigQueryService") -> str:
 
 
 @pytest.fixture
-def bigquery_session(bigquery_service: "BigQueryService", table_schema_prefix: str) -> BigQueryConfig:
-    """Create a BigQuery sync config session."""
+def bigquery_config(bigquery_service: "BigQueryService", table_schema_prefix: str) -> BigQueryConfig:
+    """Create a BigQuery config object."""
     return BigQueryConfig(
         connection_config={
             "project": bigquery_service.project,
@@ -29,3 +31,14 @@ def bigquery_session(bigquery_service: "BigQueryService", table_schema_prefix: s
             "credentials": AnonymousCredentials(),  # type: ignore[no-untyped-call]
         }
     )
+
+
+@pytest.fixture
+def bigquery_session(bigquery_config: BigQueryConfig) -> Generator[BigQueryDriver, Any, None]:
+    """Create a BigQuery sync session."""
+    try:
+        with bigquery_config.provide_session() as session:
+            yield session
+    finally:
+        # Cleanup if needed
+        pass

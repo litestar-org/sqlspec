@@ -108,16 +108,15 @@ def _create_bq_parameters(parameters: Any) -> "list[Union[ArrayQueryParameter, S
             param_type, array_element_type = _get_bq_param_type(actual_value)
 
             if param_type == "ARRAY" and array_element_type:
-                # Convert array values to strings for BigQuery emulator compatibility
-                array_values = [] if actual_value is None else [str(item) for item in actual_value]
+                # Handle array values
+                array_values = [] if actual_value is None else list(actual_value)
                 bq_parameters.append(ArrayQueryParameter(param_name_for_bq, array_element_type, array_values))
             elif param_type == "JSON":
                 json_str = to_json(actual_value)
                 bq_parameters.append(ScalarQueryParameter(param_name_for_bq, "STRING", json_str))
             elif param_type:
-                # Convert values to strings for BigQuery emulator compatibility
-                string_value = str(actual_value) if not isinstance(actual_value, str) else actual_value
-                bq_parameters.append(ScalarQueryParameter(param_name_for_bq, param_type, string_value))
+                # Use the actual value with its correct BigQuery type
+                bq_parameters.append(ScalarQueryParameter(param_name_for_bq, param_type, actual_value))
             else:
                 msg = f"Unsupported BigQuery parameter type for value of param '{name}': {type(actual_value)}"
                 raise SQLSpecError(msg)
@@ -364,25 +363,38 @@ class BigQueryDriver(SyncDriverAdapterBase):
             # If we can't parse, fall back to original SQL
             return sql
 
-        # Convert parameters to list if needed with enhanced handling
-        if isinstance(parameters, (list, tuple)):
-            param_list = list(parameters)
-        elif isinstance(parameters, dict):
-            # For named parameters, we need to handle differently
-            # For now, return original SQL for dict parameters
-            return sql
-        else:
-            param_list = [parameters]
-
-        # Counter for tracking which parameter we're replacing
-        param_index = [0]  # Use list to make it mutable in nested function
-
         def replace_placeholder(node: exp.Expression) -> exp.Expression:
             """Replace placeholder nodes with literal values using enhanced type handling."""
-            if isinstance(node, (exp.Placeholder, exp.Parameter)) and param_index[0] < len(param_list):
-                value = param_list[param_index[0]]
-                param_index[0] += 1
-                return self._create_literal_node(value)
+            if isinstance(node, exp.Placeholder):
+                # Handle positional parameters (?, :1, etc.)
+                if isinstance(parameters, (list, tuple)) and len(parameters) > 0:
+                    # For positional parameters, use index-based replacement
+                    placeholder_index = getattr(node, "index", 0)
+                    if placeholder_index < len(parameters):
+                        return self._create_literal_node(parameters[placeholder_index])
+                return node
+            if isinstance(node, exp.Parameter):
+                # Handle named parameters (@param1, :name, etc.)
+                param_name = node.this
+                if isinstance(parameters, dict):
+                    # Try different parameter name formats
+                    possible_names = [param_name, f"@{param_name}", f":{param_name}", f"param_{param_name}"]
+                    for name in possible_names:
+                        if name in parameters:
+                            actual_value = getattr(parameters[name], "value", parameters[name])
+                            return self._create_literal_node(actual_value)
+                    return node
+                if isinstance(parameters, (list, tuple)):
+                    # For positional parameters passed as list/tuple
+                    try:
+                        # Try to extract numeric index from parameter name
+                        if param_name.startswith("param_"):
+                            param_index = int(param_name[6:])  # Remove "param_" prefix
+                            if param_index < len(parameters):
+                                return self._create_literal_node(parameters[param_index])
+                    except (ValueError, IndexError):
+                        pass
+                return node
             return node
 
         # Transform the AST by replacing placeholders with literals
@@ -438,32 +450,43 @@ class BigQueryDriver(SyncDriverAdapterBase):
         )
 
     def _execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:
-        """BigQuery execute_many implementation using optimized AST-based literal embedding.
+        """BigQuery execute_many implementation using static parameter style rendering.
 
-        Leverages core parameter processing for enhanced BigQuery type handling and parameter conversion.
+        Uses the existing parameter system with STATIC style to render SQL statements
+        with embedded literals, then combines them into a script for execution.
         """
         # Check if we have parameters for execute_many
         if not statement.parameters or not isinstance(statement.parameters, (list, tuple)):
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
         parameters_list = statement.parameters
-        # Get the original SQL template
-        original_sql = statement._raw_sql
 
-        # Build individual statements for each parameter set using enhanced AST transformation
+        # Create a temporary config with STATIC parameter style for literal rendering
+        from sqlspec.core.parameters import ParameterStyle
+        static_config = self.statement_config.replace(
+            parameter_config=self.statement_config.parameter_config.replace(
+                default_execution_parameter_style=ParameterStyle.STATIC
+            )
+        )
+
+        # Build a script with all statements using static parameter rendering
         script_statements = []
         for param_set in parameters_list:
-            individual_sql = self._transform_ast_with_literals(original_sql, param_set)
-            script_statements.append(individual_sql)
+            # Create individual statement with current parameter set
+            individual_statement = statement.replace(parameters=param_set)
+            # Use static parameter style to get SQL with embedded literals
+            rendered_sql, _ = self._get_compiled_sql(individual_statement, static_config)
+            script_statements.append(rendered_sql)
 
-        # Generate script and execute it with enhanced error handling
+        # Combine into a single script
         script_sql = ";\n".join(script_statements) + ";"
 
-        # Execute the script directly using the connection with enhanced job management
+        # Execute the script as a single job
         cursor.job = self._run_query_job(script_sql, None, connection=cursor.connection)
         cursor.job.result()  # Wait for completion
 
-        # Return result with enhanced row count calculation (BigQuery emulator may report 0)
+        # BigQuery script jobs may not report accurate affected row counts
+        # Use the parameter count as a reasonable estimate
         affected_rows = cursor.job.num_dml_affected_rows or len(parameters_list)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 

@@ -7,10 +7,10 @@ from sqlspec.core.result import SQLResult
 
 
 @pytest.mark.xdist_group("bigquery")
-def test_connection(bigquery_session: BigQueryConfig) -> None:
+def test_connection(bigquery_config: BigQueryConfig) -> None:
     """Test database connection."""
 
-    with bigquery_session.provide_session() as driver:
+    with bigquery_config.provide_session() as driver:
         result = driver.execute("SELECT 1 as one")
         assert isinstance(result, SQLResult)
         assert result.data is not None

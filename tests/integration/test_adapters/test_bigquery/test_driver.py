@@ -218,8 +218,7 @@ def test_bigquery_error_handling(bigquery_session: BigQueryDriver, bigquery_serv
 
 
 @pytest.mark.xdist_group("bigquery")
-# TODO: try adding type hints to the insert statement `::int` or something to properly type the arrays
-# @pytest.mark.skip(reason="BigQuery emulator has issues with complex data types and parameter marshaling")
+@pytest.mark.xfail(reason="BigQuery emulator has issues with complex data types and parameter marshaling (JSON unmarshaling errors)")
 def test_bigquery_data_types(bigquery_session: BigQueryDriver, bigquery_service: BigQueryService) -> None:
     """Test BigQuery data type handling."""
     # Create table with various BigQuery data types
