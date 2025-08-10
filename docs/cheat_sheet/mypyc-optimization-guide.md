@@ -446,9 +446,9 @@ include = [
     "sqlspec/statement/pipeline.py",
 
     # Query builders
-    "sqlspec/statement/builder/_base.py",
-    "sqlspec/statement/builder/_select.py",
-    "sqlspec/statement/builder/_insert.py",
+    "sqlspec/builder/_base.py",
+    "sqlspec/builder/_select.py",
+    "sqlspec/builder/_insert.py",
 
     # Driver core
     "sqlspec/driver/parameters.py",
@@ -521,7 +521,7 @@ $ make install
 $ make test
 
 # ✅ DO: Verify compilation after installation
-$ python -c "import sqlspec.statement.sql; print(sqlspec.statement.sql.__file__)"
+$ python -c "import sqlspec.core.statement; print(sqlspec.core.statement.__file__)"
 # Should show: .../sqlspec/statement/sql.cpython-312-x86_64-linux-gnu.so
 
 # Count compiled modules
@@ -670,11 +670,11 @@ def safe_operation(items: list[Any]) -> None:
 
 ```python
 # ✅ DO: Import from compiled modules
-from sqlspec.statement.result import SQLResult  # Compiled module
+from sqlspec.core.result import SQLResult  # Compiled module
 
 # ❌ DON'T: Use circular imports or dynamic imports
 def get_result_class():
-    from sqlspec.statement.result import SQLResult  # Late import
+    from sqlspec.core.result import SQLResult  # Late import
     return SQLResult
 ```
 
@@ -704,7 +704,7 @@ def unsafe_divide(a: int, b: int) -> Any:
 
 ```python
 # ✅ DO: Use TypedParameter for type preservation
-from sqlspec.parameters.types import TypedParameter
+from sqlspec.core.parameters.types import TypedParameter
 
 class TypedParameter:
     __slots__ = ("name", "value", "type")
@@ -715,7 +715,7 @@ class TypedParameter:
         self.type = type_
 
 # ❌ DON'T: Lose type information
-params = {"name": "value"}  # Type information lost
+parameters = {"name": "value"}  # Type information lost
 ```
 
 ### 2. File Caching Optimization

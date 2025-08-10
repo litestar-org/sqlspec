@@ -49,7 +49,7 @@ For a detailed breakdown of the data flow, please see the [SQLSpec Data Flow Gui
 
 ## Core Components
 
-### `SQL` Class (`sqlspec.statement.sql.SQL`)
+### `SQL` Class (`sqlspec.core.statement.SQL`)
 
 The central abstraction for SQL statements.
 
@@ -63,18 +63,17 @@ The central abstraction for SQL statements.
 
 ```python
 # Public API
-sql.compile(placeholder_style="qmark") # -> (str, params)
+sql.compile(placeholder_style="qmark") # -> (str, parameters)
 sql.where(condition) # -> SQL
 sql.limit(n) # -> SQL
-sql.as_many(params) # -> SQL
 sql.as_script() # -> SQL
 
 # Internal
 sql._ensure_processed() # -> None
-sql._build_final_state() # -> (expression, params)
+sql._build_final_state() # -> (expression, parameters)
 ```
 
-### `StatementConfig` (`sqlspec.statement.sql.StatementConfig`)
+### `StatementConfig` (`sqlspec.core.statement.StatementConfig`)
 
 Configuration for SQL processing behavior.
 
@@ -88,7 +87,7 @@ StatementConfig(
 )
 ```
 
-### `TypedParameter` (`sqlspec.parameters.types.TypedParameter`)
+### `TypedParameter` (`sqlspec.core.parameters.types.TypedParameter`)
 
 Carries type information through the pipeline, ensuring that data types are handled correctly by each database driver.
 
@@ -114,6 +113,7 @@ StatementConfig(
 ```
 
 **Performance Benefits:**
+
 - **SQL Cache**: Avoids recompilation of identical queries
 - **Optimized Cache**: Reuses AST optimization results
 - **Builder Cache**: Accelerates QueryBuilder state serialization
@@ -121,6 +121,7 @@ StatementConfig(
 - **Analysis Cache**: Caches pipeline step results for reuse
 
 **StatementConfig-Aware Caching:**
+
 - All cache keys include StatementConfig hash to prevent cross-contamination
 - Different configurations maintain separate cache entries
 - Automatic cache invalidation on configuration changes
@@ -174,7 +175,7 @@ def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[i
         return special_result
 
     # 2. Get compiled SQL with driver's parameter style
-    sql, params = self._get_compiled_sql(statement, self.statement_config)
+    sql, parameters = self._get_compiled_sql(statement, self.statement_config)
 
     # 3. Route to appropriate execution method
     if statement.is_script:
@@ -182,14 +183,14 @@ def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[i
             static_sql = self._prepare_script_sql(statement)
             result = self._execute_script(cursor, static_sql, None, self.statement_config)
         else:
-            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-            result = self._execute_script(cursor, sql, prepared_params, self.statement_config)
+            prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=False)
+            result = self._execute_script(cursor, sql, prepared_parameters, self.statement_config)
     elif statement.is_many:
-        prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=True)
-        result = self._execute_many(cursor, sql, prepared_params)
+        prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=True)
+        result = self._execute_many(cursor, sql, prepared_parameters)
     else:
-        prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-        result = self._execute_statement(cursor, sql, prepared_params)
+        prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=False)
+        result = self._execute_statement(cursor, sql, prepared_parameters)
 
     return create_execution_result(result)
 
@@ -197,13 +198,13 @@ def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[i
 def _try_special_handling(self, cursor: Any, statement: SQL) -> Optional[tuple]:
     """Hook for database-specific operations (COPY, bulk ops, etc.)"""
 
-def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+def _execute_statement(self, cursor: Any, sql: str, prepared_parameters: Any) -> Any:
     """Execute single statement"""
 
-def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+def _execute_many(self, cursor: Any, sql: str, prepared_parameters: Any) -> Any:
     """Execute with parameter batches"""
 
-def _execute_script(self, cursor: Any, sql: str, prepared_params: Any, statement_config: StatementConfig) -> Any:
+def _execute_script(self, cursor: Any, sql: str, prepared_parameters: Any, statement_config: StatementConfig) -> Any:
     """Execute multi-statement script"""
 ```
 
@@ -217,7 +218,7 @@ The current parameter processing system uses `ParameterStyleConfig` integrated w
 
 ```python
 # Current parameter configuration
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 
 parameter_config = ParameterStyleConfig(
     default_parameter_style=ParameterStyle.QMARK,
@@ -242,6 +243,7 @@ statement_config = StatementConfig(
 ```
 
 **Key Enhancements:**
+
 - **StatementConfig Integration**: Parameter processing respects overall configuration
 - **Pipeline Awareness**: Works with SQLTransformContext for consistency
 - **Enhanced Caching**: Parameter processing results are cached with StatementConfig keys
@@ -249,6 +251,7 @@ statement_config = StatementConfig(
 - **Type Preservation**: Enhanced TypedParameter support through pipeline
 
 **Current Processing Flow:**
+
 1. SQL object processes parameters through pipeline (parameterize_literals_step)
 2. Parameters are compiled with StatementConfig-aware caching
 3. Driver receives pre-processed parameters via prepare_driver_parameters()

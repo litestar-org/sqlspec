@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Optional, cast
 
 try:
     import pyarrow as pa
+
     HAS_PYARROW = True
 except ImportError:
     HAS_PYARROW = False
@@ -90,37 +91,37 @@ def _transform_adbc_parameters_with_context(sql: str, parameters: Any) -> Any:
 
     Analyzes the SQL statement to infer appropriate types for NULL parameters,
     preventing Arrow 'na' type mapping errors.
-    
+
     Args:
         sql: The SQL statement for context analysis
         parameters: Parameters to transform
-        
+
     Returns:
         Transformed parameters with proper Arrow type hints
     """
     if not parameters:
         return parameters
-    
+
     # Apply ADBC-specific NULL parameter handling with better type inference
     transformed = _transform_adbc_parameters(parameters)
-    
+
     # If we still have None parameters that could cause Arrow 'na' type issues,
     # apply a more conservative approach
     if isinstance(transformed, (list, tuple)) and any(p is None for p in transformed):
         return _apply_conservative_null_typing(transformed)
-    
+
     return transformed
 
 
 def _apply_conservative_null_typing(parameters: Any) -> Any:
     """Apply conservative typing for NULL parameters to avoid Arrow 'na' issues.
-    
+
     Uses a strategy that tries to let PostgreSQL handle type inference while
     providing enough type information for Arrow to avoid 'na' type errors.
     """
     if not HAS_PYARROW:
         return parameters
-        
+
     if isinstance(parameters, (list, tuple)):
         result = []
         for param in parameters:
@@ -135,7 +136,7 @@ def _apply_conservative_null_typing(parameters: Any) -> Any:
             else:
                 result.append(param)
         return result
-    
+
     return parameters
 
 
@@ -155,16 +156,16 @@ def _transform_adbc_parameters(parameters: Any) -> Any:
 
 def _create_typed_null_for_arrow(param_type: type) -> Any:
     """Create a typed NULL value for Arrow type inference.
-    
+
     Args:
         param_type: The original parameter type for the NULL value
-        
+
     Returns:
         PyArrow scalar with proper type, or None if PyArrow not available
     """
     if not HAS_PYARROW:
         return None
-        
+
     try:
         # Map Python types to Arrow types
         type_mapping = {
@@ -176,20 +177,20 @@ def _create_typed_null_for_arrow(param_type: type) -> Any:
             list: pa.list_(pa.string()),  # Default to string list, might need refinement
             tuple: pa.list_(pa.string()),  # Default to string list
         }
-        
+
         arrow_type = type_mapping.get(param_type)
         if arrow_type is not None:
             return pa.scalar(None, type=arrow_type)
     except Exception:
         # If Arrow type creation fails, fall back to None
         pass
-    
+
     return None
 
 
 def _coerce_parameter_for_adbc(param: Any) -> Any:
     """Coerce individual parameter for ADBC compatibility.
-    
+
     Special handling for NULL parameters to provide type hints for Arrow.
     """
     # Handle TypedParameter wrappers by extracting the underlying value

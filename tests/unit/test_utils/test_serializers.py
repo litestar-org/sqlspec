@@ -5,7 +5,6 @@ Covers all serialization scenarios including edge cases and type handling.
 """
 
 import json
-import math
 from typing import Any
 
 import pytest
@@ -231,10 +230,11 @@ def test_from_json_invalid_json_raises_error() -> None:
     # Need to handle msgspec.DecodeError which is different from json.JSONDecodeError
     try:
         import msgspec
+
         expected_errors = (ValueError, json.JSONDecodeError, msgspec.DecodeError)
     except ImportError:
         expected_errors = (ValueError, json.JSONDecodeError)
-    
+
     with pytest.raises(expected_errors):
         from_json("invalid json")
 
@@ -252,10 +252,11 @@ def test_from_json_trailing_commas_error() -> None:
     """Test that trailing commas cause errors (strict JSON)."""
     try:
         import msgspec
+
         expected_errors = (ValueError, json.JSONDecodeError, msgspec.DecodeError)
     except ImportError:
         expected_errors = (ValueError, json.JSONDecodeError)
-        
+
     with pytest.raises(expected_errors):
         from_json('{"key": "value",}')
 

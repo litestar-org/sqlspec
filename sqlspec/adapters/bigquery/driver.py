@@ -463,6 +463,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         # Create a temporary config with STATIC parameter style for literal rendering
         from sqlspec.core.parameters import ParameterStyle
+
         static_config = self.statement_config.replace(
             parameter_config=self.statement_config.parameter_config.replace(
                 default_execution_parameter_style=ParameterStyle.STATIC

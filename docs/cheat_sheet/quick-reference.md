@@ -5,15 +5,18 @@
 ## 🚨 CRITICAL UPDATES - Current Implementation
 
 ### Method Signature Changes (BREAKING)
+
 - **OLD**: `_extract_select_data()` and `_extract_execute_rowcount()`
 - **NEW**: `_get_selected_data()` and `_get_row_count()` ✅
 
 ### Enhanced Caching System (NEW)
+
 - Multi-tier caching with StatementConfig-aware cache keys
 - File cache with checksum validation providing 12x+ performance improvements
 - Analysis cache for pipeline step results
 
 ### Pipeline Architecture (ENHANCED)
+
 - SQLTransformContext for state management
 - compose_pipeline for efficient step composition
 - Enhanced StatementConfig.get_pipeline_steps() support
@@ -24,9 +27,9 @@
 
 ```python
 from typing import Union, Optional
-from sqlspec.statement.filters import StatementFilter
-from sqlspec.statement.sql import SQL, Statement, StatementConfig
-from sqlspec.statement.builder import QueryBuilder
+from sqlspec.core.filters import StatementFilter
+from sqlspec.core.statement import SQL, Statement, StatementConfig
+from sqlspec.builder import QueryBuilder
 from sqlspec.typing import StatementParameters, ModelDTOT
 
 # Execute without schema conversion
@@ -104,7 +107,7 @@ graph TD
 sql = SQL("SELECT * WHERE id = ?", 1)
 # Holds: AST, parameters, configuration
 # Returns: New instances on modification
-# Key methods: compile(), copy(), as_many(), as_script()
+# Key methods: compile(), copy(),   as_script()
 ```
 
 ### StatementConfig
@@ -127,7 +130,7 @@ StatementConfig(
 class SQLTransformContext:
     current_expression: exp.Expression     # Modified AST
     original_expression: exp.Expression    # Original AST
-    parameters: dict[str, Any]             # Extracted params
+    parameters: dict[str, Any]             # Extracted parameters
     dialect: str                           # Target dialect
     metadata: dict[str, Any]               # Step results
     driver_adapter: Any                    # Current driver instance
@@ -148,9 +151,9 @@ class SQLTransformContext:
 ```python
 from typing import Optional, Any
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.statement.sql import SQL, StatementConfig
-from sqlspec.statement.result import SQLResult
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core.result import SQLResult
 
 class MyDriver(SyncDriverAdapterBase):
     """Example driver implementation."""
@@ -202,19 +205,19 @@ class MyDriver(SyncDriverAdapterBase):
         return None  # Use standard execution
 
     # Abstract execution methods
-    def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+    def _execute_statement(self, cursor: Any, sql: str, prepared_parameters: Any) -> Any:
         """Execute single statement."""
-        cursor.execute(sql, prepared_params or ())
+        cursor.execute(sql, prepared_parameters or ())
 
-    def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+    def _execute_many(self, cursor: Any, sql: str, prepared_parameters: Any) -> Any:
         """Execute with multiple parameter sets."""
-        cursor.executemany(sql, prepared_params)
+        cursor.executemany(sql, prepared_parameters)
 
-    def _execute_script(self, cursor: Any, sql: str, prepared_params: Any, statement_config: StatementConfig) -> Any:
+    def _execute_script(self, cursor: Any, sql: str, prepared_parameters: Any, statement_config: StatementConfig) -> Any:
         """Execute script."""
         statements = self.split_script_statements(sql, statement_config)
         for stmt in statements:
-            cursor.execute(stmt, prepared_params or ())
+            cursor.execute(stmt, prepared_parameters or ())
 
     # Data extraction methods (CURRENT SIGNATURES)
     def _get_selected_data(self, cursor: Any) -> tuple[list[dict[str, Any]], list[str], int]:
@@ -385,7 +388,7 @@ uv run pytest tests/integration/test_adapter_adbc.py -xvs --tb=short
 |-------|-------|----------|
 | "parameter count mismatch" | Double processing | Remove `convert_parameter_sequence` |
 | "TypeError: 'int' object is not subscriptable" | Type lost | Check `_coerce_*` methods |
-| "NULL type mapping" | ADBC NULL params | Use AST transformation |
+| "NULL type mapping" | ADBC NULL parameters | Use AST transformation |
 | "COPY data invalid" | Parameter extraction | Skip COPY detection |
 
 ## Type Definitions
@@ -405,7 +408,7 @@ from sqlspec.typing import (
 Statement = Union[str, exp.Expression, SQL]
 
 # Filter types
-from sqlspec.statement.filters import StatementFilter
+from sqlspec.core.statement.filters import StatementFilter
 ```
 
 ### StatementFilter Protocol
@@ -420,14 +423,14 @@ class StatementFilter(ABC):
         ...
 
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
-        """Extract (positional_params, named_params) from filter."""
+        """Extract (positional_parameters, named_parameters) from filter."""
         return [], {}
 ```
 
 ### Common Filters
 
 ```python
-from sqlspec.statement.filters import (
+from sqlspec.core.statement.filters import (
     LimitOffsetFilter,     # .limit(10).offset(20)
     OrderByFilter,         # .order_by("name", "created_at DESC")
     InCollectionFilter,    # WHERE col IN (...)
@@ -472,7 +475,7 @@ def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[i
         return special_result
 
     # Step 2: Get compiled SQL with driver's parameter style
-    sql, params = self._get_compiled_sql(statement, self.statement_config)
+    sql, parameters = self._get_compiled_sql(statement, self.statement_config)
 
     # Step 3: Route to appropriate execution method
     if statement.is_script:
@@ -480,18 +483,18 @@ def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[i
             static_sql = self._prepare_script_sql(statement)
             result = self._execute_script(cursor, static_sql, None, self.statement_config)
         else:
-            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-            result = self._execute_script(cursor, sql, prepared_params, self.statement_config)
+            prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=False)
+            result = self._execute_script(cursor, sql, prepared_parameters, self.statement_config)
         return create_execution_result(result)
 
     elif statement.is_many:
-        prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=True)
-        result = self._execute_many(cursor, sql, prepared_params)
+        prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=True)
+        result = self._execute_many(cursor, sql, prepared_parameters)
         return create_execution_result(result)
 
     else:
-        prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-        result = self._execute_statement(cursor, sql, prepared_params)
+        prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=False)
+        result = self._execute_statement(cursor, sql, prepared_parameters)
         return create_execution_result(result)
 ```
 
@@ -505,13 +508,13 @@ def _try_special_handling(self, cursor: Any, statement: SQL) -> Optional[tuple[A
     """Return None for standard execution or result tuple for special handling."""
 
 # Core execution methods (CURRENT SIGNATURES)
-def _execute_statement(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+def _execute_statement(self, cursor: Any, sql: str, prepared_parameters: Any) -> Any:
     """Execute single statement."""
 
-def _execute_many(self, cursor: Any, sql: str, prepared_params: Any) -> Any:
+def _execute_many(self, cursor: Any, sql: str, prepared_parameters: Any) -> Any:
     """Execute with parameter batches."""
 
-def _execute_script(self, cursor: Any, sql: str, prepared_params: Any, statement_config: StatementConfig) -> Any:
+def _execute_script(self, cursor: Any, sql: str, prepared_parameters: Any, statement_config: StatementConfig) -> Any:
     """Execute multi-statement script."""
 
 # Data extraction methods (CURRENT SIGNATURES)
@@ -527,8 +530,8 @@ def _get_row_count(self, cursor: Any) -> int:
 **StatementConfig with ParameterStyleConfig:**
 
 ```python
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.statement.sql import StatementConfig
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import StatementConfig
 
 # Create parameter configuration
 parameter_config = ParameterStyleConfig(
@@ -562,8 +565,8 @@ statement_config = StatementConfig(
 
 ```python
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.statement.sql import StatementConfig
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import StatementConfig
 
 class SqliteDriver(SyncDriverAdapterBase):
     """Reference implementation for SQLite."""
@@ -595,14 +598,14 @@ class SqliteDriver(SyncDriverAdapterBase):
     def _try_special_handling(self, cursor, statement):
         return None  # No special operations for SQLite
 
-    def _execute_script(self, cursor, sql, prepared_params, statement_config):
+    def _execute_script(self, cursor, sql, prepared_parameters, statement_config):
         cursor.executescript(sql)  # Uses static compilation
 
-    def _execute_many(self, cursor, sql, prepared_params):
-        cursor.executemany(sql, prepared_params)
+    def _execute_many(self, cursor, sql, prepared_parameters):
+        cursor.executemany(sql, prepared_parameters)
 
-    def _execute_statement(self, cursor, sql, prepared_params):
-        cursor.execute(sql, prepared_params or ())
+    def _execute_statement(self, cursor, sql, prepared_parameters):
+        cursor.execute(sql, prepared_parameters or ())
 
     def _get_selected_data(self, cursor):
         """CURRENT SIGNATURE: Extract SELECT results."""
@@ -630,25 +633,25 @@ if statement.is_script:
 
 ```python
 if statement.is_script:
-    sql, params = statement.compile(placeholder_style=self.statement_config.parameter_config.default_parameter_style)
-    prepared_params = self._prepare_driver_parameters(params)
+    sql, parameters = statement.compile(placeholder_style=self.statement_config.parameter_config.default_parameter_style)
+    prepared_parameters = self._prepare_driver_parameters(parameters)
     statements = self._split_script_statements(sql, strip_trailing_semicolon=True)
     for stmt in statements:
         if stmt.strip():
-            cursor.execute(stmt, prepared_params or ())
+            cursor.execute(stmt, prepared_parameters or ())
 ```
 
 **BigQuery (job-based):**
 
 ```python
 if statement.is_script:
-    sql, params = statement.compile(placeholder_style=self.statement_config.parameter_config.default_parameter_style)
-    prepared_params = self._prepare_driver_parameters(params)
+    sql, parameters = statement.compile(placeholder_style=self.statement_config.parameter_config.default_parameter_style)
+    prepared_parameters = self._prepare_driver_parameters(parameters)
     statements = self._split_script_statements(sql)
     jobs = []
     for stmt in statements:
         if stmt.strip():
-            job = self._run_query_job(stmt, prepared_params)
+            job = self._run_query_job(stmt, prepared_parameters)
             jobs.append(job)
     cursor.jobs = jobs
 ```
@@ -720,10 +723,10 @@ def test_special_handling(driver):
 |---------|---------|----------|
 | Missing abstract methods | NotImplementedError at runtime | Implement all required abstract methods |
 | Wrong parameter processing | Type errors, parameter mismatches | Use prepare_driver_parameters() |
-| Incorrect execution result | Missing data extraction | Implement _get_selected_data() and _get_row_count() (CURRENT SIGNATURES) |
+| Incorrect execution result | Missing data extraction | Implement _get_selected_data() and_get_row_count() (CURRENT SIGNATURES) |
 | Script execution issues | Parameter embedding problems | Configure needs_static_script_compilation correctly |
 | Memory leaks | Growing memory usage | Implement proper cursor context managers |
-| Method signature errors | AttributeError on _extract_* methods | Use _get_selected_data and _get_row_count (current) |
+| Method signature errors | AttributeError on *extract** methods | Use _get_selected_data and_get_row_count (current) |
 
 ### Development Workflow
 

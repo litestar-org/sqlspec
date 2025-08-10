@@ -9,6 +9,7 @@ This document provides a detailed, in-depth analysis of how SQL statements and p
 The core of `sqlspec` is designed around a **single-pass processing pipeline** with **enhanced multi-tier caching**. A user's SQL input, whether a raw string or a `QueryBuilder` object, is converted into a `SQL` object. This object then flows through a series of transformations and validations via `SQLTransformContext` and `compose_pipeline` before being executed by a database-specific driver. The result is then packaged into a standardized `SQLResult` object.
 
 **Key Enhancements in Current Implementation:**
+
 - **Multi-tier caching system** providing 12x+ performance improvements
 - **SQLTransformContext** for state management through pipeline steps
 - **StatementConfig-aware processing** with cache key generation
@@ -45,11 +46,12 @@ When a `SQL` object is initialized, the following enhanced process occurs:
 1. **Statement Normalization**: The input (string, `QueryBuilder`, or `sqlglot` expression) is converted into a `sqlglot` expression tree via the `_to_expression` method. This creates the Abstract Syntax Tree (AST) that represents the SQL query.
 
 2. **Enhanced Parameter and Filter Processing**: Parameters and filters are processed and stored with type preservation:
-   - Positional arguments become `_positional_params` with `TypedParameter` support
-   - Keyword arguments become `_named_params` with enhanced type information
+   - Positional arguments become `_positional_parameters` with `TypedParameter` support
+   - Keyword arguments become `_named_parameters` with enhanced type information
    - `StatementFilter` objects are stored in `_filters` for later pipeline application
 
 3. **StatementConfig Integration**: A `StatementConfig` object controls all processing aspects:
+
    ```python
    StatementConfig(
        dialect="postgres",
@@ -98,6 +100,7 @@ Before execution, the `SQL` object undergoes comprehensive processing through th
 The `SQL.compile()` method triggers the enhanced processing pipeline:
 
 1. **Multi-Tier Caching Architecture**: The system now implements comprehensive caching at multiple levels:
+
    ```python
    # Cache types and their benefits:
    sql_cache: Dict[str, str]              # Compiled SQL strings (avoids recompilation)
@@ -108,6 +111,7 @@ The `SQL.compile()` method triggers the enhanced processing pipeline:
    ```
 
 2. **Enhanced Pipeline Execution**: The `_ensure_processed` method runs the advanced pipeline using `SQLTransformContext` and `compose_pipeline`:
+
    ```python
    context = SQLTransformContext(
        current_expression=expression,
@@ -132,6 +136,7 @@ The `SQL.compile()` method triggers the enhanced processing pipeline:
    - Pipeline steps can access configuration via `context.statement_config`
 
 4. **Enhanced Parameter Style Conversion**: The modernized parameter system provides:
+
    ```python
    # Advanced parameter configuration:
    ParameterStyleConfig(
@@ -150,6 +155,7 @@ The `SQL.compile()` method triggers the enhanced processing pipeline:
    - **Performance**: Type coercion results cached for identical input patterns
 
 5. **Pipeline Metadata Tracking**: Each step updates context metadata for debugging and optimization:
+
    ```python
    context.metadata.update({
        "parameterize_literals": "completed",
@@ -176,7 +182,7 @@ def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[i
         return special_result
 
     # Step 2: Get compiled SQL with driver's parameter style
-    sql, params = self._get_compiled_sql(statement, self.statement_config)
+    sql, parameters = self._get_compiled_sql(statement, self.statement_config)
 
     # Step 3: Route to appropriate execution method
     if statement.is_script:
@@ -184,14 +190,14 @@ def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[i
             static_sql = self._prepare_script_sql(statement)
             result = self._execute_script(cursor, static_sql, None, self.statement_config)
         else:
-            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-            result = self._execute_script(cursor, sql, prepared_params, self.statement_config)
+            prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=False)
+            result = self._execute_script(cursor, sql, prepared_parameters, self.statement_config)
     elif statement.is_many:
-        prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=True)
-        result = self._execute_many(cursor, sql, prepared_params)
+        prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=True)
+        result = self._execute_many(cursor, sql, prepared_parameters)
     else:
-        prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-        result = self._execute_statement(cursor, sql, prepared_params)
+        prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=False)
+        result = self._execute_statement(cursor, sql, prepared_parameters)
 
     return create_execution_result(result)
 ```
@@ -203,15 +209,15 @@ def _try_special_handling(self, cursor, statement):
     """Hook for database-specific operations (COPY, bulk ops, etc.)."""
     return None  # Use standard execution
 
-def _execute_statement(self, cursor, sql, prepared_params):
+def _execute_statement(self, cursor, sql, prepared_parameters):
     """Execute single statement."""
-    cursor.execute(sql, prepared_params or ())
+    cursor.execute(sql, prepared_parameters or ())
 
-def _execute_many(self, cursor, sql, prepared_params):
+def _execute_many(self, cursor, sql, prepared_parameters):
     """Execute with parameter batches."""
-    cursor.executemany(sql, prepared_params)
+    cursor.executemany(sql, prepared_parameters)
 
-def _execute_script(self, cursor, sql, prepared_params, statement_config):
+def _execute_script(self, cursor, sql, prepared_parameters, statement_config):
     """Execute multi-statement script."""
     cursor.executescript(sql)  # Uses static compilation
 
@@ -270,7 +276,7 @@ def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[i
         return special_result
 
     # 2. Get compiled SQL with driver's parameter style
-    sql, params = self._get_compiled_sql(statement, self.statement_config)
+    sql, parameters = self._get_compiled_sql(statement, self.statement_config)
 
     # 3. Route to appropriate execution method
     if statement.is_script:
@@ -278,14 +284,14 @@ def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[i
             static_sql = self._prepare_script_sql(statement)
             result = self._execute_script(cursor, static_sql, None, self.statement_config)
         else:
-            prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-            result = self._execute_script(cursor, sql, prepared_params, self.statement_config)
+            prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=False)
+            result = self._execute_script(cursor, sql, prepared_parameters, self.statement_config)
     elif statement.is_many:
-        prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=True)
-        result = self._execute_many(cursor, sql, prepared_params)
+        prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=True)
+        result = self._execute_many(cursor, sql, prepared_parameters)
     else:
-        prepared_params = self.prepare_driver_parameters(params, self.statement_config, is_many=False)
-        result = self._execute_statement(cursor, sql, prepared_params)
+        prepared_parameters = self.prepare_driver_parameters(parameters, self.statement_config, is_many=False)
+        result = self._execute_statement(cursor, sql, prepared_parameters)
 
     return create_execution_result(result)
 ```
@@ -294,41 +300,41 @@ def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[i
 
 - **Parameter Style**: `qmark` (`?`)
 - **Special Features**:
-  - Native `executescript()` support with `needs_static_script_compilation=True`
-  - No special handling required (`_try_special_handling` returns `None`)
-  - Simple cursor management with context managers
+    - Native `executescript()` support with `needs_static_script_compilation=True`
+    - No special handling required (`_try_special_handling` returns `None`)
+    - Simple cursor management with context managers
 - **Implementation**: This is the cleanest reference implementation, closely following the enhanced base driver protocols.
 
 ### Psycopg (`sqlspec.adapters.psycopg`) - PostgreSQL Adapter
 
 - **Parameter Style**: `pyformat` (`%(name)s` for named, `%s` for positional)
 - **Special Features**:
-  - COPY operation support via `_try_special_handling`
-  - Connection pool integration
-  - Enhanced async support with `AsyncDriverAdapterBase`
-  - Script execution via statement splitting (no native `executescript`)
+    - COPY operation support via `_try_special_handling`
+    - Connection pool integration
+    - Enhanced async support with `AsyncDriverAdapterBase`
+    - Script execution via statement splitting (no native `executescript`)
 - **Enhanced Capabilities**: Leverages PostgreSQL-specific features like JSONB, arrays, and bulk operations.
 
 ### ADBC (`sqlspec.adapters.adbc`) - Arrow Database Connectivity
 
 - **Parameter Style**: Varies by underlying ADBC driver
-  - PostgreSQL: `numeric` (`$1`, `$2`)
-  - SQLite: `qmark` (`?`)
+    - PostgreSQL: `numeric` (`$1`, `$2`)
+    - SQLite: `qmark` (`?`)
 - **Special Features**:
-  - Apache Arrow integration for high-performance data transfer
-  - Enhanced type system with Arrow schema mapping
-  - NULL parameter handling via custom pipeline steps
-  - `ArrowResult` class for Arrow table results
+    - Apache Arrow integration for high-performance data transfer
+    - Enhanced type system with Arrow schema mapping
+    - NULL parameter handling via custom pipeline steps
+    - `ArrowResult` class for Arrow table results
 - **Enhanced Capabilities**: Optimized for analytical workloads with columnar data formats.
 
 ### BigQuery (`sqlspec.adapters.bigquery`) - Cloud Analytics
 
 - **Parameter Style**: `named_at` (`@param_name`)
 - **Special Features**:
-  - Job-based execution model
-  - Query parameter arrays and structs
-  - Dataset and table reference handling
-  - Enhanced retry logic for job completion
+    - Job-based execution model
+    - Query parameter arrays and structs
+    - Dataset and table reference handling
+    - Enhanced retry logic for job completion
 - **Enhanced Capabilities**: Massively parallel processing with cloud-native optimizations.
 
 ### Async Driver Enhancements
@@ -336,28 +342,32 @@ def _perform_execute(self, cursor: Any, statement: SQL) -> tuple[Any, Optional[i
 All async drivers inherit from `AsyncDriverAdapterBase` and follow the same enhanced template method pattern:
 
 #### AsyncPG (`sqlspec.adapters.asyncpg`)
+
 - **Parameter Style**: `numeric` (`$1`, `$2`)
 - **Special Features**:
-  - Connection pool management
-  - Prepared statement caching
-  - Enhanced type conversion for PostgreSQL types
-  - Pipeline integration with async context management
+    - Connection pool management
+    - Prepared statement caching
+    - Enhanced type conversion for PostgreSQL types
+    - Pipeline integration with async context management
 
 #### AsyncMy (`sqlspec.adapters.asyncmy`)
+
 - **Parameter Style**: `pyformat` (`%s`)
 - **Special Features**:
-  - MySQL-specific type handling
-  - Charset and collation support
-  - Enhanced error handling for MySQL-specific errors
+    - MySQL-specific type handling
+    - Charset and collation support
+    - Enhanced error handling for MySQL-specific errors
 
 #### AIOSQLite (`sqlspec.adapters.aiosqlite`)
+
 - **Parameter Style**: `qmark` (`?`)
 - **Special Features**:
-  - Thread pool execution for blocking SQLite operations
-  - WAL mode optimization
-  - Enhanced file I/O with async context managers
+    - Thread pool execution for blocking SQLite operations
+    - WAL mode optimization
+    - Enhanced file I/O with async context managers
 
 **Core Async Pattern**: All async methods follow the same flow as sync drivers but with `async/await`:
+
 ```python
 async def execute(self, statement, /, *parameters, **kwargs) -> SQLResult:
     async with self._get_connection() as connection:
@@ -370,10 +380,11 @@ async def execute(self, statement, /, *parameters, **kwargs) -> SQLResult:
 To add support for a new database using the enhanced architecture:
 
 ### 1. Create Driver Class
+
 ```python
 from sqlspec.driver import SyncDriverAdapterBase  # or AsyncDriverAdapterBase
-from sqlspec.parameters import ParameterStyle, ParameterStyleConfig
-from sqlspec.statement.sql import StatementConfig
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import StatementConfig
 
 class MyDatabaseDriver(SyncDriverAdapterBase):
     dialect = "mydatabase"
@@ -400,6 +411,7 @@ class MyDatabaseDriver(SyncDriverAdapterBase):
 ```
 
 ### 2. Implement Required Methods (CURRENT SIGNATURES)
+
 ```python
 # Context management
 def with_cursor(self, connection):
@@ -417,13 +429,13 @@ def _try_special_handling(self, cursor, statement):
     return None
 
 # Execution methods (template method pattern)
-def _execute_statement(self, cursor, sql, prepared_params):
-    cursor.execute(sql, prepared_params or ())
+def _execute_statement(self, cursor, sql, prepared_parameters):
+    cursor.execute(sql, prepared_parameters or ())
 
-def _execute_many(self, cursor, sql, prepared_params):
-    cursor.executemany(sql, prepared_params)
+def _execute_many(self, cursor, sql, prepared_parameters):
+    cursor.executemany(sql, prepared_parameters)
 
-def _execute_script(self, cursor, sql, prepared_params, statement_config):
+def _execute_script(self, cursor, sql, prepared_parameters, statement_config):
     # Handle based on needs_static_script_compilation
     if statement_config.parameter_config.needs_static_script_compilation:
         cursor.executescript(sql)  # If database supports it
@@ -431,7 +443,7 @@ def _execute_script(self, cursor, sql, prepared_params, statement_config):
         statements = self.split_script_statements(sql)
         for stmt in statements:
             if stmt.strip():
-                cursor.execute(stmt, prepared_params or ())
+                cursor.execute(stmt, prepared_parameters or ())
 
 # Data extraction methods (CURRENT SIGNATURES)
 def _get_selected_data(self, cursor):
@@ -447,6 +459,7 @@ def _get_row_count(self, cursor):
 ```
 
 ### 3. Create Configuration Class
+
 ```python
 from sqlspec.config import DatabaseConfig
 
@@ -461,6 +474,7 @@ class MyDatabaseConfig(DatabaseConfig):
 ### 4. Leverage Enhanced Features
 
 By following this pattern, you automatically get:
+
 - **Multi-tier caching system** with 12x+ performance improvements
 - **Enhanced parameter processing** with type preservation
 - **SQLTransformContext pipeline** with security validation
@@ -473,6 +487,7 @@ By following this pattern, you automatically get:
 ### 5. Testing Your Driver
 
 Use the enhanced testing patterns:
+
 ```python
 def test_my_database_driver():
     config = MyDatabaseConfig(

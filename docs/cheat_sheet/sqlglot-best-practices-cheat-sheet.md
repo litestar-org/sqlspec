@@ -341,15 +341,15 @@ ast.transform(detect_tautologies)
 ### 3. Safe Parameter Binding
 
 ```python
-def bind_parameters(ast, params):
+def bind_parameters(ast, parameters):
     """Safely bind parameters to placeholders."""
     param_index = 0
 
     def replace_placeholder(node):
         nonlocal param_index
         if isinstance(node, exp.Placeholder):
-            if param_index < len(params):
-                value = params[param_index]
+            if param_index < len(parameters):
+                value = parameters[param_index]
                 param_index += 1
                 if isinstance(value, str):
                     return exp.Literal.string(value)
@@ -413,14 +413,14 @@ def remove_comments(sql):
 
 ```python
 # Current SQLSpec pipeline architecture uses SQLTransformContext
-from sqlspec.statement.pipeline import SQLTransformContext
+from sqlspec.core.statement.pipeline import SQLTransformContext
 
 def custom_pipeline_step(context: SQLTransformContext) -> SQLTransformContext:
     """Example pipeline step using current architecture."""
 
     # Access expression and parameters
     expression = context.current_expression
-    params = context.parameters
+    parameters = context.parameters
 
     # Apply transformation
     transformed_expr = expression.transform(your_transformer)
@@ -432,7 +432,7 @@ def custom_pipeline_step(context: SQLTransformContext) -> SQLTransformContext:
     return context
 
 # Use with compose_pipeline
-from sqlspec.statement.pipeline import compose_pipeline
+from sqlspec.core.statement.pipeline import compose_pipeline
 pipeline = compose_pipeline([
     parameterize_literals_step,
     custom_pipeline_step,
@@ -472,7 +472,7 @@ def cached_transformation_step(context: SQLTransformContext) -> SQLTransformCont
 ### 1. Expression Parsing Utilities (UPDATED)
 
 ```python
-# Based on current sqlspec/statement/builder/_parsing_utils.py
+# Based on current sqlspec/builder/_parsing_utils.py
 def parse_column_expression(column_input):
     """Parse column input handling various formats."""
     if isinstance(column_input, exp.Expression):
@@ -765,7 +765,7 @@ When adding new SQLGlot patterns to SQLSpec:
 6. **Document security implications** for new transformations and validation steps
 7. **Consider performance impact** of AST operations in pipeline context
 8. **Validate against multiple SQL dialects** using current testing patterns
-9. **Use current method signatures** - _get_selected_data() and _get_row_count()
+9. **Use current method signatures** - _get_selected_data() and_get_row_count()
 10. **Respect StatementConfig** - Ensure all transformations are configuration-aware
 
 ### Pipeline Integration Checklist
