@@ -1,38 +1,23 @@
 from collections.abc import Generator
 from contextlib import contextmanager
-from enum import Enum
-from typing import Any, Optional, Union, cast
+from typing import Any, Optional, Union
 
 __all__ = (
-    "ExtraParameterError",
     "FileNotFoundInStorageError",
     "ImproperConfigurationError",
     "IntegrityError",
     "MissingDependencyError",
-    "MissingParameterError",
     "MultipleResultsFoundError",
     "NotFoundError",
-    "ParameterError",
-    "ParameterStyleMismatchError",
-    "PipelineExecutionError",
-    "QueryError",
     "RepositoryError",
-    "RiskLevel",
     "SQLBuilderError",
-    "SQLCompilationError",
     "SQLConversionError",
     "SQLFileNotFoundError",
     "SQLFileParseError",
-    "SQLFileParsingError",
-    "SQLInjectionError",
     "SQLParsingError",
     "SQLSpecError",
-    "SQLTransformationError",
-    "SQLValidationError",
     "SerializationError",
     "StorageOperationFailedError",
-    "UnknownParameterError",
-    "UnsafeSQLError",
 )
 
 
@@ -87,30 +72,12 @@ class BackendNotRegisteredError(SQLSpecError):
         super().__init__(f"Storage backend '{backend_key}' is not registered. Please register it before use.")
 
 
-class SQLLoadingError(SQLSpecError):
-    """Issues loading referenced SQL file."""
-
-    def __init__(self, message: Optional[str] = None) -> None:
-        if message is None:
-            message = "Issues loading referenced SQL file."
-        super().__init__(message)
-
-
 class SQLParsingError(SQLSpecError):
     """Issues parsing SQL statements."""
 
     def __init__(self, message: Optional[str] = None) -> None:
         if message is None:
             message = "Issues parsing SQL statement."
-        super().__init__(message)
-
-
-class SQLFileParsingError(SQLSpecError):
-    """Issues parsing SQL files."""
-
-    def __init__(self, message: Optional[str] = None) -> None:
-        if message is None:
-            message = "Issues parsing SQL files."
         super().__init__(message)
 
 
@@ -123,15 +90,6 @@ class SQLBuilderError(SQLSpecError):
         super().__init__(message)
 
 
-class SQLCompilationError(SQLSpecError):
-    """Issues Compiling SQL statements."""
-
-    def __init__(self, message: Optional[str] = None) -> None:
-        if message is None:
-            message = "Issues compiling SQL statement."
-        super().__init__(message)
-
-
 class SQLConversionError(SQLSpecError):
     """Issues converting SQL statements."""
 
@@ -139,165 +97,6 @@ class SQLConversionError(SQLSpecError):
         if message is None:
             message = "Issues converting SQL statement."
         super().__init__(message)
-
-
-# -- SQL Validation Errors --
-class RiskLevel(Enum):
-    """SQL risk assessment levels."""
-
-    SKIP = 1
-    SAFE = 2
-    LOW = 3
-    MEDIUM = 4
-    HIGH = 5
-    CRITICAL = 6
-
-    def __str__(self) -> str:
-        """String representation.
-
-        Returns:
-            Lowercase name of the style.
-        """
-        return self.name.lower()
-
-    def __lt__(self, other: "RiskLevel") -> bool:  # pragma: no cover
-        """Less than comparison for ordering."""
-        if not isinstance(other, RiskLevel):
-            return NotImplemented
-        return self.value < other.value
-
-    def __le__(self, other: "RiskLevel") -> bool:  # pragma: no cover
-        """Less than or equal comparison for ordering."""
-        if not isinstance(other, RiskLevel):
-            return NotImplemented
-        return self.value <= other.value
-
-    def __gt__(self, other: "RiskLevel") -> bool:  # pragma: no cover
-        """Greater than comparison for ordering."""
-        if not isinstance(other, RiskLevel):
-            return NotImplemented
-        return self.value > other.value
-
-    def __ge__(self, other: "RiskLevel") -> bool:  # pragma: no cover
-        """Greater than or equal comparison for ordering."""
-        if not isinstance(other, RiskLevel):
-            return NotImplemented
-        return self.value >= other.value
-
-
-class SQLValidationError(SQLSpecError):
-    """Base class for SQL validation errors."""
-
-    sql: Optional[str]
-    risk_level: RiskLevel
-
-    def __init__(self, message: str, sql: Optional[str] = None, risk_level: RiskLevel = RiskLevel.MEDIUM) -> None:
-        """Initialize with SQL context and risk level."""
-        detail_message = message
-        if sql is not None:
-            detail_message = f"{message}\nSQL: {sql}"
-        super().__init__(detail=detail_message)
-        self.sql = sql
-        self.risk_level = risk_level
-
-
-class SQLTransformationError(SQLSpecError):
-    """Base class for SQL transformation errors."""
-
-    sql: Optional[str]
-
-    def __init__(self, message: str, sql: Optional[str] = None) -> None:
-        """Initialize with SQL context and risk level."""
-        detail_message = message
-        if sql is not None:
-            detail_message = f"{message}\nSQL: {sql}"
-        super().__init__(detail=detail_message)
-        self.sql = sql
-
-
-class SQLInjectionError(SQLValidationError):
-    """Raised when potential SQL injection is detected."""
-
-    pattern: Optional[str]
-
-    def __init__(self, message: str, sql: Optional[str] = None, pattern: Optional[str] = None) -> None:
-        """Initialize with injection pattern context."""
-        detail_message = message
-        if pattern:
-            detail_message = f"{message} (Pattern: {pattern})"
-        super().__init__(detail_message, sql, RiskLevel.CRITICAL)
-        self.pattern = pattern
-
-
-class UnsafeSQLError(SQLValidationError):
-    """Raised when unsafe SQL constructs are detected."""
-
-    construct: Optional[str]
-
-    def __init__(self, message: str, sql: Optional[str] = None, construct: Optional[str] = None) -> None:
-        """Initialize with unsafe construct context."""
-        detail_message = message
-        if construct:
-            detail_message = f"{message} (Construct: {construct})"
-        super().__init__(detail_message, sql, RiskLevel.HIGH)
-        self.construct = construct
-
-
-# -- SQL Query Errors --
-class QueryError(SQLSpecError):
-    """Base class for Query errors."""
-
-
-# -- SQL Parameter Errors --
-class ParameterError(SQLSpecError):
-    """Base class for parameter-related errors."""
-
-    sql: Optional[str]
-
-    def __init__(self, message: str, sql: Optional[str] = None) -> None:
-        """Initialize with optional SQL context."""
-        detail_message = message
-        if sql is not None:
-            detail_message = f"{message}\nSQL: {sql}"
-        super().__init__(detail=detail_message)
-        self.sql = sql
-
-
-class UnknownParameterError(ParameterError):
-    """Raised when encountering unknown parameter syntax."""
-
-
-class MissingParameterError(ParameterError):
-    """Raised when required parameters are missing."""
-
-
-class ExtraParameterError(ParameterError):
-    """Raised when extra parameters are provided."""
-
-
-class ParameterStyleMismatchError(SQLSpecError):
-    """Error when parameter style doesn't match SQL placeholder style.
-
-    This exception is raised when there's a mismatch between the parameter type
-    (dictionary, tuple, etc.) and the placeholder style in the SQL query
-    (named, positional, etc.).
-    """
-
-    sql: Optional[str]
-
-    def __init__(self, message: Optional[str] = None, sql: Optional[str] = None) -> None:
-        final_message = message
-        if final_message is None:
-            final_message = (
-                "Parameter style mismatch: dictionary parameters provided but no named placeholders found in SQL."
-            )
-
-        detail_message = final_message
-        if sql:
-            detail_message = f"{final_message}\nSQL: {sql}"
-
-        super().__init__(detail=detail_message)
-        self.sql = sql
 
 
 class ImproperConfigurationError(SQLSpecError):
@@ -398,43 +197,3 @@ def wrap_exceptions(
             raise
         msg = "An error occurred during the operation."
         raise RepositoryError(detail=msg) from exc
-
-
-class PipelineExecutionError(SQLSpecError):
-    """Rich error information for pipeline execution failures."""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        operation_index: "Optional[int]" = None,
-        failed_operation: "Optional[Any]" = None,
-        partial_results: "Optional[list[Any]]" = None,
-        driver_error: "Optional[Exception]" = None,
-    ) -> None:
-        """Initialize the pipeline execution error.
-
-        Args:
-            message: Error message describing the failure
-            operation_index: Index of the operation that failed
-            failed_operation: The PipelineOperation that failed
-            partial_results: Results from operations that succeeded before the failure
-            driver_error: Original exception from the database driver
-        """
-        super().__init__(message)
-        self.operation_index = operation_index
-        self.failed_operation = failed_operation
-        self.partial_results = partial_results or []
-        self.driver_error = driver_error
-
-    def get_failed_sql(self) -> "Optional[str]":
-        """Get the SQL that failed for debugging."""
-        if self.failed_operation and hasattr(self.failed_operation, "sql"):
-            return cast("str", self.failed_operation.sql.to_sql())
-        return None
-
-    def get_failed_parameters(self) -> "Optional[Any]":
-        """Get the parameters that failed."""
-        if self.failed_operation and hasattr(self.failed_operation, "original_parameters"):
-            return self.failed_operation.original_parameters
-        return None

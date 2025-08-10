@@ -33,15 +33,6 @@ from sqlspec.core import (
 )
 from sqlspec.core import filters as filters
 from sqlspec.driver import AsyncDriverAdapterBase, ExecutionResult, SyncDriverAdapterBase
-from sqlspec.exceptions import (
-    NotFoundError,
-    ParameterError,
-    SQLBuilderError,
-    SQLFileNotFoundError,
-    SQLFileParseError,
-    SQLParsingError,
-    SQLValidationError,
-)
 from sqlspec.loader import SQLFile, SQLFileLoader
 from sqlspec.typing import ConnectionT, DictRow, ModelDTOT, ModelT, RowT, StatementParameters, SupportedSchemaModel
 
@@ -65,24 +56,17 @@ __all__ = (
     "Merge",
     "ModelDTOT",
     "ModelT",
-    "NotFoundError",
     "ParameterConverter",
-    "ParameterError",
     "ParameterProcessor",
     "ParameterStyle",
     "ParameterStyleConfig",
     "QueryBuilder",
     "RowT",
-    "SQLBuilderError",
     "SQLFactory",
     "SQLFile",
     "SQLFileLoader",
-    "SQLFileNotFoundError",
-    "SQLFileParseError",
-    "SQLParsingError",
     "SQLResult",
     "SQLSpec",
-    "SQLValidationError",
     "Select",
     "Statement",
     "StatementConfig",

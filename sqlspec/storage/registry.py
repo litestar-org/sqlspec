@@ -8,7 +8,7 @@ intelligent scheme-based routing, and named aliases for common configurations.
 import logging
 import re
 from pathlib import Path
-from typing import Any, Final, Optional, TypeVar, Union, cast
+from typing import Any, Final, Optional, Union, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -20,8 +20,6 @@ from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED
 __all__ = ("StorageRegistry", "storage_registry")
 
 logger = logging.getLogger(__name__)
-
-BackendT = TypeVar("BackendT", bound=ObjectStoreProtocol)
 
 
 SCHEME_REGEX: Final = re.compile(r"([a-zA-Z0-9+.-]+)://")

@@ -4,13 +4,12 @@ This module provides protocols that can be used for static type checking
 and runtime isinstance() checks, replacing defensive hasattr() patterns.
 """
 
-from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Protocol, Union, runtime_checkable
 
 from typing_extensions import Self
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
+    from collections.abc import AsyncIterator, Iterator
     from pathlib import Path
 
     from sqlglot import exp
@@ -19,13 +18,6 @@ if TYPE_CHECKING:
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = (
-    # Database Connection Protocols
-    "AsyncCloseableConnectionProtocol",
-    "AsyncCopyCapableConnectionProtocol",
-    "AsyncPipelineCapableDriverProtocol",
-    "AsyncTransactionCapableConnectionProtocol",
-    "AsyncTransactionMixin",
-    "AsyncTransactionStateConnectionProtocol",
     "BytesConvertibleProtocol",
     "DictProtocol",
     "FilterAppenderProtocol",
@@ -36,7 +28,6 @@ __all__ = (
     "HasOffsetProtocol",
     "HasOrderByProtocol",
     "HasParameterBuilderProtocol",
-    "HasRiskLevelProtocol",
     "HasSQLGlotExpressionProtocol",
     "HasSQLMethodProtocol",
     "HasToStatementProtocol",
@@ -48,12 +39,6 @@ __all__ = (
     "ParameterValueProtocol",
     "SQLBuilderProtocol",
     "SelectBuilderProtocol",
-    "SyncCloseableConnectionProtocol",
-    "SyncCopyCapableConnectionProtocol",
-    "SyncPipelineCapableDriverProtocol",
-    "SyncTransactionCapableConnectionProtocol",
-    "SyncTransactionMixin",
-    "SyncTransactionStateConnectionProtocol",
     "WithMethodProtocol",
 )
 
@@ -172,16 +157,6 @@ class ParameterValueProtocol(Protocol):
 
 
 @runtime_checkable
-class HasRiskLevelProtocol(Protocol):
-    """Protocol for objects with a risk_level attribute."""
-
-    @property
-    def risk_level(self) -> Any:
-        """Get the risk level of this object."""
-        ...
-
-
-@runtime_checkable
 class DictProtocol(Protocol):
     """Protocol for objects with a __dict__ attribute."""
 
@@ -203,152 +178,6 @@ class ObjectStoreItemProtocol(Protocol):
 
     path: str
     key: "Optional[str]"
-
-
-@runtime_checkable
-class SyncTransactionCapableConnectionProtocol(Protocol):
-    """Protocol for sync connections that support transactions."""
-
-    def commit(self) -> None:
-        """Commit the current transaction."""
-        ...
-
-    def rollback(self) -> None:
-        """Rollback the current transaction."""
-        ...
-
-
-@runtime_checkable
-class AsyncTransactionCapableConnectionProtocol(Protocol):
-    """Protocol for async connections that support transactions."""
-
-    async def commit(self) -> None:
-        """Commit the current transaction."""
-        ...
-
-    async def rollback(self) -> None:
-        """Rollback the current transaction."""
-        ...
-
-
-@runtime_checkable
-class SyncTransactionStateConnectionProtocol(SyncTransactionCapableConnectionProtocol, Protocol):
-    """Protocol for sync connections that can report transaction state."""
-
-    def in_transaction(self) -> bool:
-        """Check if connection is currently in a transaction."""
-        ...
-
-    def begin(self) -> None:
-        """Begin a new transaction."""
-        ...
-
-
-@runtime_checkable
-class AsyncTransactionStateConnectionProtocol(AsyncTransactionCapableConnectionProtocol, Protocol):
-    """Protocol for async connections that can report transaction state."""
-
-    def in_transaction(self) -> bool:
-        """Check if connection is currently in a transaction."""
-        ...
-
-    async def begin(self) -> None:
-        """Begin a new transaction."""
-        ...
-
-
-@runtime_checkable
-class SyncTransactionMixin(SyncTransactionStateConnectionProtocol, Protocol):
-    """Explicit synchronous transaction management interface."""
-
-    @contextmanager
-    def transaction(self) -> "Generator[SyncTransactionMixin, None, None]":
-        """Context manager for transaction handling."""
-        self.begin()
-        try:
-            yield self
-            self.commit()
-        except Exception:
-            self.rollback()
-            raise
-
-
-@runtime_checkable
-class AsyncTransactionMixin(AsyncTransactionStateConnectionProtocol, Protocol):
-    """Explicit asynchronous transaction management interface."""
-
-    @asynccontextmanager
-    async def transaction(self) -> "AsyncGenerator[AsyncTransactionMixin, None]":
-        """Async context manager for transaction handling."""
-        await self.begin()
-        try:
-            yield self
-            await self.commit()
-        except Exception:
-            await self.rollback()
-            raise
-
-
-@runtime_checkable
-class SyncCloseableConnectionProtocol(Protocol):
-    """Protocol for sync connections that can be closed."""
-
-    def close(self) -> None:
-        """Close the connection."""
-        ...
-
-
-@runtime_checkable
-class AsyncCloseableConnectionProtocol(Protocol):
-    """Protocol for async connections that can be closed."""
-
-    async def close(self) -> None:
-        """Close the connection."""
-        ...
-
-
-@runtime_checkable
-class SyncCopyCapableConnectionProtocol(Protocol):
-    """Protocol for sync connections that support COPY operations."""
-
-    def copy_from(self, table: str, file: Any, **kwargs: Any) -> None:
-        """Copy data from file to table."""
-        ...
-
-    def copy_to(self, table: str, file: Any, **kwargs: Any) -> None:
-        """Copy data from table to file."""
-        ...
-
-
-@runtime_checkable
-class AsyncCopyCapableConnectionProtocol(Protocol):
-    """Protocol for async connections that support COPY operations."""
-
-    async def copy_from(self, table: str, file: Any, **kwargs: Any) -> None:
-        """Copy data from file to table."""
-        ...
-
-    async def copy_to(self, table: str, file: Any, **kwargs: Any) -> None:
-        """Copy data from table to file."""
-        ...
-
-
-@runtime_checkable
-class SyncPipelineCapableDriverProtocol(Protocol):
-    """Protocol for sync drivers that support native pipeline execution."""
-
-    def _execute_pipeline_native(self, operations: list[Any], **options: Any) -> list[Any]:
-        """Execute pipeline operations natively."""
-        ...
-
-
-@runtime_checkable
-class AsyncPipelineCapableDriverProtocol(Protocol):
-    """Protocol for async drivers that support native pipeline execution."""
-
-    async def _execute_pipeline_native(self, operations: list[Any], **options: Any) -> list[Any]:
-        """Execute pipeline operations natively."""
-        ...
 
 
 @runtime_checkable

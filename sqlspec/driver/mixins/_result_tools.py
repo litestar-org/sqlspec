@@ -31,7 +31,6 @@ from sqlspec.utils.type_guards import is_attrs_schema, is_dataclass, is_msgspec_
 __all__ = ("_DEFAULT_TYPE_DECODERS", "_default_msgspec_deserializer")
 
 
-WINDOWS_PATH_MIN_LENGTH = 3
 logger = logging.getLogger(__name__)
 _DEFAULT_TYPE_DECODERS: list[tuple[Callable[[Any], bool], Callable[[Any, Any], Any]]] = [
     (lambda x: x is UUID, lambda t, v: t(v.hex)),

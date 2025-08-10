@@ -35,11 +35,6 @@ if TYPE_CHECKING:
     from sqlspec.builder import Select
     from sqlspec.core.filters import LimitOffsetFilter, StatementFilter
     from sqlspec.protocols import (
-        AsyncCloseableConnectionProtocol,
-        AsyncCopyCapableConnectionProtocol,
-        AsyncPipelineCapableDriverProtocol,
-        AsyncTransactionCapableConnectionProtocol,
-        AsyncTransactionStateConnectionProtocol,
         BytesConvertibleProtocol,
         DictProtocol,
         FilterAppenderProtocol,
@@ -48,18 +43,12 @@ if TYPE_CHECKING:
         HasLimitProtocol,
         HasOffsetProtocol,
         HasOrderByProtocol,
-        HasRiskLevelProtocol,
         HasSQLMethodProtocol,
         HasWhereProtocol,
         IndexableRow,
         ObjectStoreItemProtocol,
         ParameterValueProtocol,
         SQLBuilderProtocol,
-        SyncCloseableConnectionProtocol,
-        SyncCopyCapableConnectionProtocol,
-        SyncPipelineCapableDriverProtocol,
-        SyncTransactionCapableConnectionProtocol,
-        SyncTransactionStateConnectionProtocol,
         WithMethodProtocol,
     )
     from sqlspec.typing import SupportedSchemaModel
@@ -88,17 +77,11 @@ __all__ = (
     "has_parameter_value",
     "has_parent_attribute",
     "has_query_builder_parameters",
-    "has_risk_level",
     "has_sql_method",
     "has_sqlglot_expression",
     "has_this_attribute",
     "has_to_statement",
     "has_with_method",
-    "is_async_closeable_connection",
-    "is_async_copy_capable",
-    "is_async_pipeline_capable_driver",
-    "is_async_transaction_capable",
-    "is_async_transaction_state_capable",
     "is_attrs_instance",
     "is_attrs_instance_with_field",
     "is_attrs_instance_without_field",
@@ -134,11 +117,6 @@ __all__ = (
     "is_select_builder",
     "is_statement_filter",
     "is_string_literal",
-    "is_sync_closeable_connection",
-    "is_sync_copy_capable",
-    "is_sync_pipeline_capable_driver",
-    "is_sync_transaction_capable",
-    "is_sync_transaction_state_capable",
     "is_typed_parameter",
     "schema_dump",
     "supports_limit",
@@ -670,146 +648,6 @@ def has_dict_attribute(obj: Any) -> "TypeGuard[DictProtocol]":
     return isinstance(obj, DictProtocol)
 
 
-def is_sync_transaction_capable(obj: Any) -> "TypeGuard[SyncTransactionCapableConnectionProtocol]":
-    """Check if a connection supports sync transactions.
-
-    Args:
-        obj: Connection object to check.
-
-    Returns:
-        True if the connection has commit and rollback methods.
-    """
-    from sqlspec.protocols import SyncTransactionCapableConnectionProtocol
-
-    return isinstance(obj, SyncTransactionCapableConnectionProtocol)
-
-
-def is_async_transaction_capable(obj: Any) -> "TypeGuard[AsyncTransactionCapableConnectionProtocol]":
-    """Check if a connection supports async transactions.
-
-    Args:
-        obj: Connection object to check.
-
-    Returns:
-        True if the connection has async commit and rollback methods.
-    """
-    from sqlspec.protocols import AsyncTransactionCapableConnectionProtocol
-
-    return isinstance(obj, AsyncTransactionCapableConnectionProtocol)
-
-
-def is_sync_transaction_state_capable(obj: Any) -> "TypeGuard[SyncTransactionStateConnectionProtocol]":
-    """Check if a connection can report sync transaction state.
-
-    Args:
-        obj: Connection object to check.
-
-    Returns:
-        True if the connection has in_transaction and begin methods.
-    """
-    from sqlspec.protocols import SyncTransactionStateConnectionProtocol
-
-    return isinstance(obj, SyncTransactionStateConnectionProtocol)
-
-
-def is_async_transaction_state_capable(obj: Any) -> "TypeGuard[AsyncTransactionStateConnectionProtocol]":
-    """Check if a connection can report async transaction state.
-
-    Args:
-        obj: Connection object to check.
-
-    Returns:
-        True if the connection has in_transaction and async begin methods.
-    """
-    from sqlspec.protocols import AsyncTransactionStateConnectionProtocol
-
-    return isinstance(obj, AsyncTransactionStateConnectionProtocol)
-
-
-def is_sync_closeable_connection(obj: Any) -> "TypeGuard[SyncCloseableConnectionProtocol]":
-    """Check if a connection can be closed synchronously.
-
-    Args:
-        obj: Connection object to check.
-
-    Returns:
-        True if the connection has a close method.
-    """
-    from sqlspec.protocols import SyncCloseableConnectionProtocol
-
-    return isinstance(obj, SyncCloseableConnectionProtocol)
-
-
-def is_async_closeable_connection(obj: Any) -> "TypeGuard[AsyncCloseableConnectionProtocol]":
-    """Check if a connection can be closed asynchronously.
-
-    Args:
-        obj: Connection object to check.
-
-    Returns:
-        True if the connection has an async close method.
-    """
-    from sqlspec.protocols import AsyncCloseableConnectionProtocol
-
-    return isinstance(obj, AsyncCloseableConnectionProtocol)
-
-
-def is_sync_copy_capable(obj: Any) -> "TypeGuard[SyncCopyCapableConnectionProtocol]":
-    """Check if a connection supports sync COPY operations.
-
-    Args:
-        obj: Connection object to check.
-
-    Returns:
-        True if the connection has copy_from and copy_to methods.
-    """
-    from sqlspec.protocols import SyncCopyCapableConnectionProtocol
-
-    return isinstance(obj, SyncCopyCapableConnectionProtocol)
-
-
-def is_async_copy_capable(obj: Any) -> "TypeGuard[AsyncCopyCapableConnectionProtocol]":
-    """Check if a connection supports async COPY operations.
-
-    Args:
-        obj: Connection object to check.
-
-    Returns:
-        True if the connection has async copy_from and copy_to methods.
-    """
-    from sqlspec.protocols import AsyncCopyCapableConnectionProtocol
-
-    return isinstance(obj, AsyncCopyCapableConnectionProtocol)
-
-
-def is_sync_pipeline_capable_driver(obj: Any) -> "TypeGuard[SyncPipelineCapableDriverProtocol]":
-    """Check if a driver supports sync native pipeline execution.
-
-    Args:
-        obj: Driver object to check.
-
-    Returns:
-        True if the driver has _execute_pipeline_native method.
-    """
-    from sqlspec.protocols import SyncPipelineCapableDriverProtocol
-
-    return isinstance(obj, SyncPipelineCapableDriverProtocol)
-
-
-def is_async_pipeline_capable_driver(obj: Any) -> "TypeGuard[AsyncPipelineCapableDriverProtocol]":
-    """Check if a driver supports async native pipeline execution.
-
-    Args:
-        obj: Driver object to check.
-
-    Returns:
-        True if the driver has async _execute_pipeline_native method.
-    """
-    from sqlspec.protocols import AsyncPipelineCapableDriverProtocol
-
-    return isinstance(obj, AsyncPipelineCapableDriverProtocol)
-
-
 # Dataclass utility functions
 
 
@@ -971,13 +809,6 @@ def has_parameter_value(obj: Any) -> "TypeGuard[ParameterValueProtocol]":
     from sqlspec.protocols import ParameterValueProtocol
 
     return isinstance(obj, ParameterValueProtocol)
-
-
-def has_risk_level(obj: Any) -> "TypeGuard[HasRiskLevelProtocol]":
-    """Check if an object has a risk_level attribute."""
-    from sqlspec.protocols import HasRiskLevelProtocol
-
-    return isinstance(obj, HasRiskLevelProtocol)
 
 
 def supports_where(obj: Any) -> "TypeGuard[HasWhereProtocol]":
