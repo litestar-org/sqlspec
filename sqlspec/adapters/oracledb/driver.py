@@ -466,6 +466,11 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         """
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
+        # Enhanced parameter validation for executemany
+        if not prepared_parameters:
+            msg = "execute_many requires parameters"
+            raise ValueError(msg)
+
         await cursor.executemany(sql, prepared_parameters)
 
         # Calculate affected rows based on parameter count for Oracle

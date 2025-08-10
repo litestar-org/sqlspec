@@ -270,7 +270,7 @@ class ParameterStyleConfig:
         type_coercion_map: Optional[dict[type, Callable[[Any], Any]]] = None,
         has_native_list_expansion: bool = False,
         output_transformer: Optional[Callable[[str, Any], tuple[str, Any]]] = None,
-        needs_static_script_compilation: bool = True,
+        needs_static_script_compilation: bool = False,
         allow_mixed_parameter_styles: bool = False,
         preserve_parameter_format: bool = False,
         remove_null_parameters: bool = False,
@@ -918,6 +918,25 @@ class ParameterProcessor:
         needs_sqlglot_normalization = self._needs_sqlglot_normalization(param_info, dialect)
         needs_execution_conversion = self._needs_execution_conversion(param_info, config)
 
+        # Check for static script compilation (embed parameters directly in SQL)
+        # IMPORTANT: Do NOT embed parameters for execute_many operations - they need separate parameter sets
+        needs_static_embedding = (
+            config.needs_static_script_compilation and param_info and parameters and not is_many
+        )  # Disable static embedding for execute_many
+
+        if needs_static_embedding:
+            # For static script compilation, embed parameters directly and return
+            # Apply type coercion first if configured
+            coerced_params = parameters
+            if config.type_coercion_map and parameters:
+                coerced_params = self._apply_type_coercions(parameters, config.type_coercion_map, is_many)
+
+            static_sql, static_params = self._converter.convert_placeholder_style(
+                sql, coerced_params, ParameterStyle.STATIC, is_many
+            )
+            self._cache[cache_key] = (static_sql, static_params)
+            return static_sql, static_params
+
         # 3. Fast path: Skip processing if no transformation needed
         if (
             not needs_sqlglot_normalization
@@ -1003,10 +1022,13 @@ class ParameterProcessor:
         current_styles = {p.style for p in param_info}
 
         # Check if mixed styles are explicitly allowed AND the execution environment supports multiple styles
-        if (config.allow_mixed_parameter_styles and len(current_styles) > 1 and
-            config.supported_execution_parameter_styles is not None and
-            len(config.supported_execution_parameter_styles) > 1 and
-            all(style in config.supported_execution_parameter_styles for style in current_styles)):
+        if (
+            config.allow_mixed_parameter_styles
+            and len(current_styles) > 1
+            and config.supported_execution_parameter_styles is not None
+            and len(config.supported_execution_parameter_styles) > 1
+            and all(style in config.supported_execution_parameter_styles for style in current_styles)
+        ):
             return False
 
         # Check for mixed styles - if not allowed, force conversion to single style

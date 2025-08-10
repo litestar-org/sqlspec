@@ -495,7 +495,7 @@ class SQL:
             processor = SQLProcessor(self._statement_config)
 
             # Single-pass compilation that handles both parsing and parameter processing
-            compiled_result = processor.compile(self._raw_sql, current_parameters)
+            compiled_result = processor.compile(self._raw_sql, current_parameters, is_many=self._is_many)
 
             # Create processed state from compiled result
             self._processed_state = ProcessedState(

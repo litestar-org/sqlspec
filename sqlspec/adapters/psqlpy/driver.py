@@ -108,11 +108,6 @@ class PsqlpyCursor:
         """Exit cursor context with proper cleanup."""
         _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
         self._in_use = False
-        if hasattr(self.connection, "back_to_pool"):
-            try:
-                self.connection.back_to_pool()
-            except Exception as e:
-                logger.debug("Failed to return psqlpy connection to pool: %s", e)
 
     def is_in_use(self) -> bool:
         """Check if cursor is currently in use."""

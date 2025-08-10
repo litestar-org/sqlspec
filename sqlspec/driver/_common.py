@@ -402,6 +402,10 @@ class CommonDriverAttributesMixin:
         Returns:
             Parameters with TypedParameter objects unwrapped to primitive values
         """
+        # For static compilation, preserve None parameters to indicate no parameters needed
+        if parameters is None and statement_config.parameter_config.needs_static_script_compilation:
+            return None
+
         if not parameters:
             return []
 
@@ -547,7 +551,26 @@ class CommonDriverAttributesMixin:
                 return sql, prepared_parameters
         # Use the driver's statement_config for proper parameter style conversion
         # This ensures the SQL is compiled with the driver's parameter style requirements
-        compiled = SQLProcessor(statement_config).compile(statement._raw_sql or statement.sql, statement.parameters)
+
+        # For static compilation, if the statement already has processed SQL (different from raw), use it
+        # This preserves static parameter embedding that was already done
+        source_sql = statement.sql
+        source_params = statement.parameters
+        if (
+            statement_config.parameter_config.needs_static_script_compilation
+            and hasattr(statement, "_raw_sql")
+            and statement._raw_sql != statement.sql
+            and statement.parameters is None
+        ):
+            # Static compilation was already applied, use the processed SQL
+            source_sql = statement.sql
+            source_params = statement.parameters
+        else:
+            # Use raw SQL for normal processing
+            source_sql = statement._raw_sql or statement.sql
+            source_params = statement.parameters
+
+        compiled = SQLProcessor(statement_config).compile(source_sql, source_params, is_many=statement.is_many)
         sql, parameters = compiled.compiled_sql, compiled.execution_parameters
 
         if cache_key is not None:
@@ -569,15 +592,17 @@ class CommonDriverAttributesMixin:
         that affect SQL compilation, preventing cache contamination between
         different compilation contexts. Enhanced with core processing.
         """
-        context_hash = hash((
-            config.parameter_config.hash(),
-            config.dialect,
-            statement.is_script,
-            statement.is_many,
-            flatten_single_parameters,
-            bool(config.parameter_config.output_transformer),
-            bool(config.parameter_config.needs_static_script_compilation),
-        ))
+        context_hash = hash(
+            (
+                config.parameter_config.hash(),
+                config.dialect,
+                statement.is_script,
+                statement.is_many,
+                flatten_single_parameters,
+                bool(config.parameter_config.output_transformer),
+                bool(config.parameter_config.needs_static_script_compilation),
+            )
+        )
 
         # Create simple hash for core.statement.SQL (different from old SQL type)
         # Convert parameters to hashable representation safely

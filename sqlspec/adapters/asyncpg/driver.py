@@ -231,17 +231,16 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         Uses core module optimization for statement parsing and parameter processing.
         Handles PostgreSQL-specific script execution requirements.
         """
-        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        sql, _ = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         successful_count = 0
         last_result = None
 
         for stmt in statements:
-            # Execute each statement individually for better error handling
-            result = (
-                await cursor.execute(stmt, *prepared_parameters) if prepared_parameters else await cursor.execute(stmt)
-            )
+            # Execute each statement individually
+            # If parameters were embedded (static style), prepared_parameters will be None/empty
+            result = await cursor.execute(stmt)
             last_result = result
             successful_count += 1
 

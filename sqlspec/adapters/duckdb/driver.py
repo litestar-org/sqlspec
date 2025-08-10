@@ -53,7 +53,7 @@ duckdb_statement_config = StatementConfig(
         },
         type_coercion_map={},
         has_native_list_expansion=True,
-        needs_static_script_compilation=True,
+        needs_static_script_compilation=False,
         preserve_parameter_format=True,
         allow_mixed_parameter_styles=False,  # DuckDB doesn't support mixed styles in single statement
     ),

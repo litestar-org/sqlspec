@@ -190,7 +190,7 @@ class SQLProcessor:
         self._cache_hits = 0
         self._cache_misses = 0
 
-    def compile(self, sql: str, parameters: Any = None) -> CompiledSQL:
+    def compile(self, sql: str, parameters: Any = None, is_many: bool = False) -> CompiledSQL:
         """Single-pass compilation with integrated caching.
 
         This is the main compilation method that replaces the current multi-pass
@@ -205,12 +205,13 @@ class SQLProcessor:
         Args:
             sql: Raw SQL string for compilation
             parameters: Parameter values in any format
+            is_many: Whether this is for execute_many operation
 
         Returns:
             CompiledSQL with all information for execution
         """
         if not self._config.enable_caching:
-            return self._compile_uncached(sql, parameters)
+            return self._compile_uncached(sql, parameters, is_many)
 
         cache_key = self._make_cache_key(sql, parameters)
 
@@ -224,7 +225,7 @@ class SQLProcessor:
 
         # Cache miss - compile and cache result
         self._cache_misses += 1
-        result = self._compile_uncached(sql, parameters)
+        result = self._compile_uncached(sql, parameters, is_many)
 
         # Cache management - remove oldest if at capacity
         if len(self._cache) >= self._max_cache_size:
@@ -233,7 +234,7 @@ class SQLProcessor:
         self._cache[cache_key] = result
         return result
 
-    def _compile_uncached(self, sql: str, parameters: Any) -> CompiledSQL:
+    def _compile_uncached(self, sql: str, parameters: Any, is_many: bool = False) -> CompiledSQL:
         """Single-pass compilation without caching.
 
         This method implements the core single-pass compilation logic:
@@ -246,6 +247,7 @@ class SQLProcessor:
         Args:
             sql: Raw SQL string
             parameters: Parameter values
+            is_many: Whether this is for execute_many operation
 
         Returns:
             CompiledSQL result
@@ -253,14 +255,21 @@ class SQLProcessor:
         try:
             # Phase 1: Process parameters using integrated processor
             processed_sql, processed_params = self._parameter_processor.process(
-                sql=sql, parameters=parameters, config=self._config.parameter_config
+                sql=sql, parameters=parameters, config=self._config.parameter_config, is_many=is_many
             )
 
             # Phase 2: Get SQLGlot-compatible SQL for parsing and operation detection
             dialect_str = str(self._config.dialect) if self._config.dialect else None
-            sqlglot_sql, _ = self._parameter_processor._get_sqlglot_compatible_sql(
-                sql, parameters, self._config.parameter_config, dialect_str
-            )
+
+            # If static compilation was applied (processed_params is None), use the processed_sql
+            # for both execution and SQLGlot parsing, as parameters are already embedded
+            if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
+                sqlglot_sql = processed_sql
+            else:
+                # Use original SQL for SQLGlot parsing with parameters preserved
+                sqlglot_sql, _ = self._parameter_processor._get_sqlglot_compatible_sql(
+                    sql, parameters, self._config.parameter_config, dialect_str
+                )
 
             # Initialize variables that might be modified later
             final_parameters = processed_params
@@ -284,9 +293,13 @@ class SQLProcessor:
                 operation_type = "EXECUTE"
 
             # Phase 3: Apply final transformations (always work with AST when available)
-            final_sql, final_params = self._apply_final_transformations(
-                expression, processed_sql, final_parameters, dialect_str
-            )
+            # For static compilation, preserve the processed SQL and parameters as-is
+            if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
+                final_sql, final_params = processed_sql, processed_params
+            else:
+                final_sql, final_params = self._apply_final_transformations(
+                    expression, processed_sql, final_parameters, dialect_str
+                )
 
             # Phase 5: Create immutable result
             return CompiledSQL(

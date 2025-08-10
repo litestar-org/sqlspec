@@ -295,11 +295,7 @@ def validator() -> ParameterValidator:
         ("SELECT * FROM users WHERE id = %(id)s", 1, [ParameterStyle.NAMED_PYFORMAT]),
         ("SELECT * FROM users WHERE name = %s", 1, [ParameterStyle.POSITIONAL_PYFORMAT]),
         ("SELECT * FROM users WHERE id = @id", 1, [ParameterStyle.NAMED_AT]),
-        (
-            "SELECT * FROM users WHERE id = $1",
-            1,
-            [ParameterStyle.NAMED_DOLLAR],
-        ),  # NOTE: Current regex treats $1 as named_dollar
+        ("SELECT * FROM users WHERE id = $1", 1, [ParameterStyle.NUMERIC]),  # PostgreSQL numeric parameter style
         ("SELECT * FROM users WHERE name = $name", 1, [ParameterStyle.NAMED_DOLLAR]),
         ("SELECT * FROM users WHERE id = :1", 1, [ParameterStyle.POSITIONAL_COLON]),
     ],
@@ -373,8 +369,8 @@ def test_extract_parameters_complex_sql(validator: ParameterValidator) -> None:
     assert ParameterStyle.NAMED_PYFORMAT in styles
     assert ParameterStyle.QMARK in styles
     assert ParameterStyle.NAMED_AT in styles
-    # NOTE: Current regex treats $1 as NAMED_DOLLAR, not NUMERIC
-    assert ParameterStyle.NAMED_DOLLAR in styles
+    # $1 is correctly treated as NUMERIC in PostgreSQL
+    assert ParameterStyle.NUMERIC in styles
 
 
 def test_parameter_position_tracking(validator: ParameterValidator) -> None:
@@ -1012,9 +1008,8 @@ def test_dollar_numeric_vs_named_disambiguation() -> None:
     dollar_1_param = next(p for p in parameters if p.placeholder_text == "$1")
     dollar_username_param = next(p for p in parameters if p.placeholder_text == "$username")
 
-    # NOTE: Current regex implementation treats both $1 and $username as NAMED_DOLLAR
-    # This should be fixed to distinguish NUMERIC ($1) from NAMED_DOLLAR ($username)
-    assert dollar_1_param.style == ParameterStyle.NAMED_DOLLAR
+    # The regex correctly distinguishes NUMERIC ($1) from NAMED_DOLLAR ($username)
+    assert dollar_1_param.style == ParameterStyle.NUMERIC
     assert dollar_username_param.style == ParameterStyle.NAMED_DOLLAR
     assert dollar_1_param.name == "1"
     assert dollar_username_param.name == "username"
