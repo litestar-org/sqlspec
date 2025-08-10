@@ -65,15 +65,15 @@ async def test_psqlpy_advanced_postgresql_types(psqlpy_session: PsqlpyDriver) ->
         """
         INSERT INTO psqlpy_types_test
         (json_col, jsonb_col, array_col, uuid_col, inet_col, timestamp_col)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES ($1::json, $2::jsonb, $3::integer[], $4::uuid, $5::inet, $6::timestamptz)
         RETURNING id
     """,
         (
-            '{"name": "test", "value": 42}',  # JSON
-            '{"type": "jsonb", "fast": true}',  # JSONB
+            {"name": "test", "value": 42},  # JSON
+            {"type": "jsonb", "fast": True},  # JSONB
             [1, 2, 3, 4, 5],  # Array
             "550e8400-e29b-41d4-a716-446655440000",  # UUID
-            "192.168.1.1/24",  # INET
+            "192.168.1.1",  # INET (without CIDR)
             "2023-01-01T12:00:00+00:00",  # Timestamp with timezone
         ),
     )

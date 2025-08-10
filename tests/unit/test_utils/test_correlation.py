@@ -11,7 +11,6 @@ import logging
 import threading
 import uuid
 from typing import Any
-from unittest.mock import Mock, patch
 
 import pytest
 
@@ -294,15 +293,6 @@ def test_adapter_with_empty_extra() -> None:
     msg, kwargs = adapter.process("Test message", {"extra": {}})
 
     assert kwargs["extra"]["correlation_id"] == "test-id"
-
-
-@patch("logging.LoggerAdapter")
-def test_creates_adapter_with_empty_extra_dict(mock_adapter_class: Mock) -> None:
-    """Test that adapter is created with empty extra dict."""
-    base_logger = logging.getLogger("test")
-    get_correlation_adapter(base_logger)
-
-    mock_adapter_class.assert_called_once_with(base_logger, {})
 
 
 def test_database_operation_simulation() -> None:

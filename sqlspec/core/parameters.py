@@ -661,9 +661,19 @@ class ParameterConverter:
 
         # Build a mapping of unique parameters to their ordinals
         # This handles repeated parameters like $1, $2, $2 correctly
+        # Special case: QMARK (?) parameters converting to NUMERIC ($1, $2) need sequential numbering
+        param_styles = {p.style for p in param_info}
+        use_sequential_for_qmark = param_styles == {ParameterStyle.QMARK} and target_style == ParameterStyle.NUMERIC
+
         unique_params: dict[str, int] = {}
         for param in param_info:
-            param_key = param.placeholder_text
+            if use_sequential_for_qmark and param.style == ParameterStyle.QMARK:
+                # For QMARK → NUMERIC conversion, each ? gets sequential numbering
+                param_key = f"{param.placeholder_text}_{param.ordinal}"
+            else:
+                # For all other cases, group by placeholder text
+                param_key = param.placeholder_text
+
             if param_key not in unique_params:
                 unique_params[param_key] = len(unique_params)
 
@@ -677,8 +687,13 @@ class ParameterConverter:
                 ParameterStyle.POSITIONAL_PYFORMAT,
                 ParameterStyle.POSITIONAL_COLON,
             }:
-                # Use the ordinal from our unique parameter mapping
-                ordinal_to_use = unique_params[param.placeholder_text]
+                # Use the appropriate key for the unique parameter mapping
+                if use_sequential_for_qmark and param.style == ParameterStyle.QMARK:
+                    param_key = f"{param.placeholder_text}_{param.ordinal}"
+                else:
+                    param_key = param.placeholder_text
+
+                ordinal_to_use = unique_params[param_key]
                 new_placeholder = generator(ordinal_to_use)
             else:  # Named styles
                 param_name = param.name or f"param_{param.ordinal}"

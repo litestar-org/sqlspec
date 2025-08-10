@@ -152,9 +152,9 @@ async def test_parameters_in_crud_operations(psqlpy_session: PsqlpyDriver) -> No
 async def test_parameters_with_sql_object(psqlpy_session: PsqlpyDriver) -> None:
     """Test parameter handling with CORE_ROUND_3 SQL objects."""
     # Create SQL object with parameters
-    sql_obj = SQL("INSERT INTO test_table (name) VALUES ($1) RETURNING id, name")
+    sql_obj = SQL("INSERT INTO test_table (name) VALUES ($1) RETURNING id, name", ("sql_object_test",))
 
-    result = await psqlpy_session.execute(sql_obj, ("sql_object_test",))
+    result = await psqlpy_session.execute(sql_obj)
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
@@ -162,8 +162,8 @@ async def test_parameters_with_sql_object(psqlpy_session: PsqlpyDriver) -> None:
     assert result.data[0]["id"] is not None
 
     # Test SQL object with multiple parameters
-    multi_sql = SQL("SELECT $1::text as msg, $2::int as num, $3::bool as flag")
-    multi_result = await psqlpy_session.execute(multi_sql, ("test", 123, False))
+    multi_sql = SQL("SELECT $1::text as msg, $2::int as num, $3::bool as flag", ("test", 123, False))
+    multi_result = await psqlpy_session.execute(multi_sql)
     assert isinstance(multi_result, SQLResult)
     assert multi_result.data is not None
     assert multi_result.data[0]["msg"] == "test"

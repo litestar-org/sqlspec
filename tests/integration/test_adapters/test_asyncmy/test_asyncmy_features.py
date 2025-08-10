@@ -112,16 +112,16 @@ async def test_asyncmy_mysql_specific_sql_features(asyncmy_pooled_session: Async
 
     # Test INSERT ... ON DUPLICATE KEY UPDATE
     await driver.execute(
-        "INSERT INTO mysql_features (id, name, value, status) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value) + ?",
+        "INSERT INTO mysql_features (id, name, value, status) VALUES (?, ?, ?, ?) AS new_vals ON DUPLICATE KEY UPDATE value = new_vals.value + ?, status = new_vals.status",
         (1, "duplicate_test", 100, "active", 50),
     )
 
     # Insert same ID again to trigger the ON DUPLICATE KEY UPDATE
     await driver.execute(
-        "INSERT INTO mysql_features (id, name, value, status) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value) + ?",
+        "INSERT INTO mysql_features (id, name, value, status) VALUES (?, ?, ?, ?) AS new_vals ON DUPLICATE KEY UPDATE value = new_vals.value + ?, status = new_vals.status",
         (1, "duplicate_test_updated", 200, "inactive", 50),
     )
-
+    await driver.commit()
     # Verify the update occurred (200 + 50 = 250)
     result = await driver.execute("SELECT name, value, status FROM mysql_features WHERE id = ?", (1,))
     row = result.get_data()[0]

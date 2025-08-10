@@ -194,6 +194,9 @@ async def test_execute_script(psqlpy_session: PsqlpyDriver) -> None:
 
 async def test_multiple_positional_parameters(psqlpy_session: PsqlpyDriver) -> None:
     """Test handling multiple positional parameters in a single SQL statement."""
+    # Clean the table first to ensure predictable test results
+    await psqlpy_session.execute("DELETE FROM test_table WHERE name LIKE 'param%'")
+
     # Insert multiple records using execute_many
     insert_sql = "INSERT INTO test_table (name) VALUES (?)"
     parameters_list = [("param1",), ("param2",)]
@@ -207,9 +210,7 @@ async def test_multiple_positional_parameters(psqlpy_session: PsqlpyDriver) -> N
     )
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    # Note: psqlpy's execute_many may not insert all rows correctly
-    # At least one row should be inserted
-    assert len(select_result.data) >= 1
+    assert len(select_result.data) == 2
 
     # Test with IN clause
     in_result = await psqlpy_session.execute("SELECT * FROM test_table WHERE name IN (?, ?)", ("param1", "param2"))
@@ -448,8 +449,7 @@ async def test_postgresql_specific_features(psqlpy_session: PsqlpyDriver) -> Non
 
     # Test PostgreSQL data types
     type_result = await psqlpy_session.execute(
-        "SELECT $1::json as json_col, $2::uuid as uuid_col",
-        ('{"key": "value"}', "550e8400-e29b-41d4-a716-446655440000"),
+        "SELECT $1::json as json_col, $2::uuid as uuid_col", ({"key": "value"}, "550e8400-e29b-41d4-a716-446655440000")
     )
     assert isinstance(type_result, SQLResult)
     assert type_result.data is not None

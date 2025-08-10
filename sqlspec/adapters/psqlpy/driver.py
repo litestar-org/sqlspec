@@ -16,6 +16,7 @@ Architecture Features:
 """
 
 import datetime
+import decimal
 import re
 import uuid
 from contextlib import asynccontextmanager
@@ -51,8 +52,10 @@ psqlpy_statement_config = StatementConfig(
         default_execution_parameter_style=ParameterStyle.NUMERIC,
         supported_execution_parameter_styles={ParameterStyle.NUMERIC},
         type_coercion_map={
-            tuple: list  # Convert tuples to lists for PostgreSQL array compatibility
-            # Psqlpy handles most types natively, including dict->JSON conversion
+            tuple: list,  # Convert tuples to lists for PostgreSQL array compatibility
+            decimal.Decimal: float,  # Convert Decimal to float for psqlpy
+            # String type detection happens in driver layer for performance
+            # UUID, datetime, and dict types are handled natively by psqlpy
         },
         has_native_list_expansion=True,
         needs_static_script_compilation=False,
@@ -69,51 +72,221 @@ psqlpy_statement_config = StatementConfig(
 # PostgreSQL command tag parsing for rows affected extraction
 PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 
-# UUID format regex - matches both with and without dashes
-UUID_REGEX: Final[re.Pattern[str]] = re.compile(
-    r"^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$", re.IGNORECASE
+# Enhanced regex for PostgreSQL special types detection with named groups
+# This comprehensive pattern identifies various PostgreSQL data types that need special handling
+SPECIAL_TYPE_REGEX: Final[re.Pattern[str]] = re.compile(
+    r"""
+    ^(?:
+        # UUID formats (with or without dashes, case-insensitive)
+        (?P<uuid>
+            [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12} |  # Standard UUID
+            [0-9a-f]{32}                                                      # UUID without dashes
+        ) |
+
+        # IP Addresses
+        (?P<ipv4>
+            (?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}               # IPv4 octets
+            (?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)                        # Last octet
+            (?:/(?:3[0-2]|[12]?[0-9]))?                                      # Optional CIDR
+        ) |
+
+        (?P<ipv6>
+            (?:                                                               # IPv6 variants
+                (?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4} |                        # Full form
+                (?:[0-9a-f]{1,4}:){1,7}: |                                  # Compressed with ::
+                :(?::[0-9a-f]{1,4}){1,7} |                                  # Compressed start
+                (?:[0-9a-f]{1,4}:){1,6}:[0-9a-f]{1,4} |                    # Mixed forms
+                ::(?:ffff:)?(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}  # IPv4-mapped
+                (?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)
+            )
+            (?:/(?:12[0-8]|1[01][0-9]|[1-9]?[0-9]))?                        # Optional prefix
+        ) |
+
+        # MAC Addresses
+        (?P<mac>
+            (?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2} |                             # Colon/dash separated
+            [0-9a-f]{12}                                                     # No separator
+        ) |
+
+        # Date/Time formats
+        (?P<iso_datetime>
+            \d{4}-\d{2}-\d{2}                                               # Date part
+            [T\s]                                                            # Separator
+            \d{2}:\d{2}:\d{2}                                               # Time part
+            (?:\.\d{1,6})?                                                  # Optional microseconds
+            (?:Z|[+-]\d{2}:?\d{2})?                                         # Optional timezone
+        ) |
+
+        (?P<iso_date>
+            \d{4}-\d{2}-\d{2}                                               # ISO date only
+        ) |
+
+        (?P<iso_time>
+            \d{2}:\d{2}:\d{2}                                               # Time only
+            (?:\.\d{1,6})?                                                  # Optional microseconds
+            (?:Z|[+-]\d{2}:?\d{2})?                                         # Optional timezone
+        ) |
+
+        # PostgreSQL Interval format
+        (?P<interval>
+            (?:                                                               # Interval components
+                (?:\d+\s+(?:year|month|day|hour|minute|second)s?\s*)+       # Named units
+            ) |
+            (?:                                                               # ISO 8601 duration
+                P(?:\d+Y)?(?:\d+M)?(?:\d+D)?                                # Date part
+                (?:T(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?                # Time part
+            )
+        ) |
+
+        # JSON/JSONB (basic detection)
+        (?P<json>
+            \{[\s\S]*\} |                                                   # Object
+            \[[\s\S]*\]                                                     # Array
+        ) |
+
+        # PostgreSQL Array literals
+        (?P<pg_array>
+            \{                                                               # Opening brace
+            (?:[^{}]+|\{[^{}]*\})*                                          # Array contents
+            \}                                                               # Closing brace
+        )
+    )$
+    """,
+    re.VERBOSE | re.IGNORECASE,
 )
 
 
-def _convert_psqlpy_parameters(value: Any) -> Any:
-    """Convert parameters for Psqlpy compatibility.
+def _detect_postgresql_type(value: str) -> Optional[str]:
+    """Detect PostgreSQL data type from string value using enhanced regex.
 
-    This function performs minimal, safe conversions that are needed for psqlpy.
-    Most type conversions should be handled by PostgreSQL's explicit casting in SQL.
-
-    Conservative approach:
-    - Convert Decimal objects to float (psqlpy doesn't handle Decimal directly)
-    - Convert datetime ISO strings to datetime objects (psqlpy needs datetime objects)
-    - Convert tuple to list for PostgreSQL array compatibility
-    - Pass native Python objects that psqlpy can handle directly
+    Returns:
+        Type name if detected ('uuid', 'ipv4', 'ipv6', 'mac', 'iso_datetime', etc.)
+        None if no special type detected
     """
-    # Import decimal here to avoid top-level import issues
-    from decimal import Decimal
+    match = SPECIAL_TYPE_REGEX.match(value)
+    if not match:
+        return None
 
-    # Convert Decimal to float for psqlpy compatibility
-    if isinstance(value, Decimal):
-        return float(value)
+    # Return the name of the matched group
+    for group_name in [
+        "uuid",
+        "ipv4",
+        "ipv6",
+        "mac",
+        "iso_datetime",
+        "iso_date",
+        "iso_time",
+        "interval",
+        "json",
+        "pg_array",
+    ]:
+        if match.group(group_name):
+            return group_name
 
-    # Convert datetime ISO strings to datetime objects for psqlpy
-    if isinstance(value, str) and ("T" in value and ":" in value):
-        try:
-            # Try to parse as ISO datetime string
-            if "T" in value:
-                # Handle ISO format with timezone
-                return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            pass  # Not a valid datetime, keep as string
+    return None
 
-    # Convert tuple to list for PostgreSQL array compatibility
-    if isinstance(value, tuple):
-        return list(value)
 
-    # Native Python objects that psqlpy can handle directly
-    if isinstance(value, (dict, list, uuid.UUID, datetime.datetime, datetime.date)):
+def _convert_uuid(value: str) -> Any:
+    """Convert UUID string to UUID object."""
+    try:
+        # Handle both formats: with and without dashes
+        clean_uuid = value.replace("-", "").lower()
+        uuid_length = 32
+        if len(clean_uuid) == uuid_length:
+            # Reformat to standard UUID format if needed
+            formatted = f"{clean_uuid[:8]}-{clean_uuid[8:12]}-{clean_uuid[12:16]}-{clean_uuid[16:20]}-{clean_uuid[20:]}"
+            return uuid.UUID(formatted)
+        return uuid.UUID(value)
+    except (ValueError, AttributeError):
         return value
 
-    # Everything else (including strings) should be passed as-is
-    # PostgreSQL will handle type conversion based on SQL casting (::type)
+
+def _convert_iso_datetime(value: str) -> Any:
+    """Convert ISO datetime string to datetime object."""
+    try:
+        # Handle various datetime formats
+        normalized = value.replace("Z", "+00:00")
+        return datetime.datetime.fromisoformat(normalized)
+    except ValueError:
+        return value
+
+
+def _convert_iso_date(value: str) -> Any:
+    """Convert ISO date string to date object."""
+    try:
+        return datetime.date.fromisoformat(value)
+    except ValueError:
+        return value
+
+
+def _validate_json(value: str) -> str:
+    """Validate JSON string but keep as string for psqlpy."""
+    from sqlspec.utils.serializers import from_json
+
+    try:
+        from_json(value)  # Validate using utils serializer
+    except (ValueError, TypeError):
+        return value
+    return value  # psqlpy handles JSON strings
+
+
+def _passthrough(value: str) -> str:
+    """Pass value through unchanged."""
+    return value
+
+
+# Type conversion hash map for PostgreSQL types
+_PSQLPY_TYPE_CONVERTERS: dict[str, Any] = {
+    "uuid": _convert_uuid,
+    "iso_datetime": _convert_iso_datetime,
+    "iso_date": _convert_iso_date,
+    "iso_time": _passthrough,  # Let PostgreSQL handle time casting
+    "json": _validate_json,
+    "pg_array": _passthrough,  # PostgreSQL array literals handled as strings
+    "ipv4": _passthrough,  # Network addresses passed as strings
+    "ipv6": _passthrough,  # Network addresses passed as strings
+    "mac": _passthrough,  # MAC addresses passed as strings
+    "interval": _passthrough,  # Intervals passed as strings
+}
+
+
+def _convert_psqlpy_parameters(value: Any) -> Any:
+    """Convert parameters for Psqlpy compatibility using enhanced type detection.
+
+    This function performs intelligent type conversions based on detected PostgreSQL types.
+    Uses a hash map for O(1) type conversion dispatch. Works in conjunction with
+    the type_coercion_map for optimal performance - basic type coercion happens in
+    the core pipeline, while PostgreSQL-specific string type detection happens here.
+
+    Args:
+        value: Parameter value to convert
+
+    Returns:
+        Converted value suitable for psqlpy/PostgreSQL
+    """
+    # Handle string values with special PostgreSQL types
+    # This detection happens at the driver layer for performance reasons:
+    # - Only done when actually needed during execution
+    # - Avoids regex matching for non-string parameters
+    # - Allows for PostgreSQL-specific handling
+    if isinstance(value, str):
+        detected_type = _detect_postgresql_type(value)
+
+        if detected_type:
+            # Use hash map for O(1) lookup and conversion
+            converter = _PSQLPY_TYPE_CONVERTERS.get(detected_type)
+            if converter:
+                return converter(value)
+
+        # No special type detected, pass as-is
+        return value
+
+    # Note: tuple->list and Decimal->float conversions now happen in type_coercion_map
+    # Native Python objects that psqlpy handles directly
+    if isinstance(value, (dict, list, tuple, uuid.UUID, datetime.datetime, datetime.date)):
+        return value
+
+    # Everything else passed as-is
     return value
 
 
@@ -200,7 +373,11 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
     @asynccontextmanager
     async def handle_database_exceptions(self) -> "AsyncGenerator[None, None]":
-        """Handle psqlpy-specific exceptions with comprehensive error categorization."""
+        """Handle psqlpy-specific exceptions with comprehensive error categorization.
+
+        Yields:
+            None: Context manager yields nothing
+        """
         try:
             yield
         except Exception as e:
@@ -316,7 +493,11 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         await cursor.execute_many(sql, formatted_parameters)
 
-        return self.create_execution_result(cursor, rowcount_override=len(formatted_parameters), is_many_result=True)
+        # psqlpy execute_many returns None but guarantees atomicity
+        # All operations succeed or all fail, so we can trust the parameter count
+        rows_affected = len(formatted_parameters)
+
+        return self.create_execution_result(cursor, rowcount_override=rows_affected, is_many_result=True)
 
     async def _execute_statement(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement with enhanced data handling and performance optimization.

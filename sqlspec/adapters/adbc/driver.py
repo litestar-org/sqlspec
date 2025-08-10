@@ -21,18 +21,11 @@ import decimal
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional, cast
 
-try:
-    import pyarrow as pa
-
-    HAS_PYARROW = True
-except ImportError:
-    HAS_PYARROW = False
-
 from sqlspec.core.cache import get_cache_config
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig, TypedParameter
 from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.exceptions import SQLParsingError, SQLSpecError
+from sqlspec.exceptions import MissingDependencyError, SQLParsingError, SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 
@@ -93,12 +86,13 @@ def _transform_adbc_parameters_with_context(sql: str, parameters: Any) -> Any:
     preventing Arrow 'na' type mapping errors.
 
     Args:
-        sql: The SQL statement for context analysis
+        sql: The SQL statement for context analysis (currently unused, reserved for future SQL parsing)
         parameters: Parameters to transform
 
     Returns:
         Transformed parameters with proper Arrow type hints
     """
+    _ = sql  # Reserved for future SQL context analysis
     if not parameters:
         return parameters
 
@@ -119,25 +113,26 @@ def _apply_conservative_null_typing(parameters: Any) -> Any:
     Uses a strategy that tries to let PostgreSQL handle type inference while
     providing enough type information for Arrow to avoid 'na' type errors.
     """
-    if not HAS_PYARROW:
+    from sqlspec.typing import PYARROW_INSTALLED
+
+    if not PYARROW_INSTALLED:
         return parameters
 
-    if isinstance(parameters, (list, tuple)):
-        result = []
-        for param in parameters:
-            if param is None:
-                # Try using a NULL type that PostgreSQL can handle better
-                # Use a type that PostgreSQL treats as UNKNOWN
-                try:
-                    # Try using NULL with no specific type - might avoid 'na' issues
-                    result.append(pa.scalar(None))  # Let Arrow infer minimal type
-                except Exception:
-                    result.append(None)  # Fallback
-            else:
-                result.append(param)
-        return result
+    if not isinstance(parameters, (list, tuple)):
+        return parameters
 
-    return parameters
+    import pyarrow as pa
+
+    # Process list/tuple parameters
+    result = []
+    for param in parameters:
+        if param is None:
+            # Use a typed NULL that PostgreSQL can handle
+            # String type is safest default for unknown NULL values
+            result.append(pa.scalar(None, type=pa.string()))
+        else:
+            result.append(param)
+    return result
 
 
 def _transform_adbc_parameters(parameters: Any) -> Any:
@@ -163,29 +158,29 @@ def _create_typed_null_for_arrow(param_type: type) -> Any:
     Returns:
         PyArrow scalar with proper type, or None if PyArrow not available
     """
-    if not HAS_PYARROW:
+    from sqlspec.typing import PYARROW_INSTALLED
+
+    if not PYARROW_INSTALLED:
         return None
 
-    try:
-        # Map Python types to Arrow types
-        type_mapping = {
-            str: pa.string(),
-            int: pa.int64(),  # Use int64 for PostgreSQL INTEGER compatibility
-            float: pa.float64(),
-            bool: pa.bool_(),
-            bytes: pa.binary(),
-            list: pa.list_(pa.string()),  # Default to string list, might need refinement
-            tuple: pa.list_(pa.string()),  # Default to string list
-        }
+    import pyarrow as pa
 
-        arrow_type = type_mapping.get(param_type)
-        if arrow_type is not None:
-            return pa.scalar(None, type=arrow_type)
-    except Exception:
-        # If Arrow type creation fails, fall back to None
-        pass
+    # Map Python types to Arrow types for better type inference
+    type_mapping = {
+        str: pa.string(),
+        int: pa.int64(),
+        float: pa.float64(),
+        bool: pa.bool_(),
+        bytes: pa.binary(),
+        list: pa.list_(pa.string()),
+        tuple: pa.list_(pa.string()),
+        decimal.Decimal: pa.decimal128(38, 9),  # PostgreSQL NUMERIC default
+        datetime.datetime: pa.timestamp("us"),
+        datetime.date: pa.date32(),
+    }
 
-    return None
+    arrow_type = type_mapping.get(param_type, pa.string())  # Default to string
+    return pa.scalar(None, type=arrow_type)
 
 
 def _coerce_parameter_for_adbc(param: Any) -> Any:
@@ -391,6 +386,14 @@ class AdbcDriver(SyncDriverAdapterBase):
         self.dialect = statement_config.dialect
 
     @staticmethod
+    def _ensure_pyarrow_installed() -> None:
+        """Ensure PyArrow is installed for Arrow operations."""
+        from sqlspec.typing import PYARROW_INSTALLED
+
+        if not PYARROW_INSTALLED:
+            raise MissingDependencyError(package="pyarrow", install_package="arrow")
+
+    @staticmethod
     def _get_dialect(connection: "AdbcConnection") -> str:
         """Detect database dialect from ADBC connection information with enhanced accuracy."""
         try:
@@ -427,7 +430,11 @@ class AdbcDriver(SyncDriverAdapterBase):
 
     @contextmanager
     def handle_database_exceptions(self) -> "Generator[None, None, None]":
-        """Handle ADBC-specific exceptions with comprehensive error categorization."""
+        """Handle ADBC-specific exceptions with comprehensive error categorization.
+
+        Yields:
+            None: Context manager yields nothing
+        """
         try:
             yield
         except Exception as e:
@@ -452,12 +459,13 @@ class AdbcDriver(SyncDriverAdapterBase):
         """Handle ADBC-specific operations (currently none).
 
         Args:
-            cursor: ADBC cursor object
-            statement: SQL statement to analyze
+            cursor: ADBC cursor object (reserved for future use)
+            statement: SQL statement to analyze (reserved for future use)
 
         Returns:
             SQLResult if special operation was handled, None for standard execution
         """
+        _ = (cursor, statement)  # Reserved for future ADBC-specific optimizations
         return None
 
     def _execute_many(self, cursor: "Cursor", statement: SQL) -> "ExecutionResult":
