@@ -21,8 +21,8 @@ class CachingComparisonBenchmark(BaseBenchmarkSuite):
 
     def run(self, adapter: str = "all", **kwargs: Any) -> dict[str, TimingResult]:
         """Run caching comparison benchmarks."""
+        from sqlspec.core.cache import sql_cache
         from sqlspec.core.statement import SQL, StatementConfig
-        from sqlspec.core.statement.cache import sql_cache
 
         results = {}
 
