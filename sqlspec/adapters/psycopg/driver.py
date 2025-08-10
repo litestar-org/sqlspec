@@ -46,6 +46,13 @@ if TYPE_CHECKING:
 
 logger = get_logger("adapters.psycopg")
 
+# PostgreSQL transaction status constants
+TRANSACTION_STATUS_IDLE = 0
+TRANSACTION_STATUS_ACTIVE = 1
+TRANSACTION_STATUS_INTRANS = 2
+TRANSACTION_STATUS_INERROR = 3
+TRANSACTION_STATUS_UNKNOWN = 4
+
 
 def _convert_list_to_postgres_array(value: Any) -> str:
     """Convert Python list to PostgreSQL array literal format with enhanced type handling.
@@ -198,13 +205,49 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
         """Create context manager for PostgreSQL cursor with enhanced resource management."""
         return PsycopgSyncCursor(connection)
 
+    def begin(self) -> None:
+        """Begin a database transaction on the current connection."""
+        try:
+            # psycopg3 has explicit transaction support
+            # If already in a transaction, this is a no-op
+            if hasattr(self.connection, "autocommit") and not self.connection.autocommit:
+                # Already in manual commit mode, just ensure we're in a clean state
+                pass
+            else:
+                # Start manual transaction mode
+                self.connection.autocommit = False
+        except Exception as e:
+            msg = f"Failed to begin transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    def rollback(self) -> None:
+        """Rollback the current transaction on the current connection."""
+        try:
+            self.connection.rollback()
+        except Exception as e:
+            msg = f"Failed to rollback transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    def commit(self) -> None:
+        """Commit the current transaction on the current connection."""
+        try:
+            self.connection.commit()
+        except Exception as e:
+            msg = f"Failed to commit transaction: {e}"
+            raise SQLSpecError(msg) from e
+
     @contextmanager
     def handle_database_exceptions(self) -> "Generator[None, None, None]":
-        """Handle PostgreSQL psycopg-specific exceptions with comprehensive error categorization."""
+        """Handle PostgreSQL psycopg-specific exceptions with comprehensive error categorization.
+
+        Yields:
+            Generator that yields None for use with @contextmanager decorator
+        """
         try:
             yield
         except psycopg.IntegrityError as e:
             # Handle constraint violations, foreign key errors, etc.
+            self._handle_transaction_error_cleanup()
             msg = f"PostgreSQL integrity constraint violation: {e}"
             raise SQLSpecError(msg) from e
         except psycopg.OperationalError as e:
@@ -216,28 +259,34 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
                 msg = f"PostgreSQL authentication error: {e}"
             elif "syntax" in error_msg or "malformed" in error_msg:
                 msg = f"PostgreSQL SQL syntax error: {e}"
+                self._handle_transaction_error_cleanup()
                 raise SQLParsingError(msg) from e
             else:
                 msg = f"PostgreSQL operational error: {e}"
             raise SQLSpecError(msg) from e
         except psycopg.ProgrammingError as e:
             # Handle SQL syntax errors, missing objects, etc.
+            self._handle_transaction_error_cleanup()
             msg = f"PostgreSQL programming error: {e}"
             raise SQLParsingError(msg) from e
         except psycopg.DataError as e:
             # Handle invalid data, type conversion errors, etc.
+            self._handle_transaction_error_cleanup()
             msg = f"PostgreSQL data error: {e}"
             raise SQLSpecError(msg) from e
         except psycopg.DatabaseError as e:
             # Handle other database-specific errors (including transaction errors)
             error_msg = str(e).lower()
             if "transaction" in error_msg and "abort" in error_msg:
-                msg = f"PostgreSQL transaction error (may need rollback): {e}"
+                # This specifically handles the "current transaction is aborted" error
+                self._handle_transaction_error_cleanup()
+                msg = f"PostgreSQL transaction error (transaction rolled back): {e}"
             else:
                 msg = f"PostgreSQL database error: {e}"
             raise SQLSpecError(msg) from e
         except psycopg.Error as e:
             # Catch-all for other PostgreSQL errors
+            self._handle_transaction_error_cleanup()
             msg = f"PostgreSQL error: {e}"
             raise SQLSpecError(msg) from e
         except Exception as e:
@@ -248,6 +297,20 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
                 raise SQLParsingError(msg) from e
             msg = f"Unexpected database operation error: {e}"
             raise SQLSpecError(msg) from e
+
+    def _handle_transaction_error_cleanup(self) -> None:
+        """Handle transaction cleanup after database errors to prevent aborted transaction states."""
+        try:
+            # Check if connection is in a failed transaction state
+            if hasattr(self.connection, "info") and hasattr(self.connection.info, "transaction_status"):
+                status = self.connection.info.transaction_status
+                # PostgreSQL transaction statuses: IDLE=0, ACTIVE=1, INTRANS=2, INERROR=3, UNKNOWN=4
+                if status == TRANSACTION_STATUS_INERROR:
+                    logger.debug("Connection in aborted transaction state, performing rollback")
+                    self.connection.rollback()
+        except Exception as cleanup_error:
+            # If cleanup fails, log but don't raise - the original error is more important
+            logger.warning("Failed to cleanup transaction state: %s", cleanup_error)
 
     def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
         """Hook for PostgreSQL-specific special operations.
@@ -504,13 +567,49 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
         """Create async context manager for PostgreSQL cursor with enhanced resource management."""
         return PsycopgAsyncCursor(connection)
 
+    async def begin(self) -> None:
+        """Begin a database transaction on the current connection."""
+        try:
+            # psycopg3 has explicit transaction support
+            # If already in a transaction, this is a no-op
+            if hasattr(self.connection, "autocommit") and not self.connection.autocommit:
+                # Already in manual commit mode, just ensure we're in a clean state
+                pass
+            else:
+                # Start manual transaction mode
+                self.connection.autocommit = False
+        except Exception as e:
+            msg = f"Failed to begin transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    async def rollback(self) -> None:
+        """Rollback the current transaction on the current connection."""
+        try:
+            await self.connection.rollback()
+        except Exception as e:
+            msg = f"Failed to rollback transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    async def commit(self) -> None:
+        """Commit the current transaction on the current connection."""
+        try:
+            await self.connection.commit()
+        except Exception as e:
+            msg = f"Failed to commit transaction: {e}"
+            raise SQLSpecError(msg) from e
+
     @asynccontextmanager
     async def handle_database_exceptions(self) -> "AsyncGenerator[None, None]":
-        """Handle PostgreSQL psycopg-specific exceptions with comprehensive error categorization."""
+        """Handle PostgreSQL psycopg-specific exceptions with comprehensive error categorization.
+
+        Yields:
+            AsyncGenerator that yields None for use with @asynccontextmanager decorator
+        """
         try:
             yield
         except psycopg.IntegrityError as e:
             # Handle constraint violations, foreign key errors, etc.
+            await self._handle_transaction_error_cleanup_async()
             msg = f"PostgreSQL integrity constraint violation: {e}"
             raise SQLSpecError(msg) from e
         except psycopg.OperationalError as e:
@@ -522,28 +621,34 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
                 msg = f"PostgreSQL authentication error: {e}"
             elif "syntax" in error_msg or "malformed" in error_msg:
                 msg = f"PostgreSQL SQL syntax error: {e}"
+                await self._handle_transaction_error_cleanup_async()
                 raise SQLParsingError(msg) from e
             else:
                 msg = f"PostgreSQL operational error: {e}"
             raise SQLSpecError(msg) from e
         except psycopg.ProgrammingError as e:
             # Handle SQL syntax errors, missing objects, etc.
+            await self._handle_transaction_error_cleanup_async()
             msg = f"PostgreSQL programming error: {e}"
             raise SQLParsingError(msg) from e
         except psycopg.DataError as e:
             # Handle invalid data, type conversion errors, etc.
+            await self._handle_transaction_error_cleanup_async()
             msg = f"PostgreSQL data error: {e}"
             raise SQLSpecError(msg) from e
         except psycopg.DatabaseError as e:
             # Handle other database-specific errors (including transaction errors)
             error_msg = str(e).lower()
             if "transaction" in error_msg and "abort" in error_msg:
-                msg = f"PostgreSQL transaction error (may need rollback): {e}"
+                # This specifically handles the "current transaction is aborted" error
+                await self._handle_transaction_error_cleanup_async()
+                msg = f"PostgreSQL transaction error (transaction rolled back): {e}"
             else:
                 msg = f"PostgreSQL database error: {e}"
             raise SQLSpecError(msg) from e
         except psycopg.Error as e:
             # Catch-all for other PostgreSQL errors
+            await self._handle_transaction_error_cleanup_async()
             msg = f"PostgreSQL error: {e}"
             raise SQLSpecError(msg) from e
         except Exception as e:
@@ -554,6 +659,20 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
                 raise SQLParsingError(msg) from e
             msg = f"Unexpected database operation error: {e}"
             raise SQLSpecError(msg) from e
+
+    async def _handle_transaction_error_cleanup_async(self) -> None:
+        """Handle transaction cleanup after database errors to prevent aborted transaction states (async version)."""
+        try:
+            # Check if connection is in a failed transaction state
+            if hasattr(self.connection, "info") and hasattr(self.connection.info, "transaction_status"):
+                status = self.connection.info.transaction_status
+                # PostgreSQL transaction statuses: IDLE=0, ACTIVE=1, INTRANS=2, INERROR=3, UNKNOWN=4
+                if status == TRANSACTION_STATUS_INERROR:
+                    logger.debug("Connection in aborted transaction state, performing async rollback")
+                    await self.connection.rollback()
+        except Exception as cleanup_error:
+            # If cleanup fails, log but don't raise - the original error is more important
+            logger.warning("Failed to cleanup transaction state: %s", cleanup_error)
 
     async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
         """Hook for PostgreSQL-specific special operations.

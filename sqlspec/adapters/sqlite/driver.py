@@ -60,7 +60,7 @@ sqlite_statement_config = StatementConfig(
             # tuple: lambda v: to_json(list(v)),  # Removed - tuples are parameter sets
         },
         has_native_list_expansion=False,
-        needs_static_script_compilation=True,
+        needs_static_script_compilation=False,
         preserve_parameter_format=True,
     ),
     # Core processing features enabled for performance

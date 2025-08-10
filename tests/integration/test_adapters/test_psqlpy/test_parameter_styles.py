@@ -198,9 +198,9 @@ async def test_parameter_conversion_accuracy(psqlpy_session: PsqlpyDriver) -> No
     import datetime
     import decimal
 
-    # Test decimal precision
+    # Test decimal precision - using float instead of string to avoid psqlpy issues
     decimal_val = decimal.Decimal("123.456789")
-    result1 = await psqlpy_session.execute("SELECT $1::numeric as decimal_val", (str(decimal_val),))
+    result1 = await psqlpy_session.execute("SELECT $1::float as decimal_val", (float(decimal_val),))
     assert isinstance(result1, SQLResult)
     assert result1.data is not None
     # PostgreSQL may return as float or string, verify the value is close

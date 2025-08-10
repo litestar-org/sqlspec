@@ -251,6 +251,17 @@ class SQLFileLoader:
         self._files: dict[str, SQLFile] = {}
         self._query_to_file: dict[str, str] = {}  # Maps query name to file path
 
+    def _raise_file_not_found(self, path: str) -> None:
+        """Raise SQLFileNotFoundError for nonexistent file.
+
+        Args:
+            path: File path that was not found.
+
+        Raises:
+            SQLFileNotFoundError: Always raised.
+        """
+        raise SQLFileNotFoundError(path)
+
     def _generate_file_cache_key(self, path: Union[str, Path]) -> str:
         """Generate cache key for a file path.
 
@@ -462,6 +473,10 @@ class SQLFileLoader:
                     elif path_obj.exists():
                         self._load_single_file(path_obj, None)
                         loaded_count += 1
+                    elif path_obj.suffix:
+                        # Has extension, treat as file and raise error
+                        self._raise_file_not_found(str(path))
+                    # No extension, treat as directory and skip gracefully
 
             duration = time.perf_counter() - start_time
             new_queries = len(self._queries) - query_count_before

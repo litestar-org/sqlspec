@@ -88,9 +88,10 @@ def test_arrow_null_value_handling(adbc_postgresql_session: AdbcDriver) -> None:
     """)
 
     # Insert rows with various NULL patterns
+    # Start with non-NULL case to establish schema, then test NULL handling
     test_cases = [
+        ("text1", 42, True, 123.45, [1, 2, 3]),  # No NULLs - establish schema first
         (None, None, None, None, None),  # All NULLs
-        ("text1", 42, True, 123.45, [1, 2, 3]),  # No NULLs
         ("text2", None, False, None, None),  # Mixed NULLs
         (None, 100, None, 200.00, [4, 5]),  # Mixed NULLs different pattern
     ]

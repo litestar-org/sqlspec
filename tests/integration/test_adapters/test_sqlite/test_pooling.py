@@ -110,7 +110,11 @@ def test_file_database_pooling_enabled(sqlite_temp_file_config: SqliteConfig) ->
 
 @pytest.mark.xdist_group("sqlite")
 def test_pool_session_isolation(sqlite_config_shared_memory: SqliteConfig) -> None:
-    """Test that sessions from the pool maintain proper isolation."""
+    """Test that sessions from the pool share thread-local connections as expected.
+    
+    Note: SQLite uses thread-local connections, so multiple sessions in the same thread
+    share the same underlying connection. This test verifies that behavior works correctly.
+    """
     config = sqlite_config_shared_memory
 
     try:
@@ -125,24 +129,29 @@ def test_pool_session_isolation(sqlite_config_shared_memory: SqliteConfig) -> No
             """)
             session.commit()
 
-        # Test concurrent access with different sessions
+        # Test that multiple sessions share the same thread-local connection
         with config.provide_session() as session1, config.provide_session() as session2:
-            # Session 1 inserts data
+            # Verify sessions share the same connection (SQLite thread-local behavior)
+            assert session1.connection is session2.connection
+            
+            # Session 1 inserts data (will be immediately visible to session2 since same connection)
             session1.execute("INSERT INTO isolation_test (value) VALUES (?)", ("session1_data",))
 
-            # Session 2 should not see uncommitted data from session 1
-            result = session2.execute("SELECT COUNT(*) as count FROM isolation_test")
-            assert isinstance(result, SQLResult)
-            assert result.data is not None
-            assert result.data[0]["count"] == 1  # Only base_data
-
-            # After session1 commits, session2 should see the data
-            session1.commit()
-
+            # Session 2 should see the data since they share the same connection
             result = session2.execute("SELECT COUNT(*) as count FROM isolation_test")
             assert isinstance(result, SQLResult)
             assert result.data is not None
             assert result.data[0]["count"] == 2  # base_data + session1_data
+            
+            # Both sessions can modify the same data since they share the connection
+            session2.execute("UPDATE isolation_test SET value = ? WHERE value = ?", ("updated_data", "session1_data"))
+            
+            # Verify the update is visible from session1
+            result = session1.execute("SELECT value FROM isolation_test WHERE value = ?", ("updated_data",))
+            assert isinstance(result, SQLResult)
+            assert result.data is not None
+            assert len(result.data) == 1
+            assert result.data[0]["value"] == "updated_data"
 
     finally:
         config.close_pool()

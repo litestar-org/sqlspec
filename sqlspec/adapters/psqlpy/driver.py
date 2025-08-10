@@ -16,7 +16,6 @@ Architecture Features:
 """
 
 import datetime
-import ipaddress
 import re
 import uuid
 from contextlib import asynccontextmanager
@@ -31,7 +30,6 @@ from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -80,52 +78,42 @@ UUID_REGEX: Final[re.Pattern[str]] = re.compile(
 def _convert_psqlpy_parameters(value: Any) -> Any:
     """Convert parameters for Psqlpy compatibility.
 
-    Psqlpy requires specific type handling:
-    - JSON strings need to be converted to dict objects for psqlpy.PyJSON
-    - UUID strings should be converted to UUID objects
-    - IP address strings should be converted to IPv4Address/IPv6Address objects
-    - Arrays/lists are handled natively by psqlpy
+    This function performs minimal, safe conversions that are needed for psqlpy.
+    Most type conversions should be handled by PostgreSQL's explicit casting in SQL.
+
+    Conservative approach:
+    - Convert Decimal objects to float (psqlpy doesn't handle Decimal directly)
+    - Convert datetime ISO strings to datetime objects (psqlpy needs datetime objects)
+    - Convert tuple to list for PostgreSQL array compatibility
+    - Pass native Python objects that psqlpy can handle directly
     """
-    # Only convert UUID strings to UUID objects if they match UUID format
-    if isinstance(value, str) and UUID_REGEX.match(value):
-        try:
-            return uuid.UUID(value)
-        except ValueError:
-            pass  # Not a valid UUID, return as string
+    # Import decimal here to avoid top-level import issues
+    from decimal import Decimal
 
-    # Convert IP address strings to IP address objects for psqlpy INET compatibility
-    if isinstance(value, str) and ("." in value or ":" in value):
-        try:
-            # Try to parse as an IP address (with or without CIDR)
-            if "/" in value:
-                # Handle CIDR notation - convert to interface
-                return ipaddress.ip_interface(value).ip
-            # Handle plain IP address
-            return ipaddress.ip_address(value)
-        except ValueError:
-            pass  # Not a valid IP address, continue with other checks
+    # Convert Decimal to float for psqlpy compatibility
+    if isinstance(value, Decimal):
+        return float(value)
 
-    # Convert datetime strings to datetime objects for psqlpy compatibility
-    if isinstance(value, str) and ("T" in value or " " in value):
+    # Convert datetime ISO strings to datetime objects for psqlpy
+    if isinstance(value, str) and ("T" in value and ":" in value):
         try:
             # Try to parse as ISO datetime string
             if "T" in value:
                 # Handle ISO format with timezone
                 return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
-            pass  # Not a valid datetime, continue with other checks
+            pass  # Not a valid datetime, keep as string
 
-    # Convert JSON strings to dict objects for psqlpy compatibility
-    # This handles cases where JSON is passed as a string but needs to be a dict for psqlpy
-    if isinstance(value, str) and value.strip().startswith(("{", "[")):
-        try:
-            parsed_json = from_json(value)
-            # Only return the parsed JSON if it's a dict or list (valid JSON objects)
-            if isinstance(parsed_json, (dict, list)):
-                return parsed_json
-        except (ValueError, TypeError):
-            pass  # Not valid JSON, return as string
+    # Convert tuple to list for PostgreSQL array compatibility
+    if isinstance(value, tuple):
+        return list(value)
 
+    # Native Python objects that psqlpy can handle directly
+    if isinstance(value, (dict, list, uuid.UUID, datetime.datetime, datetime.date)):
+        return value
+
+    # Everything else (including strings) should be passed as-is
+    # PostgreSQL will handle type conversion based on SQL casting (::type)
     return value
 
 
