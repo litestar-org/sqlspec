@@ -1,0 +1,120 @@
+name: Test Build Configuration
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_os:
+        description: 'OS to test (or "all")'
+        required: false
+        default: 'ubuntu-latest'
+        type: choice
+        options:
+          - 'all'
+          - 'ubuntu-latest'
+          - 'windows-latest'
+          - 'macos-latest'
+          - 'macos-13'
+      test_python:
+        description: 'Python version to test (or "all")'
+        required: false
+        default: '3.12'
+        type: choice
+        options:
+          - 'all'
+          - '3.9'
+          - '3.10'
+          - '3.11'
+          - '3.12'
+          - '3.13'
+  pull_request:
+    paths:
+      - '.github/workflows/publish.yml'
+      - 'pyproject.toml'
+
+jobs:
+  test-standard-build:
+    name: Test Std ${{ matrix.os }} py${{ matrix.python-version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-13]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        exclude:
+          - os: macos-13
+            python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.9"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --extra performance --group build
+
+      - name: Build standard wheel
+        run: uv build --wheel
+
+      - name: Test wheel installation
+        run: |
+          uv venv test-env --python ${{ matrix.python-version }}
+          uv pip install --python test-env --find-links dist/ sqlspec
+          uv run --python test-env python -c "import sqlspec; print('Standard wheel test passed')"
+
+  test-mypyc-build:
+    name: Test MyPyC ${{ matrix.os }} py${{ matrix.python-version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-13]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        exclude:
+          - os: windows-latest
+            python-version: "3.9"
+          - os: macos-13
+            python-version: "3.13"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies with mypyc
+        run: uv sync --extra performance --group build
+
+      - name: Build MyPyC wheel
+        run: uv build --wheel
+        env:
+          HATCH_BUILD_HOOKS_ENABLE: "1"
+
+      - name: Rename wheel with mypyc tag
+        run: |
+          for wheel in dist/*.whl; do
+            if [[ -f "$wheel" ]]; then
+              base=$(basename "$wheel" .whl)
+              dir=$(dirname "$wheel")
+              mv "$wheel" "$dir/${base}+mypyc.whl"
+            fi
+          done
+
+      - name: Test mypyc wheel installation
+        run: |
+          uv venv test-env --python ${{ matrix.python-version }}
+          uv pip install --python test-env --find-links dist/ sqlspec
+          uv run --python test-env python -c "import sqlspec; print('MyPyC wheel test passed')"
+
+      - name: Verify wheel integrity
+        run: |
+          uv tool install twine
+          uv tool run twine check dist/*

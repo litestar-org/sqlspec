@@ -158,13 +158,13 @@ jobs:
 
       - name: Test standard wheel installation
         run: |
-          uv venv test-standard
+          uv venv test-standard --python ${{ matrix.python-version }}
           uv pip install --python test-standard --find-links dist-standard/ sqlspec
           uv run --python test-standard python -c "import sqlspec; print('Standard wheel OK')"
 
       - name: Test mypyc wheel installation
         run: |
-          uv venv test-mypyc
+          uv venv test-mypyc --python ${{ matrix.python-version }}
           uv pip install --python test-mypyc --find-links dist-mypyc/ sqlspec
           uv run --python test-mypyc python -c "import sqlspec; print('MyPyC wheel OK')"
 
@@ -196,8 +196,8 @@ jobs:
 
       - name: Verify package integrity
         run: |
-          python -m pip install twine
-          twine check dist/*
+          uv tool install twine
+          uv tool run twine check dist/*
 
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
