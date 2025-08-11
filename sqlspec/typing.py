@@ -27,134 +27,81 @@ from sqlspec._typing import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    try:
-        from attrs import AttrsInstance
-        from attrs import asdict as attrs_asdict
-        from attrs import define as attrs_define
-        from attrs import field as attrs_field
-        from attrs import fields as attrs_fields
-        from attrs import has as attrs_has
-    except ImportError:
-        from sqlspec._typing import AttrsInstance, attrs_asdict, attrs_define, attrs_field, attrs_fields, attrs_has
-
-    try:
-        from pydantic import BaseModel, FailFast, TypeAdapter
-    except ImportError:
-        from sqlspec._typing import BaseModel, FailFast, TypeAdapter
-
-    try:
-        from msgspec import UNSET, Struct, UnsetType, convert
-    except ImportError:
-        from sqlspec._typing import UNSET, Struct, UnsetType, convert
-
-    try:
-        from pyarrow import RecordBatch as ArrowRecordBatch
-        from pyarrow import Table as ArrowTable
-    except ImportError:
-        from sqlspec._typing import ArrowRecordBatch, ArrowTable
-
-    try:
-        from litestar.dto import DTOData
-    except ImportError:
-        from sqlspec._typing import DTOData
-
-    try:
-        from opentelemetry import trace
-        from opentelemetry.trace import Span, Status, StatusCode, Tracer
-    except ImportError:
-        from sqlspec._typing import Span, Status, StatusCode, Tracer, trace
-
-    try:
-        from prometheus_client import Counter, Gauge, Histogram
-    except ImportError:
-        from sqlspec._typing import Counter, Gauge, Histogram
-
-    try:
-        import aiosql
-        from aiosql.types import AsyncDriverAdapterProtocol as AiosqlAsyncProtocol
-        from aiosql.types import DriverAdapterProtocol as AiosqlProtocol
-        from aiosql.types import ParamType as AiosqlParamType
-        from aiosql.types import SQLOperationType as AiosqlSQLOperationType
-        from aiosql.types import SyncDriverAdapterProtocol as AiosqlSyncProtocol
-    except ImportError:
-        from sqlspec._typing import (
-            AiosqlAsyncProtocol,
-            AiosqlParamType,
-            AiosqlProtocol,
-            AiosqlSQLOperationType,
-            AiosqlSyncProtocol,
-            aiosql,
-        )
-    try:
-        from cattrs import structure as cattrs_structure
-        from cattrs import unstructure as cattrs_unstructure
-    except ImportError:
-        from sqlspec._typing import cattrs_structure, cattrs_unstructure
+    # Import runtime types for function signatures
+    # Import stub types only for TypeVar bounds
+    from sqlspec._typing import (
+        UNSET,
+        AiosqlAsyncProtocol,
+        AiosqlParamType,
+        AiosqlProtocol,
+        AiosqlSQLOperationType,
+        AiosqlSyncProtocol,
+        ArrowRecordBatch,
+        ArrowTable,
+        AttrsInstance,
+        AttrsInstanceStub,
+        BaseModel,
+        BaseModelStub,
+        Counter,
+        DTOData,
+        FailFast,
+        Gauge,
+        Histogram,
+        Span,
+        Status,
+        StatusCode,
+        Struct,
+        StructStub,
+        Tracer,
+        TypeAdapter,
+        UnsetType,
+        aiosql,
+        attrs_asdict,
+        attrs_define,
+        attrs_field,
+        attrs_fields,
+        attrs_has,
+        cattrs_structure,
+        cattrs_unstructure,
+        convert,
+        trace,
+    )
 else:
-    if not PYDANTIC_INSTALLED:
-        from sqlspec._typing import BaseModel, FailFast, TypeAdapter
-    else:
-        from pydantic import BaseModel, FailFast, TypeAdapter
-
-    if not MSGSPEC_INSTALLED:
-        from sqlspec._typing import UNSET, Struct, UnsetType, convert
-    else:
-        from msgspec import UNSET, Struct, UnsetType, convert
-
-    if not PYARROW_INSTALLED:
-        from sqlspec._typing import ArrowRecordBatch, ArrowTable
-    else:
-        from pyarrow import RecordBatch as ArrowRecordBatch
-        from pyarrow import Table as ArrowTable
-
-    if not LITESTAR_INSTALLED:
-        from sqlspec._typing import DTOData
-    else:
-        from litestar.dto import DTOData
-
-    if not OPENTELEMETRY_INSTALLED:
-        from sqlspec._typing import Span, Status, StatusCode, Tracer, trace
-    else:
-        from opentelemetry import trace
-        from opentelemetry.trace import Span, Status, StatusCode, Tracer
-
-    if not PROMETHEUS_INSTALLED:
-        from sqlspec._typing import Counter, Gauge, Histogram
-    else:
-        from prometheus_client import Counter, Gauge, Histogram
-
-    if not AIOSQL_INSTALLED:
-        from sqlspec._typing import (
-            AiosqlAsyncProtocol,
-            AiosqlParamType,
-            AiosqlProtocol,
-            AiosqlSQLOperationType,
-            AiosqlSyncProtocol,
-            aiosql,
-        )
-    else:
-        import aiosql
-        from aiosql.types import AsyncDriverAdapterProtocol as AiosqlAsyncProtocol
-        from aiosql.types import DriverAdapterProtocol as AiosqlProtocol
-        from aiosql.types import ParamType as AiosqlParamType
-        from aiosql.types import SQLOperationType as AiosqlSQLOperationType
-        from aiosql.types import SyncDriverAdapterProtocol as AiosqlSyncProtocol
-
-    if not ATTRS_INSTALLED:
-        from sqlspec._typing import AttrsInstance, attrs_asdict, attrs_define, attrs_field, attrs_fields, attrs_has
-    else:
-        from attrs import AttrsInstance
-        from attrs import asdict as attrs_asdict
-        from attrs import define as attrs_define
-        from attrs import field as attrs_field
-        from attrs import fields as attrs_fields
-        from attrs import has as attrs_has
-
-    if not CATTRS_INSTALLED:
-        from sqlspec._typing import cattrs_structure, cattrs_unstructure
-    else:
-        from cattrs import structure as cattrs_structure
-        from cattrs import unstructure as cattrs_unstructure
+    # At runtime, use the real implementations if available (already handled in _typing.py)
+    from sqlspec._typing import (
+        UNSET,
+        AiosqlAsyncProtocol,
+        AiosqlParamType,
+        AiosqlProtocol,
+        AiosqlSQLOperationType,
+        AiosqlSyncProtocol,
+        ArrowRecordBatch,
+        ArrowTable,
+        AttrsInstance,
+        BaseModel,
+        Counter,
+        DTOData,
+        FailFast,
+        Gauge,
+        Histogram,
+        Span,
+        Status,
+        StatusCode,
+        Struct,
+        Tracer,
+        TypeAdapter,
+        UnsetType,
+        aiosql,
+        attrs_asdict,
+        attrs_define,
+        attrs_field,
+        attrs_fields,
+        attrs_has,
+        cattrs_structure,
+        cattrs_unstructure,
+        convert,
+        trace,
+    )
 
 
 class DictLike(Protocol):
@@ -186,7 +133,7 @@ if TYPE_CHECKING:
 
     :class:`~sqlspec.typing.PoolT_co`
     """
-    ModelT = TypeVar("ModelT", bound="Union[DictLike, Struct, BaseModel, DataclassProtocol, AttrsInstance]")
+    ModelT = TypeVar("ModelT", bound="Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub]")
     """Type variable for model types.
 
     :class:`DictLike` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
@@ -206,7 +153,7 @@ DictRow: TypeAlias = "dict[str, Any]"
 TupleRow: TypeAlias = "tuple[Any, ...]"
 """Type variable for TupleRow types."""
 
-SupportedSchemaModel: TypeAlias = "Union[DictLike, Struct, BaseModel, DataclassProtocol, AttrsInstance]"
+SupportedSchemaModel: TypeAlias = "Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub]"
 """Type alias for pydantic or msgspec models.
 
 :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
@@ -230,22 +177,24 @@ PydanticOrMsgspecT = SupportedSchemaModel
 
 :class:`msgspec.Struct` or :class:`pydantic.BaseModel`
 """
-ModelDict: TypeAlias = "Union[dict[str, Any], SupportedSchemaModel, DTOData[SupportedSchemaModel]]"
+ModelDict: TypeAlias = (
+    "Union[dict[str, Any], Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub], Any]"
+)
 """Type alias for model dictionaries.
 
 Represents:
 - :type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` |  :class:`pydantic.BaseModel`
 """
-ModelDictList: TypeAlias = "Sequence[Union[dict[str, Any], SupportedSchemaModel]]"
+ModelDictList: TypeAlias = (
+    "Sequence[Union[dict[str, Any], Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub]]]"
+)
 """Type alias for model dictionary lists.
 
 A list or sequence of any of the following:
 - :type:`Sequence`[:type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel`]
 
 """
-BulkModelDict: TypeAlias = (
-    "Union[Sequence[Union[dict[str, Any], SupportedSchemaModel]], DTOData[list[SupportedSchemaModel]]]"
-)
+BulkModelDict: TypeAlias = "Union[Sequence[Union[dict[str, Any], Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub]]], Any]"
 """Type alias for bulk model dictionaries.
 
 Represents:
@@ -255,7 +204,7 @@ Represents:
 
 
 @lru_cache(typed=True)
-def get_type_adapter(f: "type[T]") -> "TypeAdapter[T]":
+def get_type_adapter(f: "type[T]") -> Any:
     """Caches and returns a pydantic type adapter.
 
     Args:

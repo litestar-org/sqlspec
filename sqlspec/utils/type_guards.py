@@ -17,7 +17,6 @@ from sqlspec.typing import (
     LITESTAR_INSTALLED,
     MSGSPEC_INSTALLED,
     PYDANTIC_INSTALLED,
-    AttrsInstance,
     BaseModel,
     DataclassProtocol,
     DTOData,
@@ -32,6 +31,7 @@ if TYPE_CHECKING:
     from sqlglot import exp
     from typing_extensions import TypeGuard
 
+    from sqlspec._typing import AttrsInstanceStub, BaseModelStub, DTODataStub, StructStub
     from sqlspec.builder import Select
     from sqlspec.core.filters import LimitOffsetFilter, StatementFilter
     from sqlspec.protocols import (
@@ -319,7 +319,7 @@ def is_dataclass_without_field(obj: Any, field_name: str) -> "TypeGuard[object]"
         return False
 
 
-def is_pydantic_model(obj: Any) -> "TypeGuard[BaseModel]":
+def is_pydantic_model(obj: Any) -> "TypeGuard[Any]":
     """Check if a value is a pydantic model class or instance.
 
     Args:
@@ -338,7 +338,7 @@ def is_pydantic_model(obj: Any) -> "TypeGuard[BaseModel]":
     return isinstance(obj, BaseModel)
 
 
-def is_pydantic_model_with_field(obj: Any, field_name: str) -> "TypeGuard[BaseModel]":
+def is_pydantic_model_with_field(obj: Any, field_name: str) -> "TypeGuard[BaseModelStub]":
     """Check if a pydantic model has a specific field.
 
     Args:
@@ -358,7 +358,7 @@ def is_pydantic_model_with_field(obj: Any, field_name: str) -> "TypeGuard[BaseMo
         return True
 
 
-def is_pydantic_model_without_field(obj: Any, field_name: str) -> "TypeGuard[BaseModel]":
+def is_pydantic_model_without_field(obj: Any, field_name: str) -> "TypeGuard[BaseModelStub]":
     """Check if a pydantic model does not have a specific field.
 
     Args:
@@ -378,7 +378,7 @@ def is_pydantic_model_without_field(obj: Any, field_name: str) -> "TypeGuard[Bas
         return False
 
 
-def is_msgspec_struct(obj: Any) -> "TypeGuard[Struct]":
+def is_msgspec_struct(obj: Any) -> "TypeGuard[StructStub]":
     """Check if a value is a msgspec struct class or instance.
 
     Args:
@@ -397,7 +397,7 @@ def is_msgspec_struct(obj: Any) -> "TypeGuard[Struct]":
     return isinstance(obj, Struct)
 
 
-def is_msgspec_struct_with_field(obj: Any, field_name: str) -> "TypeGuard[Struct]":
+def is_msgspec_struct_with_field(obj: Any, field_name: str) -> "TypeGuard[StructStub]":
     """Check if a msgspec struct has a specific field.
 
     Args:
@@ -417,7 +417,7 @@ def is_msgspec_struct_with_field(obj: Any, field_name: str) -> "TypeGuard[Struct
     return True
 
 
-def is_msgspec_struct_without_field(obj: Any, field_name: str) -> "TypeGuard[Struct]":
+def is_msgspec_struct_without_field(obj: Any, field_name: str) -> "TypeGuard[StructStub]":
     """Check if a msgspec struct does not have a specific field.
 
     Args:
@@ -436,7 +436,7 @@ def is_msgspec_struct_without_field(obj: Any, field_name: str) -> "TypeGuard[Str
     return False
 
 
-def is_attrs_instance(obj: Any) -> "TypeGuard[AttrsInstance]":
+def is_attrs_instance(obj: Any) -> "TypeGuard[AttrsInstanceStub]":
     """Check if a value is an attrs class instance.
 
     Args:
@@ -448,7 +448,7 @@ def is_attrs_instance(obj: Any) -> "TypeGuard[AttrsInstance]":
     return ATTRS_INSTALLED and attrs_has(obj.__class__)
 
 
-def is_attrs_schema(cls: Any) -> "TypeGuard[type[AttrsInstance]]":
+def is_attrs_schema(cls: Any) -> "TypeGuard[type[AttrsInstanceStub]]":
     """Check if a class type is an attrs schema.
 
     Args:
@@ -460,7 +460,7 @@ def is_attrs_schema(cls: Any) -> "TypeGuard[type[AttrsInstance]]":
     return ATTRS_INSTALLED and attrs_has(cls)
 
 
-def is_attrs_instance_with_field(obj: Any, field_name: str) -> "TypeGuard[AttrsInstance]":
+def is_attrs_instance_with_field(obj: Any, field_name: str) -> "TypeGuard[AttrsInstanceStub]":
     """Check if an attrs instance has a specific field.
 
     Args:
@@ -473,7 +473,7 @@ def is_attrs_instance_with_field(obj: Any, field_name: str) -> "TypeGuard[AttrsI
     return is_attrs_instance(obj) and hasattr(obj, field_name)
 
 
-def is_attrs_instance_without_field(obj: Any, field_name: str) -> "TypeGuard[AttrsInstance]":
+def is_attrs_instance_without_field(obj: Any, field_name: str) -> "TypeGuard[AttrsInstanceStub]":
     """Check if an attrs instance does not have a specific field.
 
     Args:
@@ -608,7 +608,7 @@ def is_schema_or_dict_without_field(
     return not is_schema_or_dict_with_field(obj, field_name)
 
 
-def is_dto_data(v: Any) -> "TypeGuard[DTOData[Any]]":
+def is_dto_data(v: Any) -> "TypeGuard[DTODataStub[Any]]":
     """Check if a value is a Litestar DTOData object.
 
     Args:
@@ -755,9 +755,7 @@ def dataclass_to_dict(
     return cast("dict[str, Any]", ret)
 
 
-def schema_dump(
-    data: "Union[dict[str, Any], DataclassProtocol, Struct, BaseModel, AttrsInstance]", exclude_unset: bool = True
-) -> "dict[str, Any]":
+def schema_dump(data: Any, exclude_unset: bool = True) -> "dict[str, Any]":
     """Dump a data object to a dictionary.
 
     Args:
@@ -774,7 +772,7 @@ def schema_dump(
     if is_dataclass(data):
         return dataclass_to_dict(data, exclude_empty=exclude_unset)
     if is_pydantic_model(data):
-        return data.model_dump(exclude_unset=exclude_unset)
+        return data.model_dump(exclude_unset=exclude_unset)  # type: ignore[no-any-return]
     if is_msgspec_struct(data):
         if exclude_unset:
             return {f: val for f in data.__struct_fields__ if (val := getattr(data, f, None)) != UNSET}

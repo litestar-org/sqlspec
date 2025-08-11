@@ -108,7 +108,8 @@ class AiosqliteExceptionHandler:
             e = exc_val
             error_msg = str(e).lower()
             if "locked" in error_msg:
-                raise e
+                msg = f"AIOSQLite database locked: {e}. Consider enabling WAL mode or reducing concurrency."
+                raise SQLSpecError(msg) from e
             if "syntax" in error_msg or "malformed" in error_msg:
                 msg = f"AIOSQLite SQL syntax error: {e}"
                 raise SQLParsingError(msg) from e
