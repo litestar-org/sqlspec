@@ -23,7 +23,6 @@ PostgreSQL Features:
 """
 
 import io
-from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional
 
 import psycopg
@@ -39,7 +38,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator
+    from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from sqlspec.driver._common import ExecutionResult
 
@@ -121,8 +120,10 @@ psycopg_statement_config = StatementConfig(
 __all__ = (
     "PsycopgAsyncCursor",
     "PsycopgAsyncDriver",
+    "PsycopgAsyncExceptionHandler",
     "PsycopgSyncCursor",
     "PsycopgSyncDriver",
+    "PsycopgSyncExceptionHandler",
     "psycopg_statement_config",
 )
 
@@ -144,6 +145,52 @@ class PsycopgSyncCursor:
         _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
         if self.cursor is not None:
             self.cursor.close()
+
+
+class PsycopgSyncExceptionHandler:
+    """Custom sync context manager for handling PostgreSQL psycopg database exceptions."""
+
+    __slots__ = ()
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if exc_type is None:
+            return
+
+        if issubclass(exc_type, psycopg.IntegrityError):
+            e = exc_val
+            msg = f"PostgreSQL psycopg integrity constraint violation: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, psycopg.ProgrammingError):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "syntax" in error_msg or "parse" in error_msg:
+                msg = f"PostgreSQL psycopg SQL syntax error: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"PostgreSQL psycopg programming error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, psycopg.OperationalError):
+            e = exc_val
+            msg = f"PostgreSQL psycopg operational error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, psycopg.DatabaseError):
+            e = exc_val
+            msg = f"PostgreSQL psycopg database error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, psycopg.Error):
+            e = exc_val
+            msg = f"PostgreSQL psycopg error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, Exception):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "parse" in error_msg or "syntax" in error_msg:
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected database operation error: {e}"
+            raise SQLSpecError(msg) from e
 
 
 class PsycopgSyncDriver(SyncDriverAdapterBase):
@@ -235,67 +282,9 @@ class PsycopgSyncDriver(SyncDriverAdapterBase):
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
 
-    @contextmanager
-    def handle_database_exceptions(self) -> "Generator[None, None, None]":
-        """Handle PostgreSQL psycopg-specific exceptions with comprehensive error categorization.
-
-        Yields:
-            Generator that yields None for use with @contextmanager decorator
-        """
-        try:
-            yield
-        except psycopg.IntegrityError as e:
-            # Handle constraint violations, foreign key errors, etc.
-            self._handle_transaction_error_cleanup()
-            msg = f"PostgreSQL integrity constraint violation: {e}"
-            raise SQLSpecError(msg) from e
-        except psycopg.OperationalError as e:
-            # Handle connection issues, permission errors, etc.
-            error_msg = str(e).lower()
-            if "connect" in error_msg or "connection" in error_msg:
-                msg = f"PostgreSQL connection error: {e}"
-            elif "permission" in error_msg or "auth" in error_msg:
-                msg = f"PostgreSQL authentication error: {e}"
-            elif "syntax" in error_msg or "malformed" in error_msg:
-                msg = f"PostgreSQL SQL syntax error: {e}"
-                self._handle_transaction_error_cleanup()
-                raise SQLParsingError(msg) from e
-            else:
-                msg = f"PostgreSQL operational error: {e}"
-            raise SQLSpecError(msg) from e
-        except psycopg.ProgrammingError as e:
-            # Handle SQL syntax errors, missing objects, etc.
-            self._handle_transaction_error_cleanup()
-            msg = f"PostgreSQL programming error: {e}"
-            raise SQLParsingError(msg) from e
-        except psycopg.DataError as e:
-            # Handle invalid data, type conversion errors, etc.
-            self._handle_transaction_error_cleanup()
-            msg = f"PostgreSQL data error: {e}"
-            raise SQLSpecError(msg) from e
-        except psycopg.DatabaseError as e:
-            # Handle other database-specific errors (including transaction errors)
-            error_msg = str(e).lower()
-            if "transaction" in error_msg and "abort" in error_msg:
-                # This specifically handles the "current transaction is aborted" error
-                self._handle_transaction_error_cleanup()
-                msg = f"PostgreSQL transaction error (transaction rolled back): {e}"
-            else:
-                msg = f"PostgreSQL database error: {e}"
-            raise SQLSpecError(msg) from e
-        except psycopg.Error as e:
-            # Catch-all for other PostgreSQL errors
-            self._handle_transaction_error_cleanup()
-            msg = f"PostgreSQL error: {e}"
-            raise SQLSpecError(msg) from e
-        except Exception as e:
-            # Handle any other unexpected errors with context
-            error_msg = str(e).lower()
-            if "parse" in error_msg or "syntax" in error_msg:
-                msg = f"SQL parsing failed: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"Unexpected database operation error: {e}"
-            raise SQLSpecError(msg) from e
+    def handle_database_exceptions(self) -> "AbstractContextManager[None]":
+        """Handle database-specific exceptions and wrap them appropriately."""
+        return PsycopgSyncExceptionHandler()
 
     def _handle_transaction_error_cleanup(self) -> None:
         """Handle transaction cleanup after database errors to prevent aborted transaction states."""
@@ -490,6 +479,52 @@ class PsycopgAsyncCursor:
             await self.cursor.close()
 
 
+class PsycopgAsyncExceptionHandler:
+    """Custom async context manager for handling PostgreSQL psycopg database exceptions."""
+
+    __slots__ = ()
+
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if exc_type is None:
+            return
+
+        if issubclass(exc_type, psycopg.IntegrityError):
+            e = exc_val
+            msg = f"PostgreSQL psycopg integrity constraint violation: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, psycopg.ProgrammingError):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "syntax" in error_msg or "parse" in error_msg:
+                msg = f"PostgreSQL psycopg SQL syntax error: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"PostgreSQL psycopg programming error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, psycopg.OperationalError):
+            e = exc_val
+            msg = f"PostgreSQL psycopg operational error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, psycopg.DatabaseError):
+            e = exc_val
+            msg = f"PostgreSQL psycopg database error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, psycopg.Error):
+            e = exc_val
+            msg = f"PostgreSQL psycopg error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, Exception):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "parse" in error_msg or "syntax" in error_msg:
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected async database operation error: {e}"
+            raise SQLSpecError(msg) from e
+
+
 class PsycopgAsyncDriver(AsyncDriverAdapterBase):
     """Enhanced PostgreSQL psycopg asynchronous driver with CORE_ROUND_3 architecture integration.
 
@@ -581,67 +616,9 @@ class PsycopgAsyncDriver(AsyncDriverAdapterBase):
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
 
-    @asynccontextmanager
-    async def handle_database_exceptions(self) -> "AsyncGenerator[None, None]":
-        """Handle PostgreSQL psycopg-specific exceptions with comprehensive error categorization.
-
-        Yields:
-            AsyncGenerator that yields None for use with @asynccontextmanager decorator
-        """
-        try:
-            yield
-        except psycopg.IntegrityError as e:
-            # Handle constraint violations, foreign key errors, etc.
-            await self._handle_transaction_error_cleanup_async()
-            msg = f"PostgreSQL integrity constraint violation: {e}"
-            raise SQLSpecError(msg) from e
-        except psycopg.OperationalError as e:
-            # Handle connection issues, permission errors, etc.
-            error_msg = str(e).lower()
-            if "connect" in error_msg or "connection" in error_msg:
-                msg = f"PostgreSQL connection error: {e}"
-            elif "permission" in error_msg or "auth" in error_msg:
-                msg = f"PostgreSQL authentication error: {e}"
-            elif "syntax" in error_msg or "malformed" in error_msg:
-                msg = f"PostgreSQL SQL syntax error: {e}"
-                await self._handle_transaction_error_cleanup_async()
-                raise SQLParsingError(msg) from e
-            else:
-                msg = f"PostgreSQL operational error: {e}"
-            raise SQLSpecError(msg) from e
-        except psycopg.ProgrammingError as e:
-            # Handle SQL syntax errors, missing objects, etc.
-            await self._handle_transaction_error_cleanup_async()
-            msg = f"PostgreSQL programming error: {e}"
-            raise SQLParsingError(msg) from e
-        except psycopg.DataError as e:
-            # Handle invalid data, type conversion errors, etc.
-            await self._handle_transaction_error_cleanup_async()
-            msg = f"PostgreSQL data error: {e}"
-            raise SQLSpecError(msg) from e
-        except psycopg.DatabaseError as e:
-            # Handle other database-specific errors (including transaction errors)
-            error_msg = str(e).lower()
-            if "transaction" in error_msg and "abort" in error_msg:
-                # This specifically handles the "current transaction is aborted" error
-                await self._handle_transaction_error_cleanup_async()
-                msg = f"PostgreSQL transaction error (transaction rolled back): {e}"
-            else:
-                msg = f"PostgreSQL database error: {e}"
-            raise SQLSpecError(msg) from e
-        except psycopg.Error as e:
-            # Catch-all for other PostgreSQL errors
-            await self._handle_transaction_error_cleanup_async()
-            msg = f"PostgreSQL error: {e}"
-            raise SQLSpecError(msg) from e
-        except Exception as e:
-            # Handle any other unexpected errors with context
-            error_msg = str(e).lower()
-            if "parse" in error_msg or "syntax" in error_msg:
-                msg = f"SQL parsing failed: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"Unexpected database operation error: {e}"
-            raise SQLSpecError(msg) from e
+    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
+        """Handle database-specific exceptions and wrap them appropriately."""
+        return PsycopgAsyncExceptionHandler()
 
     async def _handle_transaction_error_cleanup_async(self) -> None:
         """Handle transaction cleanup after database errors to prevent aborted transaction states (async version)."""

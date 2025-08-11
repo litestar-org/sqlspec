@@ -141,22 +141,23 @@ packages = ["sqlspec"]
 dependencies = ["hatch-mypyc", "hatch-cython"]
 enable-by-default = false
 exclude = [
-  "tests/**",                # Test files
-  "sqlspec/__main__.py",     # Entry point (can't run directly when compiled)
-  "sqlspec/cli.py",          # CLI module (not performance critical)
-  "sqlspec/typing.py",       # Type aliases
-  "sqlspec/_typing.py",      # Type aliases
-  "sqlspec/config.py",       # Main config
-  "sqlspec/extensions/**",   # All extensions
-  "sqlspec/**/__init__.py",  # Init files (usually just imports)
-  "sqlspec/protocols.py",    # Protocol definitions
-  "sqlspec/builder/**/*.py", # Builder (not performance critical)
+  "tests/**",                      # Test files
+  "sqlspec/__main__.py",           # Entry point (can't run directly when compiled)
+  "sqlspec/cli.py",                # CLI module (not performance critical)
+  "sqlspec/typing.py",             # Type aliases
+  "sqlspec/_typing.py",            # Type aliases
+  "sqlspec/config.py",             # Main config
+  "sqlspec/adapters/**/config.py", # Adapter configurations
+  "sqlspec/adapters/**/_types.py", # Type definitions (mypyc incompatible)
+  "sqlspec/extensions/**",         # All extensions
+  "sqlspec/**/__init__.py",        # Init files (usually just imports)
+  "sqlspec/protocols.py",          # Protocol definitions
+  "sqlspec/builder/**/*.py",       # Builder (not performance critical)
 
 ]
 include = [
-  "sqlspec/core/**/*.py",     # Core module
-  "sqlspec/adapters/**/*.py", # Adapter modules
-  "sqlspec/loader.py",        # Loader module
+  "sqlspec/core/**/*.py", # Core module 
+  "sqlspec/loader.py",    # Loader module
 
   # === UTILITY MODULES ===
   "sqlspec/utils/text.py",        # Text utilities

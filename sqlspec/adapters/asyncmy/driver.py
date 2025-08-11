@@ -22,7 +22,6 @@ MySQL Features:
 """
 
 import logging
-from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import asyncmy
@@ -39,7 +38,7 @@ from sqlspec.utils.serializers import to_json
 # AsyncMy parameter configuration uses core system's built-in conversion
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from contextlib import AbstractAsyncContextManager
 
     from sqlspec.adapters.asyncmy._types import AsyncmyConnection
     from sqlspec.core.result import SQLResult
@@ -48,7 +47,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ("AsyncmyCursor", "AsyncmyDriver", "asyncmy_statement_config")
+__all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler", "asyncmy_statement_config")
 
 
 # Enhanced AsyncMy statement configuration using core modules with performance optimizations
@@ -94,6 +93,52 @@ class AsyncmyCursor:
         _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
         if self.cursor is not None:
             await self.cursor.close()
+
+
+class AsyncmyExceptionHandler:
+    """Custom async context manager for handling AsyncMy database exceptions."""
+
+    __slots__ = ()
+
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if exc_type is None:
+            return
+
+        if issubclass(exc_type, asyncmy.errors.IntegrityError):
+            e = exc_val
+            msg = f"AsyncMy MySQL integrity constraint violation: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, asyncmy.errors.ProgrammingError):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "syntax" in error_msg or "parse" in error_msg:
+                msg = f"AsyncMy MySQL SQL syntax error: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"AsyncMy MySQL programming error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, asyncmy.errors.OperationalError):
+            e = exc_val
+            msg = f"AsyncMy MySQL operational error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, asyncmy.errors.DatabaseError):
+            e = exc_val
+            msg = f"AsyncMy MySQL database error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, asyncmy.errors.Error):
+            e = exc_val
+            msg = f"AsyncMy MySQL error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, Exception):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "parse" in error_msg or "syntax" in error_msg:
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected async database operation error: {e}"
+            raise SQLSpecError(msg) from e
 
 
 class AsyncmyDriver(AsyncDriverAdapterBase):
@@ -155,52 +200,9 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """Create async context manager for AsyncMy cursor with enhanced resource management."""
         return AsyncmyCursor(connection)
 
-    @asynccontextmanager
-    async def handle_database_exceptions(self) -> "AsyncGenerator[None, None]":
-        """Handle AsyncMy-specific exceptions with comprehensive error categorization."""
-        try:
-            yield
-        except asyncmy.errors.IntegrityError as e:
-            # Handle constraint violations, foreign key errors, etc.
-            msg = f"AsyncMy MySQL integrity constraint violation: {e}"
-            raise SQLSpecError(msg) from e
-        except asyncmy.errors.OperationalError as e:
-            # Handle connection issues, permission errors, etc.
-            error_msg = str(e).lower()
-            if "connect" in error_msg or "connection" in error_msg:
-                msg = f"AsyncMy MySQL connection error: {e}"
-            elif "access denied" in error_msg or "auth" in error_msg:
-                msg = f"AsyncMy MySQL authentication error: {e}"
-            elif "syntax" in error_msg or "sql" in error_msg:
-                msg = f"AsyncMy MySQL syntax error: {e}"
-                raise SQLParsingError(msg) from e
-            else:
-                msg = f"AsyncMy MySQL operational error: {e}"
-            raise SQLSpecError(msg) from e
-        except asyncmy.errors.ProgrammingError as e:
-            # Handle SQL syntax errors, missing objects, etc.
-            msg = f"AsyncMy MySQL programming error: {e}"
-            raise SQLParsingError(msg) from e
-        except asyncmy.errors.DataError as e:
-            # Handle invalid data, type conversion errors, etc.
-            msg = f"AsyncMy MySQL data error: {e}"
-            raise SQLSpecError(msg) from e
-        except asyncmy.errors.DatabaseError as e:
-            # Handle other database-specific errors
-            msg = f"AsyncMy MySQL database error: {e}"
-            raise SQLSpecError(msg) from e
-        except asyncmy.errors.MySQLError as e:
-            # Catch-all for other MySQL errors
-            msg = f"AsyncMy MySQL error: {e}"
-            raise SQLSpecError(msg) from e
-        except Exception as e:
-            # Handle any other unexpected errors with context
-            error_msg = str(e).lower()
-            if "parse" in error_msg or "syntax" in error_msg:
-                msg = f"SQL parsing failed: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"Unexpected database operation error: {e}"
-            raise SQLSpecError(msg) from e
+    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
+        """Handle database-specific exceptions and wrap them appropriately."""
+        return AsyncmyExceptionHandler()
 
     async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
         """Hook for AsyncMy-specific special operations.

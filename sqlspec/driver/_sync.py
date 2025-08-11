@@ -108,34 +108,13 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         or a custom context manager class with enhanced resource management.
         """
 
+    @abstractmethod
     def handle_database_exceptions(self) -> "AbstractContextManager[None]":
-        """MANDATORY: Handle database-specific exceptions and wrap them appropriately.
-
-        This method must be decorated with @contextmanager in each driver implementation.
-        It is the ONLY place where exceptions should be caught and wrapped in SQLSpec exceptions.
-        All other layers (SQLTransformer, statement processing, etc.) should let exceptions bubble up naturally.
-
-        Each driver MUST implement this to handle their specific database exceptions:
-        - SQLGlot ParseError -> SQLSpecParseError
-        - Database connection errors -> SQLSpecConnectionError
-        - Constraint violations -> SQLSpecIntegrityError
-        - Driver-specific errors -> SQLSpecDatabaseError
-
-        Example implementation:
-            @contextmanager
-            def handle_database_exceptions(self):
-                try:
-                    yield
-                except sqlglot.ParseError as e:
-                    raise SQLSpecParseError(f"SQL parsing failed: {e}") from e
-                except psycopg.Error as e:
-                    raise SQLSpecDatabaseError(f"Database error: {e}") from e
+        """Handle database-specific exceptions and wrap them appropriately.
 
         Returns:
-            Generator that yields None for use with @contextmanager decorator
+            ContextManager that can be used in with statements
         """
-        msg = "Each driver must implement handle_database_exceptions with @contextmanager decorator"
-        raise NotImplementedError(msg)
 
     @abstractmethod
     def begin(self) -> None:

@@ -23,7 +23,6 @@ Oracle Features:
 """
 
 import logging
-from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, Optional
 
 import oracledb
@@ -37,7 +36,7 @@ from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator
+    from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from sqlspec.core.result import SQLResult
     from sqlspec.core.statement import SQL
@@ -45,7 +44,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ("OracleAsyncDriver", "OracleSyncDriver", "oracledb_statement_config")
+__all__ = (
+    "OracleAsyncDriver",
+    "OracleAsyncExceptionHandler",
+    "OracleSyncDriver",
+    "OracleSyncExceptionHandler",
+    "oracledb_statement_config",
+)
 
 
 # Enhanced Oracle statement configuration using core modules with performance optimizations
@@ -107,6 +112,98 @@ class OracleAsyncCursor:
             self.cursor.close()  # Synchronous method - do not await
 
 
+class OracleSyncExceptionHandler:
+    """Custom sync context manager for handling Oracle database exceptions."""
+
+    __slots__ = ()
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if exc_type is None:
+            return
+
+        if issubclass(exc_type, oracledb.IntegrityError):
+            e = exc_val
+            msg = f"Oracle integrity constraint violation: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, oracledb.ProgrammingError):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "syntax" in error_msg or "parse" in error_msg:
+                msg = f"Oracle SQL syntax error: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Oracle programming error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, oracledb.OperationalError):
+            e = exc_val
+            msg = f"Oracle operational error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, oracledb.DatabaseError):
+            e = exc_val
+            msg = f"Oracle database error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, oracledb.Error):
+            e = exc_val
+            msg = f"Oracle error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, Exception):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "parse" in error_msg or "syntax" in error_msg:
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected database operation error: {e}"
+            raise SQLSpecError(msg) from e
+
+
+class OracleAsyncExceptionHandler:
+    """Custom async context manager for handling Oracle database exceptions."""
+
+    __slots__ = ()
+
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if exc_type is None:
+            return
+
+        if issubclass(exc_type, oracledb.IntegrityError):
+            e = exc_val
+            msg = f"Oracle integrity constraint violation: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, oracledb.ProgrammingError):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "syntax" in error_msg or "parse" in error_msg:
+                msg = f"Oracle SQL syntax error: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Oracle programming error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, oracledb.OperationalError):
+            e = exc_val
+            msg = f"Oracle operational error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, oracledb.DatabaseError):
+            e = exc_val
+            msg = f"Oracle database error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, oracledb.Error):
+            e = exc_val
+            msg = f"Oracle error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, Exception):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "parse" in error_msg or "syntax" in error_msg:
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected async database operation error: {e}"
+            raise SQLSpecError(msg) from e
+
+
 class OracleSyncDriver(SyncDriverAdapterBase):
     """Enhanced Oracle Sync driver with CORE_ROUND_3 architecture integration.
 
@@ -166,52 +263,9 @@ class OracleSyncDriver(SyncDriverAdapterBase):
         """Create sync context manager for Oracle cursor with enhanced resource management."""
         return OracleSyncCursor(connection)
 
-    @contextmanager
-    def handle_database_exceptions(self) -> "Generator[None, None, None]":
-        """Handle Oracle-specific exceptions with comprehensive error categorization."""
-        try:
-            yield
-        except oracledb.IntegrityError as e:
-            # Handle constraint violations, foreign key errors, etc.
-            msg = f"Oracle integrity constraint violation: {e}"
-            raise SQLSpecError(msg) from e
-        except oracledb.OperationalError as e:
-            # Handle connection issues, permission errors, etc.
-            error_msg = str(e).lower()
-            if "connect" in error_msg or "connection" in error_msg:
-                msg = f"Oracle connection error: {e}"
-            elif "access denied" in error_msg or "auth" in error_msg:
-                msg = f"Oracle authentication error: {e}"
-            elif "syntax" in error_msg or "sql" in error_msg:
-                msg = f"Oracle syntax error: {e}"
-                raise SQLParsingError(msg) from e
-            else:
-                msg = f"Oracle operational error: {e}"
-            raise SQLSpecError(msg) from e
-        except oracledb.ProgrammingError as e:
-            # Handle SQL syntax errors, missing objects, etc.
-            msg = f"Oracle programming error: {e}"
-            raise SQLParsingError(msg) from e
-        except oracledb.DataError as e:
-            # Handle invalid data, type conversion errors, etc.
-            msg = f"Oracle data error: {e}"
-            raise SQLSpecError(msg) from e
-        except oracledb.DatabaseError as e:
-            # Handle other database-specific errors
-            msg = f"Oracle database error: {e}"
-            raise SQLSpecError(msg) from e
-        except oracledb.Error as e:
-            # Catch-all for other Oracle errors
-            msg = f"Oracle error: {e}"
-            raise SQLSpecError(msg) from e
-        except Exception as e:
-            # Handle any other unexpected errors with context
-            error_msg = str(e).lower()
-            if "parse" in error_msg or "syntax" in error_msg:
-                msg = f"SQL parsing failed: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"Unexpected database operation error: {e}"
-            raise SQLSpecError(msg) from e
+    def handle_database_exceptions(self) -> "AbstractContextManager[None]":
+        """Handle database-specific exceptions and wrap them appropriately."""
+        return OracleSyncExceptionHandler()
 
     def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
         """Hook for Oracle-specific special operations.
@@ -376,52 +430,9 @@ class OracleAsyncDriver(AsyncDriverAdapterBase):
         """Create async context manager for Oracle cursor with enhanced resource management."""
         return OracleAsyncCursor(connection)
 
-    @asynccontextmanager
-    async def handle_database_exceptions(self) -> "AsyncGenerator[None, None]":
-        """Handle Oracle-specific exceptions with comprehensive error categorization."""
-        try:
-            yield
-        except oracledb.IntegrityError as e:
-            # Handle constraint violations, foreign key errors, etc.
-            msg = f"Oracle integrity constraint violation: {e}"
-            raise SQLSpecError(msg) from e
-        except oracledb.OperationalError as e:
-            # Handle connection issues, permission errors, etc.
-            error_msg = str(e).lower()
-            if "connect" in error_msg or "connection" in error_msg:
-                msg = f"Oracle connection error: {e}"
-            elif "access denied" in error_msg or "auth" in error_msg:
-                msg = f"Oracle authentication error: {e}"
-            elif "syntax" in error_msg or "sql" in error_msg:
-                msg = f"Oracle syntax error: {e}"
-                raise SQLParsingError(msg) from e
-            else:
-                msg = f"Oracle operational error: {e}"
-            raise SQLSpecError(msg) from e
-        except oracledb.ProgrammingError as e:
-            # Handle SQL syntax errors, missing objects, etc.
-            msg = f"Oracle programming error: {e}"
-            raise SQLParsingError(msg) from e
-        except oracledb.DataError as e:
-            # Handle invalid data, type conversion errors, etc.
-            msg = f"Oracle data error: {e}"
-            raise SQLSpecError(msg) from e
-        except oracledb.DatabaseError as e:
-            # Handle other database-specific errors
-            msg = f"Oracle database error: {e}"
-            raise SQLSpecError(msg) from e
-        except oracledb.Error as e:
-            # Catch-all for other Oracle errors
-            msg = f"Oracle error: {e}"
-            raise SQLSpecError(msg) from e
-        except Exception as e:
-            # Handle any other unexpected errors with context
-            error_msg = str(e).lower()
-            if "parse" in error_msg or "syntax" in error_msg:
-                msg = f"SQL parsing failed: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"Unexpected database operation error: {e}"
-            raise SQLSpecError(msg) from e
+    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
+        """Handle database-specific exceptions and wrap them appropriately."""
+        return OracleAsyncExceptionHandler()
 
     async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
         """Hook for Oracle-specific special operations.

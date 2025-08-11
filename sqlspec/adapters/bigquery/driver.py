@@ -24,7 +24,6 @@ BigQuery Features:
 
 import datetime
 import logging
-from contextlib import contextmanager
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional, Union
 
@@ -43,14 +42,14 @@ from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from contextlib import AbstractContextManager
 
     from sqlspec.core.result import SQLResult
     from sqlspec.core.statement import SQL
 
 logger = logging.getLogger(__name__)
 
-__all__ = ("BigQueryCursor", "BigQueryDriver", "bigquery_statement_config")
+__all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "bigquery_statement_config")
 
 
 _BQ_TYPE_MAP: dict[type, tuple[str, Optional[str]]] = {
@@ -203,6 +202,46 @@ class BigQueryCursor:
         self.connection = connection
         self.job: Optional[QueryJob] = None
 
+    def __enter__(self) -> "BigQueryConnection":
+        return self.connection
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
+        # BigQuery doesn't need explicit cursor cleanup
+
+
+class BigQueryExceptionHandler:
+    """Custom sync context manager for handling BigQuery database exceptions."""
+
+    __slots__ = ()
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if exc_type is None:
+            return
+
+        if issubclass(exc_type, GoogleCloudError):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "syntax" in error_msg or "invalid" in error_msg:
+                msg = f"BigQuery SQL syntax error: {e}"
+                raise SQLParsingError(msg) from e
+            if "permission" in error_msg or "access" in error_msg:
+                msg = f"BigQuery access error: {e}"
+                raise SQLSpecError(msg) from e
+            msg = f"BigQuery cloud error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, Exception):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "parse" in error_msg or "syntax" in error_msg:
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected BigQuery operation error: {e}"
+            raise SQLSpecError(msg) from e
+
 
 class BigQueryDriver(SyncDriverAdapterBase):
     """Enhanced BigQuery driver with CORE_ROUND_3 architecture integration.
@@ -263,20 +302,13 @@ class BigQueryDriver(SyncDriverAdapterBase):
             "default_query_job_config"
         )
 
-    @contextmanager
-    def with_cursor(self, connection: "BigQueryConnection") -> "Any":
+    def with_cursor(self, connection: "BigQueryConnection") -> "BigQueryCursor":
         """Create and return a context manager for cursor acquisition and cleanup with enhanced resource management.
 
-        Yields:
+        Returns:
             BigQueryCursor: Cursor object for query execution
         """
-        cursor = BigQueryCursor(connection)
-        try:
-            yield cursor
-        finally:
-            # Enhanced cleanup - BigQuery cursors don't need explicit cleanup but we ensure job state is clean
-            if hasattr(cursor, "job") and cursor.job:
-                cursor.job = None
+        return BigQueryCursor(connection)
 
     def begin(self) -> None:
         """Begin transaction - BigQuery doesn't support transactions."""
@@ -287,41 +319,11 @@ class BigQueryDriver(SyncDriverAdapterBase):
     def commit(self) -> None:
         """Commit transaction - BigQuery doesn't support transactions."""
 
-    @contextmanager
-    def handle_database_exceptions(self) -> "Generator[None, None, None]":
-        """Handle BigQuery-specific exceptions with comprehensive error categorization.
+    def handle_database_exceptions(self) -> "AbstractContextManager[None]":
+        """Handle database-specific exceptions and wrap them appropriately."""
+        return BigQueryExceptionHandler()
 
-        Yields:
-            None: Context manager yields nothing
-        """
-        try:
-            yield
-        except GoogleCloudError as e:
-            # Handle BigQuery/Google Cloud specific errors
-            error_msg = str(e).lower()
-            if "syntax" in error_msg or "parse" in error_msg:
-                msg = f"BigQuery syntax error: {e}"
-                raise SQLParsingError(msg) from e
-            elif "not found" in error_msg or "table" in error_msg:
-                msg = f"BigQuery table/dataset error: {e}"
-            elif "permission" in error_msg or "access" in error_msg:
-                msg = f"BigQuery permission error: {e}"
-            elif "quota" in error_msg or "limit" in error_msg:
-                msg = f"BigQuery quota/limit error: {e}"
-            else:
-                msg = f"BigQuery database error: {e}"
-            raise SQLSpecError(msg) from e
-        except Exception as e:
-            # Handle any other unexpected errors with context
-            error_msg = str(e).lower()
-            if "parse" in error_msg or "syntax" in error_msg:
-                msg = f"SQL parsing failed: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"Unexpected database operation error: {e}"
-            raise SQLSpecError(msg) from e
-
-    @staticmethod
-    def _copy_job_config_attrs(source_config: QueryJobConfig, target_config: QueryJobConfig) -> None:
+    def _copy_job_config_attrs(self, source_config: QueryJobConfig, target_config: QueryJobConfig) -> None:
         """Copy non-private attributes from source config to target config with enhanced validation."""
         for attr in dir(source_config):
             if attr.startswith("_"):
@@ -479,7 +481,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         last_job = None
 
         for stmt in statements:
-            job = self._run_query_job(stmt, prepared_parameters or {}, connection=cursor.connection)
+            job = self._run_query_job(stmt, prepared_parameters or {}, connection=cursor)
             job.result()  # Wait for completion
             last_job = job
             successful_count += 1
@@ -519,7 +521,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         script_sql = ";\n".join(script_statements)
 
         # Execute the script as a single job
-        cursor.job = self._run_query_job(script_sql, None, connection=cursor.connection)
+        cursor.job = self._run_query_job(script_sql, None, connection=cursor)
         cursor.job.result()  # Wait for completion
 
         # Get the actual affected row count from the job
@@ -534,7 +536,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         Uses core processing for optimal parameter handling and BigQuery result processing.
         """
         sql, parameters = self._get_compiled_sql(statement, self.statement_config)
-        cursor.job = self._run_query_job(sql, parameters, connection=cursor.connection)
+        cursor.job = self._run_query_job(sql, parameters, connection=cursor)
 
         # Enhanced SELECT result processing for BigQuery
         if statement.returns_rows():

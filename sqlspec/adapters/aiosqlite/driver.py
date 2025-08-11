@@ -17,7 +17,6 @@ Architecture Features:
 
 import contextlib
 import datetime
-from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -31,14 +30,14 @@ from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from contextlib import AbstractAsyncContextManager
 
     from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
     from sqlspec.core.result import SQLResult
     from sqlspec.core.statement import SQL
     from sqlspec.driver import ExecutionResult
 
-__all__ = ("AiosqliteCursor", "AiosqliteDriver", "aiosqlite_statement_config")
+__all__ = ("AiosqliteCursor", "AiosqliteDriver", "AiosqliteExceptionHandler", "aiosqlite_statement_config")
 
 
 # Enhanced AIOSQLite statement configuration using core modules with performance optimizations
@@ -88,6 +87,49 @@ class AiosqliteCursor:
         if self.cursor is not None:
             with contextlib.suppress(Exception):
                 await self.cursor.close()
+
+
+class AiosqliteExceptionHandler:
+    """Custom async context manager for handling AIOSQLite database exceptions."""
+
+    __slots__ = ()
+
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if exc_type is None:
+            return
+        if issubclass(exc_type, aiosqlite.IntegrityError):
+            e = exc_val
+            msg = f"AIOSQLite integrity constraint violation: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, aiosqlite.OperationalError):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "locked" in error_msg:
+                raise e
+            if "syntax" in error_msg or "malformed" in error_msg:
+                msg = f"AIOSQLite SQL syntax error: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"AIOSQLite operational error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, aiosqlite.DatabaseError):
+            e = exc_val
+            msg = f"AIOSQLite database error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, aiosqlite.Error):
+            e = exc_val
+            msg = f"AIOSQLite error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, Exception):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "parse" in error_msg or "syntax" in error_msg:
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected async database operation error: {e}"
+            raise SQLSpecError(msg) from e
 
 
 class AiosqliteDriver(AsyncDriverAdapterBase):
@@ -141,43 +183,9 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """Create async context manager for AIOSQLite cursor with enhanced resource management."""
         return AiosqliteCursor(connection)
 
-    @asynccontextmanager
-    async def handle_database_exceptions(self) -> "AsyncGenerator[None, None]":
+    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
         """Handle AIOSQLite-specific exceptions with comprehensive error categorization."""
-        try:
-            yield
-        except aiosqlite.IntegrityError as e:
-            # Handle constraint violations, foreign key errors, etc.
-            msg = f"AIOSQLite integrity constraint violation: {e}"
-            raise SQLSpecError(msg) from e
-        except aiosqlite.OperationalError as e:
-            # Handle locked database, malformed SQL, etc.
-            error_msg = str(e).lower()
-            if "locked" in error_msg:
-                # For database locks, re-raise the original exception for retry handling
-                raise
-            elif "syntax" in error_msg or "malformed" in error_msg:
-                msg = f"AIOSQLite SQL syntax error: {e}"
-                raise SQLParsingError(msg) from e
-            else:
-                msg = f"AIOSQLite operational error: {e}"
-            raise SQLSpecError(msg) from e
-        except aiosqlite.DatabaseError as e:
-            # Handle other database-specific errors
-            msg = f"AIOSQLite database error: {e}"
-            raise SQLSpecError(msg) from e
-        except aiosqlite.Error as e:
-            # Catch-all for other AIOSQLite errors
-            msg = f"AIOSQLite error: {e}"
-            raise SQLSpecError(msg) from e
-        except Exception as e:
-            # Handle any other unexpected errors with context
-            error_msg = str(e).lower()
-            if "parse" in error_msg or "syntax" in error_msg:
-                msg = f"SQL parsing failed: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"Unexpected database operation error: {e}"
-            raise SQLSpecError(msg) from e
+        return AiosqliteExceptionHandler()
 
     async def _try_special_handling(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "Optional[SQLResult]":
         """Hook for AIOSQLite-specific special operations.

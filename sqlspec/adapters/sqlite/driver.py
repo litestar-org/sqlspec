@@ -17,7 +17,6 @@ Architecture Features:
 import contextlib
 import datetime
 import sqlite3
-from contextlib import contextmanager
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -29,14 +28,14 @@ from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from contextlib import AbstractContextManager
 
     from sqlspec.adapters.sqlite._types import SqliteConnection
     from sqlspec.core.result import SQLResult
     from sqlspec.core.statement import SQL
     from sqlspec.driver import ExecutionResult
 
-__all__ = ("SqliteCursor", "SqliteDriver", "sqlite_statement_config")
+__all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "sqlite_statement_config")
 
 
 # Enhanced SQLite statement configuration using core modules with performance optimizations
@@ -91,6 +90,50 @@ class SqliteCursor:
                 self.cursor.close()
 
 
+class SqliteExceptionHandler:
+    """Custom sync context manager for handling SQLite database exceptions."""
+
+    __slots__ = ()
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if exc_type is None:
+            return
+
+        if issubclass(exc_type, sqlite3.IntegrityError):
+            e = exc_val
+            msg = f"SQLite integrity constraint violation: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, sqlite3.OperationalError):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "locked" in error_msg:
+                raise
+            if "syntax" in error_msg or "malformed" in error_msg:
+                msg = f"SQLite SQL syntax error: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"SQLite operational error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, sqlite3.DatabaseError):
+            e = exc_val
+            msg = f"SQLite database error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, sqlite3.Error):
+            e = exc_val
+            msg = f"SQLite error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, Exception):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "parse" in error_msg or "syntax" in error_msg:
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected database operation error: {e}"
+            raise SQLSpecError(msg) from e
+
+
 class SqliteDriver(SyncDriverAdapterBase):
     """Enhanced SQLite driver with CORE_ROUND_3 architecture integration.
 
@@ -141,42 +184,9 @@ class SqliteDriver(SyncDriverAdapterBase):
         """Create context manager for SQLite cursor with enhanced resource management."""
         return SqliteCursor(connection)
 
-    @contextmanager
-    def handle_database_exceptions(self) -> "Generator[None, None, None]":
-        """Handle SQLite-specific exceptions with comprehensive error categorization."""
-        try:
-            yield
-        except sqlite3.IntegrityError as e:
-            # Handle constraint violations, foreign key errors, etc.
-            msg = f"SQLite integrity constraint violation: {e}"
-            raise SQLSpecError(msg) from e
-        except sqlite3.OperationalError as e:
-            # Handle locked database, malformed SQL, etc.
-            error_msg = str(e).lower()
-            if "locked" in error_msg:
-                msg = f"SQLite database is locked: {e}"
-            elif "syntax" in error_msg or "malformed" in error_msg:
-                msg = f"SQLite SQL syntax error: {e}"
-                raise SQLParsingError(msg) from e
-            else:
-                msg = f"SQLite operational error: {e}"
-            raise SQLSpecError(msg) from e
-        except sqlite3.DatabaseError as e:
-            # Handle other database-specific errors
-            msg = f"SQLite database error: {e}"
-            raise SQLSpecError(msg) from e
-        except sqlite3.Error as e:
-            # Catch-all for other SQLite errors
-            msg = f"SQLite error: {e}"
-            raise SQLSpecError(msg) from e
-        except Exception as e:
-            # Handle any other unexpected errors with context
-            error_msg = str(e).lower()
-            if "parse" in error_msg or "syntax" in error_msg:
-                msg = f"SQL parsing failed: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"Unexpected database operation error: {e}"
-            raise SQLSpecError(msg) from e
+    def handle_database_exceptions(self) -> "AbstractContextManager[None]":
+        """Handle database-specific exceptions and wrap them appropriately."""
+        return SqliteExceptionHandler()
 
     def _try_special_handling(self, cursor: "sqlite3.Cursor", statement: "SQL") -> "Optional[SQLResult]":
         """Hook for SQLite-specific special operations.

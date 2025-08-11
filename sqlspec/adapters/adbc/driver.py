@@ -18,7 +18,6 @@ Architecture Features:
 import contextlib
 import datetime
 import decimal
-from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 from sqlglot import exp
@@ -32,7 +31,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from contextlib import AbstractContextManager
 
     from adbc_driver_manager.dbapi import Cursor
 
@@ -40,7 +39,7 @@ if TYPE_CHECKING:
     from sqlspec.core.result import SQLResult
     from sqlspec.driver import ExecutionResult
 
-__all__ = ("AdbcCursor", "AdbcDriver", "get_adbc_statement_config")
+__all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "get_adbc_statement_config")
 
 logger = get_logger("adapters.adbc")
 
@@ -269,6 +268,57 @@ class AdbcCursor:
                 self.cursor.close()  # type: ignore[no-untyped-call]
 
 
+class AdbcExceptionHandler:
+    """Custom sync context manager for handling ADBC database exceptions."""
+
+    __slots__ = ()
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if exc_type is None:
+            return
+
+        # Handle ADBC-specific exceptions based on DB-API 2.0 standard
+        try:
+            # Import ADBC exceptions dynamically to avoid import errors
+            from adbc_driver_manager.dbapi import DatabaseError, IntegrityError, OperationalError, ProgrammingError
+
+            if issubclass(exc_type, IntegrityError):
+                e = exc_val
+                msg = f"ADBC integrity constraint violation: {e}"
+                raise SQLSpecError(msg) from e
+            if issubclass(exc_type, ProgrammingError):
+                e = exc_val
+                error_msg = str(e).lower()
+                if "syntax" in error_msg or "parse" in error_msg:
+                    msg = f"ADBC SQL syntax error: {e}"
+                    raise SQLParsingError(msg) from e
+                msg = f"ADBC programming error: {e}"
+                raise SQLSpecError(msg) from e
+            if issubclass(exc_type, OperationalError):
+                e = exc_val
+                msg = f"ADBC operational error: {e}"
+                raise SQLSpecError(msg) from e
+            if issubclass(exc_type, DatabaseError):
+                e = exc_val
+                msg = f"ADBC database error: {e}"
+                raise SQLSpecError(msg) from e
+        except ImportError:
+            pass
+
+        # Handle generic exceptions that might indicate SQL parsing issues
+        if issubclass(exc_type, Exception):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "parse" in error_msg or "syntax" in error_msg:
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected database operation error: {e}"
+            raise SQLSpecError(msg) from e
+
+
 class AdbcDriver(SyncDriverAdapterBase):
     """Enhanced ADBC driver with CORE_ROUND_3 architecture integration.
 
@@ -370,32 +420,9 @@ class AdbcDriver(SyncDriverAdapterBase):
         """Create context manager for ADBC cursor with enhanced resource management."""
         return AdbcCursor(connection)
 
-    @contextmanager
-    def handle_database_exceptions(self) -> "Generator[None, None, None]":
-        """Handle ADBC-specific exceptions with comprehensive error categorization.
-
-        Yields:
-            None: Context manager yields nothing
-        """
-        try:
-            yield
-        except Exception as e:
-            error_msg = str(e).lower()
-            # Handle ADBC-specific errors with enhanced categorization
-            if "adbc" in error_msg or "arrow" in error_msg:
-                if "connection" in error_msg or "driver" in error_msg:
-                    msg = f"ADBC connection/driver error: {e}"
-                elif "parameter" in error_msg or "bind" in error_msg:
-                    msg = f"ADBC parameter binding error: {e}"
-                else:
-                    msg = f"ADBC database error: {e}"
-                raise SQLSpecError(msg) from e
-            elif "parse" in error_msg or "syntax" in error_msg:
-                msg = f"SQL parsing failed in ADBC operation: {e}"
-                raise SQLParsingError(msg) from e
-            else:
-                msg = f"Unexpected ADBC database error: {e}"
-                raise SQLSpecError(msg) from e
+    def handle_database_exceptions(self) -> "AbstractContextManager[None]":
+        """Handle database-specific exceptions and wrap them appropriately."""
+        return AdbcExceptionHandler()
 
     def _try_special_handling(self, cursor: "Cursor", statement: SQL) -> "Optional[SQLResult]":
         """Handle ADBC-specific operations (currently none).

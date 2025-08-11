@@ -16,8 +16,6 @@ Architecture Features:
 """
 
 import re
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 import asyncpg
@@ -30,12 +28,14 @@ from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from contextlib import AbstractAsyncContextManager
+
     from sqlspec.adapters.asyncpg._types import AsyncpgConnection
     from sqlspec.core.result import SQLResult
     from sqlspec.core.statement import SQL
     from sqlspec.driver import ExecutionResult
 
-__all__ = ("AsyncpgCursor", "AsyncpgDriver", "asyncpg_statement_config")
+__all__ = ("AsyncpgCursor", "AsyncpgDriver", "AsyncpgExceptionHandler", "asyncpg_statement_config")
 
 logger = get_logger("adapters.asyncpg")
 
@@ -78,6 +78,35 @@ class AsyncpgCursor:
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
         # AsyncPG connections don't need explicit cursor cleanup
+
+
+class AsyncpgExceptionHandler:
+    """Custom async context manager for handling AsyncPG database exceptions."""
+
+    __slots__ = ()
+
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if exc_type is None:
+            return
+        if issubclass(exc_type, asyncpg.PostgresError):
+            e = exc_val
+            error_code = getattr(e, "sqlstate", None)
+            if error_code:
+                if error_code.startswith("23"):
+                    msg = f"PostgreSQL integrity constraint violation [{error_code}]: {e}"
+                elif error_code.startswith("42"):
+                    msg = f"PostgreSQL SQL syntax error [{error_code}]: {e}"
+                    raise SQLParsingError(msg) from e
+                elif error_code.startswith("08"):
+                    msg = f"PostgreSQL connection error [{error_code}]: {e}"
+                else:
+                    msg = f"PostgreSQL database error [{error_code}]: {e}"
+            else:
+                msg = f"PostgreSQL database error: {e}"
+            raise SQLSpecError(msg) from e
 
 
 class AsyncpgDriver(AsyncDriverAdapterBase):
@@ -137,35 +166,9 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """Create context manager for AsyncPG cursor with enhanced resource management."""
         return AsyncpgCursor(connection)
 
-    @asynccontextmanager
-    async def handle_database_exceptions(self) -> AsyncGenerator[None]:
+    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
         """Enhanced async exception handling with detailed error categorization."""
-        try:
-            yield
-        except asyncpg.PostgresError as e:
-            # Handle PostgreSQL-specific errors
-            error_code = getattr(e, "sqlstate", None)
-            if error_code:
-                if error_code.startswith("23"):  # Integrity constraint violations
-                    msg = f"PostgreSQL integrity constraint violation [{error_code}]: {e}"
-                elif error_code.startswith("42"):  # Syntax errors and access rule violations
-                    msg = f"PostgreSQL SQL syntax error [{error_code}]: {e}"
-                    raise SQLParsingError(msg) from e
-                elif error_code.startswith("08"):  # Connection errors
-                    msg = f"PostgreSQL connection error [{error_code}]: {e}"
-                else:
-                    msg = f"PostgreSQL database error [{error_code}]: {e}"
-            else:
-                msg = f"PostgreSQL database error: {e}"
-            raise SQLSpecError(msg) from e
-        except Exception as e:
-            # Handle any other unexpected errors
-            error_msg = str(e).lower()
-            if "parse" in error_msg or "syntax" in error_msg:
-                msg = f"SQL parsing failed: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"Unexpected async database operation error: {e}"
-            raise SQLSpecError(msg) from e
+        return AsyncpgExceptionHandler()
 
     async def _try_special_handling(self, cursor: "AsyncpgConnection", statement: "SQL") -> "Optional[SQLResult]":
         """Handle PostgreSQL COPY operations and other special cases.

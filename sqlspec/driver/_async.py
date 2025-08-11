@@ -16,7 +16,6 @@ Performance Improvements:
 """
 
 from abc import abstractmethod
-from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
 
 from sqlspec.core import SQL, Statement
@@ -27,7 +26,8 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import is_dict_row, is_indexable_row
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Sequence
+    from collections.abc import Sequence
+    from contextlib import AbstractAsyncContextManager
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQLResult, StatementConfig, StatementFilter
@@ -108,16 +108,13 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         context manager class with enhanced resource management.
         """
 
-    @asynccontextmanager
-    async def handle_database_exceptions(self) -> "AsyncGenerator[None, None]":
+    @abstractmethod
+    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
         """Handle database-specific exceptions and wrap them appropriately.
 
-        Yields:
-            AsyncGenerator that yields None for use with @asynccontextmanager decorator
+        Returns:
+            AsyncContextManager that can be used in async with statements
         """
-        msg = "Each driver must implement handle_database_exceptions with @asynccontextmanager decorator"
-        raise NotImplementedError(msg)
-        yield
 
     @abstractmethod
     async def begin(self) -> None:

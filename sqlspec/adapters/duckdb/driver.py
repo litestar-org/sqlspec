@@ -15,7 +15,6 @@ Architecture Features:
 - Multi-parameter style support
 """
 
-from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 import duckdb
@@ -29,13 +28,13 @@ from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from contextlib import AbstractContextManager
 
     from sqlspec.adapters.duckdb._types import DuckDBConnection
     from sqlspec.core.result import SQLResult
     from sqlspec.driver import ExecutionResult
 
-__all__ = ("DuckDBCursor", "DuckDBDriver", "duckdb_statement_config")
+__all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "duckdb_statement_config")
 
 logger = get_logger("adapters.duckdb")
 
@@ -85,6 +84,52 @@ class DuckDBCursor:
         _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
         if self.cursor is not None:
             self.cursor.close()
+
+
+class DuckDBExceptionHandler:
+    """Custom sync context manager for handling DuckDB database exceptions."""
+
+    __slots__ = ()
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if exc_type is None:
+            return
+
+        if issubclass(exc_type, duckdb.IntegrityError):
+            e = exc_val
+            msg = f"DuckDB integrity constraint violation: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, duckdb.OperationalError):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "syntax" in error_msg or "parse" in error_msg:
+                msg = f"DuckDB SQL syntax error: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"DuckDB operational error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, duckdb.ProgrammingError):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "syntax" in error_msg or "parse" in error_msg:
+                msg = f"DuckDB SQL syntax error: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"DuckDB programming error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, duckdb.Error):
+            e = exc_val
+            msg = f"DuckDB error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, Exception):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "parse" in error_msg or "syntax" in error_msg:
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected database operation error: {e}"
+            raise SQLSpecError(msg) from e
 
 
 class DuckDBDriver(SyncDriverAdapterBase):
@@ -144,32 +189,9 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """Create context manager for DuckDB cursor with enhanced resource management."""
         return DuckDBCursor(connection)
 
-    @contextmanager
-    def handle_database_exceptions(self) -> "Generator[None, None, None]":
-        """Handle DuckDB-specific exceptions with comprehensive error categorization."""
-        try:
-            yield
-        except duckdb.Error as e:
-            # Handle DuckDB-specific errors with categorization
-            error_msg = str(e).lower()
-            if any(keyword in error_msg for keyword in ("parse", "syntax", "grammar")):
-                msg = f"DuckDB SQL syntax error: {e}"
-                raise SQLParsingError(msg) from e
-            elif any(keyword in error_msg for keyword in ("constraint", "unique", "foreign")):
-                msg = f"DuckDB constraint violation: {e}"
-            elif any(keyword in error_msg for keyword in ("connection", "io", "network")):
-                msg = f"DuckDB connection error: {e}"
-            else:
-                msg = f"DuckDB database error: {e}"
-            raise SQLSpecError(msg) from e
-        except Exception as e:
-            # Handle any other unexpected errors
-            error_msg = str(e).lower()
-            if "parse" in error_msg or "syntax" in error_msg:
-                msg = f"SQL parsing failed: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"Unexpected DuckDB operation error: {e}"
-            raise SQLSpecError(msg) from e
+    def handle_database_exceptions(self) -> "AbstractContextManager[None]":
+        """Handle database-specific exceptions and wrap them appropriately."""
+        return DuckDBExceptionHandler()
 
     def _try_special_handling(self, cursor: Any, statement: SQL) -> "Optional[SQLResult]":
         """Handle DuckDB-specific special operations.

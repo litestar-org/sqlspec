@@ -270,13 +270,15 @@ class SQLProcessor:
         try:
             # Phase 1: Process parameters using integrated processor
             dialect_str = str(self._config.dialect) if self._config.dialect else None
-            processed_sql, processed_params = self._parameter_processor.process(
+            processed_sql, processed_params_tuple = self._parameter_processor.process(
                 sql=sql,
                 parameters=parameters,
                 config=self._config.parameter_config,
                 dialect=dialect_str,
                 is_many=is_many,
             )
+            # Explicit annotation for mypyc
+            processed_params: Any = processed_params_tuple
 
             # Phase 2: Get SQLGlot-compatible SQL for parsing and operation detection
 
@@ -291,7 +293,7 @@ class SQLProcessor:
                 )
 
             # Initialize variables that might be modified later
-            final_parameters = processed_params
+            final_parameters: Any = processed_params
             ast_was_transformed = False
 
             if self._config.enable_parsing:

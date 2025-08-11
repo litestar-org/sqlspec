@@ -91,7 +91,7 @@ class CacheKey:
         key_data: Tuple of hashable values that uniquely identify the cached item
     """
 
-    __slots__ = CACHE_KEY_SLOTS
+    __slots__ = ("_hash", "_key_data")
 
     def __init__(self, key_data: tuple[Any, ...]) -> None:
         """Initialize cache key with performance optimization.
@@ -99,36 +99,32 @@ class CacheKey:
         Args:
             key_data: Tuple of hashable values for the cache key
         """
-        # Store key data as tuple for immutability and hashing
-        object.__setattr__(self, "_key_data", key_data)
-        object.__setattr__(self, "_hash", hash(key_data))
+        # For mypyc compatibility, we need to set attributes directly
+        # instead of using object.__setattr__ which doesn't work well with __slots__
+        self._key_data = key_data
+        self._hash = hash(key_data)
 
     @property
     def key_data(self) -> tuple[Any, ...]:
         """Get the key data tuple."""
-        return self._key_data  # type: ignore[attr-defined,no-any-return]
+        return self._key_data
 
     def __hash__(self) -> int:
         """Return cached hash value for O(1) performance."""
-        return self._hash  # type: ignore[attr-defined,no-any-return]
+        return self._hash
 
     def __eq__(self, other: object) -> bool:
         """Fast equality comparison with short-circuit evaluation."""
         if type(other) is not CacheKey:
             return False
         other_key = other  # type: CacheKey
-        if self._hash != other_key._hash:  # type: ignore[attr-defined]
+        if self._hash != other_key._hash:
             return False
-        return self._key_data == other_key._key_data  # type: ignore[attr-defined,no-any-return]
+        return self._key_data == other_key._key_data
 
     def __repr__(self) -> str:
         """String representation of the cache key."""
-        return f"CacheKey({self._key_data!r})"  # type: ignore[attr-defined]
-
-    def __setattr__(self, name: str, _: Any) -> None:
-        """Prevent modification after initialization (immutable)."""
-        msg = f"'{type(self).__name__}' object attribute '{name}' is read-only"
-        raise AttributeError(msg)
+        return f"CacheKey({self._key_data!r})"
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)

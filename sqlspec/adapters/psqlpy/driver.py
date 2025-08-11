@@ -19,7 +19,6 @@ import datetime
 import decimal
 import re
 import uuid
-from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 import psqlpy
@@ -33,13 +32,13 @@ from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from contextlib import AbstractAsyncContextManager
 
     from sqlspec.adapters.psqlpy._types import PsqlpyConnection
     from sqlspec.core.result import SQLResult
     from sqlspec.driver import ExecutionResult
 
-__all__ = ("PsqlpyCursor", "PsqlpyDriver", "psqlpy_statement_config")
+__all__ = ("PsqlpyCursor", "PsqlpyDriver", "PsqlpyExceptionHandler", "psqlpy_statement_config")
 
 logger = get_logger("adapters.psqlpy")
 
@@ -236,6 +235,44 @@ class PsqlpyCursor:
         return self._in_use
 
 
+class PsqlpyExceptionHandler:
+    """Custom async context manager for handling Psqlpy database exceptions."""
+
+    __slots__ = ()
+
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if exc_type is None:
+            return
+
+        if issubclass(exc_type, psqlpy.exceptions.DatabaseError):
+            e = exc_val
+            msg = f"Psqlpy database error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, psqlpy.exceptions.InterfaceError):
+            e = exc_val
+            msg = f"Psqlpy interface error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, psqlpy.exceptions.Error):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "syntax" in error_msg or "parse" in error_msg:
+                msg = f"Psqlpy SQL syntax error: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Psqlpy error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, Exception):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "parse" in error_msg or "syntax" in error_msg:
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected async database operation error: {e}"
+            raise SQLSpecError(msg) from e
+
+
 class PsqlpyDriver(AsyncDriverAdapterBase):
     """Enhanced Psqlpy driver with CORE_ROUND_3 architecture integration.
 
@@ -292,36 +329,9 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         """Create context manager for psqlpy cursor with enhanced resource management."""
         return PsqlpyCursor(connection)
 
-    @asynccontextmanager
-    async def handle_database_exceptions(self) -> "AsyncGenerator[None, None]":
-        """Handle psqlpy-specific exceptions with comprehensive error categorization.
-
-        Yields:
-            None: Context manager yields nothing
-        """
-        try:
-            yield
-        except Exception as e:
-            error_msg = str(e).lower()
-            exc_type = type(e).__name__.lower()
-
-            if "databaseerror" in exc_type or "psqlpy" in str(type(e).__module__):
-                if any(keyword in error_msg for keyword in ("parse", "syntax", "grammar")):
-                    msg = f"Psqlpy SQL syntax error: {e}"
-                    raise SQLParsingError(msg) from e
-                elif any(keyword in error_msg for keyword in ("constraint", "unique", "foreign")):
-                    msg = f"Psqlpy constraint violation: {e}"
-                elif any(keyword in error_msg for keyword in ("connection", "pool", "timeout")):
-                    msg = f"Psqlpy connection error: {e}"
-                else:
-                    msg = f"Psqlpy database error: {e}"
-                raise SQLSpecError(msg) from e
-
-            if "parse" in error_msg or "syntax" in error_msg:
-                msg = f"SQL parsing failed: {e}"
-                raise SQLParsingError(msg) from e
-            msg = f"Unexpected psqlpy operation error: {e}"
-            raise SQLSpecError(msg) from e
+    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
+        """Handle database-specific exceptions and wrap them appropriately."""
+        return PsqlpyExceptionHandler()
 
     async def _try_special_handling(self, cursor: "PsqlpyConnection", statement: SQL) -> "Optional[SQLResult]":
         """Hook for psqlpy-specific special operations.
