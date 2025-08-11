@@ -172,7 +172,11 @@ class MergeMatchedClauseMixin:
         """
         update_expressions: list[exp.EQ] = []
         for col, val in set_values.items():
-            param_name = self.add_parameter(val)[1]  # type: ignore[attr-defined]
+            column_name = col if isinstance(col, str) else str(col)
+            if "." in column_name:
+                column_name = column_name.split(".")[-1]
+            param_name = self._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+            param_name = self.add_parameter(val, name=param_name)[1]  # type: ignore[attr-defined]
             update_expressions.append(exp.EQ(this=exp.column(col), expression=exp.var(param_name)))
 
         when_args: dict[str, Any] = {"matched": True, "then": exp.Update(expressions=update_expressions)}
@@ -270,8 +274,12 @@ class MergeNotMatchedClauseMixin:
                 raise SQLBuilderError(msg)
 
             parameterized_values: list[exp.Expression] = []
-            for val in values:
-                param_name = self.add_parameter(val)[1]  # type: ignore[attr-defined]
+            for i, val in enumerate(values):
+                column_name = columns[i] if isinstance(columns[i], str) else str(columns[i])
+                if "." in column_name:
+                    column_name = column_name.split(".")[-1]
+                param_name = self._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+                param_name = self.add_parameter(val, name=param_name)[1]  # type: ignore[attr-defined]
                 parameterized_values.append(exp.var(param_name))
 
             insert_args["this"] = exp.Tuple(expressions=[exp.column(c) for c in columns])
@@ -336,7 +344,11 @@ class MergeNotMatchedBySourceClauseMixin:
         """
         update_expressions: list[exp.EQ] = []
         for col, val in set_values.items():
-            param_name = self.add_parameter(val)[1]  # type: ignore[attr-defined]
+            column_name = col if isinstance(col, str) else str(col)
+            if "." in column_name:
+                column_name = column_name.split(".")[-1]
+            param_name = self._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+            param_name = self.add_parameter(val, name=param_name)[1]  # type: ignore[attr-defined]
             update_expressions.append(exp.EQ(this=exp.column(col), expression=exp.var(param_name)))
 
         when_args: dict[str, Any] = {

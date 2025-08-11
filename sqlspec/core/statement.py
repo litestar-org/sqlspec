@@ -368,6 +368,10 @@ class SQL:
         new_sql = SQL(
             self._raw_sql, *self._original_parameters, statement_config=self._statement_config, is_many=self._is_many
         )
+        # Preserve accumulated parameters when marking as script
+        new_sql._named_parameters.update(self._named_parameters)
+        new_sql._positional_parameters = self._positional_parameters.copy()
+        new_sql._filters = self._filters.copy()
         new_sql._is_script = True
         return new_sql
 
@@ -375,13 +379,19 @@ class SQL:
         self, statement: "Optional[Union[str, exp.Expression]]" = None, parameters: Optional[Any] = None, **kwargs: Any
     ) -> "SQL":
         """Create copy with modifications."""
-        return SQL(
+        new_sql = SQL(
             statement or self._raw_sql,
             *(parameters if parameters is not None else self._original_parameters),
             statement_config=self._statement_config,
             is_many=self._is_many,
             **kwargs,
         )
+        # Only preserve accumulated parameters when no explicit parameters are provided
+        if parameters is None:
+            new_sql._named_parameters.update(self._named_parameters)
+            new_sql._positional_parameters = self._positional_parameters.copy()
+        new_sql._filters = self._filters.copy()
+        return new_sql
 
     def add_named_parameter(self, name: str, value: Any) -> "SQL":
         """Add a named parameter and return a new SQL instance.
@@ -437,9 +447,14 @@ class SQL:
 
         new_sql_text = new_expr.sql(dialect=self._dialect)
 
-        return SQL(
+        new_sql = SQL(
             new_sql_text, *self._original_parameters, statement_config=self._statement_config, is_many=self._is_many
         )
+        # Preserve accumulated named parameters when creating WHERE clause
+        new_sql._named_parameters.update(self._named_parameters)
+        new_sql._positional_parameters = self._positional_parameters.copy()
+        new_sql._filters = self._filters.copy()
+        return new_sql
 
     def __hash__(self) -> int:
         """Hash value."""

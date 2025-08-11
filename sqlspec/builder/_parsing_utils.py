@@ -109,7 +109,11 @@ def parse_condition_expression(
         if value is None:
             return exp.Is(this=column_expr, expression=exp.null())
         if builder and has_parameter_builder(builder):
-            _, param_name = builder.add_parameter(value)
+            from sqlspec.builder.mixins._where_clause import _extract_column_name
+
+            column_name = _extract_column_name(column)
+            param_name = builder._generate_unique_parameter_name(column_name)
+            _, param_name = builder.add_parameter(value, name=param_name)
             return exp.EQ(this=column_expr, expression=exp.Placeholder(this=param_name))
         if isinstance(value, str):
             return exp.EQ(this=column_expr, expression=exp.convert(value))

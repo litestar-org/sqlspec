@@ -119,7 +119,18 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
             msg = ERR_MSG_VALUES_COLUMNS_MISMATCH.format(values_len=len(values), columns_len=len(self._columns))
             raise SQLBuilderError(msg)
 
-        param_names = [self._add_parameter(value) for value in values]
+        param_names = []
+        for i, value in enumerate(values):
+            # Try to use column name if available, otherwise use position-based name
+            if self._columns and i < len(self._columns):
+                column_name = (
+                    str(self._columns[i]).split(".")[-1] if "." in str(self._columns[i]) else str(self._columns[i])
+                )
+                param_name = self._generate_unique_parameter_name(column_name)
+            else:
+                param_name = self._generate_unique_parameter_name(f"value_{i + 1}")
+            _, param_name = self.add_parameter(value, name=param_name)
+            param_names.append(param_name)
         value_placeholders = tuple(exp.var(name) for name in param_names)
 
         current_values_expression = insert_expr.args.get("expression")

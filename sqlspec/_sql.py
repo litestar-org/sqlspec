@@ -4,17 +4,65 @@ Provides both statement builders (select, insert, update, etc.) and column expre
 """
 
 import logging
-from typing import Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import sqlglot
 from sqlglot import exp
 from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
 
-from sqlspec.builder import Column, Delete, Insert, Merge, Select, Truncate, Update
+from sqlspec.builder import (
+    AlterTable,
+    Column,
+    CommentOn,
+    CreateIndex,
+    CreateMaterializedView,
+    CreateSchema,
+    CreateTable,
+    CreateTableAsSelect,
+    CreateView,
+    Delete,
+    DropIndex,
+    DropSchema,
+    DropTable,
+    DropView,
+    Insert,
+    Merge,
+    RenameTable,
+    Select,
+    Truncate,
+    Update,
+)
 from sqlspec.exceptions import SQLBuilderError
 
-__all__ = ("Case", "Column", "Delete", "Insert", "Merge", "SQLFactory", "Select", "Truncate", "Update", "sql")
+if TYPE_CHECKING:
+    from sqlspec.core.statement import SQL
+
+__all__ = (
+    "AlterTable",
+    "Case",
+    "Column",
+    "CommentOn",
+    "CreateIndex",
+    "CreateMaterializedView",
+    "CreateSchema",
+    "CreateTable",
+    "CreateTableAsSelect",
+    "CreateView",
+    "Delete",
+    "DropIndex",
+    "DropSchema",
+    "DropTable",
+    "DropView",
+    "Insert",
+    "Merge",
+    "RenameTable",
+    "SQLFactory",
+    "Select",
+    "Truncate",
+    "Update",
+    "sql",
+)
 
 logger = logging.getLogger("sqlspec")
 
@@ -213,6 +261,174 @@ class SQLFactory:
         return builder
 
     # ===================
+    # DDL Statement Builders
+    # ===================
+
+    def create_table(self, table_name: str, dialect: DialectType = None) -> "CreateTable":
+        """Create a CREATE TABLE builder.
+
+        Args:
+            table_name: Name of the table to create
+            dialect: Optional SQL dialect
+
+        Returns:
+            CreateTable builder instance
+        """
+        builder = CreateTable(table_name)
+        builder.dialect = dialect or self.dialect
+        return builder
+
+    def create_table_as_select(self, dialect: DialectType = None) -> "CreateTableAsSelect":
+        """Create a CREATE TABLE AS SELECT builder.
+
+        Args:
+            dialect: Optional SQL dialect
+
+        Returns:
+            CreateTableAsSelect builder instance
+        """
+        builder = CreateTableAsSelect()
+        builder.dialect = dialect or self.dialect
+        return builder
+
+    def create_view(self, dialect: DialectType = None) -> "CreateView":
+        """Create a CREATE VIEW builder.
+
+        Args:
+            dialect: Optional SQL dialect
+
+        Returns:
+            CreateView builder instance
+        """
+        builder = CreateView()
+        builder.dialect = dialect or self.dialect
+        return builder
+
+    def create_materialized_view(self, dialect: DialectType = None) -> "CreateMaterializedView":
+        """Create a CREATE MATERIALIZED VIEW builder.
+
+        Args:
+            dialect: Optional SQL dialect
+
+        Returns:
+            CreateMaterializedView builder instance
+        """
+        builder = CreateMaterializedView()
+        builder.dialect = dialect or self.dialect
+        return builder
+
+    def create_index(self, index_name: str, dialect: DialectType = None) -> "CreateIndex":
+        """Create a CREATE INDEX builder.
+
+        Args:
+            index_name: Name of the index to create
+            dialect: Optional SQL dialect
+
+        Returns:
+            CreateIndex builder instance
+        """
+        return CreateIndex(index_name, dialect=dialect or self.dialect)
+
+    def create_schema(self, dialect: DialectType = None) -> "CreateSchema":
+        """Create a CREATE SCHEMA builder.
+
+        Args:
+            dialect: Optional SQL dialect
+
+        Returns:
+            CreateSchema builder instance
+        """
+        builder = CreateSchema()
+        builder.dialect = dialect or self.dialect
+        return builder
+
+    def drop_table(self, table_name: str, dialect: DialectType = None) -> "DropTable":
+        """Create a DROP TABLE builder.
+
+        Args:
+            table_name: Name of the table to drop
+            dialect: Optional SQL dialect
+
+        Returns:
+            DropTable builder instance
+        """
+        return DropTable(table_name, dialect=dialect or self.dialect)
+
+    def drop_view(self, dialect: DialectType = None) -> "DropView":
+        """Create a DROP VIEW builder.
+
+        Args:
+            dialect: Optional SQL dialect
+
+        Returns:
+            DropView builder instance
+        """
+        return DropView(dialect=dialect or self.dialect)
+
+    def drop_index(self, index_name: str, dialect: DialectType = None) -> "DropIndex":
+        """Create a DROP INDEX builder.
+
+        Args:
+            index_name: Name of the index to drop
+            dialect: Optional SQL dialect
+
+        Returns:
+            DropIndex builder instance
+        """
+        return DropIndex(index_name, dialect=dialect or self.dialect)
+
+    def drop_schema(self, dialect: DialectType = None) -> "DropSchema":
+        """Create a DROP SCHEMA builder.
+
+        Args:
+            dialect: Optional SQL dialect
+
+        Returns:
+            DropSchema builder instance
+        """
+        return DropSchema(dialect=dialect or self.dialect)
+
+    def alter_table(self, table_name: str, dialect: DialectType = None) -> "AlterTable":
+        """Create an ALTER TABLE builder.
+
+        Args:
+            table_name: Name of the table to alter
+            dialect: Optional SQL dialect
+
+        Returns:
+            AlterTable builder instance
+        """
+        builder = AlterTable(table_name)
+        builder.dialect = dialect or self.dialect
+        return builder
+
+    def rename_table(self, dialect: DialectType = None) -> "RenameTable":
+        """Create a RENAME TABLE builder.
+
+        Args:
+            dialect: Optional SQL dialect
+
+        Returns:
+            RenameTable builder instance
+        """
+        builder = RenameTable()
+        builder.dialect = dialect or self.dialect
+        return builder
+
+    def comment_on(self, dialect: DialectType = None) -> "CommentOn":
+        """Create a COMMENT ON builder.
+
+        Args:
+            dialect: Optional SQL dialect
+
+        Returns:
+            CommentOn builder instance
+        """
+        builder = CommentOn()
+        builder.dialect = dialect or self.dialect
+        return builder
+
+    # ===================
     # SQL Analysis Helpers
     # ===================
 
@@ -363,8 +579,8 @@ class SQLFactory:
     # ===================
 
     @staticmethod
-    def raw(sql_fragment: str) -> exp.Expression:
-        """Create a raw SQL expression from a string fragment.
+    def raw(sql_fragment: str, **parameters: Any) -> "Union[exp.Expression, SQL]":
+        """Create a raw SQL expression from a string fragment with optional parameters.
 
         This method makes it explicit that you are passing raw SQL that should
         be parsed and included directly in the query. Useful for complex expressions,
@@ -372,30 +588,30 @@ class SQLFactory:
 
         Args:
             sql_fragment: Raw SQL string to parse into an expression.
+            **parameters: Named parameters for parameter binding.
 
         Returns:
-            SQLGlot expression from the parsed SQL fragment.
+            SQLGlot expression from the parsed SQL fragment (if no parameters).
+            SQL statement object (if parameters provided).
 
         Raises:
             SQLBuilderError: If the SQL fragment cannot be parsed.
 
         Example:
             ```python
-            # Raw column expression with alias
-            query = sql.select(
-                sql.raw("user.id AS u_id"), "name"
-            ).from_("users")
+            # Raw expression without parameters (current behavior)
+            expr = sql.raw("COALESCE(name, 'Unknown')")
 
-            # Raw function call
-            query = sql.select(
-                sql.raw("COALESCE(name, 'Unknown')")
-            ).from_("users")
+            # Raw SQL with named parameters (new functionality)
+            stmt = sql.raw(
+                "LOWER(name) LIKE LOWER(:pattern)", pattern=f"%{query}%"
+            )
 
-            # Raw complex expression
-            query = (
-                sql.select("*")
-                .from_("orders")
-                .where(sql.raw("DATE(created_at) = CURRENT_DATE"))
+            # Raw complex expression with parameters
+            expr = sql.raw(
+                "price BETWEEN :min_price AND :max_price",
+                min_price=100,
+                max_price=500,
             )
 
             # Raw window function
@@ -407,16 +623,23 @@ class SQLFactory:
             ).from_("employees")
             ```
         """
-        try:
-            parsed: Optional[exp.Expression] = exp.maybe_parse(sql_fragment)
-            if parsed is not None:
-                return parsed
-            if sql_fragment.strip().replace("_", "").replace(".", "").isalnum():
-                return exp.to_identifier(sql_fragment)
-            return exp.Literal.string(sql_fragment)
-        except Exception as e:
-            msg = f"Failed to parse raw SQL fragment '{sql_fragment}': {e}"
-            raise SQLBuilderError(msg) from e
+        if not parameters:
+            # Original behavior - return pure expression
+            try:
+                parsed: Optional[exp.Expression] = exp.maybe_parse(sql_fragment)
+                if parsed is not None:
+                    return parsed
+                if sql_fragment.strip().replace("_", "").replace(".", "").isalnum():
+                    return exp.to_identifier(sql_fragment)
+                return exp.Literal.string(sql_fragment)
+            except Exception as e:
+                msg = f"Failed to parse raw SQL fragment '{sql_fragment}': {e}"
+                raise SQLBuilderError(msg) from e
+
+        # New behavior - return SQL statement with parameters
+        from sqlspec.core.statement import SQL
+
+        return SQL(sql_fragment, parameters)
 
     # ===================
     # Aggregate Functions

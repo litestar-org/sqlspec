@@ -78,11 +78,21 @@ class InsertValuesMixin:
         except AttributeError:
             pass
         row_exprs = []
-        for v in values:
+        for i, v in enumerate(values):
             if isinstance(v, exp.Expression):
                 row_exprs.append(v)
             else:
-                _, param_name = self.add_parameter(v)  # type: ignore[attr-defined]
+                # Try to use column name if available, otherwise use position-based name
+                try:
+                    _columns = self._columns  # type: ignore[attr-defined]
+                    if _columns and i < len(_columns):
+                        column_name = str(_columns[i]).split(".")[-1] if "." in str(_columns[i]) else str(_columns[i])
+                        param_name = self._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+                    else:
+                        param_name = self._generate_unique_parameter_name(f"value_{i + 1}")  # type: ignore[attr-defined]
+                except AttributeError:
+                    param_name = self._generate_unique_parameter_name(f"value_{i + 1}")  # type: ignore[attr-defined]
+                _, param_name = self.add_parameter(v, name=param_name)  # type: ignore[attr-defined]
                 row_exprs.append(exp.var(param_name))
         values_expr = exp.Values(expressions=[row_exprs])
         self._expression.set("expression", values_expr)

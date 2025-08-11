@@ -563,7 +563,8 @@ class CaseBuilder:
             CaseBuilder: The current builder instance for method chaining.
         """
         cond_expr = exp.condition(condition) if isinstance(condition, str) else condition
-        param_name = self._parent.add_parameter(value)[1]
+        param_name = self._parent._generate_unique_parameter_name("case_when_value")
+        param_name = self._parent.add_parameter(value, name=param_name)[1]
         value_expr = exp.Placeholder(this=param_name)
 
         when_clause = exp.When(this=cond_expr, then=value_expr)
@@ -582,7 +583,8 @@ class CaseBuilder:
         Returns:
             CaseBuilder: The current builder instance for method chaining.
         """
-        param_name = self._parent.add_parameter(value)[1]
+        param_name = self._parent._generate_unique_parameter_name("case_else_value")
+        param_name = self._parent.add_parameter(value, name=param_name)[1]
         value_expr = exp.Placeholder(this=param_name)
         self._case_expr.set("default", value_expr)
         return self
