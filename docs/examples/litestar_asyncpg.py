@@ -24,9 +24,9 @@ from typing import Any
 
 from litestar import Litestar, get
 
-from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
+from sqlspec import SQL
+from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgPoolConfig
 from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec
-from sqlspec.statement.sql import SQL
 
 
 @get("/")
@@ -73,12 +73,15 @@ async def get_status() -> dict[str, str]:
 sqlspec = SQLSpec(
     config=[
         DatabaseConfig(
-            config=AsyncpgConfig(dsn="postgresql://app:app@localhost:15432/app", min_size=1, max_size=3),
+            config=AsyncpgConfig(
+                pool_config=AsyncpgPoolConfig(
+                    dsn="postgresql://postgres:test@localhost:5432/postgres", min_size=1, max_size=5
+                )
+            ),
             commit_mode="autocommit",
         )
     ]
 )
-
 app = Litestar(route_handlers=[hello_world, get_version, list_tables, get_status], plugins=[sqlspec], debug=True)
 
 if __name__ == "__main__":

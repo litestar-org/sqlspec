@@ -2,8 +2,6 @@
 """Application dependency providers generators.
 
 This module contains functions to create dependency providers for services and filters.
-
-You should not have modify this module very often and should only be invoked under normal usage.
 """
 
 import datetime
@@ -16,7 +14,7 @@ from litestar.di import Provide
 from litestar.params import Dependency, Parameter
 from typing_extensions import NotRequired
 
-from sqlspec.statement.filters import (
+from sqlspec.core.filters import (
     BeforeAfterFilter,
     FilterTypes,
     InCollectionFilter,
@@ -59,69 +57,44 @@ HashableType = Union[HashableValue, tuple[Any, ...], tuple[tuple[str, Any], ...]
 
 class DependencyDefaults:
     FILTERS_DEPENDENCY_KEY: str = "filters"
-    """Key for the filters dependency."""
     CREATED_FILTER_DEPENDENCY_KEY: str = "created_filter"
-    """Key for the created filter dependency."""
     ID_FILTER_DEPENDENCY_KEY: str = "id_filter"
-    """Key for the id filter dependency."""
     LIMIT_OFFSET_FILTER_DEPENDENCY_KEY: str = "limit_offset_filter"
-    """Key for the limit offset dependency."""
     UPDATED_FILTER_DEPENDENCY_KEY: str = "updated_filter"
-    """Key for the updated filter dependency."""
     ORDER_BY_FILTER_DEPENDENCY_KEY: str = "order_by_filter"
-    """Key for the order by dependency."""
     SEARCH_FILTER_DEPENDENCY_KEY: str = "search_filter"
-    """Key for the search filter dependency."""
     DEFAULT_PAGINATION_SIZE: int = 20
-    """Default pagination size."""
 
 
 DEPENDENCY_DEFAULTS = DependencyDefaults()
 
 
 class FieldNameType(NamedTuple):
-    """Type for field name and associated type information.
-
-    This allows for specifying both the field name and the expected type for filter values.
-    """
+    """Type for field name and associated type information for filter configuration."""
 
     name: str
-    """Name of the field to filter on."""
     type_hint: type[Any] = str
-    """Type of the filter value. Defaults to str."""
 
 
 class FilterConfig(TypedDict):
     """Configuration for generating dynamic filters."""
 
     id_filter: NotRequired[type[Union[UUID, int, str]]]
-    """Indicates that the id filter should be enabled.  When set, the type specified will be used for the :class:`CollectionFilter`."""
     id_field: NotRequired[str]
-    """The field on the model that stored the primary key or identifier."""
     sort_field: NotRequired[str]
-    """The default field to use for the sort filter."""
     sort_order: NotRequired[SortOrder]
-    """The default order to use for the sort filter."""
     pagination_type: NotRequired[Literal["limit_offset"]]
-    """When set, pagination is enabled based on the type specified."""
     pagination_size: NotRequired[int]
-    """The size of the pagination. Defaults to `DEFAULT_PAGINATION_SIZE`."""
     search: NotRequired[Union[str, set[str], list[str]]]
-    """Fields to enable search on. Can be a comma-separated string or a set of field names."""
     search_ignore_case: NotRequired[bool]
-    """When set, search is case insensitive by default."""
     created_at: NotRequired[bool]
-    """When set, created_at filter is enabled."""
     updated_at: NotRequired[bool]
-    """When set, updated_at filter is enabled."""
     not_in_fields: NotRequired[Union[FieldNameType, set[FieldNameType], list[Union[str, FieldNameType]]]]
-    """Fields that support not-in collection filters. Can be a single field or a set of fields with type information."""
     in_fields: NotRequired[Union[FieldNameType, set[FieldNameType], list[Union[str, FieldNameType]]]]
-    """Fields that support in-collection filters. Can be a single field or a set of fields with type information."""
 
 
 class DependencyCache(metaclass=SingletonMeta):
-    """Simple dependency cache for the application.  This is used to help memoize dependencies that are generated dynamically."""
+    """Dependency cache for memoizing dynamically generated dependencies."""
 
     def __init__(self) -> None:
         self.dependencies: dict[Union[int, str], dict[str, Provide]] = {}
@@ -148,9 +121,7 @@ def create_filter_dependencies(
     Returns:
         A dependency provider function for the combined filter function.
     """
-    cache_key = hash(_make_hashable(config))
-    deps = dep_cache.get_dependencies(cache_key)
-    if deps is not None:
+    if (deps := dep_cache.get_dependencies(cache_key := hash(_make_hashable(config)))) is not None:
         return deps
     deps = _create_statement_filters(config, dep_defaults)
     dep_cache.add_dependencies(cache_key, deps)
@@ -158,13 +129,7 @@ def create_filter_dependencies(
 
 
 def _make_hashable(value: Any) -> HashableType:
-    """Convert a value into a hashable type.
-
-    This function converts any value into a hashable type by:
-    - Converting dictionaries to sorted tuples of (key, value) pairs
-    - Converting lists and sets to sorted tuples
-    - Preserving primitive types (str, int, float, bool, None)
-    - Converting any other type to its string representation
+    """Convert a value into a hashable type for caching purposes.
 
     Args:
         value: Any value that needs to be made hashable.
@@ -175,12 +140,12 @@ def _make_hashable(value: Any) -> HashableType:
     if isinstance(value, dict):
         items = []
         for k in sorted(value.keys()):  # pyright: ignore
-            v = value[k]  # pyright: ignore
-            items.append((str(k), _make_hashable(v)))  # pyright: ignore
-        return tuple(items)  # pyright: ignore
+            v = value[k]
+            items.append((str(k), _make_hashable(v)))
+        return tuple(items)
     if isinstance(value, (list, set)):
-        hashable_items = [_make_hashable(item) for item in value]  # pyright: ignore
-        filtered_items = [item for item in hashable_items if item is not None]  # pyright: ignore
+        hashable_items = [_make_hashable(item) for item in value]
+        filtered_items = [item for item in hashable_items if item is not None]
         return tuple(sorted(filtered_items, key=str))
     if isinstance(value, (str, int, float, bool, type(None))):
         return value
@@ -193,11 +158,11 @@ def _create_statement_filters(
     """Create filter dependencies based on configuration.
 
     Args:
-        config (FilterConfig): Configuration dictionary specifying which filters to enable
-        dep_defaults (DependencyDefaults): Dependency defaults to use for the filter dependencies
+        config: Configuration dictionary specifying which filters to enable
+        dep_defaults: Dependency defaults to use for the filter dependencies
 
     Returns:
-        dict[str, Provide]: Dictionary of filter provider functions
+        Dictionary of filter provider functions
     """
     filters: dict[str, Provide] = {}
 
@@ -343,13 +308,13 @@ def _create_statement_filters(
 
 
 def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., list[FilterTypes]]:
-    """Create a filter function based on the provided configuration.
+    """Create filter aggregation function based on configuration.
 
     Args:
         config: The filter configuration.
 
     Returns:
-        A function that returns a list of filters based on the configuration.
+        Function that returns list of configured filters.
     """
 
     parameters: dict[str, inspect.Parameter] = {}
@@ -432,13 +397,13 @@ def _create_filter_aggregate_function(config: FilterConfig) -> Callable[..., lis
             annotations[f"{field_def.name}_in_filter"] = InCollectionFilter[field_def.type_hint]  # type: ignore
 
     def provide_filters(**kwargs: FilterTypes) -> list[FilterTypes]:
-        """Provide filter dependencies based on configuration.
+        """Aggregate filter dependencies based on configuration.
 
         Args:
             **kwargs: Filter parameters dynamically provided based on configuration.
 
         Returns:
-            list[FilterTypes]: List of configured filters.
+            List of configured filters.
         """
         filters: list[FilterTypes] = []
         if id_filter := kwargs.get("id_filter"):

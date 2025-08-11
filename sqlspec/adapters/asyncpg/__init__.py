@@ -1,6 +1,21 @@
-from sqlspec.adapters.asyncpg.config import CONNECTION_FIELDS, POOL_FIELDS, AsyncpgConfig
-from sqlspec.adapters.asyncpg.driver import AsyncpgConnection, AsyncpgDriver
+"""AsyncPG adapter for SQLSpec."""
 
-# AsyncpgDriver already imported above
+from sqlspec.adapters.asyncpg._types import AsyncpgConnection
+from sqlspec.adapters.asyncpg.config import AsyncpgConfig, AsyncpgConnectionConfig, AsyncpgPoolConfig
+from sqlspec.adapters.asyncpg.driver import (
+    AsyncpgCursor,
+    AsyncpgDriver,
+    AsyncpgExceptionHandler,
+    asyncpg_statement_config,
+)
 
-__all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "AsyncpgConfig", "AsyncpgConnection", "AsyncpgDriver")
+__all__ = (
+    "AsyncpgConfig",
+    "AsyncpgConnection",
+    "AsyncpgConnectionConfig",
+    "AsyncpgCursor",
+    "AsyncpgDriver",
+    "AsyncpgExceptionHandler",
+    "AsyncpgPoolConfig",
+    "asyncpg_statement_config",
+)

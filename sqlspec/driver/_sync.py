@@ -1,255 +1,473 @@
-"""Synchronous driver protocol implementation."""
+"""Synchronous driver protocol implementation.
 
-from abc import ABC, abstractmethod
-from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Optional, Union, overload
+This module provides the sync driver infrastructure for database adapters,
+including connection management, transaction support, and result processing.
+"""
 
-from sqlspec.driver._common import CommonDriverAttributesMixin
-from sqlspec.driver.parameters import process_execute_many_parameters
-from sqlspec.statement.builder import Delete, Insert, QueryBuilder, Select, Update
-from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL, SQLConfig, Statement
-from sqlspec.typing import ConnectionT, DictRow, ModelDTOT, RowT, StatementParameters
+from abc import abstractmethod
+from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
+
+from sqlspec.core import SQL
+from sqlspec.driver._common import CommonDriverAttributesMixin, ExecutionResult
+from sqlspec.driver.mixins import SQLTranslatorMixin, ToSchemaMixin
+from sqlspec.exceptions import NotFoundError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.type_guards import can_convert_to_schema
+from sqlspec.utils.type_guards import is_dict_row, is_indexable_row
 
 if TYPE_CHECKING:
-    from sqlspec.statement.filters import StatementFilter
+    from collections.abc import Sequence
+    from contextlib import AbstractContextManager
+
+    from sqlspec.builder import QueryBuilder
+    from sqlspec.core import SQLResult, Statement, StatementConfig, StatementFilter
+    from sqlspec.typing import ModelDTOT, ModelT, RowT, StatementParameters
 
 logger = get_logger("sqlspec")
 
-__all__ = ("SyncDriverAdapterProtocol",)
+__all__ = ("SyncDriverAdapterBase",)
 
 
 EMPTY_FILTERS: "list[StatementFilter]" = []
 
 
-class SyncDriverAdapterProtocol(CommonDriverAttributesMixin[ConnectionT, RowT], ABC):
+class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToSchemaMixin):
+    """Base class for synchronous database drivers.
+
+    Provides the foundation for sync database adapters, including connection management,
+    transaction support, and SQL execution methods. All database operations are performed
+    synchronously and support context manager patterns for proper resource cleanup.
+    """
+
     __slots__ = ()
 
-    def __init__(
-        self,
-        connection: "ConnectionT",
-        config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
-    ) -> None:
-        """Initialize sync driver adapter.
+    def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
+        """Central execution dispatcher using the Template Method Pattern.
+
+        Orchestrates the common execution flow, delegating database-specific steps
+        to abstract methods that concrete adapters must implement.
+        All database operations are wrapped in exception handling.
 
         Args:
-            connection: The database connection
-            config: SQL statement configuration
-            default_row_type: Default row type for results (DictRow, TupleRow, etc.)
+            statement: The SQL statement to execute
+            connection: The database connection to use
+
+        Returns:
+            The result of the SQL execution
         """
-        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
+        with self.handle_database_exceptions(), self.with_cursor(connection) as cursor:
+            special_result = self._try_special_handling(cursor, statement)
+            if special_result is not None:
+                return special_result
 
-    def _build_statement(
-        self,
-        statement: "Union[Statement, QueryBuilder[Any]]",
-        *parameters: "Union[StatementParameters, StatementFilter]",
-        _config: "Optional[SQLConfig]" = None,
-        **kwargs: Any,
-    ) -> "SQL":
-        # Use driver's config if none provided
-        _config = _config or self.config
+            if statement.is_script:
+                execution_result = self._execute_script(cursor, statement)
+            elif statement.is_many:
+                execution_result = self._execute_many(cursor, statement)
+            else:
+                execution_result = self._execute_statement(cursor, statement)
 
-        if isinstance(statement, QueryBuilder):
-            return statement.to_statement(config=_config)
-        # If statement is already a SQL object, handle additional parameters
-        if isinstance(statement, SQL):
-            if parameters or kwargs:
-                new_config = _config
-                if self.dialect and not new_config.dialect:
-                    new_config = replace(new_config, dialect=self.dialect)
-                # Use raw SQL if available to ensure proper parsing with dialect
-                sql_source = statement._raw_sql or statement._statement
-                # Preserve filters and state when creating new SQL object
-                existing_state = {
-                    "is_many": statement._is_many,
-                    "is_script": statement._is_script,
-                    "original_parameters": statement._original_parameters,
-                    "filters": statement._filters,
-                    "positional_params": statement._positional_params,
-                    "named_params": statement._named_params,
-                }
-                return SQL(sql_source, *parameters, config=new_config, _existing_state=existing_state, **kwargs)
-            # Even without additional parameters, ensure dialect is set
-            if self.dialect and (not statement._config.dialect or statement._config.dialect != self.dialect):
-                new_config = replace(statement._config, dialect=self.dialect)
-                # Use raw SQL if available to ensure proper parsing with dialect
-                sql_source = statement._raw_sql or statement._statement
-                # Preserve parameters and state when creating new SQL object
-                # Use the public parameters property which always has the right value
-                existing_state = {
-                    "is_many": statement._is_many,
-                    "is_script": statement._is_script,
-                    "original_parameters": statement._original_parameters,
-                    "filters": statement._filters,
-                    "positional_params": statement._positional_params,
-                    "named_params": statement._named_params,
-                }
-                if statement.parameters:
-                    return SQL(
-                        sql_source, parameters=statement.parameters, config=new_config, _existing_state=existing_state
-                    )
-                return SQL(sql_source, config=new_config, _existing_state=existing_state)
-            return statement
-        new_config = _config
-        if self.dialect and not new_config.dialect:
-            new_config = replace(new_config, dialect=self.dialect)
-        return SQL(statement, *parameters, config=new_config, **kwargs)
+            return self.build_statement_result(statement, execution_result)
 
     @abstractmethod
-    def _execute_statement(
-        self, statement: "SQL", connection: "Optional[ConnectionT]" = None, **kwargs: Any
-    ) -> "SQLResult[RowT]":
-        """Actual execution implementation by concrete drivers, using the raw connection.
+    def with_cursor(self, connection: Any) -> Any:
+        """Create and return a context manager for cursor acquisition and cleanup.
 
-        Returns SQLResult directly based on the statement type.
+        Returns a context manager that yields a cursor for database operations.
+        Concrete implementations handle database-specific cursor creation and cleanup.
         """
-        raise NotImplementedError
 
-    @overload
+    @abstractmethod
+    def handle_database_exceptions(self) -> "AbstractContextManager[None]":
+        """Handle database-specific exceptions and wrap them appropriately.
+
+        Returns:
+            ContextManager that can be used in with statements
+        """
+
+    @abstractmethod
+    def begin(self) -> None:
+        """Begin a database transaction on the current connection."""
+
+    @abstractmethod
+    def rollback(self) -> None:
+        """Rollback the current transaction on the current connection."""
+
+    @abstractmethod
+    def commit(self) -> None:
+        """Commit the current transaction on the current connection."""
+
+    @abstractmethod
+    def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
+        """Hook for database-specific special operations (e.g., PostgreSQL COPY, bulk operations).
+
+        This method is called first in dispatch_statement_execution() to allow drivers to handle
+        special operations that don't follow the standard SQL execution pattern.
+
+        Args:
+            cursor: Database cursor/connection object
+            statement: SQL statement to analyze
+
+        Returns:
+            SQLResult if the special operation was handled and completed,
+            None if standard execution should proceed
+        """
+
+    def _execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
+        """Execute a SQL script containing multiple statements.
+
+        Default implementation splits the script and executes statements individually.
+        Drivers can override for database-specific script execution methods.
+
+        Args:
+            cursor: Database cursor/connection object
+            statement: SQL statement object with all necessary data and configuration
+
+        Returns:
+            ExecutionResult with script execution data including statement counts
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
+
+        for stmt in statements:
+            single_stmt = statement.copy(statement=stmt, parameters=prepared_parameters)
+            self._execute_statement(cursor, single_stmt)
+
+        return self.create_execution_result(
+            cursor, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
+        )
+
+    @abstractmethod
+    def _execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:
+        """Execute SQL with multiple parameter sets (executemany).
+
+        Must be implemented by each driver for database-specific executemany logic.
+
+        Args:
+            cursor: Database cursor/connection object
+            statement: SQL statement object with all necessary data and configuration
+
+        Returns:
+            ExecutionResult with execution data for the many operation
+        """
+
+    @abstractmethod
+    def _execute_statement(self, cursor: Any, statement: "SQL") -> ExecutionResult:
+        """Execute a single SQL statement.
+
+        Must be implemented by each driver for database-specific execution logic.
+
+        Args:
+            cursor: Database cursor/connection object
+            statement: SQL statement object with all necessary data and configuration
+
+        Returns:
+            ExecutionResult with execution data
+        """
+
     def execute(
         self,
-        statement: "Select",
+        statement: "Union[SQL, Statement, QueryBuilder]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
-        schema_type: "type[ModelDTOT]",
-        _connection: "Optional[ConnectionT]" = None,
-        _config: "Optional[SQLConfig]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
-    ) -> "SQLResult[ModelDTOT]": ...
-
-    @overload
-    def execute(
-        self,
-        statement: "Select",
-        /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
-        schema_type: None = None,
-        _connection: "Optional[ConnectionT]" = None,
-        _config: "Optional[SQLConfig]" = None,
-        **kwargs: Any,
-    ) -> "SQLResult[RowT]": ...
-
-    @overload
-    def execute(
-        self,
-        statement: "Union[Insert, Update, Delete]",
-        /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
-        _connection: "Optional[ConnectionT]" = None,
-        _config: "Optional[SQLConfig]" = None,
-        **kwargs: Any,
-    ) -> "SQLResult[RowT]": ...
-
-    @overload
-    def execute(
-        self,
-        statement: "Union[str, SQL]",
-        /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
-        schema_type: "type[ModelDTOT]",
-        _connection: "Optional[ConnectionT]" = None,
-        _config: "Optional[SQLConfig]" = None,
-        **kwargs: Any,
-    ) -> "SQLResult[ModelDTOT]": ...
-
-    @overload
-    def execute(
-        self,
-        statement: "Union[str, SQL]",
-        /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
-        schema_type: None = None,
-        _connection: "Optional[ConnectionT]" = None,
-        _config: "Optional[SQLConfig]" = None,
-        **kwargs: Any,
-    ) -> "SQLResult[RowT]": ...
-
-    def execute(
-        self,
-        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
-        /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
-        schema_type: "Optional[type[ModelDTOT]]" = None,
-        _connection: "Optional[ConnectionT]" = None,
-        _config: "Optional[SQLConfig]" = None,
-        **kwargs: Any,
-    ) -> "Union[SQLResult[ModelDTOT], SQLResult[RowT]]":
-        sql_statement = self._build_statement(statement, *parameters, _config=_config or self.config, **kwargs)
-        result = self._execute_statement(statement=sql_statement, connection=self._connection(_connection), **kwargs)
-
-        # If schema_type is provided and we have data, convert it
-        if schema_type and result.data and can_convert_to_schema(self):
-            converted_data = list(self.to_schema(data=result.data, schema_type=schema_type))
-            return SQLResult[ModelDTOT](
-                statement=result.statement,
-                data=converted_data,
-                column_names=result.column_names,
-                rows_affected=result.rows_affected,
-                operation_type=result.operation_type,
-                last_inserted_id=result.last_inserted_id,
-                execution_time=result.execution_time,
-                metadata=result.metadata,
-            )
-
-        return result
+    ) -> "SQLResult":
+        """Execute a statement with parameter handling."""
+        sql_statement = self.prepare_statement(
+            statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
+        )
+        return self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
 
     def execute_many(
         self,
-        statement: "Union[SQL, Statement, QueryBuilder[Any]]",
+        statement: "Union[SQL, Statement, QueryBuilder]",
         /,
-        *parameters: "Union[StatementParameters, StatementFilter]",
-        _connection: "Optional[ConnectionT]" = None,
-        _config: "Optional[SQLConfig]" = None,
+        parameters: "Sequence[StatementParameters]",
+        *filters: "Union[StatementParameters, StatementFilter]",
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
-    ) -> "SQLResult[RowT]":
+    ) -> "SQLResult":
         """Execute statement multiple times with different parameters.
 
-        Now passes first parameter set through pipeline to enable
-        literal extraction and consistent parameter processing.
+        Parameters passed will be used as the batch execution sequence.
         """
-        filters, param_sequence = process_execute_many_parameters(parameters)
+        config = statement_config or self.statement_config
 
-        # Process first parameter set through pipeline for literal extraction
-        first_params = param_sequence[0] if param_sequence else None
+        if isinstance(statement, SQL):
+            sql_statement = SQL(statement._raw_sql, parameters, statement_config=config, is_many=True, **kwargs)
+        else:
+            base_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
+            sql_statement = SQL(base_statement._raw_sql, parameters, statement_config=config, is_many=True, **kwargs)
 
-        # Build statement with first params to trigger pipeline processing
-        sql_statement = self._build_statement(
-            statement, first_params, *filters, _config=_config or self.config, **kwargs
-        )
-
-        # Mark as many with full sequence
-        sql_statement = sql_statement.as_many(param_sequence)
-
-        return self._execute_statement(statement=sql_statement, connection=self._connection(_connection), **kwargs)
+        return self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
 
     def execute_script(
         self,
         statement: "Union[str, SQL]",
         /,
         *parameters: "Union[StatementParameters, StatementFilter]",
-        _connection: "Optional[ConnectionT]" = None,
-        _config: "Optional[SQLConfig]" = None,
-        _suppress_warnings: bool = False,  # New parameter for migrations
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
-    ) -> "SQLResult[RowT]":
+    ) -> "SQLResult":
         """Execute a multi-statement script.
 
         By default, validates each statement and logs warnings for dangerous
-        operations. Use _suppress_warnings=True for migrations and admin scripts.
+        operations. Use suppress_warnings=True for migrations and admin scripts.
         """
-        script_config = _config or self.config
+        script_config = statement_config or self.statement_config
+        sql_statement = self.prepare_statement(statement, parameters, statement_config=script_config, kwargs=kwargs)
 
-        # Keep validation enabled by default
-        # Validators will log warnings for dangerous operations
+        return self.dispatch_statement_execution(statement=sql_statement.as_script(), connection=self.connection)
 
-        sql_statement = self._build_statement(statement, *parameters, _config=script_config, **kwargs)
-        sql_statement = sql_statement.as_script()
+    @overload
+    def select_one(
+        self,
+        statement: "Union[Statement, QueryBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: "type[ModelDTOT]",
+        statement_config: "Optional[StatementConfig]" = None,
+        **kwargs: Any,
+    ) -> "ModelDTOT": ...
 
-        # Pass suppress warnings flag to execution
-        if _suppress_warnings:
-            kwargs["_suppress_warnings"] = True
+    @overload
+    def select_one(
+        self,
+        statement: "Union[Statement, QueryBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: None = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        **kwargs: Any,
+    ) -> "Union[ModelT, RowT, dict[str, Any]]": ...  # pyright: ignore[reportInvalidTypeVarUse]
 
-        return self._execute_statement(statement=sql_statement, connection=self._connection(_connection), **kwargs)
+    def select_one(
+        self,
+        statement: "Union[Statement, QueryBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: "Optional[type[ModelDTOT]]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        **kwargs: Any,
+    ) -> "Union[ModelT, RowT, ModelDTOT]":  # pyright: ignore[reportInvalidTypeVarUse]
+        """Execute a select statement and return exactly one row.
+
+        Raises an exception if no rows or more than one row is returned.
+        """
+        result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
+        data = result.get_data()
+        if not data:
+            msg = "No rows found"
+            raise NotFoundError(msg)
+        if len(data) > 1:
+            msg = f"Expected exactly one row, found {len(data)}"
+            raise ValueError(msg)
+        return cast(
+            "Union[ModelT, RowT, ModelDTOT]",
+            self.to_schema(data[0], schema_type=schema_type) if schema_type else data[0],
+        )
+
+    @overload
+    def select_one_or_none(
+        self,
+        statement: "Union[Statement, QueryBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: "type[ModelDTOT]",
+        statement_config: "Optional[StatementConfig]" = None,
+        **kwargs: Any,
+    ) -> "Optional[ModelDTOT]": ...
+
+    @overload
+    def select_one_or_none(
+        self,
+        statement: "Union[Statement, QueryBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: None = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        **kwargs: Any,
+    ) -> "Optional[ModelT]": ...  # pyright: ignore[reportInvalidTypeVarUse]
+
+    def select_one_or_none(
+        self,
+        statement: "Union[Statement, QueryBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: "Optional[type[ModelDTOT]]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        **kwargs: Any,
+    ) -> "Optional[Union[ModelT, ModelDTOT]]":  # pyright: ignore[reportInvalidTypeVarUse]
+        """Execute a select statement and return at most one row.
+
+        Returns None if no rows are found.
+        Raises an exception if more than one row is returned.
+        """
+        result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
+        data = result.get_data()
+        if not data:
+            return None
+        if len(data) > 1:
+            msg = f"Expected at most one row, found {len(data)}"
+            raise ValueError(msg)
+        return cast("Optional[Union[ModelT, ModelDTOT]]", self.to_schema(data[0], schema_type=schema_type))
+
+    @overload
+    def select(
+        self,
+        statement: "Union[Statement, QueryBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: "type[ModelDTOT]",
+        statement_config: "Optional[StatementConfig]" = None,
+        **kwargs: Any,
+    ) -> "list[ModelDTOT]": ...
+
+    @overload
+    def select(
+        self,
+        statement: "Union[Statement, QueryBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: None = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        **kwargs: Any,
+    ) -> "list[ModelT]": ...  # pyright: ignore[reportInvalidTypeVarUse]
+
+    def select(
+        self,
+        statement: "Union[Statement, QueryBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: "Optional[type[ModelDTOT]]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        **kwargs: Any,
+    ) -> "Union[list[ModelT], list[ModelDTOT]]":  # pyright: ignore[reportInvalidTypeVarUse]
+        """Execute a select statement and return all rows."""
+        result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
+        return cast(
+            "Union[list[ModelT], list[ModelDTOT]]",
+            self.to_schema(cast("list[ModelT]", result.get_data()), schema_type=schema_type),
+        )
+
+    def select_value(
+        self,
+        statement: "Union[Statement, QueryBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        statement_config: "Optional[StatementConfig]" = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Execute a select statement and return a single scalar value.
+
+        Expects exactly one row with one column.
+        Raises an exception if no rows or more than one row/column is returned.
+        """
+        result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
+        try:
+            row = result.one()
+        except ValueError as e:
+            msg = "No rows found"
+            raise NotFoundError(msg) from e
+        if not row:
+            msg = "No rows found"
+            raise NotFoundError(msg)
+        if is_dict_row(row):
+            if not row:
+                msg = "Row has no columns"
+                raise ValueError(msg)
+            return next(iter(row.values()))
+        if is_indexable_row(row):
+            if not row:
+                msg = "Row has no columns"
+                raise ValueError(msg)
+            return row[0]
+        msg = f"Unexpected row type: {type(row)}"
+        raise ValueError(msg)
+
+    def select_value_or_none(
+        self,
+        statement: "Union[Statement, QueryBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        statement_config: "Optional[StatementConfig]" = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Execute a select statement and return a single scalar value or None.
+
+        Returns None if no rows are found.
+        Expects at most one row with one column.
+        Raises an exception if more than one row is returned.
+        """
+        result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
+        data = result.get_data()
+        if not data:
+            return None
+        if len(data) > 1:
+            msg = f"Expected at most one row, found {len(data)}"
+            raise ValueError(msg)
+        row = data[0]
+        if isinstance(row, dict):
+            if not row:
+                return None
+            return next(iter(row.values()))
+        if isinstance(row, (tuple, list)):
+            return row[0]
+        msg = f"Cannot extract value from row type {type(row).__name__}"
+        raise TypeError(msg)
+
+    @overload
+    def select_with_total(
+        self,
+        statement: "Union[Statement, QueryBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: "type[ModelDTOT]",
+        statement_config: "Optional[StatementConfig]" = None,
+        **kwargs: Any,
+    ) -> "tuple[list[ModelDTOT], int]": ...
+
+    @overload
+    def select_with_total(
+        self,
+        statement: "Union[Statement, QueryBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: None = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        **kwargs: Any,
+    ) -> "tuple[list[dict[str, Any]], int]": ...
+
+    def select_with_total(
+        self,
+        statement: "Union[Statement, QueryBuilder]",
+        /,
+        *parameters: "Union[StatementParameters, StatementFilter]",
+        schema_type: "Optional[type[ModelDTOT]]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        **kwargs: Any,
+    ) -> "tuple[Union[list[dict[str, Any]], list[ModelDTOT]], int]":
+        """Execute a select statement and return both the data and total count.
+
+        This method is designed for pagination scenarios where you need both
+        the current page of data and the total number of rows that match the query.
+
+        Args:
+            statement: The SQL statement, QueryBuilder, or raw SQL string
+            *parameters: Parameters for the SQL statement
+            schema_type: Optional schema type for data transformation
+            statement_config: Optional SQL configuration
+            **kwargs: Additional keyword arguments
+
+        Returns:
+            A tuple containing:
+            - List of data rows (transformed by schema_type if provided)
+            - Total count of rows matching the query (ignoring LIMIT/OFFSET)
+        """
+        sql_statement = self.prepare_statement(
+            statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
+        )
+        count_result = self.dispatch_statement_execution(self._create_count_query(sql_statement), self.connection)
+        select_result = self.execute(sql_statement)
+
+        return (self.to_schema(select_result.get_data(), schema_type=schema_type), count_result.scalar())

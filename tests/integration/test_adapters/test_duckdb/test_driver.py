@@ -1,19 +1,12 @@
 """Test DuckDB driver implementation."""
 
-from __future__ import annotations
-
-import tempfile
 from collections.abc import Generator
-from pathlib import Path
 from typing import Any, Literal
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
-from sqlspec.statement.result import ArrowResult, SQLResult
-from sqlspec.statement.sql import SQL
+from sqlspec.core.result import SQLResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds"]
 
@@ -25,38 +18,42 @@ def duckdb_session() -> Generator[DuckDBDriver, None, None]:
     Returns:
         A DuckDB session with a test table.
     """
-    adapter = DuckDBConfig()
-    with adapter.provide_session() as session:
-        session.execute_script("CREATE SEQUENCE IF NOT EXISTS test_id_seq START 1")
-        create_table_sql = """
-            CREATE TABLE IF NOT EXISTS test_table (
-                id INTEGER PRIMARY KEY DEFAULT nextval('test_id_seq'),
-                name TEXT NOT NULL
-            )
-        """
-        session.execute_script(create_table_sql)
-        yield session
-        # Clean up
-        session.execute_script("DROP TABLE IF EXISTS test_table")
-        session.execute_script("DROP SEQUENCE IF EXISTS test_id_seq")
+    adapter = DuckDBConfig(pool_config={"database": ":memory:"})
+    try:
+        with adapter.provide_session() as session:
+            session.execute_script("CREATE SEQUENCE IF NOT EXISTS test_id_seq START 1")
+            create_table_sql = """
+                CREATE TABLE IF NOT EXISTS test_table (
+                    id INTEGER PRIMARY KEY DEFAULT nextval('test_id_seq'),
+                    name TEXT NOT NULL
+                )
+            """
+            session.execute_script(create_table_sql)
+            yield session
+            # Clean up
+            session.execute_script("DROP TABLE IF EXISTS test_table")
+            session.execute_script("DROP SEQUENCE IF EXISTS test_id_seq")
+    finally:
+        # Ensure pool is closed properly to avoid threading issues during test shutdown
+        adapter.close_pool()
 
 
 @pytest.mark.parametrize(
-    ("params", "style"),
+    ("parameters", "style"),
     [
         pytest.param(("test_name", 1), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_name", "id": 1}, "dict_binds", id="dict_binds"),
     ],
 )
 @pytest.mark.xdist_group("duckdb")
-def test_insert(duckdb_session: DuckDBDriver, params: Any, style: ParamStyle) -> None:
+def test_insert(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle) -> None:
     """Test inserting data with different parameter styles."""
     if style == "tuple_binds":
         sql = "INSERT INTO test_table (name, id) VALUES (?, ?)"
     else:
         sql = "INSERT INTO test_table (name, id) VALUES (:name, :id)"
 
-    result = duckdb_session.execute(sql, params)
+    result = duckdb_session.execute(sql, parameters)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 1
 
@@ -72,14 +69,14 @@ def test_insert(duckdb_session: DuckDBDriver, params: Any, style: ParamStyle) ->
 
 
 @pytest.mark.parametrize(
-    ("params", "style"),
+    ("parameters", "style"),
     [
         pytest.param(("test_name", 1), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_name", "id": 1}, "dict_binds", id="dict_binds"),
     ],
 )
 @pytest.mark.xdist_group("duckdb")
-def test_select(duckdb_session: DuckDBDriver, params: Any, style: ParamStyle) -> None:
+def test_select(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle) -> None:
     """Test selecting data with different parameter styles."""
     # Insert test record
     if style == "tuple_binds":
@@ -87,7 +84,7 @@ def test_select(duckdb_session: DuckDBDriver, params: Any, style: ParamStyle) ->
     else:
         insert_sql = "INSERT INTO test_table (name, id) VALUES (:name, :id)"
 
-    insert_result = duckdb_session.execute(insert_sql, params)
+    insert_result = duckdb_session.execute(insert_sql, parameters)
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
@@ -102,12 +99,12 @@ def test_select(duckdb_session: DuckDBDriver, params: Any, style: ParamStyle) ->
     # Test select with a WHERE clause
     if style == "tuple_binds":
         select_where_sql = "SELECT id FROM test_table WHERE name = ?"
-        where_params = "test_name"
+        where_parameters = "test_name"
     else:
         select_where_sql = "SELECT id FROM test_table WHERE name = :name"
-        where_params = {"name": "test_name"}
+        where_parameters = {"name": "test_name"}
 
-    where_result = duckdb_session.execute(select_where_sql, where_params)
+    where_result = duckdb_session.execute(select_where_sql, where_parameters)
     assert isinstance(where_result, SQLResult)
     assert where_result.data is not None
     assert len(where_result.data) == 1
@@ -117,14 +114,14 @@ def test_select(duckdb_session: DuckDBDriver, params: Any, style: ParamStyle) ->
 
 
 @pytest.mark.parametrize(
-    ("params", "style"),
+    ("parameters", "style"),
     [
         pytest.param(("test_name", 1), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_name", "id": 1}, "dict_binds", id="dict_binds"),
     ],
 )
 @pytest.mark.xdist_group("duckdb")
-def test_select_value(duckdb_session: DuckDBDriver, params: Any, style: ParamStyle) -> None:
+def test_select_value(duckdb_session: DuckDBDriver, parameters: Any, style: ParamStyle) -> None:
     """Test select value with different parameter styles."""
     # Insert test record
     if style == "tuple_binds":
@@ -132,19 +129,19 @@ def test_select_value(duckdb_session: DuckDBDriver, params: Any, style: ParamSty
     else:
         insert_sql = "INSERT INTO test_table (name, id) VALUES (:name, :id)"
 
-    insert_result = duckdb_session.execute(insert_sql, params)
+    insert_result = duckdb_session.execute(insert_sql, parameters)
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
     # Test select value
     if style == "tuple_binds":
         value_sql = "SELECT name FROM test_table WHERE id = ?"
-        value_params = 1
+        value_parameters = 1
     else:
         value_sql = "SELECT name FROM test_table WHERE id = :id"
-        value_params = {"id": 1}
+        value_parameters = {"id": 1}
 
-    value_result = duckdb_session.execute(value_sql, value_params)
+    value_result = duckdb_session.execute(value_sql, value_parameters)
     assert isinstance(value_result, SQLResult)
     assert value_result.data is not None
     assert len(value_result.data) == 1
@@ -157,60 +154,21 @@ def test_select_value(duckdb_session: DuckDBDriver, params: Any, style: ParamSty
     duckdb_session.execute_script("DELETE FROM test_table")
 
 
-@pytest.mark.parametrize(
-    ("params", "style"),
-    [
-        pytest.param(("arrow_name", 1), "tuple_binds", id="tuple_binds"),
-        pytest.param({"name": "arrow_name", "id": 1}, "dict_binds", id="dict_binds"),
-    ],
-)
-@pytest.mark.xdist_group("duckdb")
-def test_select_arrow(duckdb_session: DuckDBDriver, params: Any, style: ParamStyle) -> None:
-    """Test selecting data as an Arrow Table."""
-    # Insert test record
-    if style == "tuple_binds":
-        insert_sql = "INSERT INTO test_table (name, id) VALUES (?, ?)"
-    else:
-        insert_sql = "INSERT INTO test_table (name, id) VALUES (:name, :id)"
-
-    insert_result = duckdb_session.execute(insert_sql, params)
-    assert isinstance(insert_result, SQLResult)
-    assert insert_result.rows_affected == 1
-
-    # Test select_arrow using mixins
-    if hasattr(duckdb_session, "fetch_arrow_table"):
-        select_sql = "SELECT name, id FROM test_table WHERE id = 1"
-        arrow_result = duckdb_session.fetch_arrow_table(select_sql)
-
-        assert isinstance(arrow_result, ArrowResult)
-        arrow_table = arrow_result.data
-        assert isinstance(arrow_table, pa.Table)
-        assert arrow_table.num_rows == 1
-        assert arrow_table.num_columns == 2
-        assert arrow_table.column_names == ["name", "id"]
-        assert arrow_table.column("name").to_pylist() == ["arrow_name"]
-        assert arrow_table.column("id").to_pylist() == [1]
-    else:
-        pytest.skip("DuckDB driver does not support Arrow operations")
-
-    duckdb_session.execute_script("DELETE FROM test_table")
-
-
 @pytest.mark.xdist_group("duckdb")
 def test_execute_many_insert(duckdb_session: DuckDBDriver) -> None:
     """Test execute_many functionality for batch inserts."""
     insert_sql = "INSERT INTO test_table (name, id) VALUES (?, ?)"
-    params_list = [("name1", 10), ("name2", 20), ("name3", 30)]
+    parameters_list = [("name1", 10), ("name2", 20), ("name3", 30)]
 
-    result = duckdb_session.execute_many(insert_sql, params_list)
+    result = duckdb_session.execute_many(insert_sql, parameters_list)
     assert isinstance(result, SQLResult)
-    assert result.rows_affected == len(params_list)
+    assert result.rows_affected == len(parameters_list)
 
     # Verify all records were inserted
     select_result = duckdb_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == len(params_list)
+    assert select_result.data[0]["count"] == len(parameters_list)
 
 
 @pytest.mark.xdist_group("duckdb")
@@ -507,70 +465,6 @@ def test_duckdb_performance_bulk_operations(duckdb_session: DuckDBDriver) -> Non
 
 
 @pytest.mark.xdist_group("duckdb")
-def test_duckdb_arrow_integration_comprehensive(duckdb_session: DuckDBDriver) -> None:
-    """Test comprehensive Arrow integration with DuckDB."""
-    if not hasattr(duckdb_session, "fetch_arrow_table"):
-        pytest.skip("DuckDB driver does not support Arrow operations")
-
-    # Create table with various data types for Arrow testing
-    duckdb_session.execute_script("""
-        CREATE TABLE arrow_test (
-            id INTEGER,
-            name TEXT,
-            value DOUBLE,
-            active BOOLEAN,
-            created_date DATE
-        );
-
-        INSERT INTO arrow_test VALUES
-            (1, 'Alice', 123.45, true, '2024-01-01'),
-            (2, 'Bob', 234.56, false, '2024-01-02'),
-            (3, 'Carol', 345.67, true, '2024-01-03'),
-            (4, 'Dave', 456.78, false, '2024-01-04'),
-            (5, 'Eve', 567.89, true, '2024-01-05');
-    """)
-
-    # Test Arrow result with filtering
-    arrow_result = duckdb_session.fetch_arrow_table(
-        "SELECT id, name, value FROM arrow_test WHERE active = ? ORDER BY id", parameters=[True]
-    )
-
-    assert isinstance(arrow_result, ArrowResult)
-    arrow_table = arrow_result.data
-    assert isinstance(arrow_table, pa.Table)
-    assert arrow_table.num_rows == 3  # 3 active records
-    assert arrow_table.num_columns == 3
-    assert arrow_table.column_names == ["id", "name", "value"]
-
-    # Verify Arrow data
-    ids = arrow_table.column("id").to_pylist()
-    names = arrow_table.column("name").to_pylist()
-    values = arrow_table.column("value").to_pylist()
-
-    assert ids == [1, 3, 5]
-    assert names == ["Alice", "Carol", "Eve"]
-    assert values == [123.45, 345.67, 567.89]
-
-    # Test Arrow with aggregation
-    agg_arrow_result = duckdb_session.fetch_arrow_table("""
-        SELECT
-            active,
-            COUNT(*) as count,
-            AVG(value) as avg_value
-        FROM arrow_test
-        GROUP BY active
-        ORDER BY active
-    """)
-
-    agg_table = agg_arrow_result.data
-    assert agg_table.num_rows == 2  # true and false groups
-    assert agg_table.num_columns == 3
-
-    # Clean up
-    duckdb_session.execute_script("DROP TABLE arrow_test")
-
-
-@pytest.mark.xdist_group("duckdb")
 def test_duckdb_error_handling_and_edge_cases(duckdb_session: DuckDBDriver) -> None:
     """Test DuckDB error handling and edge cases."""
     # Test invalid SQL
@@ -602,56 +496,9 @@ def test_duckdb_error_handling_and_edge_cases(duckdb_session: DuckDBDriver) -> N
 
 
 @pytest.mark.xdist_group("duckdb")
-def test_duckdb_with_schema_type_conversion(duckdb_session: DuckDBDriver) -> None:
-    """Test DuckDB driver with schema type conversion."""
-    from dataclasses import dataclass
-
-    @dataclass
-    class TestRecord:
-        id: int
-        name: str
-        value: float | None = None
-
-    # Create test data
-    duckdb_session.execute_script("""
-        CREATE TABLE schema_conversion_test (
-            id INTEGER,
-            name TEXT,
-            value DOUBLE
-        );
-
-        INSERT INTO schema_conversion_test VALUES
-            (1, 'Record 1', 100.5),
-            (2, 'Record 2', 200.75),
-            (3, 'Record 3', NULL);
-    """)
-
-    # Test schema type conversion
-    result = duckdb_session.execute(
-        "SELECT id, name, value FROM schema_conversion_test ORDER BY id", schema_type=TestRecord
-    )
-
-    assert isinstance(result, SQLResult)
-    assert result.total_count == 3
-
-    # Verify converted data types
-    for i, record in enumerate(result.data, 1):
-        assert isinstance(record, TestRecord)
-        assert record.id == i
-        assert record.name == f"Record {i}"
-        if i < 3:
-            assert record.value is not None
-        else:
-            assert record.value is None
-
-    # Clean up
-    duckdb_session.execute_script("DROP TABLE schema_conversion_test")
-
-
-@pytest.mark.xdist_group("duckdb")
 def test_duckdb_result_methods_comprehensive(duckdb_session: DuckDBDriver) -> None:
-    """Test comprehensive SelectResult and ExecuteResult methods."""
-    # Test SelectResult methods
+    """Test comprehensive SQLResult methods."""
+    # Test SQLResult methods
     duckdb_session.execute_script("""
         CREATE TABLE result_methods_test (
             id INTEGER,
@@ -666,7 +513,7 @@ def test_duckdb_result_methods_comprehensive(duckdb_session: DuckDBDriver) -> No
             (4, 'C', 40);
     """)
 
-    # Test SelectResult methods
+    # Test SQLResult methods
     select_result = duckdb_session.execute("SELECT * FROM result_methods_test ORDER BY id")
 
     # Test get_count()
@@ -686,10 +533,10 @@ def test_duckdb_result_methods_comprehensive(duckdb_session: DuckDBDriver) -> No
     assert empty_result.get_count() == 0
     assert empty_result.get_first() is None
 
-    # Test ExecuteResult methods
+    # Test SQLResult methods
     update_result = duckdb_session.execute("UPDATE result_methods_test SET value = value * 2 WHERE category = 'A'")
 
-    # Test ExecuteResult methods
+    # Test SQLResult methods
     assert isinstance(update_result, SQLResult)
     assert update_result.get_affected_count() == 2
     assert update_result.was_updated()
@@ -712,24 +559,3 @@ def test_duckdb_result_methods_comprehensive(duckdb_session: DuckDBDriver) -> No
 
     # Clean up
     duckdb_session.execute_script("DROP TABLE result_methods_test")
-
-
-@pytest.mark.xdist_group("duckdb")
-def test_duckdb_to_parquet(duckdb_session: DuckDBDriver) -> None:
-    """Integration test: to_parquet writes correct data to a Parquet file using DuckDB native API."""
-    duckdb_session.execute("CREATE TABLE IF NOT EXISTS test_table (id INTEGER, name VARCHAR)")
-    duckdb_session.execute("INSERT INTO test_table (id, name) VALUES (?, ?)", (1, "arrow1"))
-    duckdb_session.execute("INSERT INTO test_table (id, name) VALUES (?, ?)", (2, "arrow2"))
-    statement = SQL("SELECT id, name FROM test_table ORDER BY id")
-    with tempfile.TemporaryDirectory() as tmpdir:
-        output_path = Path(tmpdir) / "partitioned_data"
-        try:
-            duckdb_session.export_to_storage(statement, destination_uri=str(output_path))  # type: ignore[attr-defined]
-            table = pq.read_table(f"{output_path}.parquet")
-            assert table.num_rows == 2
-            assert table.column_names == ["id", "name"]
-            data = table.to_pylist()
-            assert data[0]["id"] == 1 and data[0]["name"] == "arrow1"
-            assert data[1]["id"] == 2 and data[1]["name"] == "arrow2"
-        except Exception as e:
-            pytest.fail(f"Failed to export to storage: {e}")

@@ -1,6 +1,6 @@
 """Storage abstraction layer for SQLSpec.
 
-This module provides a flexible storage system with:
+Provides a flexible storage system with:
 - Multiple backend support (local, fsspec, obstore)
 - Lazy loading and configuration-based registration
 - URI scheme-based automatic backend resolution

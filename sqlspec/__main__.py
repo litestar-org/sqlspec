@@ -4,7 +4,7 @@ __all__ = ("run_cli",)
 
 
 def run_cli() -> None:  # pragma: no cover
-    """SQLSpec CLI"""
+    """SQLSpec CLI."""
     build_cli_interface()()
 
 

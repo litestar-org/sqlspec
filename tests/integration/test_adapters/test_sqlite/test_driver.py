@@ -1,37 +1,14 @@
-"""Integration tests for SQLite driver implementation."""
+"""Integration tests for SQLite driver implementation with CORE_ROUND_3 architecture."""
 
 import math
-import tempfile
-from collections.abc import Generator
 from typing import Any, Literal
 
-import pyarrow.parquet as pq
 import pytest
 
-from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
-from sqlspec.statement.result import ArrowResult, SQLResult
-from sqlspec.statement.sql import SQL
+from sqlspec.adapters.sqlite import SqliteDriver
+from sqlspec.core.result import SQLResult
 
 ParamStyle = Literal["tuple_binds", "dict_binds", "named_binds"]
-
-
-@pytest.fixture
-def sqlite_session() -> Generator[SqliteDriver, None, None]:
-    """Create a SQLite session with test table."""
-    config = SqliteConfig(database=":memory:")
-
-    with config.provide_session() as session:
-        # Create test table
-        session.execute_script("""
-            CREATE TABLE IF NOT EXISTS test_table (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                value INTEGER DEFAULT 0,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        yield session
-        # Cleanup is automatic with in-memory database
 
 
 @pytest.mark.xdist_group("sqlite")
@@ -43,7 +20,7 @@ def test_sqlite_basic_crud(sqlite_session: SqliteDriver) -> None:
     assert insert_result.rows_affected == 1
 
     # SELECT
-    select_result = sqlite_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_name"))
+    select_result = sqlite_session.execute("SELECT name, value FROM test_table WHERE name = ?", ("test_name",))
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
     assert len(select_result.data) == 1
@@ -56,13 +33,13 @@ def test_sqlite_basic_crud(sqlite_session: SqliteDriver) -> None:
     assert update_result.rows_affected == 1
 
     # Verify UPDATE
-    verify_result = sqlite_session.execute("SELECT value FROM test_table WHERE name = ?", ("test_name"))
+    verify_result = sqlite_session.execute("SELECT value FROM test_table WHERE name = ?", ("test_name",))
     assert isinstance(verify_result, SQLResult)
     assert verify_result.data is not None
     assert verify_result.data[0]["value"] == 100
 
     # DELETE
-    delete_result = sqlite_session.execute("DELETE FROM test_table WHERE name = ?", ("test_name"))
+    delete_result = sqlite_session.execute("DELETE FROM test_table WHERE name = ?", ("test_name",))
     assert isinstance(delete_result, SQLResult)
     assert delete_result.rows_affected == 1
 
@@ -74,17 +51,21 @@ def test_sqlite_basic_crud(sqlite_session: SqliteDriver) -> None:
 
 
 @pytest.mark.parametrize(
-    ("params", "style"),
+    ("parameters", "style"),
     [
         pytest.param(("test_value"), "tuple_binds", id="tuple_binds"),
         pytest.param({"name": "test_value"}, "dict_binds", id="dict_binds"),
     ],
 )
 @pytest.mark.xdist_group("sqlite")
-def test_sqlite_parameter_styles(sqlite_session: SqliteDriver, params: Any, style: ParamStyle) -> None:
+def test_sqlite_parameter_styles(sqlite_session: SqliteDriver, parameters: Any, style: ParamStyle) -> None:
     """Test different parameter binding styles."""
+    # Clear any existing data between parameterized test runs
+    sqlite_session.execute("DELETE FROM test_table")
+    sqlite_session.commit()
+
     # Insert test data
-    sqlite_session.execute("INSERT INTO test_table (name) VALUES (?)", ("test_value"))
+    sqlite_session.execute("INSERT INTO test_table (name) VALUES (?)", ("test_value",))
 
     # Test parameter style
     if style == "tuple_binds":
@@ -92,7 +73,7 @@ def test_sqlite_parameter_styles(sqlite_session: SqliteDriver, params: Any, styl
     else:  # dict_binds
         sql = "SELECT name FROM test_table WHERE name = :name"
 
-    result = sqlite_session.execute(sql, params)
+    result = sqlite_session.execute(sql, parameters)
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 1
@@ -102,17 +83,21 @@ def test_sqlite_parameter_styles(sqlite_session: SqliteDriver, params: Any, styl
 @pytest.mark.xdist_group("sqlite")
 def test_sqlite_execute_many(sqlite_session: SqliteDriver) -> None:
     """Test execute_many functionality."""
-    params_list = [("name1", 1), ("name2", 2), ("name3", 3)]
+    # Clear any existing data
+    sqlite_session.execute("DELETE FROM test_table")
+    sqlite_session.commit()
 
-    result = sqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", params_list)
+    parameters_list = [("name1", 1), ("name2", 2), ("name3", 3)]
+
+    result = sqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", parameters_list)
     assert isinstance(result, SQLResult)
-    assert result.rows_affected == len(params_list)
+    assert result.rows_affected == len(parameters_list)
 
     # Verify all records were inserted
     select_result = sqlite_session.execute("SELECT COUNT(*) as count FROM test_table")
     assert isinstance(select_result, SQLResult)
     assert select_result.data is not None
-    assert select_result.data[0]["count"] == len(params_list)
+    assert select_result.data[0]["count"] == len(parameters_list)
 
     # Verify data integrity
     ordered_result = sqlite_session.execute("SELECT name, value FROM test_table ORDER BY name")
@@ -143,8 +128,6 @@ def test_sqlite_execute_script(sqlite_session: SqliteDriver) -> None:
     # Explicitly check for errors from the script execution itself
     if hasattr(result, "errors") and result.errors:
         pytest.fail(f"Script execution reported errors: {result.errors}")
-    if hasattr(result, "has_errors") and callable(result.has_errors) and result.has_errors():
-        pytest.fail(f"Script execution reported errors (via has_errors): {result.get_errors()}")
 
     # Verify script effects
     select_result = sqlite_session.execute(
@@ -162,6 +145,10 @@ def test_sqlite_execute_script(sqlite_session: SqliteDriver) -> None:
 @pytest.mark.xdist_group("sqlite")
 def test_sqlite_result_methods(sqlite_session: SqliteDriver) -> None:
     """Test SelectResult and ExecuteResult methods."""
+    # Clean up any existing data to ensure consistent test results
+    sqlite_session.execute("DELETE FROM test_table")
+    sqlite_session.commit()
+
     # Insert test data
     sqlite_session.execute_many(
         "INSERT INTO test_table (name, value) VALUES (?, ?)", [("result1", 10), ("result2", 20), ("result3", 30)]
@@ -183,7 +170,7 @@ def test_sqlite_result_methods(sqlite_session: SqliteDriver) -> None:
     assert not result.is_empty()
 
     # Test empty result
-    empty_result = sqlite_session.execute("SELECT * FROM test_table WHERE name = ?", ("nonexistent"))
+    empty_result = sqlite_session.execute("SELECT * FROM test_table WHERE name = ?", ("nonexistent",))
     assert isinstance(empty_result, SQLResult)
     assert empty_result.is_empty()
     assert empty_result.get_first() is None
@@ -253,7 +240,7 @@ def test_sqlite_transactions(sqlite_session: SqliteDriver) -> None:
     sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("transaction_test", 100))
 
     # Verify data is committed
-    result = sqlite_session.execute("SELECT COUNT(*) as count FROM test_table WHERE name = ?", ("transaction_test"))
+    result = sqlite_session.execute("SELECT COUNT(*) as count FROM test_table WHERE name = ?", ("transaction_test",))
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert result.data[0]["count"] == 1
@@ -262,6 +249,10 @@ def test_sqlite_transactions(sqlite_session: SqliteDriver) -> None:
 @pytest.mark.xdist_group("sqlite")
 def test_sqlite_complex_queries(sqlite_session: SqliteDriver) -> None:
     """Test complex SQL queries."""
+    # Clear any existing data between test runs
+    sqlite_session.execute("DELETE FROM test_table")
+    sqlite_session.commit()
+
     # Insert test data
     test_data = [("Alice", 25), ("Bob", 30), ("Charlie", 35), ("Diana", 28)]
 
@@ -325,7 +316,7 @@ def test_sqlite_schema_operations(sqlite_session: SqliteDriver) -> None:
     assert create_result.operation_type == "SCRIPT"
 
     # Insert data into new table
-    insert_result = sqlite_session.execute("INSERT INTO schema_test (description) VALUES (?)", ("test description"))
+    insert_result = sqlite_session.execute("INSERT INTO schema_test (description) VALUES (?)", ("test_description",))
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 1
 
@@ -333,7 +324,7 @@ def test_sqlite_schema_operations(sqlite_session: SqliteDriver) -> None:
     pragma_result = sqlite_session.execute("PRAGMA table_info(schema_test)")
     assert isinstance(pragma_result, SQLResult)
     assert pragma_result.data is not None
-    assert len(pragma_result.data) == 3  # id, description, created_at
+    assert len(pragma_result.get_data()) == 3  # id, description, created_at
 
     # Drop table
     drop_result = sqlite_session.execute_script("DROP TABLE schema_test")
@@ -349,7 +340,7 @@ def test_sqlite_column_names_and_metadata(sqlite_session: SqliteDriver) -> None:
 
     # Test column names
     result = sqlite_session.execute(
-        "SELECT id, name, value, created_at FROM test_table WHERE name = ?", ("metadata_test")
+        "SELECT id, name, value, created_at FROM test_table WHERE name = ?", ("metadata_test",)
     )
     assert isinstance(result, SQLResult)
     assert result.column_names == ["id", "name", "value", "created_at"]
@@ -362,35 +353,6 @@ def test_sqlite_column_names_and_metadata(sqlite_session: SqliteDriver) -> None:
     assert row["value"] == 123
     assert row["id"] is not None
     assert row["created_at"] is not None
-
-
-@pytest.mark.xdist_group("sqlite")
-def test_sqlite_with_schema_type(sqlite_session: SqliteDriver) -> None:
-    """Test SQLite driver with schema type conversion."""
-    from dataclasses import dataclass
-    from typing import Optional
-
-    @dataclass
-    class TestRecord:
-        id: Optional[int]
-        name: str
-        value: int
-
-    # Insert test data
-    sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("schema_test", 456))
-
-    # Query with schema type
-    result = sqlite_session.execute(
-        "SELECT id, name, value FROM test_table WHERE name = ?", ("schema_test"), schema_type=TestRecord
-    )
-
-    assert isinstance(result, SQLResult)
-    assert result.data is not None
-    assert len(result.data) == 1
-
-    # The data should be converted to the schema type by the ResultConverter
-    # The exact behavior depends on the ResultConverter implementation
-    assert result.column_names == ["id", "name", "value"]
 
 
 @pytest.mark.xdist_group("sqlite")
@@ -418,39 +380,6 @@ def test_sqlite_performance_bulk_operations(sqlite_session: SqliteDriver) -> Non
     assert page_result.data is not None
     assert len(page_result.data) == 10
     assert page_result.data[0]["name"] == "bulk_user_20"
-
-
-@pytest.mark.xdist_group("sqlite")
-def test_sqlite_fetch_arrow_table(sqlite_session: SqliteDriver) -> None:
-    """Integration test: fetch_arrow_table returns pyarrow.Table directly."""
-    sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("arrow1", 111))
-    sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("arrow2", 222))
-    # fetch_arrow_table expects a SQL string, not a SQL object
-    result = sqlite_session.fetch_arrow_table("SELECT name, value FROM test_table ORDER BY name")
-    assert isinstance(result, ArrowResult)
-    assert result.num_rows == 2
-    assert result.column_names == ["name", "value"]
-    assert result.data is not None
-    assert result.data.column("name").to_pylist() == ["arrow1", "arrow2"]
-    assert result.data.column("value").to_pylist() == [111, 222]
-
-
-@pytest.mark.xdist_group("sqlite")
-def test_sqlite_to_parquet(sqlite_session: SqliteDriver) -> None:
-    """Integration test: to_parquet writes correct data to a Parquet file."""
-    sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("pq1", 10))
-    sqlite_session.execute("INSERT INTO test_table (name, value) VALUES (?, ?)", ("pq2", 20))
-    SQL("SELECT name, value FROM test_table ORDER BY name")
-    with tempfile.NamedTemporaryFile(suffix=".parquet") as tmpfile:
-        # export_to_storage expects query string and destination_uri
-        sqlite_session.export_to_storage(
-            "SELECT name, value FROM test_table ORDER BY name", destination_uri=tmpfile.name
-        )
-        table = pq.read_table(tmpfile.name)
-        assert table.num_rows == 2
-        assert table.column_names == ["name", "value"]
-        assert table.column("name").to_pylist() == ["pq1", "pq2"]
-        assert table.column("value").to_pylist() == [10, 20]
 
 
 @pytest.mark.xdist_group("sqlite")
@@ -530,6 +459,8 @@ def test_asset_maintenance_alert_complex_query(sqlite_session: SqliteDriver) -> 
     # So we'll split this into two operations for SQLite compatibility
 
     # First, perform the INSERT with ON CONFLICT
+    # Debug what the SELECT would return
+    # Test the INSERT query with correct parameters
     insert_result = sqlite_session.execute(
         """
         INSERT INTO alert_users (user_id, asset_maintenance_id, alert_definition_id)
@@ -542,6 +473,9 @@ def test_asset_maintenance_alert_complex_query(sqlite_session: SqliteDriver) -> 
     """,
         {"date_start": "2024-01-15", "date_end": "2024-01-17"},
     )
+
+    # Explicitly commit the transaction for SQLite
+    sqlite_session.connection.commit()
 
     assert isinstance(insert_result, SQLResult)
     assert insert_result.rows_affected == 3  # Should insert 3 records

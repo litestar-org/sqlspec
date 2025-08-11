@@ -36,10 +36,9 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
-from sqlspec import sql
+from sqlspec import SQL, StatementConfig, sql
 from sqlspec.adapters.duckdb import DuckDBConfig
-from sqlspec.statement.filters import LimitOffsetFilter, OrderByFilter, SearchFilter
-from sqlspec.statement.sql import SQL, SQLConfig
+from sqlspec.core.filters import LimitOffsetFilter, OrderByFilter, SearchFilter
 
 # Display constants
 MAX_ROWS_TO_DISPLAY = 5
@@ -172,16 +171,14 @@ def create_sample_database() -> Any:
                     INSERT INTO users (id, name, email, department, age, salary, hire_date, active)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                    parameters=(
-                        i,
-                        fake.name(),
-                        fake.unique.email(),
-                        fake.random_element(departments),
-                        fake.random_int(min=22, max=65),
-                        fake.random_int(min=40000, max=150000),
-                        fake.date_between(start_date="-3y", end_date="today"),
-                        fake.boolean(chance_of_getting_true=85),
-                    ),
+                    i,
+                    fake.name(),
+                    fake.unique.email(),
+                    fake.random_element(departments),
+                    fake.random_int(min=22, max=65),
+                    fake.random_int(min=40000, max=150000),
+                    fake.date_between(start_date="-3y", end_date="today"),
+                    fake.boolean(chance_of_getting_true=85),
                 )
             )
 
@@ -193,14 +190,12 @@ def create_sample_database() -> Any:
                     INSERT INTO products (id, name, category, price, stock_quantity, created_at)
                     VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                    parameters=(
-                        i,
-                        fake.catch_phrase(),
-                        fake.random_element(categories),
-                        fake.random_int(min=10, max=1000),
-                        fake.random_int(min=0, max=100),
-                        fake.date_time_between(start_date="-2y", end_date="now"),
-                    ),
+                    i,
+                    fake.catch_phrase(),
+                    fake.random_element(categories),
+                    fake.random_int(min=10, max=1000),
+                    fake.random_int(min=0, max=100),
+                    fake.date_time_between(start_date="-2y", end_date="now"),
                 )
             )
 
@@ -214,15 +209,13 @@ def create_sample_database() -> Any:
                     INSERT INTO orders (id, user_id, product_id, quantity, total_amount, order_date, status)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                    parameters=(
-                        i,
-                        fake.random_int(min=1, max=50),
-                        fake.random_int(min=1, max=30),
-                        quantity,
-                        quantity * price,
-                        fake.date_time_between(start_date="-1y", end_date="now"),
-                        fake.random_element(statuses),
-                    ),
+                    i,
+                    fake.random_int(min=1, max=50),
+                    fake.random_int(min=1, max=30),
+                    quantity,
+                    quantity * price,
+                    fake.date_time_between(start_date="-1y", end_date="now"),
+                    fake.random_element(statuses),
                 )
             )
 
@@ -244,26 +237,26 @@ def display_header() -> None:
 
 def display_sql_with_syntax(sql_obj: SQL, title: str = "Generated SQL") -> None:
     """Display SQL with syntax highlighting."""
-    sql_text = sql_obj.to_sql()
+    sql_text = sql_obj.sql
     syntax = Syntax(sql_text, "sql", theme="monokai", line_numbers=True)
     console.print(Panel(syntax, title=title, border_style="green"))
 
     # Show parameters if any
     if sql_obj.parameters:
-        params_table = Table(title="Parameters")
-        params_table.add_column("Name", style="cyan")
-        params_table.add_column("Value", style="yellow")
+        parameters_table = Table(title="Parameters")
+        parameters_table.add_column("Name", style="cyan")
+        parameters_table.add_column("Value", style="yellow")
 
         if isinstance(sql_obj.parameters, dict):
             for name, value in sql_obj.parameters.items():
-                params_table.add_row(str(name), str(value))
+                parameters_table.add_row(str(name), str(value))
         elif isinstance(sql_obj.parameters, (list, tuple)):
             for i, value in enumerate(sql_obj.parameters):
-                params_table.add_row(f"${i + 1}", str(value))
+                parameters_table.add_row(f"${i + 1}", str(value))
         else:
-            params_table.add_row("value", str(sql_obj.parameters))
+            parameters_table.add_row("value", str(sql_obj.parameters))
 
-        console.print(params_table)
+        console.print(parameters_table)
 
 
 @rclick.group()
@@ -349,7 +342,7 @@ def analysis() -> None:
     )
 
     # Create analyzer with custom config
-    config = SQLConfig(enable_analysis=True, enable_validation=True, enable_transformations=True)
+    config = StatementConfig(enable_analysis=True, enable_validation=True, enable_transformations=True)
 
     # Demo queries with different complexity levels
     queries = [
@@ -407,47 +400,6 @@ def analysis() -> None:
 
         # Display the SQL
         display_sql_with_syntax(stmt, f"{title} - SQL")
-
-        # Show validation results
-        validation = stmt.validate()
-        if validation:
-            validation_table = Table(title="Validation Results")
-            validation_table.add_column("Aspect", style="cyan")
-            validation_table.add_column("Status", style="green")
-            validation_table.add_column("Details", style="yellow")
-
-            validation_table.add_row(
-                "Safety", "✓ Safe" if validation.is_safe else "⚠ Issues Found", f"Risk Level: {validation.risk_level}"
-            )
-
-            if validation.issues:
-                for issue in validation.issues:
-                    validation_table.add_row("Issue", "⚠ Warning", issue)
-
-            if validation.warnings:
-                for warning in validation.warnings:
-                    validation_table.add_row("Warning", "i Info", warning)
-
-            console.print(validation_table)
-
-        # Show analysis results if available
-        if stmt.analysis_result:
-            analysis = stmt.analysis_result
-
-            analysis_table = Table(title="Analysis Results")
-            analysis_table.add_column("Metric", style="cyan")
-            analysis_table.add_column("Value", style="green")
-
-            analysis_table.add_row("Statement Type", analysis.statement_type)
-            analysis_table.add_row("Tables", ", ".join(analysis.tables))
-            analysis_table.add_row("Join Count", str(analysis.join_count))
-            analysis_table.add_row("Uses Subqueries", str(analysis.uses_subqueries))
-            analysis_table.add_row("Complexity Score", str(analysis.complexity_score))
-
-            if analysis.aggregate_functions:
-                analysis_table.add_row("Aggregate Functions", ", ".join(analysis.aggregate_functions))
-
-            console.print(analysis_table)
 
 
 @cli.command()
@@ -590,7 +542,12 @@ def demo_insert_returning() -> None:
         VALUES (?, ?, ?, ?, ?, ?)
         RETURNING id, name, email
     """,
-        parameters=("John Doe", "john@example.com", "Engineering", 30, 75000, datetime.now()),
+        "John Doe",
+        "john@example.com",
+        "Engineering",
+        30,
+        75000,
+        datetime.now(),
     )
 
     display_sql_with_syntax(query)
@@ -663,7 +620,7 @@ def interactive() -> None:
         try:
             user_input = console.input("[bold blue]sqlspec>[/bold blue] ").strip()
 
-            if user_input.lower() in ("exit", "quit"):
+            if user_input.lower() in {"exit", "quit"}:
                 break
             elif user_input.lower() == "help":
                 show_interactive_help()
@@ -741,7 +698,7 @@ def show_interactive_help() -> None:
 Start with [green]sql.[/green] to build queries:
 • [yellow]sql.select("*").from_("users")[/yellow]
 • [yellow]sql.insert("users").values(...)[/yellow]
-• [yellow]SQL("SELECT * FROM users WHERE id = ?", parameters=[1])[/yellow]
+• [yellow]SQL("SELECT * FROM users WHERE id = ?", 1)[/yellow]
 
 [bold cyan]Available Objects:[/bold cyan]
 • sql - Query builder factory object

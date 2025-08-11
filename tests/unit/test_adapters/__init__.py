@@ -1,3 +1,3 @@
-"""Unit tests for SQLSpec adapters."""
+"""Unit tests for database adapters."""
 
 __all__ = ()

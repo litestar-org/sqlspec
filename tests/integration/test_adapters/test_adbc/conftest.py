@@ -1,6 +1,5 @@
-from __future__ import annotations
+"""Test fixtures and configuration for ADBC integration tests."""
 
-# Import necessary modules for the decorator
 import functools
 from typing import Any, Callable, TypeVar, cast
 
@@ -31,5 +30,7 @@ def xfail_if_driver_missing(func: F) -> F:
 def adbc_session(postgres_service: PostgresService) -> AdbcConfig:
     """Create an ADBC session for PostgreSQL."""
     return AdbcConfig(
-        uri=f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        connection_config={
+            "uri": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        }
     )

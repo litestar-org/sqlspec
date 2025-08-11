@@ -9,19 +9,16 @@ __all__ = ("import_string", "module_to_os_path")
 
 
 def module_to_os_path(dotted_path: str = "app") -> "Path":
-    """Find Module to OS Path.
-
-    Return a path to the base directory of the project or the module
-    specified by `dotted_path`.
+    """Convert a module dotted path to filesystem path.
 
     Args:
-        dotted_path: The path to the module. Defaults to "app".
+        dotted_path: The path to the module.
 
     Raises:
         TypeError: The module could not be found.
 
     Returns:
-        Path: The path to the module.
+        The path to the module.
     """
     try:
         if (src := find_spec(dotted_path)) is None:  # pragma: no cover
@@ -36,16 +33,13 @@ def module_to_os_path(dotted_path: str = "app") -> "Path":
 
 
 def import_string(dotted_path: str) -> "Any":
-    """Dotted Path Import.
-
-    Import a dotted module path and return the attribute/class designated by the
-    last name in the path. Raise ImportError if the import failed.
+    """Import a module or attribute from a dotted path string.
 
     Args:
         dotted_path: The path of the module to import.
 
     Returns:
-        object: The imported object.
+        The imported object.
     """
 
     def _raise_import_error(msg: str, exc: "Optional[Exception]" = None) -> None:
@@ -57,7 +51,7 @@ def import_string(dotted_path: str) -> "Any":
     try:
         parts = dotted_path.split(".")
         module = None
-        i = len(parts)  # Initialize to full length
+        i = len(parts)
 
         for i in range(len(parts), 0, -1):
             module_path = ".".join(parts[:i])
@@ -83,6 +77,7 @@ def import_string(dotted_path: str) -> "Any":
                 return obj
             if not hasattr(parent_module, attr):
                 _raise_import_error(f"Module '{parent_module_path}' has no attribute '{attr}' in '{dotted_path}'")
+
         for attr in attrs:
             if not hasattr(obj, attr):
                 _raise_import_error(

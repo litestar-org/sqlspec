@@ -1,183 +1,253 @@
-"""Aiosqlite database configuration with direct field-based configuration."""
+"""Aiosqlite database configuration with optimized connection management."""
 
+import asyncio
 import logging
-from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, TypedDict
 
 import aiosqlite
+from typing_extensions import NotRequired
 
-from sqlspec.adapters.aiosqlite.driver import AiosqliteConnection, AiosqliteDriver
+from sqlspec.adapters.aiosqlite.driver import AiosqliteCursor, AiosqliteDriver, aiosqlite_statement_config
 from sqlspec.config import AsyncDatabaseConfig
-from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import DictRow, Empty
 
 if TYPE_CHECKING:
-    from typing import Literal
+    from collections.abc import AsyncGenerator
 
+    from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
+    from sqlspec.core.statement import StatementConfig
 
-__all__ = ("CONNECTION_FIELDS", "AiosqliteConfig")
+__all__ = ("AiosqliteConfig", "AiosqliteConnectionParams", "AiosqliteConnectionPool")
 
 logger = logging.getLogger(__name__)
 
-CONNECTION_FIELDS = frozenset(
-    {"database", "timeout", "detect_types", "isolation_level", "check_same_thread", "cached_statements", "uri"}
-)
+# Core PRAGMAs for SQLite performance optimization
+WAL_PRAGMA_SQL: Final[str] = "PRAGMA journal_mode = WAL"
+FOREIGN_KEYS_SQL: Final[str] = "PRAGMA foreign_keys = ON"
+SYNC_NORMAL_SQL: Final[str] = "PRAGMA synchronous = NORMAL"
+BUSY_TIMEOUT_SQL: Final[str] = "PRAGMA busy_timeout = 5000"  # 5 seconds
 
 
-class AiosqliteConfig(AsyncDatabaseConfig[AiosqliteConnection, None, AiosqliteDriver]):
-    """Configuration for Aiosqlite database connections with direct field-based configuration.
+class AiosqliteConnectionPool:
+    """Connection pool for Aiosqlite using a single shared connection approach.
 
-    Note: Aiosqlite doesn't support connection pooling, so pool_instance is always None.
+    Uses a single shared connection per database file since aiosqlite internally
+    handles queuing and serialization of operations.
     """
 
-    is_async: ClassVar[bool] = True
-    supports_connection_pooling: ClassVar[bool] = False
+    __slots__ = ("_closed", "_connection", "_connection_parameters", "_lock")
 
-    driver_type: type[AiosqliteDriver] = AiosqliteDriver
-    connection_type: type[AiosqliteConnection] = AiosqliteConnection
+    def __init__(self, connection_parameters: "dict[str, Any]") -> None:
+        """Initialize connection manager.
 
-    # Parameter style support information
-    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("qmark", "named_colon")
-    """AIOSQLite supports ? (qmark) and :name (named_colon) parameter styles."""
+        Args:
+            connection_parameters: SQLite connection parameters
+        """
+        self._connection: Optional[AiosqliteConnection] = None
+        self._connection_parameters = connection_parameters
+        self._lock = asyncio.Lock()
+        self._closed = False
 
-    default_parameter_style: ClassVar[str] = "qmark"
-    """AIOSQLite's native parameter style is ? (qmark)."""
+    async def _ensure_connection(self) -> "AiosqliteConnection":
+        """Ensure we have a valid connection, creating one if needed."""
+        async with self._lock:
+            if self._connection is None or self._closed:
+                self._connection = await aiosqlite.connect(**self._connection_parameters)
+
+                await self._connection.execute(WAL_PRAGMA_SQL)
+                await self._connection.execute(FOREIGN_KEYS_SQL)
+                await self._connection.execute(SYNC_NORMAL_SQL)
+                await self._connection.execute(BUSY_TIMEOUT_SQL)
+                await self._connection.commit()
+
+                self._closed = False
+                logger.debug("Created new aiosqlite connection")
+
+            return self._connection
+
+    @asynccontextmanager
+    async def get_connection(self) -> "AsyncGenerator[AiosqliteConnection, None]":
+        """Get the shared connection.
+
+        Yields:
+            The shared Aiosqlite connection instance.
+        """
+        connection = await self._ensure_connection()
+        yield connection
+
+    async def close(self) -> None:
+        """Close the shared connection."""
+        async with self._lock:
+            if self._connection is not None and not self._closed:
+                await self._connection.close()
+                self._connection = None
+                self._closed = True
+                logger.debug("Closed aiosqlite connection")
+
+    def size(self) -> int:
+        """Get connection count."""
+        return 0 if self._closed or self._connection is None else 1
+
+    def checked_out(self) -> int:
+        """Get number of checked out connections."""
+        return 0
+
+    async def acquire(self) -> "AiosqliteConnection":
+        """Get the shared connection directly.
+
+        Returns:
+            The shared connection instance.
+        """
+        return await self._ensure_connection()
+
+    async def release(self, connection: "AiosqliteConnection") -> None:
+        """No-op release for compatibility.
+
+        Args:
+            connection: Connection to release (ignored)
+        """
+        _ = connection
+
+
+class AiosqliteConnectionParams(TypedDict, total=False):
+    """aiosqlite connection parameters."""
+
+    database: NotRequired[str]
+    timeout: NotRequired[float]
+    detect_types: NotRequired[int]
+    isolation_level: NotRequired[Optional[str]]
+    check_same_thread: NotRequired[bool]
+    cached_statements: NotRequired[int]
+    uri: NotRequired[bool]
+
+
+class AiosqliteConfig(AsyncDatabaseConfig):
+    """Database configuration for AioSQLite engine."""
+
+    driver_type: ClassVar[type[AiosqliteDriver]] = AiosqliteDriver
+    cursor_type: ClassVar[type[AiosqliteCursor]] = AiosqliteCursor
 
     def __init__(
         self,
-        database: str = ":memory:",
-        statement_config: Optional[SQLConfig] = None,
-        default_row_type: type[DictRow] = DictRow,
-        # Connection parameters
-        timeout: Optional[float] = None,
-        detect_types: Optional[int] = None,
-        isolation_level: Optional["Optional[Literal['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE']]"] = None,
-        check_same_thread: Optional[bool] = None,
-        cached_statements: Optional[int] = None,
-        uri: Optional[bool] = None,
+        *,
+        pool_instance: "Optional[AiosqliteConnectionPool]" = None,
+        pool_config: "Optional[dict[str, Any]]" = None,
+        migration_config: "Optional[dict[str, Any]]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> None:
-        """Initialize Aiosqlite configuration.
+        """Initialize AioSQLite configuration.
 
         Args:
-            database: The path to the database file to be opened. Pass ":memory:" for in-memory database
-            statement_config: Default SQL statement configuration
-            default_row_type: Default row type for results
-            timeout: How many seconds the connection should wait before raising an OperationalError when a table is locked
-            detect_types: Control whether and how data types are detected. It can be 0 (default) or a combination of PARSE_DECLTYPES and PARSE_COLNAMES
-            isolation_level: The isolation_level of the connection. This can be None for autocommit mode or one of "DEFERRED", "IMMEDIATE" or "EXCLUSIVE"
-            check_same_thread: If True (default), ProgrammingError is raised if the database connection is used by a thread other than the one that created it
-            cached_statements: The number of statements that SQLite will cache for this connection. The default is 128
-            uri: If set to True, database is interpreted as a URI with supported options
-            **kwargs: Additional parameters (stored in extras)
+            pool_instance: Optional pre-configured connection pool instance.
+            pool_config: Optional pool configuration dict (AiosqliteConnectionParams).
+            migration_config: Optional migration configuration.
+            statement_config: Optional statement configuration.
+            **kwargs: Additional connection parameters.
         """
-        # Store connection parameters as instance attributes
-        self.database = database
-        self.timeout = timeout
-        self.detect_types = detect_types
-        self.isolation_level = isolation_level
-        self.check_same_thread = check_same_thread
-        self.cached_statements = cached_statements
-        self.uri = uri
-        self.extras = kwargs or {}
-        # Store other config
-        self.statement_config = statement_config or SQLConfig()
-        self.default_row_type = default_row_type
+        connection_params = {}
+        if pool_config:
+            connection_params.update(pool_config)
+        connection_params.update(kwargs)
 
-        super().__init__()
+        super().__init__(
+            pool_config=connection_params,
+            pool_instance=pool_instance,
+            migration_config=migration_config or {},
+            statement_config=statement_config or aiosqlite_statement_config,
+        )
 
-    @property
-    def connection_config_dict(self) -> dict[str, Any]:
-        """Return the connection configuration as a dict for aiosqlite.connect()."""
-        # Gather non-None connection parameters
-        config = {
-            field: getattr(self, field)
-            for field in CONNECTION_FIELDS
-            if getattr(self, field, None) is not None and getattr(self, field) is not Empty
-        }
+        self._connection_parameters = self._parse_connection_parameters(connection_params)
 
-        # Merge extras parameters
-        config.update(self.extras)
+        if pool_instance is None:
+            self.pool_instance: AiosqliteConnectionPool = AiosqliteConnectionPool(self._connection_parameters)
 
-        return config
+    def _parse_connection_parameters(self, params: "dict[str, Any]") -> "dict[str, Any]":
+        """Parse connection parameters for AioSQLite.
 
-    async def _create_pool(self) -> None:
-        """Aiosqlite doesn't support pooling."""
-        return
+        Args:
+            params: Connection parameters dict.
+
+        Returns:
+            Processed connection parameters dict.
+        """
+        result = params.copy()
+
+        if "database" not in result:
+            # Default to in-memory database
+            result["database"] = ":memory:"
+
+        # Convert regular :memory: to shared memory for multi-connection access
+        if result.get("database") == ":memory:":
+            result["database"] = "file::memory:?cache=shared"
+            result["uri"] = True
+
+        for pool_param in ["pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds"]:
+            result.pop(pool_param, None)
+
+        return result
+
+    @asynccontextmanager
+    async def provide_connection(self) -> "AsyncGenerator[AiosqliteConnection, None]":
+        """Provide a database connection.
+
+        Yields:
+            AiosqliteConnection: Database connection instance.
+        """
+        async with self.pool_instance.get_connection() as connection:
+            yield connection
+
+    @asynccontextmanager
+    async def provide_session(
+        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+    ) -> "AsyncGenerator[AiosqliteDriver, None]":
+        """Provide an async database session.
+
+        Args:
+            *args: Additional positional arguments.
+            statement_config: Optional statement configuration override.
+            **kwargs: Additional keyword arguments.
+
+        Yields:
+            AiosqliteDriver: Database session instance.
+        """
+        _ = args, kwargs
+        effective_statement_config = statement_config or self.statement_config
+        async with self.pool_instance.get_connection() as connection:
+            session = self.driver_type(connection, statement_config=effective_statement_config)
+            try:
+                yield session
+            finally:
+                pass
+
+    async def close(self) -> None:
+        """Close the connection manager."""
+        if self.pool_instance:
+            await self.pool_instance.close()
+
+    def _get_connection_config_dict(self) -> "dict[str, Any]":
+        """Get connection configuration dictionary.
+
+        Returns:
+            Connection parameters for creating connections.
+        """
+        return self._connection_parameters.copy()
+
+    async def _create_pool(self) -> "AiosqliteConnectionPool":
+        """Create the connection manager instance.
+
+        Returns:
+            AiosqliteConnectionPool: The connection manager instance.
+        """
+        if self.pool_instance is None:
+            self.pool_instance = AiosqliteConnectionPool(self._connection_parameters)
+        return self.pool_instance
 
     async def _close_pool(self) -> None:
-        """Aiosqlite doesn't support pooling."""
-        return
+        """Close the connection manager."""
+        if self.pool_instance:
+            await self.pool_instance.close()
 
-    async def create_connection(self) -> AiosqliteConnection:
-        """Create a single async connection.
-
-        Returns:
-            An Aiosqlite connection instance.
-        """
-        try:
-            config = self.connection_config_dict
-            return await aiosqlite.connect(**config)
-        except Exception as e:
-            msg = f"Could not configure the Aiosqlite connection. Error: {e!s}"
-            raise ImproperConfigurationError(msg) from e
-
-    @asynccontextmanager
-    async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AiosqliteConnection, None]:
-        """Provide an async connection context manager.
-
-        Args:
-            *args: Additional arguments.
-            **kwargs: Additional keyword arguments.
-
-        Yields:
-            An Aiosqlite connection instance.
-        """
-        connection = await self.create_connection()
-        try:
-            yield connection
-        finally:
-            await connection.close()
-
-    @asynccontextmanager
-    async def provide_session(self, *args: Any, **kwargs: Any) -> AsyncGenerator[AiosqliteDriver, None]:
-        """Provide an async driver session context manager.
-
-        Args:
-            *args: Additional arguments.
-            **kwargs: Additional keyword arguments.
-
-        Yields:
-            An AiosqliteDriver instance.
-        """
-        async with self.provide_connection(*args, **kwargs) as connection:
-            statement_config = self.statement_config
-            # Inject parameter style info if not already set
-            if statement_config.allowed_parameter_styles is None:
-                from dataclasses import replace
-
-                statement_config = replace(
-                    statement_config,
-                    allowed_parameter_styles=self.supported_parameter_styles,
-                    default_parameter_style=self.default_parameter_style,
-                )
-            yield self.driver_type(connection=connection, config=statement_config)
-
-    async def provide_pool(self, *args: Any, **kwargs: Any) -> None:
-        """Aiosqlite doesn't support pooling."""
-        return
-
-    def get_signature_namespace(self) -> "dict[str, type[Any]]":
-        """Get the signature namespace for Aiosqlite types.
-
-        This provides all Aiosqlite-specific types that Litestar needs to recognize
-        to avoid serialization attempts.
-
-        Returns:
-            Dictionary mapping type names to types.
-        """
-        namespace = super().get_signature_namespace()
-        namespace.update({"AiosqliteConnection": AiosqliteConnection})
-        return namespace
+    async def close_pool(self) -> None:
+        """Close the connection pool (delegates to _close_pool)."""
+        await self._close_pool()

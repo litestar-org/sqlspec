@@ -1,239 +1,274 @@
+"""AsyncMy MySQL driver implementation for async MySQL operations.
+
+Provides async MySQL/MariaDB connectivity with:
+- Parameter style conversion (QMARK to POSITIONAL_PYFORMAT)
+- MySQL-specific type coercion and data handling
+- Error categorization for MySQL/MariaDB
+- Transaction management
+"""
+
 import logging
-from collections.abc import AsyncGenerator, Sequence
-from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional, Union
 
-from asyncmy import Connection
-from typing_extensions import TypeAlias
+import asyncmy
+import asyncmy.errors
+from asyncmy.cursors import Cursor, DictCursor
 
-from sqlspec.driver import AsyncDriverAdapterProtocol
-from sqlspec.driver.connection import managed_transaction_async
-from sqlspec.driver.mixins import (
-    AsyncAdapterCacheMixin,
-    AsyncPipelinedExecutionMixin,
-    AsyncStorageMixin,
-    SQLTranslatorMixin,
-    ToSchemaMixin,
-    TypeCoercionMixin,
-)
-from sqlspec.driver.parameters import convert_parameter_sequence
-from sqlspec.statement.parameters import ParameterStyle, ParameterValidator
-from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import DictRow, RowT
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import StatementConfig
+from sqlspec.driver import AsyncDriverAdapterBase
+from sqlspec.exceptions import SQLParsingError, SQLSpecError
+from sqlspec.utils.serializers import to_json
 
 if TYPE_CHECKING:
-    from asyncmy.cursors import Cursor, DictCursor
-    from sqlglot.dialects.dialect import DialectType
+    from contextlib import AbstractAsyncContextManager
 
-__all__ = ("AsyncmyConnection", "AsyncmyDriver")
+    from sqlspec.adapters.asyncmy._types import AsyncmyConnection
+    from sqlspec.core.result import SQLResult
+    from sqlspec.core.statement import SQL
+    from sqlspec.driver import ExecutionResult
 
-logger = logging.getLogger("sqlspec")
+logger = logging.getLogger(__name__)
 
-AsyncmyConnection: TypeAlias = Connection
+__all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler", "asyncmy_statement_config")
 
 
-class AsyncmyDriver(
-    AsyncDriverAdapterProtocol[AsyncmyConnection, RowT],
-    AsyncAdapterCacheMixin,
-    SQLTranslatorMixin,
-    TypeCoercionMixin,
-    AsyncStorageMixin,
-    AsyncPipelinedExecutionMixin,
-    ToSchemaMixin,
-):
-    """Asyncmy MySQL/MariaDB Driver Adapter. Modern protocol implementation."""
+# Enhanced AsyncMy statement configuration using core modules with performance optimizations
+asyncmy_statement_config = StatementConfig(
+    dialect="mysql",
+    parameter_config=ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.QMARK,
+        supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT},
+        default_execution_parameter_style=ParameterStyle.POSITIONAL_PYFORMAT,
+        supported_execution_parameter_styles={ParameterStyle.POSITIONAL_PYFORMAT},
+        type_coercion_map={
+            dict: to_json,
+            list: to_json,
+            tuple: lambda v: to_json(list(v)),
+            bool: int,  # MySQL represents booleans as integers
+        },
+        has_native_list_expansion=False,
+        needs_static_script_compilation=True,
+        preserve_parameter_format=True,
+    ),
+    enable_parsing=True,
+    enable_validation=True,
+    enable_caching=True,
+    enable_parameter_type_wrapping=True,
+)
 
-    dialect: "DialectType" = "mysql"
-    supported_parameter_styles: "tuple[ParameterStyle, ...]" = (ParameterStyle.POSITIONAL_PYFORMAT,)
-    default_parameter_style: ParameterStyle = ParameterStyle.POSITIONAL_PYFORMAT
+
+class AsyncmyCursor:
+    """Async context manager for AsyncMy cursor management."""
+
+    __slots__ = ("connection", "cursor")
+
+    def __init__(self, connection: "AsyncmyConnection") -> None:
+        self.connection = connection
+        self.cursor: Optional[Union[Cursor, DictCursor]] = None
+
+    async def __aenter__(self) -> Union[Cursor, DictCursor]:
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        _ = (exc_type, exc_val, exc_tb)
+        if self.cursor is not None:
+            await self.cursor.close()
+
+
+class AsyncmyExceptionHandler:
+    """Custom async context manager for handling AsyncMy database exceptions."""
+
+    __slots__ = ()
+
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if exc_type is None:
+            return
+
+        if issubclass(exc_type, asyncmy.errors.IntegrityError):
+            e = exc_val
+            msg = f"AsyncMy MySQL integrity constraint violation: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, asyncmy.errors.ProgrammingError):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "syntax" in error_msg or "parse" in error_msg:
+                msg = f"AsyncMy MySQL SQL syntax error: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"AsyncMy MySQL programming error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, asyncmy.errors.OperationalError):
+            e = exc_val
+            msg = f"AsyncMy MySQL operational error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, asyncmy.errors.DatabaseError):
+            e = exc_val
+            msg = f"AsyncMy MySQL database error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, asyncmy.errors.Error):
+            e = exc_val
+            msg = f"AsyncMy MySQL error: {e}"
+            raise SQLSpecError(msg) from e
+        if issubclass(exc_type, Exception):
+            e = exc_val
+            error_msg = str(e).lower()
+            if "parse" in error_msg or "syntax" in error_msg:
+                msg = f"SQL parsing failed: {e}"
+                raise SQLParsingError(msg) from e
+            msg = f"Unexpected async database operation error: {e}"
+            raise SQLSpecError(msg) from e
+
+
+class AsyncmyDriver(AsyncDriverAdapterBase):
+    """AsyncMy MySQL/MariaDB driver for async database operations.
+
+    Provides MySQL/MariaDB connectivity with:
+    - Parameter style conversion (QMARK to POSITIONAL_PYFORMAT)
+    - MySQL-specific type coercion (bool -> int, dict/list -> JSON)
+    - Error categorization for MySQL/MariaDB
+    - Transaction management
+    """
+
+    __slots__ = ()
+    dialect = "mysql"
 
     def __init__(
         self,
-        connection: AsyncmyConnection,
-        config: Optional[SQLConfig] = None,
-        default_row_type: type[DictRow] = DictRow,
+        connection: "AsyncmyConnection",
+        statement_config: "Optional[StatementConfig]" = None,
+        driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        super().__init__(connection=connection, config=config, default_row_type=default_row_type)
+        if statement_config is None:
+            cache_config = get_cache_config()
+            enhanced_config = asyncmy_statement_config.replace(
+                enable_caching=cache_config.compiled_cache_enabled,
+                enable_parsing=True,
+                enable_validation=True,
+                dialect="mysql",
+            )
+            statement_config = enhanced_config
 
-    @asynccontextmanager
-    async def _get_cursor(
-        self, connection: "Optional[AsyncmyConnection]" = None
-    ) -> "AsyncGenerator[Union[Cursor, DictCursor], None]":
-        conn = self._connection(connection)
-        cursor = conn.cursor()
-        try:
-            yield cursor
-        finally:
-            await cursor.close()
+        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
-    async def _execute_statement(
-        self, statement: SQL, connection: "Optional[AsyncmyConnection]" = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
-        if statement.is_script:
-            sql, _ = self._get_compiled_sql(statement, ParameterStyle.STATIC)
-            return await self._execute_script(sql, connection=connection, **kwargs)
+    def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncmyCursor":
+        """Create async context manager for AsyncMy cursor."""
+        return AsyncmyCursor(connection)
 
-        # Detect parameter styles in the SQL
-        detected_styles = set()
-        sql_str = statement.to_sql(placeholder_style=None)  # Get raw SQL
-        validator = self.config.parameter_validator if self.config else ParameterValidator()
-        param_infos = validator.extract_parameters(sql_str)
-        if param_infos:
-            detected_styles = {p.style for p in param_infos}
+    def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
+        """Handle database-specific exceptions and wrap them appropriately."""
+        return AsyncmyExceptionHandler()
 
-        # Determine target style based on what's in the SQL
-        target_style = self.default_parameter_style
+    async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
+        """Hook for AsyncMy-specific special operations.
 
-        # Check if there are unsupported styles
-        unsupported_styles = detected_styles - set(self.supported_parameter_styles)
-        if unsupported_styles:
-            # Force conversion to default style
-            target_style = self.default_parameter_style
-        elif detected_styles:
-            # Prefer the first supported style found
-            for style in detected_styles:
-                if style in self.supported_parameter_styles:
-                    target_style = style
-                    break
+        Args:
+            cursor: AsyncMy cursor object
+            statement: SQL statement to analyze
 
-        # Compile with the determined style
-        sql, params = self._get_compiled_sql(statement, target_style)
+        Returns:
+            None - always proceeds with standard execution for AsyncMy
+        """
+        _ = (cursor, statement)  # Mark as intentionally unused
+        return None
 
-        if statement.is_many:
-            params = self._process_parameters(params)
-            return await self._execute_many(sql, params, connection=connection, **kwargs)
+    async def _execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        """Execute SQL script using enhanced statement splitting and parameter handling.
 
-        params = self._process_parameters(params)
-        return await self._execute(sql, params, statement, connection=connection, **kwargs)
+        Uses core module optimization for statement parsing and parameter processing.
+        Parameters are embedded as static values for script execution compatibility.
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
-    async def _execute(
-        self, sql: str, parameters: Any, statement: SQL, connection: "Optional[AsyncmyConnection]" = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
-        # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        successful_count = 0
+        last_cursor = cursor
 
-        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # Convert parameters using consolidated utility
-            converted_params = convert_parameter_sequence(parameters)
-            # AsyncMy doesn't like empty lists/tuples, convert to None
-            final_params = converted_params[0] if converted_params and len(converted_params) == 1 else converted_params
-            if not final_params:
-                final_params = None
+        for stmt in statements:
+            await cursor.execute(stmt, prepared_parameters or None)
+            successful_count += 1
 
-            async with self._get_cursor(txn_conn) as cursor:
-                # AsyncMy expects list/tuple parameters or dict for named params
-                await cursor.execute(sql, final_params)
+        return self.create_execution_result(
+            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+        )
 
-                if self.returns_rows(statement.expression):
-                    # For SELECT queries, fetch data and return SQLResult
-                    data = await cursor.fetchall()
-                    column_names = [desc[0] for desc in cursor.description or []]
-                    return SQLResult(
-                        statement=statement,
-                        data=data,
-                        column_names=column_names,
-                        rows_affected=len(data),
-                        operation_type="SELECT",
-                    )
+    async def _execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        """Execute SQL with multiple parameter sets using optimized AsyncMy batch processing.
 
-                # For DML/DDL queries
-                return SQLResult(
-                    statement=statement,
-                    data=[],
-                    rows_affected=cursor.rowcount if cursor.rowcount is not None else -1,
-                    operation_type=self._determine_operation_type(statement),
-                    metadata={"status_message": "OK"},
-                )
+        Leverages core parameter processing for enhanced MySQL type handling and parameter conversion.
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-    async def _execute_many(
-        self, sql: str, param_list: Any, connection: "Optional[AsyncmyConnection]" = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
-        # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+        # Enhanced parameter validation for executemany
+        if not prepared_parameters:
+            msg = "execute_many requires parameters"
+            raise ValueError(msg)
 
-        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # Normalize parameter list using consolidated utility
-            converted_param_list = convert_parameter_sequence(param_list)
+        await cursor.executemany(sql, prepared_parameters)
 
-            params_list: list[Union[list[Any], tuple[Any, ...]]] = []
-            if converted_param_list and isinstance(converted_param_list, Sequence):
-                for param_set in converted_param_list:
-                    if isinstance(param_set, (list, tuple)):
-                        params_list.append(param_set)
-                    elif param_set is None:
-                        params_list.append([])
-                    else:
-                        params_list.append([param_set])
+        # Calculate affected rows based on parameter count for AsyncMy
+        affected_rows = len(prepared_parameters) if prepared_parameters else 0
 
-            async with self._get_cursor(txn_conn) as cursor:
-                await cursor.executemany(sql, params_list)
-                return SQLResult(
-                    statement=SQL(sql, _dialect=self.dialect),
-                    data=[],
-                    rows_affected=cursor.rowcount if cursor.rowcount != -1 else len(params_list),
-                    operation_type="EXECUTE",
-                    metadata={"status_message": "OK"},
-                )
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    async def _execute_script(
-        self, script: str, connection: "Optional[AsyncmyConnection]" = None, **kwargs: Any
-    ) -> SQLResult[RowT]:
-        # Use provided connection or driver's default connection
-        conn = connection if connection is not None else self._connection(None)
+    async def _execute_statement(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        """Execute single SQL statement with enhanced AsyncMy MySQL data handling and performance optimization.
 
-        async with managed_transaction_async(conn, auto_commit=True) as txn_conn:
-            # AsyncMy may not support multi-statement scripts without CLIENT_MULTI_STATEMENTS flag
-            statements = self._split_script_statements(script)
-            suppress_warnings = kwargs.get("_suppress_warnings", False)
-            statements_executed = 0
-            total_rows = 0
+        Uses core processing for optimal parameter handling and MySQL result processing.
+        """
+        sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
+        await cursor.execute(sql, prepared_parameters or None)
 
-            async with self._get_cursor(txn_conn) as cursor:
-                for statement_str in statements:
-                    if statement_str:
-                        # Validate each statement unless warnings suppressed
-                        if not suppress_warnings:
-                            # Run validation through pipeline
-                            temp_sql = SQL(statement_str, config=self.config)
-                            temp_sql._ensure_processed()
-                            # Validation errors are logged as warnings by default
+        # Enhanced SELECT result processing for MySQL
+        if statement.returns_rows():
+            fetched_data = await cursor.fetchall()
+            column_names = [desc[0] for desc in cursor.description or []]
 
-                        await cursor.execute(statement_str)
-                        statements_executed += 1
-                        total_rows += cursor.rowcount if cursor.rowcount is not None else 0
+            # AsyncMy may return tuples or dicts - ensure consistent dict format
+            if fetched_data and not isinstance(fetched_data[0], dict):
+                data = [dict(zip(column_names, row)) for row in fetched_data]
+            else:
+                data = fetched_data
 
-            return SQLResult(
-                statement=SQL(script, _dialect=self.dialect).as_script(),
-                data=[],
-                rows_affected=total_rows,
-                operation_type="SCRIPT",
-                metadata={"status_message": "SCRIPT EXECUTED"},
-                total_statements=statements_executed,
-                successful_statements=statements_executed,
+            return self.create_execution_result(
+                cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
-    async def _ingest_arrow_table(self, table: "Any", table_name: str, mode: str = "append", **options: Any) -> int:
-        self._ensure_pyarrow_installed()
-        conn = self._connection(None)
-        async with managed_transaction_async(conn, auto_commit=True) as txn_conn, self._get_cursor(txn_conn) as cursor:
-            if mode == "replace":
-                await cursor.execute(f"TRUNCATE TABLE {table_name}")
-            elif mode == "create":
-                msg = "'create' mode is not supported for asyncmy ingestion."
-                raise NotImplementedError(msg)
+        # Enhanced non-SELECT result processing for MySQL
+        affected_rows = cursor.rowcount if cursor.rowcount is not None else -1
+        last_id = getattr(cursor, "lastrowid", None) if cursor.rowcount and cursor.rowcount > 0 else None
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_id)
 
-            data_for_ingest = table.to_pylist()
-            if not data_for_ingest:
-                return 0
+    # MySQL transaction management with enhanced async error handling
+    async def begin(self) -> None:
+        """Begin a database transaction with enhanced async error handling.
 
-            # Generate column placeholders: %s, %s, etc.
-            num_columns = len(data_for_ingest[0])
-            placeholders = ", ".join("%s" for _ in range(num_columns))
-            sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
-            await cursor.executemany(sql, data_for_ingest)
-            return cursor.rowcount if cursor.rowcount is not None else -1
+        Explicitly starts a MySQL transaction to ensure proper transaction boundaries.
+        """
+        try:
+            # Execute explicit BEGIN to start transaction
+            async with AsyncmyCursor(self.connection) as cursor:
+                await cursor.execute("BEGIN")
+        except asyncmy.errors.MySQLError as e:
+            msg = f"Failed to begin MySQL transaction: {e}"
+            raise SQLSpecError(msg) from e
 
-    def _connection(self, connection: Optional["AsyncmyConnection"] = None) -> "AsyncmyConnection":
-        """Get the connection to use for the operation."""
-        return connection or self.connection
+    async def rollback(self) -> None:
+        """Rollback the current transaction with enhanced async error handling."""
+        try:
+            await self.connection.rollback()
+        except asyncmy.errors.MySQLError as e:
+            msg = f"Failed to rollback MySQL transaction: {e}"
+            raise SQLSpecError(msg) from e
+
+    async def commit(self) -> None:
+        """Commit the current transaction with enhanced async error handling."""
+        try:
+            await self.connection.commit()
+        except asyncmy.errors.MySQLError as e:
+            msg = f"Failed to commit MySQL transaction: {e}"
+            raise SQLSpecError(msg) from e

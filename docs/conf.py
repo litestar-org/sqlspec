@@ -2,50 +2,66 @@
 from __future__ import annotations
 
 import os
+from datetime import date
 from functools import partial
 from typing import TYPE_CHECKING
 
-from sqlspec.__metadata__ import __project__ as project
-from sqlspec.__metadata__ import __version__ as version
+from sqlspec.__metadata__ import __project__, __version__
 
 if TYPE_CHECKING:
     from typing import Any
 
     from sphinx.addnodes import document  # type: ignore[attr-defined,unused-ignore]
     from sphinx.application import Sphinx
+
 # -- Environmental Data ------------------------------------------------------
 __all__ = ("setup", "update_html_context")
 
+current_year = date.today().year
+
 
 # -- Project information -----------------------------------------------------
-project = project
-copyright = "2023, Litestar-Org"
-author = "Litestar-Org"
-release = os.getenv("_SQLSPEC_DOCS_BUILD_VERSION", version.rsplit(".")[0])
+project = __project__
+copyright = f"{current_year}, Litestar Organization"
+author = "Litestar Organization"
+release = os.getenv("_SQLSPEC_DOCS_BUILD_VERSION", __version__.rsplit(".")[0])
+suppress_warnings = [
+    "autosectionlabel.*",
+    "ref.python",  # TODO: remove when https://github.com/sphinx-doc/sphinx/issues/4961 is fixed
+]
 # -- General configuration ---------------------------------------------------
 extensions = [
+    "sphinx.ext.intersphinx",
     "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",
     "sphinx.ext.autosectionlabel",
     "sphinx.ext.githubpages",
     "sphinx.ext.viewcode",
-    "sphinx.ext.intersphinx",
+    "tools.sphinx_ext.missing_references",
+    "tools.sphinx_ext.changelog",
+    "sphinx_autodoc_typehints",
+    "myst_parser",
     "auto_pytabs.sphinx_ext",
-    "tools.sphinx_ext",
     "sphinx_copybutton",
     "sphinx.ext.todo",
     "sphinx.ext.viewcode",
     "sphinx_click",
     "sphinx_toolbox.collapse",
     "sphinx_design",
+    "sphinx_togglebutton",
+    "sphinx_paramlinks",
 ]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "msgspec": ("https://jcristharif.com/msgspec/", None),
-    "anyio": ("https://anyio.readthedocs.io/en/stable/", None),
-    "click": ("https://click.palletsprojects.com/en/8.1.x/", None),
+    "sqlalchemy": ("https://docs.sqlalchemy.org/en/20/", None),
+    "alembic": ("https://alembic.sqlalchemy.org/en/latest/", None),
     "litestar": ("https://docs.litestar.dev/latest/", None),
+    "click": ("https://click.palletsprojects.com/en/stable/", None),
+    "anyio": ("https://anyio.readthedocs.io/en/stable/", None),
     "multidict": ("https://multidict.aio-libs.org/en/stable/", None),
+    "cryptography": ("https://cryptography.io/en/latest/", None),
     "pydantic": ("https://docs.pydantic.dev/latest/", None),
     "sanic": ("https://sanic.readthedocs.io/en/latest/", None),
     "flask": ("https://flask.palletsprojects.com/en/stable/", None),
@@ -61,7 +77,10 @@ PY_FUNC = "py:func"
 
 nitpicky = True
 nitpick_ignore: list[str] = []
-nitpick_ignore_regex = [(PY_RE, r"sqlspec.*\.T")]
+nitpick_ignore_regex: list[str] = []
+
+auto_pytabs_min_version = (3, 9)
+auto_pytabs_max_version = (3, 13)
 
 napoleon_google_docstring = True
 napoleon_include_special_with_doc = True
@@ -75,15 +94,39 @@ autodoc_class_signature = "separated"
 autodoc_default_options = {"special-members": "__init__", "show-inheritance": True, "members": True}
 autodoc_member_order = "bysource"
 autodoc_typehints_format = "short"
-autodoc_type_aliases: dict[str, str] = {}
-autodoc_mock_imports: list[str] = []
+autodoc_type_aliases = {
+    "SQLConfig": "sqlspec.base.SQLConfig",
+    "SessionProtocol": "sqlspec.protocols.SessionProtocol",
+    "DriverProtocol": "sqlspec.protocols.DriverProtocol",
+    "StatementProtocol": "sqlspec.protocols.StatementProtocol",
+    "ResultProtocol": "sqlspec.protocols.ResultProtocol",
+    "ModelT": "sqlspec.typing.ModelT",
+    "FilterTypeT": "sqlspec.typing.FilterTypeT",
+    "StatementTypeT": "sqlspec.typing.StatementTypeT",
+    "Union": "typing.Union",
+    "Callable": "typing.Callable",
+    "Any": "typing.Any",
+    "Optional": "typing.Optional",
+}
+autodoc_mock_imports = [
+    "sqlalchemy",
+    "alembic",
+    "asyncpg",
+    "psycopg",
+    "aiomysql",
+    "asyncmy",
+    "aiosqlite",
+    "duckdb",
+    "oracledb",
+    "psqlpy",
+    "adbc_driver_postgresql",
+    "adbc_driver_sqlite",
+    "adbc_driver_flightsql",
+    "google.cloud.bigquery",
+]
+
 
 autosectionlabel_prefix_document = True
-
-todo_include_todos = True
-
-templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 # Strip the dollar prompt when copying code
 # https://sphinx-copybutton.readthedocs.io/en/latest/use.html#strip-and-configure-input-prompts-for-code-cells
@@ -91,27 +134,28 @@ copybutton_prompt_text = "$ "
 
 # -- Style configuration -----------------------------------------------------
 html_theme = "shibuya"
+html_title = "SQLSpec"
+html_short_title = "SQLSpec"
+pygments_style = "dracula"
+todo_include_todos = True
+
 html_static_path = ["_static"]
 html_favicon = "_static/favicon.png"
 templates_path = ["_templates"]
 html_js_files = ["versioning.js"]
 html_css_files = ["custom.css"]
-html_show_sourcelink = False
-html_title = "SQLSpec"
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "PYPI_README.md"]
 html_show_sourcelink = True
 html_copy_source = True
-html_context = {"source_type": "github", "source_user": "litestar-org", "source_repo": project.replace("_", "-")}
 
-brand_colors = {
-    "--brand-primary": {"rgb": "245, 0, 87", "hex": "#f50057"},
-    "--brand-secondary": {"rgb": "32, 32, 32", "hex": "#202020"},
-    "--brand-tertiary": {"rgb": "161, 173, 161", "hex": "#A1ADA1"},
-    "--brand-green": {"rgb": "0, 245, 151", "hex": "#00f597"},
-    "--brand-alert": {"rgb": "243, 96, 96", "hex": "#f36060"},
-    "--brand-dark": {"rgb": "0, 0, 0", "hex": "#000000"},
-    "--brand-light": {"rgb": "235, 221, 221", "hex": "#ebdddd"},
+html_context = {
+    "source_type": "github",
+    "source_user": "litestar-org",
+    "source_repo": "sqlspec",
+    "current_version": "latest",
+    "version": release,
 }
+
 
 html_theme_options = {
     "logo_target": "/",
@@ -159,7 +203,7 @@ html_theme_options = {
                     "url": "https://github.com/litestar-org/.github?tab=coc-ov-file#security-ov-file",
                     "icon": "coc",
                 },
-                {"title": "Sponsor", "url": "https://github.com/sponsors/Litestar-org", "icon": "heart"},
+                {"title": "Sponsor", "url": "https://github.com/sponsors/Litestar-Org", "icon": "heart"},
             ],
         },
         {

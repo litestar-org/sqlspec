@@ -10,19 +10,47 @@ from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypeVar, Union, cast
 
+from sqlspec.core.result import SQLResult
+from sqlspec.core.statement import SQL, StatementConfig
 from sqlspec.exceptions import MissingDependencyError
-from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQL, SQLConfig
-from sqlspec.typing import AIOSQL_INSTALLED, RowT
+from sqlspec.typing import AIOSQL_INSTALLED
 
 if TYPE_CHECKING:
-    from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
+    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 
 logger = logging.getLogger("sqlspec.extensions.aiosql")
 
 __all__ = ("AiosqlAsyncAdapter", "AiosqlSyncAdapter")
 
 T = TypeVar("T")
+
+
+class AsyncCursorLike:
+    def __init__(self, result: Any) -> None:
+        self.result = result
+
+    async def fetchall(self) -> list[Any]:
+        if isinstance(self.result, SQLResult) and self.result.data is not None:
+            return list(self.result.data)
+        return []
+
+    async def fetchone(self) -> Optional[Any]:
+        rows = await self.fetchall()
+        return rows[0] if rows else None
+
+
+class CursorLike:
+    def __init__(self, result: Any) -> None:
+        self.result = result
+
+    def fetchall(self) -> list[Any]:
+        if isinstance(self.result, SQLResult) and self.result.data is not None:
+            return list(self.result.data)
+        return []
+
+    def fetchone(self) -> Optional[Any]:
+        rows = self.fetchall()
+        return rows[0] if rows else None
 
 
 def _check_aiosql_available() -> None:
@@ -38,21 +66,20 @@ def _normalize_dialect(dialect: "Union[str, Any, None]") -> str:
         dialect: Original dialect name (can be str, Dialect, type[Dialect], or None)
 
     Returns:
-        converted dialect name
+        Converted dialect name compatible with SQLGlot
     """
     if dialect is None:
         return "sql"
 
-    if hasattr(dialect, "__name__"):  # It's a class
+    if hasattr(dialect, "__name__"):
         dialect_str = str(dialect.__name__).lower()  # pyright: ignore
-    elif hasattr(dialect, "name"):  # It's an instance with name attribute
+    elif hasattr(dialect, "name"):
         dialect_str = str(dialect.name).lower()  # pyright: ignore
     elif isinstance(dialect, str):
         dialect_str = dialect.lower()
     else:
         dialect_str = str(dialect).lower()
 
-    # Map common dialect aliases to SQLGlot names
     dialect_mapping = {
         "postgresql": "postgres",
         "psycopg": "postgres",
@@ -65,11 +92,9 @@ def _normalize_dialect(dialect: "Union[str, Any, None]") -> str:
 
 
 class _AiosqlAdapterBase:
-    """Base adapter for common logic."""
+    """Base adapter class providing common functionality for aiosql integration."""
 
-    def __init__(
-        self, driver: "Union[SyncDriverAdapterProtocol[Any, Any], AsyncDriverAdapterProtocol[Any, Any]]"
-    ) -> None:
+    def __init__(self, driver: "Union[SyncDriverAdapterBase, AsyncDriverAdapterBase]") -> None:
         """Initialize the base adapter.
 
         Args:
@@ -79,27 +104,46 @@ class _AiosqlAdapterBase:
         self.driver = driver
 
     def process_sql(self, query_name: str, op_type: "Any", sql: str) -> str:
-        """Process SQL for aiosql compatibility."""
+        """Process SQL string for aiosql compatibility.
+
+        Args:
+            query_name: Name of the query
+            op_type: Operation type
+            sql: SQL string to process
+
+        Returns:
+            Processed SQL string
+        """
         return sql
 
     def _create_sql_object(self, sql: str, parameters: "Any" = None) -> SQL:
-        """Create SQL object with proper configuration."""
-        config = SQLConfig(enable_validation=False)
-        converted_dialect = _normalize_dialect(self.driver.dialect)
-        return SQL(sql, parameters, config=config, dialect=converted_dialect)
+        """Create SQL object with proper configuration.
+
+        Args:
+            sql: SQL string
+            parameters: Query parameters
+
+        Returns:
+            Configured SQL object
+        """
+        return SQL(
+            sql,
+            parameters,
+            config=StatementConfig(enable_validation=False),
+            dialect=_normalize_dialect(getattr(self.driver, "dialect", "sqlite")),
+        )
 
 
 class AiosqlSyncAdapter(_AiosqlAdapterBase):
-    """Sync adapter that implements aiosql protocol using SQLSpec drivers.
+    """Synchronous adapter that implements aiosql protocol using SQLSpec drivers.
 
-    This adapter bridges aiosql's sync driver protocol with SQLSpec's sync drivers,
-    enabling all of SQLSpec's drivers to work with queries loaded by aiosql.
-
+    This adapter bridges aiosql's synchronous driver protocol with SQLSpec's sync drivers,
+    enabling queries loaded by aiosql to be executed with SQLSpec drivers.
     """
 
     is_aio_driver: ClassVar[bool] = False
 
-    def __init__(self, driver: "SyncDriverAdapterProtocol[Any, Any]") -> None:
+    def __init__(self, driver: "SyncDriverAdapterBase") -> None:
         """Initialize the sync adapter.
 
         Args:
@@ -123,8 +167,8 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
             Query result rows
 
         Note:
-            record_class parameter is ignored. Use schema_type in driver.execute
-            or _sqlspec_schema_type in parameters for type mapping.
+            The record_class parameter is ignored for compatibility. Use schema_type
+            in driver.execute or _sqlspec_schema_type in parameters for type mapping.
         """
         if record_class is not None:
             logger.warning(
@@ -132,16 +176,14 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
                 "Use schema_type in driver.execute or _sqlspec_schema_type in parameters."
             )
 
-        sql_obj = self._create_sql_object(sql, parameters)
-        # Execute using SQLSpec driver
-        result = self.driver.execute(sql_obj, connection=conn)
+        result = self.driver.execute(self._create_sql_object(sql, parameters), connection=conn)
 
         if isinstance(result, SQLResult) and result.data is not None:
             yield from result.data
 
     def select_one(
         self, conn: Any, query_name: str, sql: str, parameters: "Any", record_class: Optional[Any] = None
-    ) -> Optional[RowT]:
+    ) -> Optional[dict[str, Any]]:
         """Execute a SELECT query and return first result.
 
         Args:
@@ -155,8 +197,8 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
             First result row or None
 
         Note:
-            record_class parameter is ignored. Use schema_type in driver.execute
-            or _sqlspec_schema_type in parameters for type mapping.
+            The record_class parameter is ignored for compatibility. Use schema_type
+            in driver.execute or _sqlspec_schema_type in parameters for type mapping.
         """
         if record_class is not None:
             logger.warning(
@@ -164,12 +206,10 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
                 "Use schema_type in driver.execute or _sqlspec_schema_type in parameters."
             )
 
-        sql_obj = self._create_sql_object(sql, parameters)
-
-        result = cast("SQLResult[RowT]", self.driver.execute(sql_obj, connection=conn))
+        result = cast("SQLResult", self.driver.execute(self._create_sql_object(sql, parameters), connection=conn))
 
         if hasattr(result, "data") and result.data and isinstance(result, SQLResult):
-            return cast("Optional[RowT]", result.data[0])
+            return cast("Optional[dict[str, Any]]", result.data[0])
         return None
 
     def select_value(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Optional[Any]:
@@ -207,21 +247,7 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
         Yields:
             Cursor-like object with results
         """
-        sql_obj = self._create_sql_object(sql, parameters)
-        result = self.driver.execute(sql_obj, connection=conn)
-
-        class CursorLike:
-            def __init__(self, result: Any) -> None:
-                self.result = result
-
-            def fetchall(self) -> list[Any]:
-                if isinstance(result, SQLResult) and result.data is not None:
-                    return list(result.data)
-                return []
-
-            def fetchone(self) -> Optional[Any]:
-                rows = self.fetchall()
-                return rows[0] if rows else None
+        result = self.driver.execute(self._create_sql_object(sql, parameters), connection=conn)
 
         yield CursorLike(result)
 
@@ -237,10 +263,8 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
         Returns:
             Number of affected rows
         """
-        sql_obj = self._create_sql_object(sql, parameters)
-        result = cast("SQLResult[Any]", self.driver.execute(sql_obj, connection=conn))
+        result = cast("SQLResult", self.driver.execute(self._create_sql_object(sql, parameters), connection=conn))
 
-        # SQLResult has rows_affected attribute
         return result.rows_affected if hasattr(result, "rows_affected") else 0
 
     def insert_update_delete_many(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> int:
@@ -255,12 +279,10 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
         Returns:
             Number of affected rows
         """
-        # For executemany, we don't extract sqlspec filters from individual parameter sets
-        sql_obj = self._create_sql_object(sql)
+        result = cast(
+            "SQLResult", self.driver.execute_many(self._create_sql_object(sql), parameters=parameters, connection=conn)
+        )
 
-        result = cast("SQLResult[Any]", self.driver.execute_many(sql_obj, parameters=parameters, connection=conn))
-
-        # SQLResult has rows_affected attribute
         return result.rows_affected if hasattr(result, "rows_affected") else 0
 
     def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Optional[Any]:
@@ -275,20 +297,19 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
         Returns:
             Returned value or None
         """
-        # INSERT RETURNING is treated like a select that returns data
         return self.select_one(conn, query_name, sql, parameters)
 
 
 class AiosqlAsyncAdapter(_AiosqlAdapterBase):
-    """Async adapter that implements aiosql protocol using SQLSpec drivers.
+    """Asynchronous adapter that implements aiosql protocol using SQLSpec drivers.
 
     This adapter bridges aiosql's async driver protocol with SQLSpec's async drivers,
-    enabling all of SQLSpec's features to work with queries loaded by aiosql.
+    enabling queries loaded by aiosql to be executed with SQLSpec async drivers.
     """
 
     is_aio_driver: ClassVar[bool] = True
 
-    def __init__(self, driver: "AsyncDriverAdapterProtocol[Any, Any]") -> None:
+    def __init__(self, driver: "AsyncDriverAdapterBase") -> None:
         """Initialize the async adapter.
 
         Args:
@@ -312,8 +333,8 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
             List of query result rows
 
         Note:
-            record_class parameter is ignored. Use schema_type in driver.execute
-            or _sqlspec_schema_type in parameters for type mapping.
+            The record_class parameter is ignored for compatibility. Use schema_type
+            in driver.execute or _sqlspec_schema_type in parameters for type mapping.
         """
         if record_class is not None:
             logger.warning(
@@ -321,9 +342,7 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
                 "Use schema_type in driver.execute or _sqlspec_schema_type in parameters."
             )
 
-        sql_obj = self._create_sql_object(sql, parameters)
-
-        result = await self.driver.execute(sql_obj, connection=conn)  # type: ignore[misc]
+        result = await self.driver.execute(self._create_sql_object(sql, parameters), connection=conn)  # type: ignore[misc]
 
         if hasattr(result, "data") and result.data is not None and isinstance(result, SQLResult):
             return list(result.data)
@@ -345,8 +364,8 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
             First result row or None
 
         Note:
-            record_class parameter is ignored. Use schema_type in driver.execute
-            or _sqlspec_schema_type in parameters for type mapping.
+            The record_class parameter is ignored for compatibility. Use schema_type
+            in driver.execute or _sqlspec_schema_type in parameters for type mapping.
         """
         if record_class is not None:
             logger.warning(
@@ -354,9 +373,7 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
                 "Use schema_type in driver.execute or _sqlspec_schema_type in parameters."
             )
 
-        sql_obj = self._create_sql_object(sql, parameters)
-
-        result = await self.driver.execute(sql_obj, connection=conn)  # type: ignore[misc]
+        result = await self.driver.execute(self._create_sql_object(sql, parameters), connection=conn)  # type: ignore[misc]
 
         if hasattr(result, "data") and result.data and isinstance(result, SQLResult):
             return result.data[0]
@@ -397,22 +414,7 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
         Yields:
             Cursor-like object with results
         """
-        sql_obj = self._create_sql_object(sql, parameters)
-        result = await self.driver.execute(sql_obj, connection=conn)  # type: ignore[misc]
-
-        class AsyncCursorLike:
-            def __init__(self, result: Any) -> None:
-                self.result = result
-
-            @staticmethod
-            async def fetchall() -> list[Any]:
-                if isinstance(result, SQLResult) and result.data is not None:
-                    return list(result.data)
-                return []
-
-            async def fetchone(self) -> Optional[Any]:
-                rows = await self.fetchall()
-                return rows[0] if rows else None
+        result = await self.driver.execute(self._create_sql_object(sql, parameters), connection=conn)  # type: ignore[misc]
 
         yield AsyncCursorLike(result)
 
@@ -426,11 +428,9 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
             parameters: Query parameters
 
         Note:
-            Async version returns None per aiosql protocol
+            Returns None per aiosql async protocol
         """
-        sql_obj = self._create_sql_object(sql, parameters)
-
-        await self.driver.execute(sql_obj, connection=conn)  # type: ignore[misc]
+        await self.driver.execute(self._create_sql_object(sql, parameters), connection=conn)  # type: ignore[misc]
 
     async def insert_update_delete_many(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> None:
         """Execute INSERT/UPDATE/DELETE with many parameter sets.
@@ -442,11 +442,9 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
             parameters: Sequence of parameter sets
 
         Note:
-            Async version returns None per aiosql protocol
+            Returns None per aiosql async protocol
         """
-        # For executemany, we don't extract sqlspec filters from individual parameter sets
-        sql_obj = self._create_sql_object(sql)
-        await self.driver.execute_many(sql_obj, parameters=parameters, connection=conn)  # type: ignore[misc]
+        await self.driver.execute_many(self._create_sql_object(sql), parameters=parameters, connection=conn)  # type: ignore[misc]
 
     async def insert_returning(self, conn: Any, query_name: str, sql: str, parameters: "Any") -> Optional[Any]:
         """Execute INSERT with RETURNING and return result.
@@ -460,5 +458,4 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
         Returns:
             Returned value or None
         """
-        # INSERT RETURNING is treated like a select that returns data
         return await self.select_one(conn, query_name, sql, parameters)

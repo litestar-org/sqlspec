@@ -7,20 +7,22 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from sqlspec.core.statement import SQL
 from sqlspec.migrations.base import BaseMigrationRunner
+from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.sync_tools import run_
 
 if TYPE_CHECKING:
-    from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
-    from sqlspec.statement.sql import SQL
+    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 
 __all__ = ("AsyncMigrationRunner", "SyncMigrationRunner")
 
 logger = get_logger("migrations.runner")
 
 
-class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterProtocol[Any]"]):
-    """Sync version - executes migrations using SQLFileLoader."""
+class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase"]):
+    """Executes migrations using SQLFileLoader."""
 
     def get_migration_files(self) -> "list[tuple[str, Path]]":
         """Get all migration files sorted by version.
@@ -42,7 +44,7 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterProtocol[Any]"])
         return self._load_migration_metadata(file_path)
 
     def execute_upgrade(
-        self, driver: "SyncDriverAdapterProtocol[Any]", migration: "dict[str, Any]"
+        self, driver: "SyncDriverAdapterBase", migration: "dict[str, Any]"
     ) -> "tuple[Optional[str], int]":
         """Execute an upgrade migration.
 
@@ -58,15 +60,12 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterProtocol[Any]"])
             return None, 0
 
         start_time = time.time()
-
-        # Execute migration
         driver.execute(upgrade_sql)
-
         execution_time = int((time.time() - start_time) * 1000)
         return None, execution_time
 
     def execute_downgrade(
-        self, driver: "SyncDriverAdapterProtocol[Any]", migration: "dict[str, Any]"
+        self, driver: "SyncDriverAdapterBase", migration: "dict[str, Any]"
     ) -> "tuple[Optional[str], int]":
         """Execute a downgrade migration.
 
@@ -82,22 +81,12 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterProtocol[Any]"])
             return None, 0
 
         start_time = time.time()
-
-        # Execute migration
         driver.execute(downgrade_sql)
-
         execution_time = int((time.time() - start_time) * 1000)
         return None, execution_time
 
     def load_all_migrations(self) -> "dict[str, SQL]":
         """Load all migrations into a single namespace for bulk operations.
-
-        Returns a dictionary mapping query names to SQL objects.
-        Useful for:
-        - Migration analysis tools
-        - Documentation generation
-        - Validation and linting
-        - Migration squashing
 
         Returns:
             Dictionary mapping query names to SQL objects.
@@ -105,19 +94,31 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterProtocol[Any]"])
         all_queries = {}
         migrations = self.get_migration_files()
 
-        for _version, file_path in migrations:
-            self.loader.load_sql(file_path)
+        for version, file_path in migrations:
+            if file_path.suffix == ".sql":
+                self.loader.load_sql(file_path)
+                for query_name in self.loader.list_queries():
+                    all_queries[query_name] = self.loader.get_sql(query_name)
+            else:
+                loader = get_migration_loader(file_path, self.migrations_path, self.project_root)
 
-            # Get all queries from this file
-            for query_name in self.loader.list_queries():
-                # Store with full query name for uniqueness
-                all_queries[query_name] = self.loader.get_sql(query_name)
+                try:
+                    up_sql = run_(loader.get_up_sql)(file_path)
+                    down_sql = run_(loader.get_down_sql)(file_path)
+
+                    if up_sql:
+                        all_queries[f"migrate-{version}-up"] = SQL(up_sql[0])
+                    if down_sql:
+                        all_queries[f"migrate-{version}-down"] = SQL(down_sql[0])
+
+                except Exception as e:
+                    logger.debug("Failed to load Python migration %s: %s", file_path, e)
 
         return all_queries
 
 
-class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterProtocol[Any]"]):
-    """Async version - executes migrations using SQLFileLoader."""
+class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase"]):
+    """Executes migrations using SQLFileLoader."""
 
     async def get_migration_files(self) -> "list[tuple[str, Path]]":
         """Get all migration files sorted by version.
@@ -125,7 +126,6 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterProtocol[Any]"
         Returns:
             List of tuples containing (version, file_path).
         """
-        # For async, we still use the sync file operations since Path.glob is sync
         return self._get_migration_files_sync()
 
     async def load_migration(self, file_path: Path) -> "dict[str, Any]":
@@ -137,11 +137,10 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterProtocol[Any]"
         Returns:
             Dictionary containing migration metadata.
         """
-        # File loading is still sync, so we use the base implementation
         return self._load_migration_metadata(file_path)
 
     async def execute_upgrade(
-        self, driver: "AsyncDriverAdapterProtocol[Any]", migration: "dict[str, Any]"
+        self, driver: "AsyncDriverAdapterBase", migration: "dict[str, Any]"
     ) -> "tuple[Optional[str], int]":
         """Execute an upgrade migration.
 
@@ -157,15 +156,12 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterProtocol[Any]"
             return None, 0
 
         start_time = time.time()
-
-        # Execute migration
         await driver.execute(upgrade_sql)
-
         execution_time = int((time.time() - start_time) * 1000)
         return None, execution_time
 
     async def execute_downgrade(
-        self, driver: "AsyncDriverAdapterProtocol[Any]", migration: "dict[str, Any]"
+        self, driver: "AsyncDriverAdapterBase", migration: "dict[str, Any]"
     ) -> "tuple[Optional[str], int]":
         """Execute a downgrade migration.
 
@@ -181,22 +177,12 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterProtocol[Any]"
             return None, 0
 
         start_time = time.time()
-
-        # Execute migration
         await driver.execute(downgrade_sql)
-
         execution_time = int((time.time() - start_time) * 1000)
         return None, execution_time
 
     async def load_all_migrations(self) -> "dict[str, SQL]":
         """Load all migrations into a single namespace for bulk operations.
-
-        Returns a dictionary mapping query names to SQL objects.
-        Useful for:
-        - Migration analysis tools
-        - Documentation generation
-        - Validation and linting
-        - Migration squashing
 
         Returns:
             Dictionary mapping query names to SQL objects.
@@ -204,12 +190,24 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterProtocol[Any]"
         all_queries = {}
         migrations = await self.get_migration_files()
 
-        for _version, file_path in migrations:
-            self.loader.load_sql(file_path)
+        for version, file_path in migrations:
+            if file_path.suffix == ".sql":
+                self.loader.load_sql(file_path)
+                for query_name in self.loader.list_queries():
+                    all_queries[query_name] = self.loader.get_sql(query_name)
+            else:
+                loader = get_migration_loader(file_path, self.migrations_path, self.project_root)
 
-            # Get all queries from this file
-            for query_name in self.loader.list_queries():
-                # Store with full query name for uniqueness
-                all_queries[query_name] = self.loader.get_sql(query_name)
+                try:
+                    up_sql = await loader.get_up_sql(file_path)
+                    down_sql = await loader.get_down_sql(file_path)
+
+                    if up_sql:
+                        all_queries[f"migrate-{version}-up"] = SQL(up_sql[0])
+                    if down_sql:
+                        all_queries[f"migrate-{version}-down"] = SQL(down_sql[0])
+
+                except Exception as e:
+                    logger.debug("Failed to load Python migration %s: %s", file_path, e)
 
         return all_queries

@@ -8,21 +8,17 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgAsyncDriver
-from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQLConfig
+from sqlspec.core.result import SQLResult
 
 
 @pytest.fixture
 async def psycopg_async_session(postgres_service: PostgresService) -> AsyncGenerator[PsycopgAsyncDriver, None]:
     """Create a psycopg async session with test table."""
     config = PsycopgAsyncConfig(
-        host=postgres_service.host,
-        port=postgres_service.port,
-        user=postgres_service.user,
-        password=postgres_service.password,
-        dbname=postgres_service.database,
-        autocommit=True,  # Enable autocommit for tests
-        statement_config=SQLConfig(enable_transformations=False, enable_validation=False, enable_parsing=False),
+        pool_config={
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}",
+            "autocommit": True,  # Enable autocommit for tests
+        }
     )
 
     # Manually create and manage the pool to ensure proper cleanup
@@ -48,9 +44,7 @@ async def psycopg_async_session(postgres_service: PostgresService) -> AsyncGener
                 pass
     finally:
         # Ensure pool is closed properly with timeout
-        if config.pool_instance:
-            await config.pool_instance.close(timeout=5.0)
-            config.pool_instance = None
+        await config.close_pool()
 
 
 @pytest.mark.xdist_group("postgres")
@@ -101,9 +95,7 @@ async def test_psycopg_async_copy_operations_keyword(psycopg_async_session: Psyc
 
     # Test COPY FROM STDIN with text format using keyword parameter
     copy_data = "3\ttest3\t300\n4\ttest4\t400\n"
-    result = await psycopg_async_session.execute(
-        "COPY copy_test_async_kw FROM STDIN WITH (FORMAT text)", parameters=copy_data
-    )
+    result = await psycopg_async_session.execute("COPY copy_test_async_kw FROM STDIN WITH (FORMAT text)", copy_data)
     assert isinstance(result, SQLResult)
     assert result.rows_affected >= 0  # May be -1 or actual count
 
@@ -165,9 +157,7 @@ async def test_psycopg_async_copy_csv_format_keyword(psycopg_async_session: Psyc
 
     # Test COPY FROM STDIN with CSV format using keyword parameter
     csv_data = "6,test6,600\n7,test7,700\n8,test8,800\n"
-    result = await psycopg_async_session.execute(
-        "COPY copy_csv_async_kw FROM STDIN WITH (FORMAT csv)", parameters=csv_data
-    )
+    result = await psycopg_async_session.execute("COPY copy_csv_async_kw FROM STDIN WITH (FORMAT csv)", csv_data)
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
 

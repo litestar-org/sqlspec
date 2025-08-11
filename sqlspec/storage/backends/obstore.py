@@ -1,15 +1,17 @@
-"""High-performance object storage using obstore.
+"""Object storage backend using obstore.
 
-This backend implements the ObjectStoreProtocol using obstore,
+Implements the ObjectStoreProtocol using obstore,
 providing native support for S3, GCS, Azure, and local file storage
-with excellent performance characteristics and native Arrow support.
+with Arrow support.
 """
 
 from __future__ import annotations
 
 import fnmatch
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
+
+from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import MissingDependencyError, StorageOperationFailedError
 from sqlspec.storage.backends.base import ObjectStoreBase
@@ -27,21 +29,40 @@ __all__ = ("ObStoreBackend",)
 logger = logging.getLogger(__name__)
 
 
+class _AsyncArrowIterator:
+    """Helper class to work around mypyc's lack of async generator support."""
+
+    def __init__(self, store: Any, pattern: str, **kwargs: Any) -> None:
+        self.store = store
+        self.pattern = pattern
+        self.kwargs = kwargs
+        self._iterator: Any | None = None
+
+    def __aiter__(self) -> _AsyncArrowIterator:
+        return self
+
+    async def __anext__(self) -> ArrowRecordBatch:
+        if self._iterator is None:
+            self._iterator = self.store.stream_arrow_async(self.pattern, **self.kwargs)
+        if self._iterator is not None:
+            return cast("ArrowRecordBatch", await self._iterator.__anext__())
+        raise StopAsyncIteration
+
+
+DEFAULT_OPTIONS: Final[dict[str, Any]] = {"connect_timeout": "30s", "request_timeout": "60s"}
+
+
+@mypyc_attr(allow_interpreted_subclasses=True)
 class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
-    """High-performance object storage backend using obstore.
+    """Object storage backend using obstore.
 
-    This backend leverages obstore's Rust-based implementation for maximum
-    performance, providing native support for:
-    - AWS S3 and S3-compatible stores
-    - Google Cloud Storage
-    - Azure Blob Storage
-    - Local filesystem
-    - HTTP endpoints
+    Uses obstore's Rust-based implementation for storage operations,
+    providing native support for AWS S3, Google Cloud Storage, Azure Blob Storage,
+    local filesystem, and HTTP endpoints.
 
-    Features native Arrow support and ~9x better performance than fsspec.
+    Includes native Arrow support.
     """
 
-    # ObStore has excellent native capabilities
     capabilities: ClassVar[StorageCapabilities] = StorageCapabilities(
         supports_arrow=True,
         supports_streaming=True,
@@ -52,6 +73,8 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
         is_cloud_native=True,
         has_low_latency=True,
     )
+
+    __slots__ = ("_path_cache", "base_path", "protocol", "store", "store_options", "store_uri")
 
     def __init__(self, store_uri: str, base_path: str = "", **store_options: Any) -> None:
         """Initialize obstore backend.
@@ -69,26 +92,23 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
             self.store_uri = store_uri
             self.base_path = base_path.rstrip("/") if base_path else ""
             self.store_options = store_options
-            self.store: Any  # Will be set based on store_uri
+            self.store: Any
+            self._path_cache: dict[str, str] = {}
+            self.protocol = store_uri.split("://", 1)[0] if "://" in store_uri else "file"
 
             if store_uri.startswith("memory://"):
-                # MemoryStore doesn't use from_url - create directly
                 from obstore.store import MemoryStore
 
                 self.store = MemoryStore()
             elif store_uri.startswith("file://"):
                 from obstore.store import LocalStore
 
-                # LocalStore works with directory paths, so we use root
                 self.store = LocalStore("/")
-                # The full path will be handled in _resolve_path
             else:
-                # Use obstore's from_url for automatic URI parsing
                 from obstore.store import from_url
 
                 self.store = from_url(store_uri, **store_options)  # pyright: ignore[reportAttributeAccessIssue]
 
-            # Log successful initialization
             logger.debug("ObStore backend initialized for %s", store_uri)
 
         except Exception as exc:
@@ -98,10 +118,10 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
     def _resolve_path(self, path: str | Path) -> str:
         """Resolve path relative to base_path."""
         path_str = str(path)
-        # For file:// URIs, the path passed in is already absolute
+        if path_str.startswith("file://"):
+            path_str = path_str.removeprefix("file://")
         if self.store_uri.startswith("file://") and path_str.startswith("/"):
             return path_str.lstrip("/")
-
         if self.base_path:
             clean_base = self.base_path.rstrip("/")
             clean_path = path_str.lstrip("/")
@@ -113,22 +133,11 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
         """Return backend type identifier."""
         return "obstore"
 
-    # Implementation of abstract methods from ObjectStoreBase
-
     def read_bytes(self, path: str | Path, **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
         """Read bytes using obstore."""
         try:
-            resolved_path = self._resolve_path(path)
-            result = self.store.get(resolved_path)
-            bytes_data = result.bytes()
-            if hasattr(bytes_data, "__bytes__"):
-                return bytes(bytes_data)
-            if hasattr(bytes_data, "tobytes"):
-                return bytes_data.tobytes()  # type: ignore[no-any-return]
-            if isinstance(bytes_data, bytes):
-                return bytes_data
-            # Try to convert to bytes
-            return bytes(bytes_data)
+            result = self.store.get(self._resolve_path(path))
+            return cast("bytes", result.bytes().to_bytes())
         except Exception as exc:
             msg = f"Failed to read bytes from {path}"
             raise StorageOperationFailedError(msg) from exc
@@ -136,41 +145,30 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
     def write_bytes(self, path: str | Path, data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
         """Write bytes using obstore."""
         try:
-            resolved_path = self._resolve_path(path)
-            self.store.put(resolved_path, data)
+            self.store.put(self._resolve_path(path), data)
         except Exception as exc:
             msg = f"Failed to write bytes to {path}"
             raise StorageOperationFailedError(msg) from exc
 
     def read_text(self, path: str | Path, encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text using obstore."""
-        data = self.read_bytes(path, **kwargs)
-        return data.decode(encoding)
+        return self.read_bytes(path, **kwargs).decode(encoding)
 
     def write_text(self, path: str | Path, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Write text using obstore."""
-        encoded_data = data.encode(encoding)
-        self.write_bytes(path, encoded_data, **kwargs)
+        self.write_bytes(path, data.encode(encoding), **kwargs)
 
     def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:  # pyright: ignore[reportUnusedParameter]
         """List objects using obstore."""
-        resolved_prefix = self._resolve_path(prefix) if prefix else self.base_path or ""
-        objects: list[str] = []
-
-        def _get_item_path(item: Any) -> str:
-            """Extract path from item, trying path attribute first, then key."""
-            if hasattr(item, "path"):
-                return str(item.path)
-            if hasattr(item, "key"):
-                return str(item.key)
-            return str(item)
-
-        if not recursive:
-            objects.extend(_get_item_path(item) for item in self.store.list_with_delimiter(resolved_prefix))  # pyright: ignore
-        else:
-            objects.extend(_get_item_path(item) for item in self.store.list(resolved_prefix))
-
-        return sorted(objects)
+        try:
+            resolved_prefix = self._resolve_path(prefix) if prefix else self.base_path or ""
+            items = (
+                self.store.list_with_delimiter(resolved_prefix) if not recursive else self.store.list(resolved_prefix)
+            )
+            return sorted(str(getattr(item, "path", getattr(item, "key", str(item)))) for item in items)
+        except Exception as exc:
+            msg = f"Failed to list objects with prefix '{prefix}'"
+            raise StorageOperationFailedError(msg) from exc
 
     def exists(self, path: str | Path, **kwargs: Any) -> bool:  # pyright: ignore[reportUnusedParameter]
         """Check if object exists using obstore."""
@@ -207,56 +205,52 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
     def glob(self, pattern: str, **kwargs: Any) -> list[str]:
         """Find objects matching pattern using obstore.
 
-        Note: obstore does not support server-side globbing. This implementation
-        lists all objects and filters them client-side, which may be inefficient
-        for large buckets.
+        Lists all objects and filters them client-side using the pattern.
         """
         from pathlib import PurePosixPath
 
-        # List all objects and filter by pattern
         resolved_pattern = self._resolve_path(pattern)
         all_objects = self.list_objects(recursive=True, **kwargs)
 
         if "**" in pattern:
             matching_objects = []
 
-            # Special case: **/*.ext should also match *.ext in root
             if pattern.startswith("**/"):
-                suffix_pattern = pattern[3:]  # Remove **/
+                suffix_pattern = pattern[3:]
 
                 for obj in all_objects:
                     obj_path = PurePosixPath(obj)
-                    # Try both the full pattern and just the suffix
                     if obj_path.match(resolved_pattern) or obj_path.match(suffix_pattern):
                         matching_objects.append(obj)
             else:
-                # Standard ** pattern matching
                 for obj in all_objects:
                     obj_path = PurePosixPath(obj)
                     if obj_path.match(resolved_pattern):
                         matching_objects.append(obj)
 
             return matching_objects
-        # Use standard fnmatch for simple patterns
         return [obj for obj in all_objects if fnmatch.fnmatch(obj, resolved_pattern)]
 
     def get_metadata(self, path: str | Path, **kwargs: Any) -> dict[str, Any]:  # pyright: ignore[reportUnusedParameter]
         """Get object metadata using obstore."""
         resolved_path = self._resolve_path(path)
+        result: dict[str, Any] = {}
         try:
             metadata = self.store.head(resolved_path)
-            result = {"path": resolved_path, "exists": True}
-            for attr in ("size", "last_modified", "e_tag", "version"):
-                if hasattr(metadata, attr):
-                    result[attr] = getattr(metadata, attr)
+            result.update(
+                {
+                    "path": resolved_path,
+                    "exists": True,
+                    "size": getattr(metadata, "size", None),
+                    "last_modified": getattr(metadata, "last_modified", None),
+                    "e_tag": getattr(metadata, "e_tag", None),
+                    "version": getattr(metadata, "version", None),
+                }
+            )
+            if hasattr(metadata, "metadata") and metadata.metadata:
+                result["custom_metadata"] = metadata.metadata
 
-            # Include custom metadata if available
-            if hasattr(metadata, "metadata"):
-                custom_metadata = getattr(metadata, "metadata", None)
-                if custom_metadata:
-                    result["custom_metadata"] = custom_metadata
         except Exception:
-            # Object doesn't exist
             return {"path": resolved_path, "exists": False}
         else:
             return result
@@ -264,19 +258,17 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
     def is_object(self, path: str | Path) -> bool:
         """Check if path is an object using obstore."""
         resolved_path = self._resolve_path(path)
-        # An object exists and doesn't end with /
         return self.exists(path) and not resolved_path.endswith("/")
 
     def is_path(self, path: str | Path) -> bool:
         """Check if path is a prefix/directory using obstore."""
         resolved_path = self._resolve_path(path)
 
-        # A path/prefix either ends with / or has objects under it
         if resolved_path.endswith("/"):
             return True
 
         try:
-            objects = self.list_objects(prefix=str(path), recursive=False)
+            objects = self.list_objects(prefix=str(path), recursive=True)
             return len(objects) > 0
         except Exception:
             return False
@@ -287,7 +279,7 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
             resolved_path = self._resolve_path(path)
             if hasattr(self.store, "read_arrow"):
                 return self.store.read_arrow(resolved_path, **kwargs)  # type: ignore[no-any-return]  # pyright: ignore[reportAttributeAccessIssue]
-            # Fall back to reading as Parquet via bytes
+
             import io
 
             import pyarrow.parquet as pq
@@ -306,7 +298,6 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
             if hasattr(self.store, "write_arrow"):
                 self.store.write_arrow(resolved_path, table, **kwargs)  # pyright: ignore[reportAttributeAccessIssue]
             else:
-                # Fall back to writing as Parquet via bytes
                 import io
 
                 import pyarrow as pa
@@ -314,30 +305,22 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
 
                 buffer = io.BytesIO()
 
-                # Check for decimal64 columns and convert to decimal128
-                # PyArrow doesn't support decimal64 in Parquet files
                 schema = table.schema
-                needs_conversion = False
-                new_fields = []
+                if any(str(f.type).startswith("decimal64") for f in schema):
+                    new_fields = []
+                    for field in schema:
+                        if str(field.type).startswith("decimal64"):
+                            import re
 
-                for field in schema:
-                    if str(field.type).startswith("decimal64"):
-                        import re
-
-                        match = re.match(r"decimal64\((\d+),\s*(\d+)\)", str(field.type))
-                        if match:
-                            precision, scale = int(match.group(1)), int(match.group(2))
-                            new_field = pa.field(field.name, pa.decimal128(precision, scale))
-                            new_fields.append(new_field)
-                            needs_conversion = True
+                            match = re.match(r"decimal64\((\d+),\s*(\d+)\)", str(field.type))
+                            if match:
+                                precision, scale = int(match.group(1)), int(match.group(2))
+                                new_fields.append(pa.field(field.name, pa.decimal128(precision, scale)))
+                            else:
+                                new_fields.append(field)  # pragma: no cover
                         else:
                             new_fields.append(field)
-                    else:
-                        new_fields.append(field)
-
-                if needs_conversion:
-                    new_schema = pa.schema(new_fields)
-                    table = table.cast(new_schema)
+                    table = table.cast(pa.schema(new_fields))
 
                 pq.write_table(table, buffer, **kwargs)
                 buffer.seek(0)
@@ -359,58 +342,50 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
             msg = f"Failed to stream Arrow data for pattern {pattern}"
             raise StorageOperationFailedError(msg) from exc
 
-    # Private async implementations for instrumentation support
-    # These are called by the base class async methods after instrumentation
-
     async def read_bytes_async(self, path: str | Path, **kwargs: Any) -> bytes:  # pyright: ignore[reportUnusedParameter]
-        """Private async read bytes using native obstore async if available."""
-        resolved_path = self._resolve_path(path)
-        result = await self.store.get_async(resolved_path)
-        bytes_data = result.bytes()
-        if hasattr(bytes_data, "__bytes__"):
-            return bytes(bytes_data)
-        if hasattr(bytes_data, "tobytes"):
-            return bytes_data.tobytes()  # type: ignore[no-any-return]
-        if isinstance(bytes_data, bytes):
-            return bytes_data
-        # Try to convert to bytes
-        return bytes(bytes_data)
+        """Read bytes from storage asynchronously."""
+        try:
+            resolved_path = self._resolve_path(path)
+            result = await self.store.get_async(resolved_path)
+            bytes_obj = await result.bytes_async()
+            return bytes_obj.to_bytes()  # type: ignore[no-any-return]  # pyright: ignore[reportAttributeAccessIssue]
+        except Exception as exc:
+            msg = f"Failed to read bytes from {path}"
+            raise StorageOperationFailedError(msg) from exc
 
     async def write_bytes_async(self, path: str | Path, data: bytes, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
-        """Private async write bytes using native obstore async."""
+        """Write bytes to storage asynchronously."""
         resolved_path = self._resolve_path(path)
         await self.store.put_async(resolved_path, data)
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:  # pyright: ignore[reportUnusedParameter]
-        """Private async list objects using native obstore async if available."""
-        resolved_prefix = self._resolve_path(prefix) if prefix else self.base_path or ""
+        """List objects in storage asynchronously."""
+        try:
+            resolved_prefix = self._resolve_path(prefix) if prefix else self.base_path or ""
 
-        # Note: store.list_async returns an async iterator
-        objects = [str(item.path) async for item in self.store.list_async(resolved_prefix)]  # pyright: ignore[reportAttributeAccessIssue]
+            objects = [str(item.path) async for item in self.store.list_async(resolved_prefix)]  # pyright: ignore[reportAttributeAccessIssue]
 
-        # Manual filtering for non-recursive if needed as obstore lacks an
-        # async version of list_with_delimiter.
-        if not recursive and resolved_prefix:
-            base_depth = resolved_prefix.count("/")
-            objects = [obj for obj in objects if obj.count("/") <= base_depth + 1]
+            if not recursive and resolved_prefix:
+                base_depth = resolved_prefix.count("/")
+                objects = [obj for obj in objects if obj.count("/") <= base_depth + 1]
 
-        return sorted(objects)
-
-    # Implement all other required abstract async methods
-    # ObStore provides native async for most operations
+            return sorted(objects)
+        except Exception as exc:
+            msg = f"Failed to list objects with prefix '{prefix}'"
+            raise StorageOperationFailedError(msg) from exc
 
     async def read_text_async(self, path: str | Path, encoding: str = "utf-8", **kwargs: Any) -> str:
-        """Async read text using native obstore async."""
+        """Read text from storage asynchronously."""
         data = await self.read_bytes_async(path, **kwargs)
         return data.decode(encoding)
 
     async def write_text_async(self, path: str | Path, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
-        """Async write text using native obstore async."""
+        """Write text to storage asynchronously."""
         encoded_data = data.encode(encoding)
         await self.write_bytes_async(path, encoded_data, **kwargs)
 
     async def exists_async(self, path: str | Path, **kwargs: Any) -> bool:  # pyright: ignore[reportUnusedParameter]
-        """Async check if object exists using native obstore async."""
+        """Check if object exists in storage asynchronously."""
         resolved_path = self._resolve_path(path)
         try:
             await self.store.head_async(resolved_path)
@@ -419,53 +394,57 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
         return True
 
     async def delete_async(self, path: str | Path, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
-        """Async delete object using native obstore async."""
+        """Delete object from storage asynchronously."""
         resolved_path = self._resolve_path(path)
         await self.store.delete_async(resolved_path)
 
     async def copy_async(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
-        """Async copy object using native obstore async."""
+        """Copy object in storage asynchronously."""
         source_path = self._resolve_path(source)
         dest_path = self._resolve_path(destination)
         await self.store.copy_async(source_path, dest_path)
 
     async def move_async(self, source: str | Path, destination: str | Path, **kwargs: Any) -> None:  # pyright: ignore[reportUnusedParameter]
-        """Async move object using native obstore async."""
+        """Move object in storage asynchronously."""
         source_path = self._resolve_path(source)
         dest_path = self._resolve_path(destination)
         await self.store.rename_async(source_path, dest_path)
 
     async def get_metadata_async(self, path: str | Path, **kwargs: Any) -> dict[str, Any]:  # pyright: ignore[reportUnusedParameter]
-        """Async get object metadata using native obstore async."""
+        """Get object metadata from storage asynchronously."""
         resolved_path = self._resolve_path(path)
-        metadata = await self.store.head_async(resolved_path)
+        result: dict[str, Any] = {}
+        try:
+            metadata = await self.store.head_async(resolved_path)
+            result.update(
+                {
+                    "path": resolved_path,
+                    "exists": True,
+                    "size": metadata.size,
+                    "last_modified": metadata.last_modified,
+                    "e_tag": metadata.e_tag,
+                    "version": metadata.version,
+                }
+            )
+            if hasattr(metadata, "metadata") and metadata.metadata:
+                result["custom_metadata"] = metadata.metadata
 
-        result = {"path": resolved_path, "exists": True}
-
-        for attr in ["size", "last_modified", "e_tag", "version"]:
-            if hasattr(metadata, attr):
-                result[attr] = getattr(metadata, attr)
-
-        # Include custom metadata if available
-        if hasattr(metadata, "metadata"):
-            custom_metadata = getattr(metadata, "metadata", None)
-            if custom_metadata:
-                result["custom_metadata"] = custom_metadata
-
-        return result
+        except Exception:
+            return {"path": resolved_path, "exists": False}
+        else:
+            return result
 
     async def read_arrow_async(self, path: str | Path, **kwargs: Any) -> ArrowTable:
-        """Async read Arrow table using native obstore async."""
+        """Read Arrow table from storage asynchronously."""
         resolved_path = self._resolve_path(path)
         return await self.store.read_arrow_async(resolved_path, **kwargs)  # type: ignore[no-any-return]  # pyright: ignore[reportAttributeAccessIssue]
 
     async def write_arrow_async(self, path: str | Path, table: ArrowTable, **kwargs: Any) -> None:
-        """Async write Arrow table using native obstore async."""
+        """Write Arrow table to storage asynchronously."""
         resolved_path = self._resolve_path(path)
         if hasattr(self.store, "write_arrow_async"):
             await self.store.write_arrow_async(resolved_path, table, **kwargs)  # pyright: ignore[reportAttributeAccessIssue]
         else:
-            # Fall back to writing as Parquet via bytes
             import io
 
             import pyarrow.parquet as pq
@@ -475,7 +454,6 @@ class ObStoreBackend(ObjectStoreBase, HasStorageCapabilities):
             buffer.seek(0)
             await self.write_bytes_async(resolved_path, buffer.read())
 
-    async def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
+    def stream_arrow_async(self, pattern: str, **kwargs: Any) -> AsyncIterator[ArrowRecordBatch]:
         resolved_pattern = self._resolve_path(pattern)
-        async for batch in self.store.stream_arrow_async(resolved_pattern, **kwargs):  # pyright: ignore[reportAttributeAccessIssue]
-            yield batch
+        return _AsyncArrowIterator(self.store, resolved_pattern, **kwargs)

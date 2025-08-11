@@ -6,21 +6,23 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.psycopg import PsycopgSyncConfig, PsycopgSyncDriver
-from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQLConfig
+from sqlspec.adapters.psycopg.driver import psycopg_statement_config
+from sqlspec.core.result import SQLResult
 
 
 @pytest.fixture
 def psycopg_batch_session(postgres_service: PostgresService) -> "Generator[PsycopgSyncDriver, None, None]":
     """Create a Psycopg session for batch operation testing."""
     config = PsycopgSyncConfig(
-        host=postgres_service.host,
-        port=postgres_service.port,
-        user=postgres_service.user,
-        password=postgres_service.password,
-        dbname=postgres_service.database,
-        autocommit=True,  # Enable autocommit for tests
-        statement_config=SQLConfig(),
+        pool_config={
+            "host": postgres_service.host,
+            "port": postgres_service.port,
+            "user": postgres_service.user,
+            "password": postgres_service.password,
+            "dbname": postgres_service.database,
+            "autocommit": True,  # Enable autocommit for tests
+        },
+        statement_config=psycopg_statement_config,
     )
 
     try:
@@ -42,9 +44,7 @@ def psycopg_batch_session(postgres_service: PostgresService) -> "Generator[Psyco
             session.execute_script("DROP TABLE IF EXISTS test_batch")
     finally:
         # Ensure pool is closed properly to avoid "cannot join current thread" warnings
-        if config.pool_instance:
-            config.pool_instance.close(timeout=5.0)
-            config.pool_instance = None
+        config.close_pool()
 
 
 @pytest.mark.xdist_group("postgres")
@@ -81,9 +81,9 @@ def test_psycopg_execute_many_update(psycopg_batch_session: PsycopgSyncDriver) -
     )
 
     # Now update with execute_many
-    update_params = [(100, "Update 1"), (200, "Update 2"), (300, "Update 3")]
+    update_parameters = [(100, "Update 1"), (200, "Update 2"), (300, "Update 3")]
 
-    result = psycopg_batch_session.execute_many("UPDATE test_batch SET value = %s WHERE name = %s", update_params)
+    result = psycopg_batch_session.execute_many("UPDATE test_batch SET value = %s WHERE name = %s", update_parameters)
 
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
@@ -153,9 +153,9 @@ def test_psycopg_execute_many_delete(psycopg_batch_session: PsycopgSyncDriver) -
     )
 
     # Delete specific items by name
-    delete_params = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
+    delete_parameters = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
 
-    result = psycopg_batch_session.execute_many("DELETE FROM test_batch WHERE name = %s", delete_params)
+    result = psycopg_batch_session.execute_many("DELETE FROM test_batch WHERE name = %s", delete_parameters)
 
     assert isinstance(result, SQLResult)
     assert result.rows_affected == 3
@@ -200,11 +200,11 @@ def test_psycopg_execute_many_large_batch(psycopg_batch_session: PsycopgSyncDriv
 @pytest.mark.xdist_group("postgres")
 def test_psycopg_execute_many_with_sql_object(psycopg_batch_session: PsycopgSyncDriver) -> None:
     """Test execute_many with SQL object on Psycopg."""
-    from sqlspec.statement.sql import SQL
+    from sqlspec.core.statement import SQL
 
     parameters = [("SQL Obj 1", 111, "SOB"), ("SQL Obj 2", 222, "SOB"), ("SQL Obj 3", 333, "SOB")]
 
-    sql_obj = SQL("INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)").as_many(parameters)
+    sql_obj = SQL("INSERT INTO test_batch (name, value, category) VALUES (%s, %s, %s)", parameters, is_many=True)
 
     result = psycopg_batch_session.execute(sql_obj)
 
@@ -336,12 +336,12 @@ def test_psycopg_execute_many_with_upsert(psycopg_batch_session: PsycopgSyncDriv
     """)
 
     # First batch - initial inserts
-    initial_params = [(1, "Item 1"), (2, "Item 2"), (3, "Item 3")]
+    initial_parameters = [(1, "Item 1"), (2, "Item 2"), (3, "Item 3")]
 
-    psycopg_batch_session.execute_many("INSERT INTO test_upsert (id, name) VALUES (%s, %s)", initial_params)
+    psycopg_batch_session.execute_many("INSERT INTO test_upsert (id, name) VALUES (%s, %s)", initial_parameters)
 
     # Second batch - with conflicts using ON CONFLICT
-    conflict_params = [
+    conflict_parameters = [
         (1, "Updated Item 1", 1),  # Conflict - increment counter by 1
         (2, "Updated Item 2", 1),  # Conflict - increment counter by 1
         (4, "Item 4", 1),  # New - increment value (unused for new rows)
@@ -349,7 +349,7 @@ def test_psycopg_execute_many_with_upsert(psycopg_batch_session: PsycopgSyncDriv
 
     result = psycopg_batch_session.execute_many(
         "INSERT INTO test_upsert (id, name) VALUES (%s, %s) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, counter = test_upsert.counter + %s",
-        conflict_params,
+        conflict_parameters,
     )
 
     assert isinstance(result, SQLResult)

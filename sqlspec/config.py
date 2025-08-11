@@ -1,21 +1,17 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, Optional, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, Optional, TypeVar, Union
 
-from sqlspec.typing import ConnectionT, PoolT  # pyright: ignore
+from typing_extensions import NotRequired, TypedDict
+
+from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+from sqlspec.core.statement import StatementConfig
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
-    from sqlglot.dialects.dialect import DialectType
-
-    from sqlspec.driver import AsyncDriverAdapterProtocol, SyncDriverAdapterProtocol
-    from sqlspec.statement.result import StatementResult
-
-
-StatementResultType = Union["StatementResult[dict[str, Any]]", "StatementResult[Any]"]
+    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 
 
 __all__ = (
@@ -24,10 +20,9 @@ __all__ = (
     "ConfigT",
     "DatabaseConfigProtocol",
     "DriverT",
-    "GenericPoolConfig",
+    "LifecycleConfig",
     "NoPoolAsyncConfig",
     "NoPoolSyncConfig",
-    "StatementResultType",
     "SyncConfigT",
     "SyncDatabaseConfig",
 )
@@ -38,74 +33,59 @@ ConfigT = TypeVar(
     "ConfigT",
     bound="Union[Union[AsyncDatabaseConfig[Any, Any, Any], NoPoolAsyncConfig[Any, Any]], SyncDatabaseConfig[Any, Any, Any], NoPoolSyncConfig[Any, Any]]",
 )
-DriverT = TypeVar("DriverT", bound="Union[SyncDriverAdapterProtocol[Any], AsyncDriverAdapterProtocol[Any]]")
+
+# Define TypeVars for Generic classes
+ConnectionT = TypeVar("ConnectionT")
+PoolT = TypeVar("PoolT")
+DriverT = TypeVar("DriverT", bound="Union[SyncDriverAdapterBase, AsyncDriverAdapterBase]")
 
 logger = get_logger("config")
 
 
-@dataclass
+class LifecycleConfig(TypedDict, total=False):
+    """Universal lifecycle hooks for all adapters.
+
+    Each hook accepts a list of callables to support multiple handlers.
+    """
+
+    on_connection_create: NotRequired[list[Callable[[Any], None]]]
+    on_connection_destroy: NotRequired[list[Callable[[Any], None]]]
+    on_pool_create: NotRequired[list[Callable[[Any], None]]]
+    on_pool_destroy: NotRequired[list[Callable[[Any], None]]]
+    on_session_start: NotRequired[list[Callable[[Any], None]]]
+    on_session_end: NotRequired[list[Callable[[Any], None]]]
+    on_query_start: NotRequired[list[Callable[[str, dict], None]]]
+    on_query_complete: NotRequired[list[Callable[[str, dict, Any], None]]]
+    on_error: NotRequired[list[Callable[[Exception, str, dict], None]]]
+
+
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     """Protocol defining the interface for database configurations."""
 
-    is_async: "ClassVar[bool]" = field(init=False, default=False)
-    supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=False)
-    supports_native_arrow_import: "ClassVar[bool]" = field(init=False, default=False)
-    supports_native_arrow_export: "ClassVar[bool]" = field(init=False, default=False)
-    supports_native_parquet_import: "ClassVar[bool]" = field(init=False, default=False)
-    supports_native_parquet_export: "ClassVar[bool]" = field(init=False, default=False)
-    connection_type: "type[ConnectionT]" = field(init=False, repr=False, hash=False, compare=False)
-    driver_type: "type[DriverT]" = field(init=False, repr=False, hash=False, compare=False)
-    pool_instance: "Optional[PoolT]" = field(default=None)
-    default_row_type: "type[Any]" = field(init=False)
-    migration_config: "dict[str, Any]" = field(default_factory=dict)
-    """Migration configuration settings."""
-    _dialect: "DialectType" = field(default=None, init=False, repr=False, hash=False, compare=False)
-
-    # Adapter-level cache configuration
-    enable_adapter_cache: bool = field(default=True)
-    """Enable adapter-level SQL compilation caching."""
-    adapter_cache_size: int = field(default=500)
-    """Maximum number of compiled SQL statements to cache per adapter."""
-    enable_prepared_statements: bool = field(default=False)
-    """Enable prepared statement pooling for supported databases."""
-    prepared_statement_cache_size: int = field(default=100)
-    """Maximum number of prepared statements to maintain."""
-
-    supported_parameter_styles: "ClassVar[tuple[str, ...]]" = ()
-    """Parameter styles supported by this database adapter (e.g., ('qmark', 'named_colon'))."""
-
-    default_parameter_style: "ClassVar[str]" = "none"
-    """The preferred/native parameter style for this database."""
+    __slots__ = ("driver_features", "migration_config", "pool_instance", "statement_config")
+    driver_type: "ClassVar[type[Any]]"
+    connection_type: "ClassVar[type[Any]]"
+    is_async: "ClassVar[bool]" = False
+    supports_connection_pooling: "ClassVar[bool]" = False
+    supports_native_arrow_import: "ClassVar[bool]" = False
+    supports_native_arrow_export: "ClassVar[bool]" = False
+    supports_native_parquet_import: "ClassVar[bool]" = False
+    supports_native_parquet_export: "ClassVar[bool]" = False
+    statement_config: "StatementConfig"
+    pool_instance: "Optional[PoolT]"
+    migration_config: "dict[str, Any]"
 
     def __hash__(self) -> int:
         return id(self)
 
-    @property
-    def dialect(self) -> "DialectType":
-        """Get the SQL dialect type lazily.
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, type(self)):
+            return False
+        return bool(self.pool_instance == other.pool_instance and self.migration_config == other.migration_config)
 
-        This property allows dialect to be set either statically as a class attribute
-        or dynamically via the _get_dialect() method. If a specific adapter needs
-        dynamic dialect detection (e.g., ADBC which supports multiple databases),
-        it can override _get_dialect() to provide custom logic.
-
-        Returns:
-            The SQL dialect type for this database.
-        """
-        if self._dialect is None:
-            self._dialect = self._get_dialect()
-        return self._dialect
-
-    def _get_dialect(self) -> "DialectType":
-        """Get the dialect for this database configuration.
-
-        This method should be overridden by configs that need dynamic dialect detection.
-        By default, it looks for the dialect on the driver class.
-
-        Returns:
-            The SQL dialect type.
-        """
-        return self.driver_type.dialect
+    def __repr__(self) -> str:
+        parts = ", ".join([f"pool_instance={self.pool_instance!r}", f"migration_config={self.migration_config!r}"])
+        return f"{type(self).__name__}({parts})"
 
     @abstractmethod
     def create_connection(self) -> "Union[ConnectionT, Awaitable[ConnectionT]]":
@@ -124,12 +104,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         self, *args: Any, **kwargs: Any
     ) -> "Union[AbstractContextManager[DriverT], AbstractAsyncContextManager[DriverT]]":
         """Provide a database session context manager."""
-        raise NotImplementedError
-
-    @property
-    @abstractmethod
-    def connection_config_dict(self) -> "dict[str, Any]":
-        """Return the connection configuration as a dict."""
         raise NotImplementedError
 
     @abstractmethod
@@ -159,46 +133,49 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         Returns:
             Dictionary mapping type names to types.
         """
-        namespace: dict[str, type[Any]] = {}
-
-        if hasattr(self, "driver_type") and self.driver_type:
-            namespace[self.driver_type.__name__] = self.driver_type
-
-        namespace[self.__class__.__name__] = self.__class__
-
-        if hasattr(self, "connection_type") and self.connection_type:
-            connection_type = self.connection_type
-
-            if hasattr(connection_type, "__args__"):
-                # It's a generic type, extract the actual types
-                for arg_type in connection_type.__args__:  # type: ignore[attr-defined]
-                    if arg_type and hasattr(arg_type, "__name__"):
-                        namespace[arg_type.__name__] = arg_type
-            elif hasattr(connection_type, "__name__"):
-                # Regular type
-                namespace[connection_type.__name__] = connection_type
-
-        return namespace
+        return {}
 
 
-@dataclass
 class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for a sync database configurations that do not implement a pool."""
 
-    is_async: "ClassVar[bool]" = field(init=False, default=False)
-    supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=False)
-    pool_instance: None = None
+    __slots__ = ("connection_config",)
+    is_async: "ClassVar[bool]" = False
+    supports_connection_pooling: "ClassVar[bool]" = False
+
+    def __init__(
+        self,
+        *,
+        connection_config: Optional[dict[str, Any]] = None,
+        migration_config: "Optional[dict[str, Any]]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        driver_features: "Optional[dict[str, Any]]" = None,
+    ) -> None:
+        self.pool_instance = None
+        self.connection_config = connection_config or {}
+        self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
+
+        if statement_config is None:
+            default_parameter_config = ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+            )
+            self.statement_config = StatementConfig(dialect="sqlite", parameter_config=default_parameter_config)
+        else:
+            self.statement_config = statement_config
+        self.driver_features = driver_features or {}
 
     def create_connection(self) -> ConnectionT:
-        """Create connection with instrumentation."""
+        """Create a database connection."""
         raise NotImplementedError
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[ConnectionT]":
-        """Provide connection with instrumentation."""
+        """Provide a database connection context manager."""
         raise NotImplementedError
 
-    def provide_session(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[DriverT]":
-        """Provide session with instrumentation."""
+    def provide_session(
+        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+    ) -> "AbstractContextManager[DriverT]":
+        """Provide a database session context manager."""
         raise NotImplementedError
 
     def create_pool(self) -> None:
@@ -211,24 +188,47 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         return None
 
 
-@dataclass
 class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for an async database configurations that do not implement a pool."""
 
-    is_async: "ClassVar[bool]" = field(init=False, default=True)
-    supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=False)
-    pool_instance: None = None
+    __slots__ = ("connection_config",)
+
+    is_async: "ClassVar[bool]" = True
+    supports_connection_pooling: "ClassVar[bool]" = False
+
+    def __init__(
+        self,
+        *,
+        connection_config: "Optional[dict[str, Any]]" = None,
+        migration_config: "Optional[dict[str, Any]]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        driver_features: "Optional[dict[str, Any]]" = None,
+    ) -> None:
+        self.pool_instance = None
+        self.connection_config = connection_config or {}
+        self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
+
+        if statement_config is None:
+            default_parameter_config = ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+            )
+            self.statement_config = StatementConfig(dialect="sqlite", parameter_config=default_parameter_config)
+        else:
+            self.statement_config = statement_config
+        self.driver_features = driver_features or {}
 
     async def create_connection(self) -> ConnectionT:
-        """Create connection with instrumentation."""
+        """Create a database connection."""
         raise NotImplementedError
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractAsyncContextManager[ConnectionT]":
-        """Provide connection with instrumentation."""
+        """Provide a database connection context manager."""
         raise NotImplementedError
 
-    def provide_session(self, *args: Any, **kwargs: Any) -> "AbstractAsyncContextManager[DriverT]":
-        """Provide session with instrumentation."""
+    def provide_session(
+        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+    ) -> "AbstractAsyncContextManager[DriverT]":
+        """Provide a database session context manager."""
         raise NotImplementedError
 
     async def create_pool(self) -> None:
@@ -241,20 +241,38 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         return None
 
 
-@dataclass
-class GenericPoolConfig:
-    """Generic Database Pool Configuration."""
-
-
-@dataclass
 class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Generic Sync Database Configuration."""
 
-    is_async: "ClassVar[bool]" = field(init=False, default=False)
-    supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=True)
+    __slots__ = ("pool_config",)
+
+    is_async: "ClassVar[bool]" = False
+    supports_connection_pooling: "ClassVar[bool]" = True
+
+    def __init__(
+        self,
+        *,
+        pool_config: "Optional[dict[str, Any]]" = None,
+        pool_instance: "Optional[PoolT]" = None,
+        migration_config: "Optional[dict[str, Any]]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        driver_features: "Optional[dict[str, Any]]" = None,
+    ) -> None:
+        self.pool_instance = pool_instance
+        self.pool_config = pool_config or {}
+        self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
+
+        if statement_config is None:
+            default_parameter_config = ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+            )
+            self.statement_config = StatementConfig(dialect="postgres", parameter_config=default_parameter_config)
+        else:
+            self.statement_config = statement_config
+        self.driver_features = driver_features or {}
 
     def create_pool(self) -> PoolT:
-        """Create pool with instrumentation.
+        """Create and return the connection pool.
 
         Returns:
             The created pool.
@@ -265,7 +283,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         return self.pool_instance
 
     def close_pool(self) -> None:
-        """Close pool with instrumentation."""
+        """Close the connection pool."""
         self._close_pool()
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
@@ -275,15 +293,17 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         return self.pool_instance
 
     def create_connection(self) -> ConnectionT:
-        """Create connection with instrumentation."""
+        """Create a database connection."""
         raise NotImplementedError
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[ConnectionT]":
-        """Provide connection with instrumentation."""
+        """Provide a database connection context manager."""
         raise NotImplementedError
 
-    def provide_session(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[DriverT]":
-        """Provide session with instrumentation."""
+    def provide_session(
+        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+    ) -> "AbstractContextManager[DriverT]":
+        """Provide a database session context manager."""
         raise NotImplementedError
 
     @abstractmethod
@@ -297,15 +317,40 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         raise NotImplementedError
 
 
-@dataclass
 class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Generic Async Database Configuration."""
 
-    is_async: "ClassVar[bool]" = field(init=False, default=True)
-    supports_connection_pooling: "ClassVar[bool]" = field(init=False, default=True)
+    __slots__ = ("pool_config",)
+
+    is_async: "ClassVar[bool]" = True
+    supports_connection_pooling: "ClassVar[bool]" = True
+
+    def __init__(
+        self,
+        *,
+        pool_config: "Optional[dict[str, Any]]" = None,
+        pool_instance: "Optional[PoolT]" = None,
+        migration_config: "Optional[dict[str, Any]]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        driver_features: "Optional[dict[str, Any]]" = None,
+    ) -> None:
+        self.pool_instance = pool_instance
+        self.pool_config = pool_config or {}
+        self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
+
+        if statement_config is None:
+            self.statement_config = StatementConfig(
+                parameter_config=ParameterStyleConfig(
+                    default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+                ),
+                dialect="postgres",
+            )
+        else:
+            self.statement_config = statement_config
+        self.driver_features = driver_features or {}
 
     async def create_pool(self) -> PoolT:
-        """Create pool with instrumentation.
+        """Create and return the connection pool.
 
         Returns:
             The created pool.
@@ -316,7 +361,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         return self.pool_instance
 
     async def close_pool(self) -> None:
-        """Close pool with instrumentation."""
+        """Close the connection pool."""
         await self._close_pool()
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
@@ -326,15 +371,17 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         return self.pool_instance
 
     async def create_connection(self) -> ConnectionT:
-        """Create connection with instrumentation."""
+        """Create a database connection."""
         raise NotImplementedError
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractAsyncContextManager[ConnectionT]":
-        """Provide connection with instrumentation."""
+        """Provide a database connection context manager."""
         raise NotImplementedError
 
-    def provide_session(self, *args: Any, **kwargs: Any) -> "AbstractAsyncContextManager[DriverT]":
-        """Provide session with instrumentation."""
+    def provide_session(
+        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+    ) -> "AbstractAsyncContextManager[DriverT]":
+        """Provide a database session context manager."""
         raise NotImplementedError
 
     @abstractmethod

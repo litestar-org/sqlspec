@@ -54,3 +54,10 @@ requirements/*
 tools/*.json
 benchmarks/
 .benchmark
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.duckdb
+.crush
+CRUSH.md

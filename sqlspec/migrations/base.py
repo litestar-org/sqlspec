@@ -3,20 +3,24 @@
 This module provides abstract base classes for migration components.
 """
 
+import operator
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Generic, Optional, TypeVar
 
+from sqlspec._sql import sql
+from sqlspec.builder._ddl import CreateTable
+from sqlspec.core.statement import SQL
 from sqlspec.loader import SQLFileLoader
-from sqlspec.statement.sql import SQL
+from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.sync_tools import run_
 
 __all__ = ("BaseMigrationCommands", "BaseMigrationRunner", "BaseMigrationTracker")
 
 
 logger = get_logger("migrations.base")
 
-# Type variables for generic driver and config types
 DriverT = TypeVar("DriverT")
 ConfigT = TypeVar("ConfigT")
 
@@ -38,18 +42,23 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         Returns:
             SQL object for table creation.
         """
-        return SQL(
-            f"""
-            CREATE TABLE IF NOT EXISTS {self.version_table} (
-                version_num VARCHAR(32) PRIMARY KEY,
-                description TEXT,
-                applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                execution_time_ms INTEGER,
-                checksum VARCHAR(64),
-                applied_by VARCHAR(255)
-            )
-        """
-        )
+        builder = CreateTable(self.version_table)
+        if not hasattr(builder, "_columns"):
+            builder._columns = []
+        if not hasattr(builder, "_constraints"):
+            builder._constraints = []
+        if not hasattr(builder, "_table_options"):
+            builder._table_options = {}
+
+        return (
+            builder.if_not_exists()
+            .column("version_num", "VARCHAR(32)", primary_key=True)
+            .column("description", "TEXT")
+            .column("applied_at", "TIMESTAMP", not_null=True, default="CURRENT_TIMESTAMP")
+            .column("execution_time_ms", "INTEGER")
+            .column("checksum", "VARCHAR(64)")
+            .column("applied_by", "VARCHAR(255)")
+        ).to_statement()
 
     def _get_current_version_sql(self) -> SQL:
         """Get SQL for retrieving current version.
@@ -57,7 +66,10 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         Returns:
             SQL object for version query.
         """
-        return SQL(f"SELECT version_num FROM {self.version_table} ORDER BY version_num DESC LIMIT 1")
+
+        return (
+            sql.select("version_num").from_(self.version_table).order_by("version_num DESC").limit(1)
+        ).to_statement()
 
     def _get_applied_migrations_sql(self) -> SQL:
         """Get SQL for retrieving all applied migrations.
@@ -65,7 +77,8 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         Returns:
             SQL object for migrations query.
         """
-        return SQL(f"SELECT * FROM {self.version_table} ORDER BY version_num")
+
+        return (sql.select("*").from_(self.version_table).order_by("version_num")).to_statement()
 
     def _get_record_migration_sql(
         self, version: str, description: str, execution_time_ms: int, checksum: str, applied_by: str
@@ -82,14 +95,12 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         Returns:
             SQL object for insert.
         """
-        return SQL(
-            f"INSERT INTO {self.version_table} (version_num, description, execution_time_ms, checksum, applied_by) VALUES (?, ?, ?, ?, ?)",
-            version,
-            description,
-            execution_time_ms,
-            checksum,
-            applied_by,
-        )
+
+        return (
+            sql.insert(self.version_table)
+            .columns("version_num", "description", "execution_time_ms", "checksum", "applied_by")
+            .values(version, description, execution_time_ms, checksum, applied_by)
+        ).to_statement()
 
     def _get_remove_migration_sql(self, version: str) -> SQL:
         """Get SQL for removing a migration record.
@@ -100,7 +111,8 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         Returns:
             SQL object for delete.
         """
-        return SQL(f"DELETE FROM {self.version_table} WHERE version_num = ?", version)
+
+        return (sql.delete().from_(self.version_table).where(sql.version_num == version)).to_statement()
 
     @abstractmethod
     def ensure_tracking_table(self, driver: DriverT) -> Any:
@@ -141,9 +153,10 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         """
         self.migrations_path = migrations_path
         self.loader = SQLFileLoader()
+        self.project_root: Optional[Path] = None
 
     def _extract_version(self, filename: str) -> Optional[str]:
-        """Extract version from filename (e.g., '0001_initial.sql' -> '0001').
+        """Extract version from filename.
 
         Args:
             filename: The migration filename.
@@ -152,9 +165,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             The extracted version string or None.
         """
         parts = filename.split("_", 1)
-        if parts and parts[0].isdigit():
-            return parts[0].zfill(4)
-        return None
+        return parts[0].zfill(4) if parts and parts[0].isdigit() else None
 
     def _calculate_checksum(self, content: str) -> str:
         """Calculate MD5 checksum of migration content.
@@ -163,14 +174,14 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             content: The migration file content.
 
         Returns:
-            The MD5 checksum hex string.
+            MD5 checksum hex string.
         """
         import hashlib
 
         return hashlib.md5(content.encode()).hexdigest()  # noqa: S324
 
     def _get_migration_files_sync(self) -> "list[tuple[str, Path]]":
-        """Get all migration files sorted by version (sync version).
+        """Get all migration files sorted by version.
 
         Returns:
             List of tuples containing (version, file_path).
@@ -179,14 +190,15 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             return []
 
         migrations = []
-        for file_path in self.migrations_path.glob("*.sql"):
-            if file_path.name.startswith("."):
-                continue
-            version = self._extract_version(file_path.name)
-            if version:
-                migrations.append((version, file_path))
+        for pattern in ["*.sql", "*.py"]:
+            for file_path in self.migrations_path.glob(pattern):
+                if file_path.name.startswith("."):
+                    continue
+                version = self._extract_version(file_path.name)
+                if version:
+                    migrations.append((version, file_path))
 
-        return sorted(migrations, key=lambda x: x[0])
+        return sorted(migrations, key=operator.itemgetter(0))
 
     def _load_migration_metadata(self, file_path: Path) -> "dict[str, Any]":
         """Load migration metadata from file.
@@ -195,32 +207,37 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             file_path: Path to the migration file.
 
         Returns:
-            Dictionary containing migration metadata.
+            Migration metadata dictionary.
         """
-        self.loader.clear_cache()
-        self.loader.load_sql(file_path)
 
-        # Read raw content for checksum
-        content = file_path.read_text()
+        loader = get_migration_loader(file_path, self.migrations_path, self.project_root)
+        loader.validate_migration_file(file_path)
+        content = file_path.read_text(encoding="utf-8")
         checksum = self._calculate_checksum(content)
-
-        # Extract metadata
         version = self._extract_version(file_path.name)
         description = file_path.stem.split("_", 1)[1] if "_" in file_path.stem else ""
 
-        # Query names use versioned pattern
-        up_query = f"migrate-{version}-up"
-        down_query = f"migrate-{version}-down"
+        has_upgrade, has_downgrade = True, False
+
+        if file_path.suffix == ".sql":
+            up_query, down_query = f"migrate-{version}-up", f"migrate-{version}-down"
+            self.loader.clear_cache()
+            self.loader.load_sql(file_path)
+            has_upgrade, has_downgrade = self.loader.has_query(up_query), self.loader.has_query(down_query)
+        else:
+            try:
+                has_downgrade = bool(run_(loader.get_down_sql)(file_path))
+            except Exception:
+                has_downgrade = False
 
         return {
             "version": version,
             "description": description,
             "file_path": file_path,
             "checksum": checksum,
-            "up_query": up_query,
-            "down_query": down_query,
-            "has_upgrade": self.loader.has_query(up_query),
-            "has_downgrade": self.loader.has_query(down_query),
+            "has_upgrade": has_upgrade,
+            "has_downgrade": has_downgrade,
+            "loader": loader,
         }
 
     def _get_migration_sql(self, migration: "dict[str, Any]", direction: str) -> Optional[SQL]:
@@ -233,17 +250,29 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         Returns:
             SQL object for the migration.
         """
-        query_key = f"{direction}_query"
-        has_key = f"has_{direction}grade"
-
-        if not migration.get(has_key):
+        if not migration.get(f"has_{direction}grade"):
             if direction == "down":
                 logger.warning("Migration %s has no downgrade query", migration["version"])
                 return None
             msg = f"Migration {migration['version']} has no upgrade query"
             raise ValueError(msg)
 
-        return self.loader.get_sql(migration[query_key])
+        file_path, loader = migration["file_path"], migration["loader"]
+
+        try:
+            method = loader.get_up_sql if direction == "up" else loader.get_down_sql
+            sql_statements = run_(method)(file_path)
+
+        except Exception as e:
+            if direction == "down":
+                logger.warning("Failed to load downgrade for migration %s: %s", migration["version"], e)
+                return None
+            msg = f"Failed to load upgrade for migration {migration['version']}: {e}"
+            raise ValueError(msg) from e
+        else:
+            if sql_statements:
+                return SQL(sql_statements[0])
+            return None
 
     @abstractmethod
     def get_migration_files(self) -> Any:
@@ -281,20 +310,17 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
             config: The SQLSpec configuration.
         """
         self.config = config
-
-        # Get migration settings from config
-        migration_config = getattr(self.config, "migration_config", {})
-        if migration_config is None:
-            migration_config = {}
+        migration_config = getattr(self.config, "migration_config", {}) or {}
 
         self.version_table = migration_config.get("version_table_name", "sqlspec_migrations")
         self.migrations_path = Path(migration_config.get("script_location", "migrations"))
+        self.project_root = Path(migration_config["project_root"]) if "project_root" in migration_config else None
 
     def _get_init_readme_content(self) -> str:
-        """Get the README content for migration directory initialization.
+        """Get README content for migration directory initialization.
 
         Returns:
-            The README markdown content.
+            README markdown content.
         """
         return """# SQLSpec Migrations
 
@@ -334,7 +360,7 @@ This naming ensures proper sorting and avoids conflicts when loading multiple fi
 """
 
     def init_directory(self, directory: str, package: bool = True) -> None:
-        """Initialize migration directory structure (sync implementation).
+        """Initialize migration directory structure.
 
         Args:
             directory: Directory to initialize migrations in.
@@ -350,11 +376,9 @@ This naming ensures proper sorting and avoids conflicts when loading multiple fi
         if package:
             (migrations_dir / "__init__.py").touch()
 
-        # Create README
         readme = migrations_dir / "README.md"
         readme.write_text(self._get_init_readme_content())
 
-        # Create .gitkeep for empty directory
         (migrations_dir / ".gitkeep").touch()
 
         console.print(f"[green]Initialized migrations in {directory}[/]")
@@ -385,6 +409,6 @@ This naming ensures proper sorting and avoids conflicts when loading multiple fi
         ...
 
     @abstractmethod
-    def revision(self, message: str) -> Any:
+    def revision(self, message: str, file_type: str = "sql") -> Any:
         """Create a new migration file."""
         ...

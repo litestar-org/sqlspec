@@ -18,7 +18,6 @@ if TYPE_CHECKING:
 
 __all__ = ("StructuredFormatter", "correlation_id_var", "get_correlation_id", "get_logger", "set_correlation_id")
 
-# Context variable for correlation ID tracking
 correlation_id_var: ContextVar[str | None] = ContextVar("correlation_id", default=None)
 
 
@@ -52,7 +51,6 @@ class StructuredFormatter(logging.Formatter):
         Returns:
             JSON formatted log entry
         """
-        # Base log entry
         log_entry = {
             "timestamp": self.formatTime(record, self.datefmt),
             "level": record.levelname,

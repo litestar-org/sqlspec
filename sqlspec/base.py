@@ -13,6 +13,15 @@ from sqlspec.config import (
     SyncConfigT,
     SyncDatabaseConfig,
 )
+from sqlspec.core.cache import (
+    CacheConfig,
+    CacheStatsAggregate,
+    get_cache_config,
+    get_cache_stats,
+    log_cache_stats,
+    reset_cache_stats,
+    update_cache_config,
+)
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -27,18 +36,19 @@ logger = get_logger()
 
 
 class SQLSpec:
-    """Type-safe configuration manager and registry for database connections and pools."""
+    """Configuration manager and registry for database connections and pools."""
 
-    __slots__ = ("_configs",)
+    __slots__ = ("_cleanup_tasks", "_configs", "_instance_cache_config")
 
     def __init__(self) -> None:
         self._configs: dict[Any, DatabaseConfigProtocol[Any, Any, Any]] = {}
         atexit.register(self._cleanup_pools)
+        self._instance_cache_config: Optional[CacheConfig] = None
+        self._cleanup_tasks: list[asyncio.Task[None]] = []
 
     @staticmethod
     def _get_config_name(obj: Any) -> str:
         """Get display name for configuration object."""
-        # Try to get __name__ attribute if it exists, otherwise use str()
         return getattr(obj, "__name__", str(obj))
 
     def _cleanup_pools(self) -> None:
@@ -54,17 +64,25 @@ class SQLSpec:
                             try:
                                 loop = asyncio.get_running_loop()
                                 if loop.is_running():
-                                    _task = asyncio.ensure_future(close_pool_awaitable, loop=loop)  # noqa: RUF006
-
+                                    task = asyncio.create_task(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
+                                    self._cleanup_tasks.append(task)
                                 else:
                                     asyncio.run(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
-                            except RuntimeError:  # No running event loop
+                            except RuntimeError:
                                 asyncio.run(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
                     else:
                         config.close_pool()
                     cleaned_count += 1
                 except Exception as e:
                     logger.warning("Failed to clean up pool for config %s: %s", config_type.__name__, e)
+
+        if self._cleanup_tasks:
+            try:
+                loop = asyncio.get_running_loop()
+                if loop.is_running():
+                    asyncio.gather(*self._cleanup_tasks, return_exceptions=True)
+            except RuntimeError:
+                pass
 
         self._configs.clear()
         logger.info("Pool cleanup completed. Cleaned %d pools.", cleaned_count)
@@ -233,14 +251,13 @@ class SQLSpec:
             async def _create_driver_async() -> "DriverT":
                 resolved_connection = await connection_obj  # pyright: ignore
                 return cast(  # pyright: ignore
-                    "DriverT",
-                    config.driver_type(connection=resolved_connection, default_row_type=config.default_row_type),
+                    "DriverT", config.driver_type(connection=resolved_connection)
                 )
 
             return _create_driver_async()
 
         return cast(  # pyright: ignore
-            "DriverT", config.driver_type(connection=connection_obj, default_row_type=config.default_row_type)
+            "DriverT", config.driver_type(connection=connection_obj)
         )
 
     @overload
@@ -473,3 +490,82 @@ class SQLSpec:
 
         logger.debug("Config %s does not support connection pooling - nothing to close", config_name)
         return None
+
+    @staticmethod
+    def get_cache_config() -> CacheConfig:
+        """Get the current global cache configuration.
+
+        Returns:
+            The current cache configuration.
+        """
+        return get_cache_config()
+
+    @staticmethod
+    def update_cache_config(config: CacheConfig) -> None:
+        """Update the global cache configuration.
+
+        Args:
+            config: The new cache configuration to apply.
+        """
+        update_cache_config(config)
+
+    @staticmethod
+    def get_cache_stats() -> CacheStatsAggregate:
+        """Get current cache statistics.
+
+        Returns:
+            Cache statistics object with detailed metrics.
+        """
+        return get_cache_stats()
+
+    @staticmethod
+    def reset_cache_stats() -> None:
+        """Reset all cache statistics to zero."""
+        reset_cache_stats()
+
+    @staticmethod
+    def log_cache_stats() -> None:
+        """Log current cache statistics using the configured logger."""
+        log_cache_stats()
+
+    @staticmethod
+    def configure_cache(
+        *,
+        sql_cache_size: Optional[int] = None,
+        fragment_cache_size: Optional[int] = None,
+        optimized_cache_size: Optional[int] = None,
+        sql_cache_enabled: Optional[bool] = None,
+        fragment_cache_enabled: Optional[bool] = None,
+        optimized_cache_enabled: Optional[bool] = None,
+    ) -> None:
+        """Update cache configuration with partial values.
+
+        Args:
+            sql_cache_size: Size of the SQL statement cache
+            fragment_cache_size: Size of the AST fragment cache
+            optimized_cache_size: Size of the optimized expression cache
+            sql_cache_enabled: Enable/disable SQL cache
+            fragment_cache_enabled: Enable/disable fragment cache
+            optimized_cache_enabled: Enable/disable optimized cache
+        """
+        current_config = get_cache_config()
+        update_cache_config(
+            CacheConfig(
+                sql_cache_size=sql_cache_size if sql_cache_size is not None else current_config.sql_cache_size,
+                fragment_cache_size=fragment_cache_size
+                if fragment_cache_size is not None
+                else current_config.fragment_cache_size,
+                optimized_cache_size=optimized_cache_size
+                if optimized_cache_size is not None
+                else current_config.optimized_cache_size,
+                sql_cache_enabled=sql_cache_enabled
+                if sql_cache_enabled is not None
+                else current_config.sql_cache_enabled,
+                fragment_cache_enabled=fragment_cache_enabled
+                if fragment_cache_enabled is not None
+                else current_config.fragment_cache_enabled,
+                optimized_cache_enabled=optimized_cache_enabled
+                if optimized_cache_enabled is not None
+                else current_config.optimized_cache_enabled,
+            )
+        )

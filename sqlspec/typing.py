@@ -1,12 +1,14 @@
 # pyright: ignore[reportAttributeAccessIssue]
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from functools import lru_cache
-from typing import TYPE_CHECKING, Annotated, Any, Union
+from typing import TYPE_CHECKING, Annotated, Any, Protocol, Union
 
 from typing_extensions import TypeAlias, TypeVar
 
 from sqlspec._typing import (
     AIOSQL_INSTALLED,
+    ATTRS_INSTALLED,
+    CATTRS_INSTALLED,
     FSSPEC_INSTALLED,
     LITESTAR_INSTALLED,
     MSGSPEC_INSTALLED,
@@ -16,74 +18,141 @@ from sqlspec._typing import (
     PROMETHEUS_INSTALLED,
     PYARROW_INSTALLED,
     PYDANTIC_INSTALLED,
-    UNSET,
-    AiosqlAsyncProtocol,  # pyright: ignore[reportAttributeAccessIssue]
-    AiosqlParamType,  # pyright: ignore[reportAttributeAccessIssue]
-    AiosqlProtocol,  # pyright: ignore[reportAttributeAccessIssue]
-    AiosqlSQLOperationType,  # pyright: ignore[reportAttributeAccessIssue]
-    AiosqlSyncProtocol,  # pyright: ignore[reportAttributeAccessIssue]
-    ArrowRecordBatch,
-    ArrowTable,
-    BaseModel,
-    Counter,  # pyright: ignore[reportAttributeAccessIssue]
     DataclassProtocol,
-    DTOData,
     Empty,
+    EmptyEnum,
     EmptyType,
-    Gauge,  # pyright: ignore[reportAttributeAccessIssue]
-    Histogram,  # pyright: ignore[reportAttributeAccessIssue]
-    Span,  # pyright: ignore[reportAttributeAccessIssue]
-    Status,  # pyright: ignore[reportAttributeAccessIssue]
-    StatusCode,  # pyright: ignore[reportAttributeAccessIssue]
-    Struct,
-    Tracer,  # pyright: ignore[reportAttributeAccessIssue]
-    TypeAdapter,
-    UnsetType,
-    aiosql,
-    convert,  # pyright: ignore[reportAttributeAccessIssue]
-    trace,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from sqlspec._typing import (
+        UNSET,
+        AiosqlAsyncProtocol,
+        AiosqlParamType,
+        AiosqlProtocol,
+        AiosqlSQLOperationType,
+        AiosqlSyncProtocol,
+        ArrowRecordBatch,
+        ArrowTable,
+        AttrsInstance,
+        AttrsInstanceStub,
+        BaseModel,
+        BaseModelStub,
+        Counter,
+        DTOData,
+        FailFast,
+        Gauge,
+        Histogram,
+        Span,
+        Status,
+        StatusCode,
+        Struct,
+        StructStub,
+        Tracer,
+        TypeAdapter,
+        UnsetType,
+        aiosql,
+        attrs_asdict,
+        attrs_define,
+        attrs_field,
+        attrs_fields,
+        attrs_has,
+        cattrs_structure,
+        cattrs_unstructure,
+        convert,
+        trace,
+    )
+else:
+    from sqlspec._typing import (
+        UNSET,
+        AiosqlAsyncProtocol,
+        AiosqlParamType,
+        AiosqlProtocol,
+        AiosqlSQLOperationType,
+        AiosqlSyncProtocol,
+        ArrowRecordBatch,
+        ArrowTable,
+        AttrsInstance,
+        BaseModel,
+        Counter,
+        DTOData,
+        FailFast,
+        Gauge,
+        Histogram,
+        Span,
+        Status,
+        StatusCode,
+        Struct,
+        Tracer,
+        TypeAdapter,
+        UnsetType,
+        aiosql,
+        attrs_asdict,
+        attrs_define,
+        attrs_field,
+        attrs_fields,
+        attrs_has,
+        cattrs_structure,
+        cattrs_unstructure,
+        convert,
+        trace,
+    )
 
-PYDANTIC_USE_FAILFAST = False  # leave permanently disabled for now
+
+class DictLike(Protocol):
+    """A protocol for objects that behave like a dictionary for reading."""
+
+    def __getitem__(self, key: str) -> Any: ...
+    def __iter__(self) -> Iterator[str]: ...
+    def __len__(self) -> int: ...
 
 
-T = TypeVar("T")
-ConnectionT = TypeVar("ConnectionT")
-"""Type variable for connection types.
+PYDANTIC_USE_FAILFAST = False
 
-:class:`~sqlspec.typing.ConnectionT`
-"""
-PoolT = TypeVar("PoolT")
-"""Type variable for pool types.
 
-:class:`~sqlspec.typing.PoolT`
-"""
-PoolT_co = TypeVar("PoolT_co", covariant=True)
-"""Type variable for covariant pool types.
+if TYPE_CHECKING:
+    T = TypeVar("T")
+    ConnectionT = TypeVar("ConnectionT")
+    """Type variable for connection types.
 
-:class:`~sqlspec.typing.PoolT_co`
-"""
-ModelT = TypeVar("ModelT", bound="Union[dict[str, Any], Struct, BaseModel, DataclassProtocol]")
-"""Type variable for model types.
+    :class:`~sqlspec.typing.ConnectionT`
+    """
+    PoolT = TypeVar("PoolT")
+    """Type variable for pool types.
 
-:class:`dict[str, Any]` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol`
-"""
+    :class:`~sqlspec.typing.PoolT`
+    """
+    PoolT_co = TypeVar("PoolT_co", covariant=True)
+    """Type variable for covariant pool types.
+
+    :class:`~sqlspec.typing.PoolT_co`
+    """
+    ModelT = TypeVar("ModelT", bound="Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub]")
+    """Type variable for model types.
+
+    :class:`DictLike` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
+    """
+    RowT = TypeVar("RowT", bound="dict[str, Any]")
+else:
+    T = Any
+    ConnectionT = Any
+    PoolT = Any
+    PoolT_co = Any
+    ModelT = Any
+    RowT = dict[str, Any]
 
 
 DictRow: TypeAlias = "dict[str, Any]"
 """Type variable for DictRow types."""
 TupleRow: TypeAlias = "tuple[Any, ...]"
 """Type variable for TupleRow types."""
-RowT = TypeVar("RowT", default=dict[str, Any])
 
-SupportedSchemaModel: TypeAlias = "Union[Struct, BaseModel, DataclassProtocol]"
+SupportedSchemaModel: TypeAlias = "Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub]"
 """Type alias for pydantic or msgspec models.
 
-:class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol`
+:class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
 """
 StatementParameters: TypeAlias = "Union[Any, dict[str, Any], list[Any], tuple[Any, ...], None]"
 """Type alias for statement parameters.
@@ -94,8 +163,6 @@ Represents:
 - :type:`tuple[Any, ...]`
 - :type:`None`
 """
-# Backward compatibility alias
-SQLParameterType: TypeAlias = StatementParameters
 ModelDTOT = TypeVar("ModelDTOT", bound="SupportedSchemaModel")
 """Type variable for model DTOs.
 
@@ -106,22 +173,24 @@ PydanticOrMsgspecT = SupportedSchemaModel
 
 :class:`msgspec.Struct` or :class:`pydantic.BaseModel`
 """
-ModelDict: TypeAlias = "Union[dict[str, Any], SupportedSchemaModel, DTOData[SupportedSchemaModel]]"
+ModelDict: TypeAlias = (
+    "Union[dict[str, Any], Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub], Any]"
+)
 """Type alias for model dictionaries.
 
 Represents:
 - :type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` |  :class:`pydantic.BaseModel`
 """
-ModelDictList: TypeAlias = "Sequence[Union[dict[str, Any], SupportedSchemaModel]]"
+ModelDictList: TypeAlias = (
+    "Sequence[Union[dict[str, Any], Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub]]]"
+)
 """Type alias for model dictionary lists.
 
 A list or sequence of any of the following:
 - :type:`Sequence`[:type:`dict[str, Any]` | :class:`DataclassProtocol` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel`]
 
 """
-BulkModelDict: TypeAlias = (
-    "Union[Sequence[Union[dict[str, Any], SupportedSchemaModel]], DTOData[list[SupportedSchemaModel]]]"
-)
+BulkModelDict: TypeAlias = "Union[Sequence[Union[dict[str, Any], Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub]]], Any]"
 """Type alias for bulk model dictionaries.
 
 Represents:
@@ -131,7 +200,7 @@ Represents:
 
 
 @lru_cache(typed=True)
-def get_type_adapter(f: "type[T]") -> "TypeAdapter[T]":
+def get_type_adapter(f: "type[T]") -> Any:
     """Caches and returns a pydantic type adapter.
 
     Args:
@@ -159,6 +228,8 @@ def MixinOf(base: type[T]) -> type[T]:  # noqa: N802
 
 __all__ = (
     "AIOSQL_INSTALLED",
+    "ATTRS_INSTALLED",
+    "CATTRS_INSTALLED",
     "FSSPEC_INSTALLED",
     "LITESTAR_INSTALLED",
     "MSGSPEC_INSTALLED",
@@ -177,14 +248,17 @@ __all__ = (
     "AiosqlSyncProtocol",
     "ArrowRecordBatch",
     "ArrowTable",
+    "AttrsInstance",
     "BaseModel",
     "BulkModelDict",
     "ConnectionT",
     "Counter",
     "DTOData",
     "DataclassProtocol",
+    "DictLike",
     "DictRow",
     "Empty",
+    "EmptyEnum",
     "EmptyType",
     "FailFast",
     "Gauge",
@@ -201,7 +275,6 @@ __all__ = (
     "PoolT_co",
     "PydanticOrMsgspecT",
     "RowT",
-    "SQLParameterType",
     "Span",
     "StatementParameters",
     "Status",
@@ -213,66 +286,14 @@ __all__ = (
     "TypeAdapter",
     "UnsetType",
     "aiosql",
+    "attrs_asdict",
+    "attrs_define",
+    "attrs_field",
+    "attrs_fields",
+    "attrs_has",
+    "cattrs_structure",
+    "cattrs_unstructure",
     "convert",
     "get_type_adapter",
     "trace",
 )
-
-if TYPE_CHECKING:
-    if not PYDANTIC_INSTALLED:
-        from sqlspec._typing import BaseModel, FailFast, TypeAdapter
-    else:
-        from pydantic import BaseModel, FailFast, TypeAdapter  # noqa: TC004
-
-    if not MSGSPEC_INSTALLED:
-        from sqlspec._typing import UNSET, Struct, UnsetType, convert
-    else:
-        from msgspec import UNSET, Struct, UnsetType, convert  # noqa: TC004
-
-    if not PYARROW_INSTALLED:
-        from sqlspec._typing import ArrowRecordBatch, ArrowTable
-    else:
-        from pyarrow import RecordBatch as ArrowRecordBatch  # noqa: TC004
-        from pyarrow import Table as ArrowTable  # noqa: TC004
-    if not LITESTAR_INSTALLED:
-        from sqlspec._typing import DTOData
-    else:
-        from litestar.dto import DTOData  # noqa: TC004
-    if not OPENTELEMETRY_INSTALLED:
-        from sqlspec._typing import Span, Status, StatusCode, Tracer, trace  # noqa: TC004  # pyright: ignore
-    else:
-        from opentelemetry.trace import (  # pyright: ignore[reportMissingImports] # noqa: TC004
-            Span,
-            Status,
-            StatusCode,
-            Tracer,
-        )
-    if not PROMETHEUS_INSTALLED:
-        from sqlspec._typing import Counter, Gauge, Histogram  # pyright: ignore
-    else:
-        from prometheus_client import Counter, Gauge, Histogram  # noqa: TC004 # pyright: ignore # noqa: TC004
-
-    if not AIOSQL_INSTALLED:
-        from sqlspec._typing import (
-            AiosqlAsyncProtocol,  # pyright: ignore[reportAttributeAccessIssue]
-            AiosqlParamType,  # pyright: ignore[reportAttributeAccessIssue]
-            AiosqlProtocol,  # pyright: ignore[reportAttributeAccessIssue]
-            AiosqlSQLOperationType,  # pyright: ignore[reportAttributeAccessIssue]
-            AiosqlSyncProtocol,  # pyright: ignore[reportAttributeAccessIssue]
-            aiosql,
-        )
-    else:
-        import aiosql  # noqa: TC004 # pyright: ignore
-        from aiosql.types import (  # noqa: TC004 # pyright: ignore[reportMissingImports]
-            AsyncDriverAdapterProtocol as AiosqlAsyncProtocol,
-        )
-        from aiosql.types import (  # noqa: TC004 # pyright: ignore[reportMissingImports]
-            DriverAdapterProtocol as AiosqlProtocol,
-        )
-        from aiosql.types import ParamType as AiosqlParamType  # noqa: TC004 # pyright: ignore[reportMissingImports]
-        from aiosql.types import (
-            SQLOperationType as AiosqlSQLOperationType,  # noqa: TC004 # pyright: ignore[reportMissingImports]
-        )
-        from aiosql.types import (  # noqa: TC004 # pyright: ignore[reportMissingImports]
-            SyncDriverAdapterProtocol as AiosqlSyncProtocol,
-        )

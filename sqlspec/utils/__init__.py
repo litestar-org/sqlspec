@@ -1,4 +1,3 @@
-from sqlspec.utils import deprecation, fixtures, module_loader, singleton, sync_tools, text
-from sqlspec.utils.statement_hashing import hash_expression
+from sqlspec.utils import deprecation, fixtures, module_loader, singleton, sync_tools, text, type_guards
 
-__all__ = ("deprecation", "fixtures", "hash_expression", "module_loader", "singleton", "sync_tools", "text")
+__all__ = ("deprecation", "fixtures", "module_loader", "singleton", "sync_tools", "text", "type_guards")

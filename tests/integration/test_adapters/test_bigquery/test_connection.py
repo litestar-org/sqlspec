@@ -1,16 +1,16 @@
-from __future__ import annotations
+"""BigQuery connection tests with CORE_ROUND_3 architecture."""
 
 import pytest
 
 from sqlspec.adapters.bigquery import BigQueryConfig
-from sqlspec.statement.result import SQLResult
+from sqlspec.core.result import SQLResult
 
 
 @pytest.mark.xdist_group("bigquery")
-def test_connection(bigquery_session: BigQueryConfig) -> None:
+def test_connection(bigquery_config: BigQueryConfig) -> None:
     """Test database connection."""
 
-    with bigquery_session.provide_session() as driver:
+    with bigquery_config.provide_session() as driver:
         result = driver.execute("SELECT 1 as one")
         assert isinstance(result, SQLResult)
         assert result.data is not None

@@ -3,241 +3,120 @@
 import contextlib
 import logging
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union, cast
 
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
+from typing_extensions import NotRequired
 
+from sqlspec.adapters.psycopg._types import PsycopgAsyncConnection, PsycopgSyncConnection
 from sqlspec.adapters.psycopg.driver import (
-    PsycopgAsyncConnection,
+    PsycopgAsyncCursor,
     PsycopgAsyncDriver,
-    PsycopgSyncConnection,
+    PsycopgSyncCursor,
     PsycopgSyncDriver,
+    psycopg_statement_config,
 )
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
-from sqlspec.statement.sql import SQLConfig
-from sqlspec.typing import DictRow, Empty
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
 
-    from psycopg import Connection
+    from sqlspec.core.statement import StatementConfig
+
 
 logger = logging.getLogger("sqlspec.adapters.psycopg")
 
-CONNECTION_FIELDS = frozenset(
-    {
-        "conninfo",
-        "host",
-        "port",
-        "user",
-        "password",
-        "dbname",
-        "connect_timeout",
-        "options",
-        "application_name",
-        "sslmode",
-        "sslcert",
-        "sslkey",
-        "sslrootcert",
-        "autocommit",
-    }
-)
 
-POOL_FIELDS = CONNECTION_FIELDS.union(
-    {
-        "min_size",
-        "max_size",
-        "name",
-        "timeout",
-        "max_waiting",
-        "max_lifetime",
-        "max_idle",
-        "reconnect_timeout",
-        "num_workers",
-        "configure",
-        "kwargs",
-    }
-)
+class PsycopgConnectionParams(TypedDict, total=False):
+    """Psycopg connection parameters."""
 
-__all__ = ("CONNECTION_FIELDS", "POOL_FIELDS", "PsycopgAsyncConfig", "PsycopgSyncConfig")
+    conninfo: NotRequired[str]
+    host: NotRequired[str]
+    port: NotRequired[int]
+    user: NotRequired[str]
+    password: NotRequired[str]
+    dbname: NotRequired[str]
+    connect_timeout: NotRequired[int]
+    options: NotRequired[str]
+    application_name: NotRequired[str]
+    sslmode: NotRequired[str]
+    sslcert: NotRequired[str]
+    sslkey: NotRequired[str]
+    sslrootcert: NotRequired[str]
+    autocommit: NotRequired[bool]
+    extra: NotRequired[dict[str, Any]]
+
+
+class PsycopgPoolParams(PsycopgConnectionParams, total=False):
+    """Psycopg pool parameters."""
+
+    min_size: NotRequired[int]
+    max_size: NotRequired[int]
+    name: NotRequired[str]
+    timeout: NotRequired[float]
+    max_waiting: NotRequired[int]
+    max_lifetime: NotRequired[float]
+    max_idle: NotRequired[float]
+    reconnect_timeout: NotRequired[float]
+    num_workers: NotRequired[int]
+    configure: NotRequired["Callable[..., Any]"]
+    kwargs: NotRequired[dict[str, Any]]
+
+
+__all__ = (
+    "PsycopgAsyncConfig",
+    "PsycopgAsyncCursor",
+    "PsycopgConnectionParams",
+    "PsycopgPoolParams",
+    "PsycopgSyncConfig",
+    "PsycopgSyncCursor",
+)
 
 
 class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool, PsycopgSyncDriver]):
     """Configuration for Psycopg synchronous database connections with direct field-based configuration."""
 
-    is_async: ClassVar[bool] = False
-    supports_connection_pooling: ClassVar[bool] = True
-
-    # Driver class reference for dialect resolution
-    driver_type: type[PsycopgSyncDriver] = PsycopgSyncDriver
-    connection_type: type[PsycopgSyncConnection] = PsycopgSyncConnection
-    # Parameter style support information
-    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional", "pyformat_named")
-    """Psycopg supports %s (positional) and %(name)s (named) parameter styles."""
-
-    default_parameter_style: ClassVar[str] = "pyformat_positional"
-    """Psycopg's native parameter style is %s (pyformat positional)."""
+    driver_type: "ClassVar[type[PsycopgSyncDriver]]" = PsycopgSyncDriver
+    connection_type: "ClassVar[type[PsycopgSyncConnection]]" = PsycopgSyncConnection
 
     def __init__(
         self,
-        statement_config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
-        # Connection parameters
-        conninfo: Optional[str] = None,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
-        user: Optional[str] = None,
-        password: Optional[str] = None,
-        dbname: Optional[str] = None,
-        connect_timeout: Optional[float] = None,
-        options: Optional[str] = None,
-        application_name: Optional[str] = None,
-        sslmode: Optional[str] = None,
-        sslcert: Optional[str] = None,
-        sslkey: Optional[str] = None,
-        sslrootcert: Optional[str] = None,
-        autocommit: Optional[bool] = None,
-        # Pool parameters
-        min_size: Optional[int] = None,
-        max_size: Optional[int] = None,
-        name: Optional[str] = None,
-        timeout: Optional[float] = None,
-        max_waiting: Optional[int] = None,
-        max_lifetime: Optional[float] = None,
-        max_idle: Optional[float] = None,
-        reconnect_timeout: Optional[float] = None,
-        num_workers: Optional[int] = None,
-        configure: Optional["Callable[[Connection[Any]], None]"] = None,
-        kwargs: Optional[dict[str, Any]] = None,
-        # User-defined extras
-        extras: Optional[dict[str, Any]] = None,
-        **additional_kwargs: Any,
+        *,
+        pool_config: "Optional[Union[PsycopgPoolParams, dict[str, Any]]]" = None,
+        pool_instance: Optional["ConnectionPool"] = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        migration_config: Optional[dict[str, Any]] = None,
     ) -> None:
         """Initialize Psycopg synchronous configuration.
 
         Args:
+            pool_config: Pool configuration parameters (TypedDict or dict)
+            pool_instance: Existing pool instance to use
             statement_config: Default SQL statement configuration
-            default_row_type: Default row type for results
-            conninfo: Connection string in libpq format
-            host: Database server host
-            port: Database server port
-            user: Database user
-            password: Database password
-            dbname: Database name
-            connect_timeout: Connection timeout in seconds
-            options: Command-line options to send to the server
-            application_name: Application name for logging and statistics
-            sslmode: SSL mode (disable, prefer, require, etc.)
-            sslcert: SSL client certificate file
-            sslkey: SSL client private key file
-            sslrootcert: SSL root certificate file
-            autocommit: Enable autocommit mode
-            min_size: Minimum number of connections in the pool
-            max_size: Maximum number of connections in the pool
-            name: Name of the connection pool
-            timeout: Timeout for acquiring connections
-            max_waiting: Maximum number of waiting clients
-            max_lifetime: Maximum connection lifetime
-            max_idle: Maximum idle time for connections
-            reconnect_timeout: Time between reconnection attempts
-            num_workers: Number of background workers
-            configure: Callback to configure new connections
-            kwargs: Additional connection parameters
-            extras: Additional connection parameters not explicitly defined
-            **additional_kwargs: Additional parameters (stored in extras)
+            migration_config: Migration configuration
+
         """
-        # Store connection parameters as instance attributes
-        self.conninfo = conninfo
-        self.host = host
-        self.port = port
-        self.user = user
-        self.password = password
-        self.dbname = dbname
-        self.connect_timeout = connect_timeout
-        self.options = options
-        self.application_name = application_name
-        self.sslmode = sslmode
-        self.sslcert = sslcert
-        self.sslkey = sslkey
-        self.sslrootcert = sslrootcert
-        self.autocommit = autocommit
+        processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
+        if "extra" in processed_pool_config:
+            extras = processed_pool_config.pop("extra")
+            processed_pool_config.update(extras)
 
-        # Store pool parameters as instance attributes
-        self.min_size = min_size
-        self.max_size = max_size
-        self.name = name
-        self.timeout = timeout
-        self.max_waiting = max_waiting
-        self.max_lifetime = max_lifetime
-        self.max_idle = max_idle
-        self.reconnect_timeout = reconnect_timeout
-        self.num_workers = num_workers
-        self.configure = configure
-        self.kwargs = kwargs or {}
-
-        self.extras = extras or {}
-        self.extras.update(additional_kwargs)
-
-        # Store other config
-        self.statement_config = statement_config or SQLConfig()
-        self.default_row_type = default_row_type
-
-        super().__init__()
-
-    @property
-    def connection_config_dict(self) -> dict[str, Any]:
-        """Return the connection configuration as a dict for psycopg operations.
-
-        Returns only connection-specific parameters.
-        """
-        # Gather non-None parameters from connection fields only
-        config = {
-            field: getattr(self, field)
-            for field in CONNECTION_FIELDS
-            if getattr(self, field, None) is not None and getattr(self, field) is not Empty
-        }
-
-        # Merge extras and kwargs
-        config.update(self.extras)
-        if self.kwargs:
-            config.update(self.kwargs)
-
-        config["row_factory"] = dict_row
-
-        return config
-
-    @property
-    def pool_config_dict(self) -> dict[str, Any]:
-        """Return the pool configuration as a dict for psycopg pool operations.
-
-        Returns all configuration parameters including connection and pool-specific parameters.
-        """
-        # Gather non-None parameters from all fields (connection + pool)
-        config = {
-            field: getattr(self, field)
-            for field in POOL_FIELDS
-            if getattr(self, field, None) is not None and getattr(self, field) is not Empty
-        }
-
-        # Merge extras and kwargs
-        config.update(self.extras)
-        if self.kwargs:
-            config.update(self.kwargs)
-
-        config["row_factory"] = dict_row
-
-        return config
+        super().__init__(
+            pool_config=processed_pool_config,
+            pool_instance=pool_instance,
+            migration_config=migration_config,
+            statement_config=statement_config or psycopg_statement_config,
+        )
 
     def _create_pool(self) -> "ConnectionPool":
         """Create the actual connection pool."""
         logger.info("Creating Psycopg connection pool", extra={"adapter": "psycopg"})
 
         try:
-            all_config = self.pool_config_dict.copy()
+            all_config = dict(self.pool_config)
 
-            # Separate pool-specific parameters that ConnectionPool accepts directly
-            pool_params = {
+            pool_parameters = {
                 "min_size": all_config.pop("min_size", 4),
                 "max_size": all_config.pop("max_size", None),
                 "name": all_config.pop("name", None),
@@ -249,29 +128,34 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 "num_workers": all_config.pop("num_workers", 3),
             }
 
-            # Capture autocommit setting before configuring the pool
             autocommit_setting = all_config.get("autocommit")
 
             def configure_connection(conn: "PsycopgSyncConnection") -> None:
                 conn.row_factory = dict_row
-                # Apply autocommit setting if specified
                 if autocommit_setting is not None:
                     conn.autocommit = autocommit_setting
 
-            pool_params["configure"] = all_config.pop("configure", configure_connection)
+                try:
+                    import pgvector.psycopg
 
-            pool_params = {k: v for k, v in pool_params.items() if v is not None}
+                    pgvector.psycopg.register_vector(conn)
+                    logger.debug("pgvector registered successfully for psycopg sync connection")
+                except ImportError:
+                    pass
+                except Exception as e:
+                    logger.debug("Failed to register pgvector for psycopg sync: %s", e)
+
+            pool_parameters["configure"] = all_config.pop("configure", configure_connection)
+
+            pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
 
             conninfo = all_config.pop("conninfo", None)
             if conninfo:
-                # If conninfo is provided, use it directly
-                # Don't pass kwargs when using conninfo string
-                pool = ConnectionPool(conninfo, open=True, **pool_params)
+                pool = ConnectionPool(conninfo, open=True, **pool_parameters)
             else:
-                # row_factory is already popped out earlier
-                all_config.pop("row_factory", None)
-                all_config.pop("kwargs", None)
-                pool = ConnectionPool("", kwargs=all_config, open=True, **pool_params)
+                kwargs = all_config.pop("kwargs", {})
+                all_config.update(kwargs)
+                pool = ConnectionPool("", kwargs=all_config, open=True, **pool_parameters)
 
             logger.info("Psycopg connection pool created successfully", extra={"adapter": "psycopg"})
         except Exception as e:
@@ -287,7 +171,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         logger.info("Closing Psycopg connection pool", extra={"adapter": "psycopg"})
 
         try:
-            # This avoids the "cannot join current thread" error during garbage collection
             if hasattr(self.pool_instance, "_closed"):
                 self.pool_instance._closed = True
 
@@ -331,29 +214,22 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 conn.close()
 
     @contextlib.contextmanager
-    def provide_session(self, *args: Any, **kwargs: Any) -> "Generator[PsycopgSyncDriver, None, None]":
+    def provide_session(
+        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+    ) -> "Generator[PsycopgSyncDriver, None, None]":
         """Provide a driver session context manager.
 
         Args:
             *args: Additional arguments.
+            statement_config: Optional statement configuration override.
             **kwargs: Additional keyword arguments.
 
         Yields:
             A PsycopgSyncDriver instance.
         """
         with self.provide_connection(*args, **kwargs) as conn:
-            statement_config = self.statement_config
-            # Inject parameter style info if not already set
-            if statement_config.allowed_parameter_styles is None:
-                from dataclasses import replace
-
-                statement_config = replace(
-                    statement_config,
-                    allowed_parameter_styles=self.supported_parameter_styles,
-                    default_parameter_style=self.default_parameter_style,
-                )
-            driver = self.driver_type(connection=conn, config=statement_config)
-            yield driver
+            final_statement_config = statement_config or self.statement_config
+            yield self.driver_type(connection=conn, statement_config=final_statement_config)
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
         """Provide pool instance.
@@ -375,184 +251,50 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             Dictionary mapping type names to types.
         """
         namespace = super().get_signature_namespace()
-        namespace.update({"PsycopgSyncConnection": PsycopgSyncConnection})
+        namespace.update({"PsycopgSyncConnection": PsycopgSyncConnection, "PsycopgSyncCursor": PsycopgSyncCursor})
         return namespace
 
 
 class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnectionPool, PsycopgAsyncDriver]):
     """Configuration for Psycopg asynchronous database connections with direct field-based configuration."""
 
-    is_async: ClassVar[bool] = True
-    supports_connection_pooling: ClassVar[bool] = True
-
-    # Driver class reference for dialect resolution
-    driver_type: type[PsycopgAsyncDriver] = PsycopgAsyncDriver
-    connection_type: type[PsycopgAsyncConnection] = PsycopgAsyncConnection
-
-    # Parameter style support information
-    supported_parameter_styles: ClassVar[tuple[str, ...]] = ("pyformat_positional", "pyformat_named")
-    """Psycopg supports %s (pyformat_positional) and %(name)s (pyformat_named) parameter styles."""
-
-    default_parameter_style: ClassVar[str] = "pyformat_positional"
-    """Psycopg's preferred parameter style is %s (pyformat_positional)."""
+    driver_type: ClassVar[type[PsycopgAsyncDriver]] = PsycopgAsyncDriver
+    connection_type: "ClassVar[type[PsycopgAsyncConnection]]" = PsycopgAsyncConnection
 
     def __init__(
         self,
-        statement_config: "Optional[SQLConfig]" = None,
-        default_row_type: "type[DictRow]" = DictRow,
-        # Connection parameters
-        conninfo: Optional[str] = None,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
-        user: Optional[str] = None,
-        password: Optional[str] = None,
-        dbname: Optional[str] = None,
-        connect_timeout: Optional[float] = None,
-        options: Optional[str] = None,
-        application_name: Optional[str] = None,
-        sslmode: Optional[str] = None,
-        sslcert: Optional[str] = None,
-        sslkey: Optional[str] = None,
-        sslrootcert: Optional[str] = None,
-        autocommit: Optional[bool] = None,
-        # Pool parameters
-        min_size: Optional[int] = None,
-        max_size: Optional[int] = None,
-        name: Optional[str] = None,
-        timeout: Optional[float] = None,
-        max_waiting: Optional[int] = None,
-        max_lifetime: Optional[float] = None,
-        max_idle: Optional[float] = None,
-        reconnect_timeout: Optional[float] = None,
-        num_workers: Optional[int] = None,
-        configure: Optional["Callable[[Connection[Any]], None]"] = None,
-        kwargs: Optional[dict[str, Any]] = None,
-        # User-defined extras
-        extras: Optional[dict[str, Any]] = None,
-        **additional_kwargs: Any,
+        *,
+        pool_config: "Optional[Union[PsycopgPoolParams, dict[str, Any]]]" = None,
+        pool_instance: "Optional[AsyncConnectionPool]" = None,
+        migration_config: "Optional[dict[str, Any]]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
     ) -> None:
         """Initialize Psycopg asynchronous configuration.
 
         Args:
+            pool_config: Pool configuration parameters (TypedDict or dict)
+            pool_instance: Existing pool instance to use
             statement_config: Default SQL statement configuration
-            default_row_type: Default row type for results
-            conninfo: Connection string in libpq format
-            host: Database server host
-            port: Database server port
-            user: Database user
-            password: Database password
-            dbname: Database name
-            connect_timeout: Connection timeout in seconds
-            options: Command-line options to send to the server
-            application_name: Application name for logging and statistics
-            sslmode: SSL mode (disable, prefer, require, etc.)
-            sslcert: SSL client certificate file
-            sslkey: SSL client private key file
-            sslrootcert: SSL root certificate file
-            autocommit: Enable autocommit mode
-            min_size: Minimum number of connections in the pool
-            max_size: Maximum number of connections in the pool
-            name: Name of the connection pool
-            timeout: Timeout for acquiring connections
-            max_waiting: Maximum number of waiting clients
-            max_lifetime: Maximum connection lifetime
-            max_idle: Maximum idle time for connections
-            reconnect_timeout: Time between reconnection attempts
-            num_workers: Number of background workers
-            configure: Callback to configure new connections
-            kwargs: Additional connection parameters
-            extras: Additional connection parameters not explicitly defined
-            **additional_kwargs: Additional parameters (stored in extras)
+            migration_config: Migration configuration
         """
-        # Store connection parameters as instance attributes
-        self.conninfo = conninfo
-        self.host = host
-        self.port = port
-        self.user = user
-        self.password = password
-        self.dbname = dbname
-        self.connect_timeout = connect_timeout
-        self.options = options
-        self.application_name = application_name
-        self.sslmode = sslmode
-        self.sslcert = sslcert
-        self.sslkey = sslkey
-        self.sslrootcert = sslrootcert
-        self.autocommit = autocommit
+        processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
+        if "extra" in processed_pool_config:
+            extras = processed_pool_config.pop("extra")
+            processed_pool_config.update(extras)
 
-        # Store pool parameters as instance attributes
-        self.min_size = min_size
-        self.max_size = max_size
-        self.name = name
-        self.timeout = timeout
-        self.max_waiting = max_waiting
-        self.max_lifetime = max_lifetime
-        self.max_idle = max_idle
-        self.reconnect_timeout = reconnect_timeout
-        self.num_workers = num_workers
-        self.configure = configure
-        self.kwargs = kwargs or {}
-
-        self.extras = extras or {}
-        self.extras.update(additional_kwargs)
-
-        # Store other config
-        self.statement_config = statement_config or SQLConfig()
-        self.default_row_type = default_row_type
-
-        super().__init__()
-
-    @property
-    def connection_config_dict(self) -> dict[str, Any]:
-        """Return the connection configuration as a dict for psycopg operations.
-
-        Returns only connection-specific parameters.
-        """
-        # Gather non-None parameters from connection fields only
-        config = {
-            field: getattr(self, field)
-            for field in CONNECTION_FIELDS
-            if getattr(self, field, None) is not None and getattr(self, field) is not Empty
-        }
-
-        # Merge extras and kwargs
-        config.update(self.extras)
-        if self.kwargs:
-            config.update(self.kwargs)
-
-        config["row_factory"] = dict_row
-
-        return config
-
-    @property
-    def pool_config_dict(self) -> dict[str, Any]:
-        """Return the pool configuration as a dict for psycopg pool operations.
-
-        Returns all configuration parameters including connection and pool-specific parameters.
-        """
-        # Gather non-None parameters from all fields (connection + pool)
-        config = {
-            field: getattr(self, field)
-            for field in POOL_FIELDS
-            if getattr(self, field, None) is not None and getattr(self, field) is not Empty
-        }
-
-        # Merge extras and kwargs
-        config.update(self.extras)
-        if self.kwargs:
-            config.update(self.kwargs)
-
-        config["row_factory"] = dict_row
-
-        return config
+        super().__init__(
+            pool_config=processed_pool_config,
+            pool_instance=pool_instance,
+            migration_config=migration_config,
+            statement_config=statement_config or psycopg_statement_config,
+        )
 
     async def _create_pool(self) -> "AsyncConnectionPool":
         """Create the actual async connection pool."""
 
-        all_config = self.pool_config_dict.copy()
+        all_config = dict(self.pool_config)
 
-        # Separate pool-specific parameters that AsyncConnectionPool accepts directly
-        pool_params = {
+        pool_parameters = {
             "min_size": all_config.pop("min_size", 4),
             "max_size": all_config.pop("max_size", None),
             "name": all_config.pop("name", None),
@@ -569,24 +311,30 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
         async def configure_connection(conn: "PsycopgAsyncConnection") -> None:
             conn.row_factory = dict_row
-            # Apply autocommit setting if specified (async version requires await)
             if autocommit_setting is not None:
                 await conn.set_autocommit(autocommit_setting)
 
-        pool_params["configure"] = all_config.pop("configure", configure_connection)
+            try:
+                from pgvector.psycopg import register_vector_async
 
-        pool_params = {k: v for k, v in pool_params.items() if v is not None}
+                await register_vector_async(conn)
+                logger.debug("pgvector registered successfully for psycopg async connection")
+            except ImportError:
+                pass
+            except Exception as e:
+                logger.debug("Failed to register pgvector for psycopg async: %s", e)
+
+        pool_parameters["configure"] = all_config.pop("configure", configure_connection)
+
+        pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
 
         conninfo = all_config.pop("conninfo", None)
         if conninfo:
-            # If conninfo is provided, use it directly
-            # Don't pass kwargs when using conninfo string
-            pool = AsyncConnectionPool(conninfo, open=False, **pool_params)
+            pool = AsyncConnectionPool(conninfo, open=False, **pool_parameters)
         else:
-            # row_factory is already popped out earlier
-            all_config.pop("row_factory", None)
-            all_config.pop("kwargs", None)
-            pool = AsyncConnectionPool("", kwargs=all_config, open=False, **pool_params)
+            kwargs = all_config.pop("kwargs", {})
+            all_config.update(kwargs)
+            pool = AsyncConnectionPool("", kwargs=all_config, open=False, **pool_parameters)
 
         await pool.open()
 
@@ -598,7 +346,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             return
 
         try:
-            # This avoids the "cannot join current thread" error during garbage collection
             if hasattr(self.pool_instance, "_closed"):
                 self.pool_instance._closed = True
 
@@ -638,29 +385,22 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
                 await conn.close()
 
     @asynccontextmanager
-    async def provide_session(self, *args: Any, **kwargs: Any) -> "AsyncGenerator[PsycopgAsyncDriver, None]":
+    async def provide_session(
+        self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
+    ) -> "AsyncGenerator[PsycopgAsyncDriver, None]":
         """Provide an async driver session context manager.
 
         Args:
             *args: Additional arguments.
+            statement_config: Optional statement configuration override.
             **kwargs: Additional keyword arguments.
 
         Yields:
             A PsycopgAsyncDriver instance.
         """
         async with self.provide_connection(*args, **kwargs) as conn:
-            statement_config = self.statement_config
-            # Inject parameter style info if not already set
-            if statement_config.allowed_parameter_styles is None:
-                from dataclasses import replace
-
-                statement_config = replace(
-                    statement_config,
-                    allowed_parameter_styles=self.supported_parameter_styles,
-                    default_parameter_style=self.default_parameter_style,
-                )
-            driver = self.driver_type(connection=conn, config=statement_config)
-            yield driver
+            final_statement_config = statement_config or psycopg_statement_config
+            yield self.driver_type(connection=conn, statement_config=final_statement_config)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":
         """Provide async pool instance.
@@ -682,5 +422,5 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             Dictionary mapping type names to types.
         """
         namespace = super().get_signature_namespace()
-        namespace.update({"PsycopgAsyncConnection": PsycopgAsyncConnection})
+        namespace.update({"PsycopgAsyncConnection": PsycopgAsyncConnection, "PsycopgAsyncCursor": PsycopgAsyncCursor})
         return namespace

@@ -18,15 +18,15 @@ logger = get_logger("extensions.litestar")
 
 
 class SQLSpec(InitPluginProtocol, SQLSpecBase):
-    """SQLSpec plugin."""
+    """Litestar plugin for SQLSpec database integration."""
 
     __slots__ = ("_config", "_plugin_configs")
 
     def __init__(self, config: Union["SyncConfigT", "AsyncConfigT", "DatabaseConfig", list["DatabaseConfig"]]) -> None:
-        """Initialize ``SQLSpecPlugin``.
+        """Initialize SQLSpec plugin.
 
         Args:
-            config: configure SQLSpec plugin for use with Litestar.
+            config: Database configuration for SQLSpec plugin.
         """
         self._configs: dict[Any, DatabaseConfigProtocol[Any, Any, Any]] = {}
         if isinstance(config, DatabaseConfigProtocol):
@@ -38,27 +38,31 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
 
     @property
     def config(self) -> "list[DatabaseConfig]":  # pyright: ignore[reportInvalidTypeVarUse]
-        """Return the plugin config.
+        """Return the plugin configuration.
 
         Returns:
-            ConfigManager.
+            List of database configurations.
         """
         return self._plugin_configs
 
     def on_cli_init(self, cli: "Group") -> None:
-        """Configure the CLI for use with SQLSpec."""
+        """Configure CLI commands for SQLSpec database operations.
+
+        Args:
+            cli: The Click command group to add commands to.
+        """
         from sqlspec.extensions.litestar.cli import database_group
 
         cli.add_command(database_group)
 
     def on_app_init(self, app_config: "AppConfig") -> "AppConfig":
-        """Configure application for use with SQLSpec.
+        """Configure Litestar application with SQLSpec database integration.
 
         Args:
-            app_config: The :class:`AppConfig <.config.app.AppConfig>` instance.
+            app_config: The Litestar application configuration instance.
 
         Returns:
-            The updated :class:`AppConfig <.config.app.AppConfig>` instance.
+            The updated application configuration instance.
         """
 
         self._validate_dependency_keys()
@@ -67,7 +71,6 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
             app_config.state.sqlspec = self
 
         app_config.on_startup.append(store_sqlspec_in_state)
-        # Register types for injection
         app_config.signature_types.extend(
             [SQLSpec, ConnectionT, PoolT, DriverT, DatabaseConfig, DatabaseConfigProtocol, SyncConfigT, AsyncConfigT]
         )
@@ -81,8 +84,7 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
             app_config.signature_types.append(c.config.driver_type)  # type: ignore[union-attr]
 
             if hasattr(c.config, "get_signature_namespace"):
-                config_namespace = c.config.get_signature_namespace()  # type: ignore[attr-defined]
-                signature_namespace.update(config_namespace)
+                signature_namespace.update(c.config.get_signature_namespace())  # type: ignore[attr-defined]
 
             app_config.before_send.append(c.before_send_handler)
             app_config.lifespan.append(c.lifespan_handler)  # pyright: ignore[reportUnknownMemberType]
@@ -128,10 +130,10 @@ class SQLSpec(InitPluginProtocol, SQLSpecBase):
         raise KeyError(msg)
 
     def _validate_dependency_keys(self) -> None:
-        """Verify uniqueness of ``connection_key`` and ``pool_key``.
+        """Validate that connection and pool keys are unique across configurations.
 
         Raises:
-            ImproperConfigurationError: If session keys or pool keys are not unique.
+            ImproperConfigurationError: If connection keys or pool keys are not unique.
         """
         connection_keys = [c.connection_key for c in self.config]
         pool_keys = [c.pool_key for c in self.config]

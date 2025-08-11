@@ -6,38 +6,43 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
-from sqlspec.statement.result import SQLResult
-from sqlspec.statement.sql import SQLConfig
+from sqlspec.core.result import SQLResult
 
 
 @pytest.fixture
 async def asyncpg_batch_session(postgres_service: PostgresService) -> "AsyncGenerator[AsyncpgDriver, None]":
     """Create an AsyncPG session for batch operation testing."""
     config = AsyncpgConfig(
-        host=postgres_service.host,
-        port=postgres_service.port,
-        user=postgres_service.user,
-        password=postgres_service.password,
-        database=postgres_service.database,
-        statement_config=SQLConfig(enable_validation=False),
+        pool_config={
+            "host": postgres_service.host,
+            "port": postgres_service.port,
+            "user": postgres_service.user,
+            "password": postgres_service.password,
+            "database": postgres_service.database,
+        }
     )
 
-    async with config.provide_session() as session:
-        # Create test table
-        await session.execute_script("""
-            CREATE TABLE IF NOT EXISTS test_batch (
-                id SERIAL PRIMARY KEY,
-                name TEXT NOT NULL,
-                value INTEGER DEFAULT 0,
-                category TEXT
-            )
-        """)
-        # Clear any existing data
-        await session.execute_script("TRUNCATE TABLE test_batch RESTART IDENTITY")
+    try:
+        async with config.provide_session() as session:
+            # Create test table
+            await session.execute_script("""
+                CREATE TABLE IF NOT EXISTS test_batch (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    value INTEGER DEFAULT 0,
+                    category TEXT
+                )
+            """)
+            # Clear any existing data
+            await session.execute_script("TRUNCATE TABLE test_batch RESTART IDENTITY")
 
-        yield session
-        # Cleanup
-        await session.execute_script("DROP TABLE IF EXISTS test_batch")
+            yield session
+            # Cleanup
+            await session.execute_script("DROP TABLE IF EXISTS test_batch")
+    finally:
+        # Ensure pool is closed properly to avoid threading issues during test shutdown
+        if config.pool_instance:
+            await config.close_pool()
 
 
 @pytest.mark.asyncio
@@ -76,9 +81,11 @@ async def test_asyncpg_execute_many_update(asyncpg_batch_session: AsyncpgDriver)
     )
 
     # Now update with execute_many
-    update_params = [(100, "Update 1"), (200, "Update 2"), (300, "Update 3")]
+    update_parameters = [(100, "Update 1"), (200, "Update 2"), (300, "Update 3")]
 
-    result = await asyncpg_batch_session.execute_many("UPDATE test_batch SET value = $1 WHERE name = $2", update_params)
+    result = await asyncpg_batch_session.execute_many(
+        "UPDATE test_batch SET value = $1 WHERE name = $2", update_parameters
+    )
 
     assert isinstance(result, SQLResult)
 
@@ -149,9 +156,9 @@ async def test_asyncpg_execute_many_delete(asyncpg_batch_session: AsyncpgDriver)
     )
 
     # Delete specific items by name
-    delete_params = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
+    delete_parameters = [("Delete 1",), ("Delete 2",), ("Delete 4",)]
 
-    result = await asyncpg_batch_session.execute_many("DELETE FROM test_batch WHERE name = $1", delete_params)
+    result = await asyncpg_batch_session.execute_many("DELETE FROM test_batch WHERE name = $1", delete_parameters)
 
     assert isinstance(result, SQLResult)
 
@@ -196,11 +203,11 @@ async def test_asyncpg_execute_many_large_batch(asyncpg_batch_session: AsyncpgDr
 @pytest.mark.xdist_group("postgres")
 async def test_asyncpg_execute_many_with_sql_object(asyncpg_batch_session: AsyncpgDriver) -> None:
     """Test execute_many with SQL object on AsyncPG."""
-    from sqlspec.statement.sql import SQL
+    from sqlspec.core.statement import SQL
 
     parameters = [("SQL Obj 1", 111, "SOB"), ("SQL Obj 2", 222, "SOB"), ("SQL Obj 3", 333, "SOB")]
 
-    sql_obj = SQL("INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)").as_many(parameters)
+    sql_obj = SQL("INSERT INTO test_batch (name, value, category) VALUES ($1, $2, $3)", parameters, is_many=True)
 
     result = await asyncpg_batch_session.execute(sql_obj)
 
@@ -208,7 +215,7 @@ async def test_asyncpg_execute_many_with_sql_object(asyncpg_batch_session: Async
 
     # Verify data
     check_result = await asyncpg_batch_session.execute(
-        "SELECT COUNT(*) as count FROM test_batch WHERE category = $1", ("SOB")
+        "SELECT COUNT(*) as count FROM test_batch WHERE category = $1", ("SOB",)
     )
     assert check_result[0]["count"] == 3
 
@@ -240,7 +247,7 @@ async def test_asyncpg_execute_many_with_returning(asyncpg_batch_session: Asyncp
         )
 
         check_result = await asyncpg_batch_session.execute(
-            "SELECT COUNT(*) as count FROM test_batch WHERE category = $1", ("RET")
+            "SELECT COUNT(*) as count FROM test_batch WHERE category = $1", ("RET",)
         )
         assert check_result[0]["count"] == 3
 
@@ -256,7 +263,8 @@ async def test_asyncpg_execute_many_with_arrays(asyncpg_batch_session: AsyncpgDr
             name TEXT,
             tags TEXT[],
             scores INTEGER[]
-        )
+        );
+        TRUNCATE TABLE test_arrays RESTART IDENTITY;
     """)
 
     parameters = [
@@ -293,7 +301,8 @@ async def test_asyncpg_execute_many_with_json(asyncpg_batch_session: AsyncpgDriv
             id SERIAL PRIMARY KEY,
             name TEXT,
             metadata JSONB
-        )
+        );
+        TRUNCATE TABLE test_json RESTART IDENTITY;
     """)
 
     # AsyncPG expects JSON data to be serialized as strings

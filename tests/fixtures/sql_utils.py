@@ -54,7 +54,7 @@ def format_sql(sql_template: str, field_names: list[str], style: str, dialect: O
     return sql_template.format(*placeholders)
 
 
-def format_sql_params(
+def format_sql_parameters(
     sql_template: str, param_fields: list[str], style: str, dialect: Optional[str] = None
 ) -> tuple[str, Union[tuple[Any, ...], dict[str, Any]]]:
     """Format SQL template and create the appropriate parameter object based on style.
@@ -66,17 +66,17 @@ def format_sql_params(
         dialect: The SQL dialect (e.g., "postgres", "sqlite"). Defaults to None.
 
     Returns:
-        A tuple containing the formatted SQL string and an empty params object of the correct type.
+        A tuple containing the formatted SQL string and an empty parameters object of the correct type.
     """
     formatted_sql = format_sql(sql_template, param_fields, style, dialect)
 
     # Return appropriate empty parameter container based on style
-    empty_params: Union[tuple[Any, ...], dict[str, Any]] = () if style == "tuple_binds" else {}
+    empty_parameters: Union[tuple[Any, ...], dict[str, Any]] = () if style == "tuple_binds" else {}
 
-    return formatted_sql, empty_params
+    return formatted_sql, empty_parameters
 
 
-def create_tuple_or_dict_params(
+def create_tuple_or_dict_parameters(
     values: list[Any], field_names: list[str], style: str
 ) -> Union[tuple[Any, ...], dict[str, Any]]:
     """Create the appropriate parameter object based on values and style.

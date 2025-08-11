@@ -4,7 +4,6 @@ This module provides protocols that can be used for static type checking
 and runtime isinstance() checks, replacing defensive hasattr() patterns.
 """
 
-from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Protocol, Union, runtime_checkable
 
 from typing_extensions import Self
@@ -15,17 +14,10 @@ if TYPE_CHECKING:
 
     from sqlglot import exp
 
-    from sqlspec.statement.pipelines.context import SQLProcessingContext
     from sqlspec.storage.capabilities import StorageCapabilities
     from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = (
-    # Database Connection Protocols
-    "AsyncCloseableConnectionProtocol",
-    "AsyncCopyCapableConnectionProtocol",
-    "AsyncPipelineCapableDriverProtocol",
-    "AsyncTransactionCapableConnectionProtocol",
-    "AsyncTransactionStateConnectionProtocol",
     "BytesConvertibleProtocol",
     "DictProtocol",
     "FilterAppenderProtocol",
@@ -36,7 +28,6 @@ __all__ = (
     "HasOffsetProtocol",
     "HasOrderByProtocol",
     "HasParameterBuilderProtocol",
-    "HasRiskLevelProtocol",
     "HasSQLGlotExpressionProtocol",
     "HasSQLMethodProtocol",
     "HasToStatementProtocol",
@@ -46,14 +37,8 @@ __all__ = (
     "ObjectStoreItemProtocol",
     "ObjectStoreProtocol",
     "ParameterValueProtocol",
-    "ProcessorProtocol",
     "SQLBuilderProtocol",
     "SelectBuilderProtocol",
-    "SyncCloseableConnectionProtocol",
-    "SyncCopyCapableConnectionProtocol",
-    "SyncPipelineCapableDriverProtocol",
-    "SyncTransactionCapableConnectionProtocol",
-    "SyncTransactionStateConnectionProtocol",
     "WithMethodProtocol",
 )
 
@@ -172,39 +157,10 @@ class ParameterValueProtocol(Protocol):
 
 
 @runtime_checkable
-class HasRiskLevelProtocol(Protocol):
-    """Protocol for objects with a risk_level attribute."""
-
-    @property
-    def risk_level(self) -> Any:
-        """Get the risk level of this object."""
-        ...
-
-
-@runtime_checkable
 class DictProtocol(Protocol):
     """Protocol for objects with a __dict__ attribute."""
 
     __dict__: dict[str, Any]
-
-
-class ProcessorProtocol(Protocol):
-    """Defines the interface for a single processing step in the SQL pipeline."""
-
-    @abstractmethod
-    def process(
-        self, expression: "Optional[exp.Expression]", context: "SQLProcessingContext"
-    ) -> "Optional[exp.Expression]":
-        """Processes an SQL expression.
-
-        Args:
-            expression: The SQL expression to process.
-            context: The SQLProcessingContext holding the current state and config.
-
-        Returns:
-            The (possibly modified) SQL expression for transformers, or None for validators/analyzers.
-        """
-        ...
 
 
 @runtime_checkable
@@ -225,137 +181,19 @@ class ObjectStoreItemProtocol(Protocol):
 
 
 @runtime_checkable
-class SyncTransactionCapableConnectionProtocol(Protocol):
-    """Protocol for sync connections that support transactions."""
-
-    def commit(self) -> None:
-        """Commit the current transaction."""
-        ...
-
-    def rollback(self) -> None:
-        """Rollback the current transaction."""
-        ...
-
-
-@runtime_checkable
-class AsyncTransactionCapableConnectionProtocol(Protocol):
-    """Protocol for async connections that support transactions."""
-
-    async def commit(self) -> None:
-        """Commit the current transaction."""
-        ...
-
-    async def rollback(self) -> None:
-        """Rollback the current transaction."""
-        ...
-
-
-@runtime_checkable
-class SyncTransactionStateConnectionProtocol(SyncTransactionCapableConnectionProtocol, Protocol):
-    """Protocol for sync connections that can report transaction state."""
-
-    def in_transaction(self) -> bool:
-        """Check if connection is currently in a transaction."""
-        ...
-
-    def begin(self) -> None:
-        """Begin a new transaction."""
-        ...
-
-
-@runtime_checkable
-class AsyncTransactionStateConnectionProtocol(AsyncTransactionCapableConnectionProtocol, Protocol):
-    """Protocol for async connections that can report transaction state."""
-
-    def in_transaction(self) -> bool:
-        """Check if connection is currently in a transaction."""
-        ...
-
-    async def begin(self) -> None:
-        """Begin a new transaction."""
-        ...
-
-
-@runtime_checkable
-class SyncCloseableConnectionProtocol(Protocol):
-    """Protocol for sync connections that can be closed."""
-
-    def close(self) -> None:
-        """Close the connection."""
-        ...
-
-
-@runtime_checkable
-class AsyncCloseableConnectionProtocol(Protocol):
-    """Protocol for async connections that can be closed."""
-
-    async def close(self) -> None:
-        """Close the connection."""
-        ...
-
-
-@runtime_checkable
-class SyncCopyCapableConnectionProtocol(Protocol):
-    """Protocol for sync connections that support COPY operations."""
-
-    def copy_from(self, table: str, file: Any, **kwargs: Any) -> None:
-        """Copy data from file to table."""
-        ...
-
-    def copy_to(self, table: str, file: Any, **kwargs: Any) -> None:
-        """Copy data from table to file."""
-        ...
-
-
-@runtime_checkable
-class AsyncCopyCapableConnectionProtocol(Protocol):
-    """Protocol for async connections that support COPY operations."""
-
-    async def copy_from(self, table: str, file: Any, **kwargs: Any) -> None:
-        """Copy data from file to table."""
-        ...
-
-    async def copy_to(self, table: str, file: Any, **kwargs: Any) -> None:
-        """Copy data from table to file."""
-        ...
-
-
-@runtime_checkable
-class SyncPipelineCapableDriverProtocol(Protocol):
-    """Protocol for sync drivers that support native pipeline execution."""
-
-    def _execute_pipeline_native(self, operations: list[Any], **options: Any) -> list[Any]:
-        """Execute pipeline operations natively."""
-        ...
-
-
-@runtime_checkable
-class AsyncPipelineCapableDriverProtocol(Protocol):
-    """Protocol for async drivers that support native pipeline execution."""
-
-    async def _execute_pipeline_native(self, operations: list[Any], **options: Any) -> list[Any]:
-        """Execute pipeline operations natively."""
-        ...
-
-
-@runtime_checkable
 class ObjectStoreProtocol(Protocol):
-    """Unified protocol for object storage operations.
+    """Protocol for object storage operations.
 
-    This protocol defines the interface for all storage backends with built-in
-    instrumentation support. Backends must implement both sync and async operations
-    where possible, with async operations suffixed with _async.
-
-    All methods use 'path' terminology for consistency with object store patterns.
+    Defines the interface for storage backends with both sync and async operations.
     """
 
-    # Class-level capability descriptor
     capabilities: ClassVar["StorageCapabilities"]
+
+    protocol: str
 
     def __init__(self, uri: str, **kwargs: Any) -> None:
         return
 
-    # Core Operations (sync)
     def read_bytes(self, path: "Union[str, Path]", **kwargs: Any) -> bytes:
         """Read bytes from an object."""
         return b""
@@ -372,7 +210,6 @@ class ObjectStoreProtocol(Protocol):
         """Write text to an object."""
         return
 
-    # Object Operations
     def exists(self, path: "Union[str, Path]", **kwargs: Any) -> bool:
         """Check if an object exists."""
         return False
@@ -389,7 +226,6 @@ class ObjectStoreProtocol(Protocol):
         """Move an object."""
         return
 
-    # Listing Operations
     def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
         """List objects with optional prefix."""
         return []
@@ -398,7 +234,6 @@ class ObjectStoreProtocol(Protocol):
         """Find objects matching a glob pattern."""
         return []
 
-    # Path Operations
     def is_object(self, path: "Union[str, Path]") -> bool:
         """Check if path points to an object."""
         return False
@@ -411,32 +246,21 @@ class ObjectStoreProtocol(Protocol):
         """Get object metadata."""
         return {}
 
-    # Arrow Operations
     def read_arrow(self, path: "Union[str, Path]", **kwargs: Any) -> "ArrowTable":
-        """Read an Arrow table from storage.
-
-        For obstore backend, this should use native arrow operations when available.
-        """
+        """Read an Arrow table from storage."""
         msg = "Arrow reading not implemented"
         raise NotImplementedError(msg)
 
     def write_arrow(self, path: "Union[str, Path]", table: "ArrowTable", **kwargs: Any) -> None:
-        """Write an Arrow table to storage.
-
-        For obstore backend, this should use native arrow operations when available.
-        """
+        """Write an Arrow table to storage."""
         msg = "Arrow writing not implemented"
         raise NotImplementedError(msg)
 
     def stream_arrow(self, pattern: str, **kwargs: Any) -> "Iterator[ArrowRecordBatch]":
-        """Stream Arrow record batches from matching objects.
-
-        For obstore backend, this should use native streaming when available.
-        """
+        """Stream Arrow record batches from matching objects."""
         msg = "Arrow streaming not implemented"
         raise NotImplementedError(msg)
 
-    # Async versions
     async def read_bytes_async(self, path: "Union[str, Path]", **kwargs: Any) -> bytes:
         """Async read bytes from an object."""
         msg = "Async operations not implemented"

@@ -1,6 +1,12 @@
 [project]
 authors = [{ name = "Cody Fincher", email = "cody@litestar.dev" }]
-dependencies = ["typing-extensions", "eval_type_backport; python_version < \"3.10\"", "click", "sqlglot>=19.9.0"]
+dependencies = [
+  "typing-extensions",
+  "eval_type_backport; python_version < \"3.10\"",
+  "click",
+  "sqlglot>=19.9.0",
+  "mypy-extensions",
+]
 description = "SQL Experiments in Python"
 license = "MIT"
 maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
@@ -21,6 +27,7 @@ aiosql = ["aiosql"]
 aiosqlite = ["aiosqlite"]
 asyncmy = ["asyncmy"]
 asyncpg = ["asyncpg"]
+attrs = ["attrs", "cattrs"]
 bigquery = ["google-cloud-bigquery"]
 cli = ["rich-click"]
 duckdb = ["duckdb"]
@@ -29,6 +36,7 @@ flask = ["flask"]
 fsspec = ["fsspec"]
 litestar = ["litestar"]
 msgspec = ["msgspec"]
+mypyc = []
 nanoid = ["fastnanoid>=0.4.1"]
 obstore = ["obstore"]
 opentelemetry = ["opentelemetry-instrumentation"]
@@ -46,10 +54,9 @@ pymysql = ["pymysql"]
 spanner = ["google-cloud-spanner"]
 uuid = ["uuid-utils"]
 
-
 [dependency-groups]
-benchmarks = ["sqlalchemy", "psutil", "types-psutil"]
-build = ["bump-my-version"]
+benchmarks = ["sqlalchemy[asyncio]", "psutil", "types-psutil", "rich", "rich-click", "duckdb"]
+build = ["bump-my-version", "hatch-mypyc"]
 dev = [
   { include-group = "extras" },
   { include-group = "lint" },
@@ -76,6 +83,7 @@ doc = [
 ]
 extras = [
   "adbc_driver_manager",
+  "pgvector",
   "pyarrow",
   "polars",
   "adbc_driver_sqlite",
@@ -95,8 +103,11 @@ lint = [
   "types-protobuf",
   "asyncpg-stubs",
   "pyarrow-stubs",
+
 ]
 test = [
+  "aiohttp",
+  "requests",
   "anyio",
   "coverage>=7.6.1",
   "pytest>=8.0.0",
@@ -113,7 +124,7 @@ sqlspec = "sqlspec.__main__:run_cli"
 
 [build-system]
 build-backend = "hatchling.build"
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-mypyc"]
 
 [tool.hatch.build.targets.sdist]
 dev-mode-dirs = ["."]
@@ -125,6 +136,52 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 include = ["NOTICE"]
 packages = ["sqlspec"]
+
+
+[tool.hatch.build.targets.wheel.hooks.mypyc]
+dependencies = ["hatch-mypyc", "hatch-cython"]
+enable-by-default = false
+exclude = [
+  "tests/**",                      # Test files
+  "sqlspec/__main__.py",           # Entry point (can't run directly when compiled)
+  "sqlspec/cli.py",                # CLI module (not performance critical)
+  "sqlspec/typing.py",             # Type aliases
+  "sqlspec/_typing.py",            # Type aliases
+  "sqlspec/config.py",             # Main config
+  "sqlspec/adapters/**/config.py", # Adapter configurations
+  "sqlspec/adapters/**/_types.py", # Type definitions (mypyc incompatible)
+  "sqlspec/extensions/**",         # All extensions
+  "sqlspec/**/__init__.py",        # Init files (usually just imports)
+  "sqlspec/protocols.py",          # Protocol definitions
+  "sqlspec/builder/**/*.py",       # Builder (not performance critical)
+
+]
+include = [
+  "sqlspec/core/**/*.py", # Core module
+  "sqlspec/loader.py",    # Loader module
+
+  # === UTILITY MODULES ===
+  "sqlspec/utils/text.py",        # Text utilities
+  "sqlspec/utils/sync_tools.py",  # Synchronous utility functions
+  "sqlspec/utils/type_guards.py", # Type guard utilities
+  "sqlspec/utils/fixtures.py",    # File fixture loading
+]
+mypy-args = [
+  "--ignore-missing-imports",
+  "--allow-untyped-defs",
+  "--allow-untyped-globals",
+  "--no-implicit-reexport",
+  "--no-warn-redundant-casts",
+  "--no-warn-unused-ignores",
+  "--follow-imports=skip",
+]
+require-runtime-dependencies = true
+require-runtime-features = ["mypyc"]
+
+[tool.hatch.build.targets.wheel.hooks.mypyc.options]
+debug_level = "0" # No debug info in production (0-2)
+multi_file = true # Enable cross-module optimization
+opt_level = "3"   # Maximum optimization (0-3)
 
 
 [tool.bumpversion]
@@ -281,6 +338,8 @@ module = [
   "fsspec.*",
   "sqlglot",
   "sqlglot.*",
+  "pgvector",
+  "pgvector.*",
 ]
 
 [[tool.mypy.overrides]]
@@ -302,7 +361,8 @@ reportPrivateImportUsage = false
 reportPrivateUsage = false
 reportTypedDictNotRequiredAccess = false
 reportUnknownArgumentType = false
-reportUnnecessaryTypeIgnoreComments = "information"
+reportUnnecessaryCast = false
+reportUnnecessaryTypeIgnoreComments = false
 root = "."
 venv = ".venv"
 
@@ -376,6 +436,8 @@ ignore = [
   "S608",    # ruff - Possible sql injection
   "PLR0904", # too many public methods
   "PLR6301", # method could be static or class method
+  "B903",    # class could be a dataclass or named tuple
+  "PLW0603", # Using the global statement to update is discouraged
 ]
 select = ["ALL"]
 
@@ -402,7 +464,7 @@ split-on-trailing-comma = false
 [tool.ruff.lint.per-file-ignores]
 "docs/**/*.*" = ["S", "B", "DTZ", "A", "TC", "ERA", "D", "RET", "PLW0127"]
 "docs/examples/**" = ["T201"]
-"sqlspec/statement/builder/mixins/**/*.*" = ["SLF001"]
+"sqlspec/builder/mixins/**/*.*" = ["SLF001"]
 "tests/**/*.*" = [
   "A",
   "ARG",

@@ -9,8 +9,8 @@ from pathlib import Path
 
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.base import SQLSpec
+from sqlspec.core.statement import SQL
 from sqlspec.loader import SQLFileLoader
-from sqlspec.statement.sql import SQL
 
 __all__ = (
     "basic_loader_example",
@@ -192,7 +192,7 @@ def database_integration_example() -> None:
 
         # Initialize SQLSpec and register database
         sqlspec = SQLSpec()
-        config = SqliteConfig(database=":memory:")
+        config = SqliteConfig()
         sqlspec.add_config(config)
 
         # Initialize loader and load SQL files

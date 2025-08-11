@@ -17,8 +17,8 @@ from litestar import Litestar, get
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
+from sqlspec.core.statement import SQL
 from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec
-from sqlspec.statement.sql import SQL
 
 
 @get("/test", sync_to_thread=True)
@@ -40,8 +40,10 @@ sqlspec = SQLSpec(
         DatabaseConfig(config=AiosqliteConfig(), commit_mode="autocommit"),
         DatabaseConfig(
             config=DuckDBConfig(
-                extensions=[{"name": "vss", "force_install": True}],
-                secrets=[{"secret_type": "s3", "name": "s3_secret", "value": {"key_id": "abcd"}}],
+                driver_features={
+                    "extensions": [{"name": "vss", "force_install": True}],
+                    "secrets": [{"secret_type": "s3", "name": "s3_secret", "value": {"key_id": "abcd"}}],
+                }
             ),
             connection_key="etl_connection",
             session_key="etl_session",

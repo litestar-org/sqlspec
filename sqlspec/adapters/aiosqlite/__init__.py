@@ -1,4 +1,19 @@
-from sqlspec.adapters.aiosqlite.config import CONNECTION_FIELDS, AiosqliteConfig
-from sqlspec.adapters.aiosqlite.driver import AiosqliteConnection, AiosqliteDriver
+from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
+from sqlspec.adapters.aiosqlite.config import AiosqliteConfig, AiosqliteConnectionParams, AiosqliteConnectionPool
+from sqlspec.adapters.aiosqlite.driver import (
+    AiosqliteCursor,
+    AiosqliteDriver,
+    AiosqliteExceptionHandler,
+    aiosqlite_statement_config,
+)
 
-__all__ = ("CONNECTION_FIELDS", "AiosqliteConfig", "AiosqliteConnection", "AiosqliteDriver")
+__all__ = (
+    "AiosqliteConfig",
+    "AiosqliteConnection",
+    "AiosqliteConnectionParams",
+    "AiosqliteConnectionPool",
+    "AiosqliteCursor",
+    "AiosqliteDriver",
+    "AiosqliteExceptionHandler",
+    "aiosqlite_statement_config",
+)

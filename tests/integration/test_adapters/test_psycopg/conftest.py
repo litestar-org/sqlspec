@@ -15,12 +15,9 @@ if TYPE_CHECKING:
 def psycopg_sync_config(postgres_service: PostgresService) -> "Generator[PsycopgSyncConfig, None, None]":
     """Create a psycopg sync configuration."""
     config = PsycopgSyncConfig(
-        host=postgres_service.host,
-        port=postgres_service.port,
-        user=postgres_service.user,
-        password=postgres_service.password,
-        dbname=postgres_service.database,
-        autocommit=True,  # Enable autocommit for tests
+        pool_config={
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        }
     )
     yield config
     # Ensure pool is closed
@@ -32,12 +29,9 @@ def psycopg_sync_config(postgres_service: PostgresService) -> "Generator[Psycopg
 def psycopg_async_config(postgres_service: PostgresService) -> "Generator[PsycopgAsyncConfig, None, None]":
     """Create a psycopg async configuration."""
     config = PsycopgAsyncConfig(
-        host=postgres_service.host,
-        port=postgres_service.port,
-        user=postgres_service.user,
-        password=postgres_service.password,
-        dbname=postgres_service.database,
-        autocommit=True,  # Enable autocommit for tests
+        pool_config={
+            "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
+        }
     )
     yield config
     # Ensure pool is closed

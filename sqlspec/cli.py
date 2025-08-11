@@ -32,7 +32,7 @@ def get_sqlspec_group() -> "Group":
     @click.group(name="sqlspec")
     @click.option(
         "--config",
-        help="Dotted path to SQLAlchemy config(s) (e.g. 'myapp.config.sqlspec_configs')",
+        help="Dotted path to SQLSpec config(s) (e.g. 'myapp.config.sqlspec_configs')",
         required=True,
         type=str,
     )
@@ -87,7 +87,7 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
         database_group = get_sqlspec_group()
 
     bind_key_option = click.option(
-        "--bind-key", help="Specify which SQLAlchemy config to use by bind key", type=str, default=None
+        "--bind-key", help="Specify which SQLSpec config to use by bind key", type=str, default=None
     )
     verbose_option = click.option("--verbose", help="Enable verbose output.", type=bool, default=False, is_flag=True)
     no_prompt_option = click.option(
@@ -103,21 +103,20 @@ def add_migration_commands(database_group: Optional["Group"] = None) -> "Group":
     def get_config_by_bind_key(
         ctx: "click.Context", bind_key: Optional[str]
     ) -> "Union[AsyncDatabaseConfig[Any, Any, Any], SyncDatabaseConfig[Any, Any, Any]]":
-        """Get the SQLAlchemy config for the specified bind key.
+        """Get the SQLSpec config for the specified bind key.
 
         Args:
             ctx: The click context.
             bind_key: The bind key to get the config for.
 
         Returns:
-            The SQLAlchemy config for the specified bind key.
+            The SQLSpec config for the specified bind key.
         """
         configs = ctx.obj["configs"]
         if bind_key is None:
             return cast("Union[AsyncDatabaseConfig[Any, Any, Any], SyncDatabaseConfig[Any, Any, Any]]", configs[0])
 
         for config in configs:
-            # Check if config has a name or identifier attribute
             config_name = getattr(config, "name", None) or getattr(config, "bind_key", None)
             if config_name == bind_key:
                 return cast("Union[AsyncDatabaseConfig[Any, Any, Any], SyncDatabaseConfig[Any, Any, Any]]", config)

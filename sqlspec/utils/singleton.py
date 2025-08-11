@@ -10,7 +10,6 @@ _T = TypeVar("_T")
 class SingletonMeta(type):
     """Metaclass for singleton pattern."""
 
-    # We store instances keyed by the class type
     _instances: dict[type, object] = {}
     _lock = threading.Lock()
 

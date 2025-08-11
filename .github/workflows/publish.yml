@@ -6,10 +6,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  publish-release:
+  build-source:
+    name: Build source distribution
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -21,10 +20,239 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --extra performance --group build
 
-      - name: Build package
-        run: uv build
+      - name: Build source distribution
+        run: uv build --sdist
+
+      - name: Upload source artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-dist
+          path: dist/*.tar.gz
+
+  build-wheels-standard:
+    name: Build standard wheels (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-13]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        exclude:
+          - os: macos-13
+            python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.9"
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --extra performance --group build
+
+      - name: Build standard wheel
+        run: uv build --wheel
+
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-standard-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: dist/*.whl
+
+  build-wheels-mypyc:
+    name: Build MyPyC wheels (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-13]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        exclude:
+          - os: windows-latest
+            python-version: "3.9"
+          - os: macos-13
+            python-version: "3.13"
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies with mypyc extras
+        run: uv sync --extra mypyc --group build
+
+      - name: Set up MyPyC environment variables
+        run: |
+          echo "MYPYC_OPT_LEVEL=3" >> $GITHUB_ENV
+          echo "MYPYC_DEBUG_LEVEL=0" >> $GITHUB_ENV
+          echo "MYPYC_MULTI_FILE=1" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Build MyPyC wheel
+        run: uv build --wheel
+        env:
+          HATCH_BUILD_HOOK_ENABLE_MYPYC: "1"
+
+      - name: Rename wheel to indicate mypyc
+        run: |
+          for wheel in dist/*.whl; do
+            if [[ -f "$wheel" ]]; then
+              base=$(basename "$wheel" .whl)
+              dir=$(dirname "$wheel")
+              mv "$wheel" "$dir/${base}+mypyc.whl"
+            fi
+          done
+        shell: bash
+
+      - name: Upload mypyc wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-mypyc-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: dist/*.whl
+
+  build-universal-wheels:
+    name: Build universal wheels with cibuildwheel
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        cibw_python: ["cp39", "cp310", "cp311", "cp312", "cp313"]
+        cibw_arch: ["x86_64", "aarch64", "arm64"]
+        exclude:
+          - os: ubuntu-latest
+            cibw_arch: arm64
+          - os: windows-latest
+            cibw_arch: aarch64
+          - os: windows-latest
+            cibw_arch: arm64
+          - os: macos-latest
+            cibw_arch: aarch64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (for ARM builds on Linux)
+        if: matrix.os == 'ubuntu-latest' && matrix.cibw_arch == 'aarch64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build wheels with cibuildwheel
+        uses: pypa/cibuildwheel@v2.16.5
+        env:
+          CIBW_BUILD: ${{ matrix.cibw_python }}-*
+          CIBW_ARCHS: ${{ matrix.cibw_arch }}
+          CIBW_BUILD_VERBOSITY: 2
+          CIBW_ENVIRONMENT: >
+            MYPYC_OPT_LEVEL=3
+            MYPYC_DEBUG_LEVEL=0
+            MYPYC_MULTI_FILE=1
+            HATCH_BUILD_HOOK_ENABLE_MYPYC=1
+          CIBW_BEFORE_BUILD: |
+            python -m pip install uv
+            uv sync --extra mypyc --group build
+          CIBW_BUILD_FRONTEND: "build[uv]"
+          CIBW_TEST_SKIP: "*"
+
+      - name: Upload cibuildwheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-cibw-${{ matrix.os }}-${{ matrix.cibw_python }}-${{ matrix.cibw_arch }}
+          path: wheelhouse/*.whl
+
+  test-wheels:
+    name: Test wheels on ${{ matrix.os }}
+    needs: [build-wheels-standard, build-wheels-mypyc]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.12"]
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Download standard wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels-standard-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: dist-standard/
+
+      - name: Download mypyc wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels-mypyc-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: dist-mypyc/
+
+      - name: Test standard wheel installation
+        run: |
+          uv venv test-standard
+          uv pip install --find-links dist-standard/ sqlspec
+          uv run --python test-standard python -c "import sqlspec; print('Standard wheel OK')"
+
+      - name: Test mypyc wheel installation
+        run: |
+          uv venv test-mypyc
+          uv pip install --find-links dist-mypyc/ sqlspec
+          uv run --python test-mypyc python -c "import sqlspec; print('MyPyC wheel OK')"
+
+  publish-release:
+    name: Publish to PyPI
+    needs: [build-source, build-wheels-standard, build-wheels-mypyc, build-universal-wheels, test-wheels]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/project/sqlspec/
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*"
+          merge-multiple: true
+          path: dist/
+
+      - name: List all built packages
+        run: |
+          echo "=== All built packages ==="
+          find dist/ -name "*.whl" -o -name "*.tar.gz" | sort
+          echo "=== Package count ==="
+          find dist/ -name "*.whl" | wc -l
+          find dist/ -name "*.tar.gz" | wc -l
+
+      - name: Verify package integrity
+        run: |
+          python -m pip install twine
+          twine check dist/*
 
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          verbose: true
+          print-hash: true

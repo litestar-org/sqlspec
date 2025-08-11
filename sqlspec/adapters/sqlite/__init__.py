@@ -1,4 +1,15 @@
-from sqlspec.adapters.sqlite.config import CONNECTION_FIELDS, SqliteConfig
-from sqlspec.adapters.sqlite.driver import SqliteConnection, SqliteDriver
+"""SQLite adapter for SQLSpec."""
 
-__all__ = ("CONNECTION_FIELDS", "SqliteConfig", "SqliteConnection", "SqliteDriver")
+from sqlspec.adapters.sqlite._types import SqliteConnection
+from sqlspec.adapters.sqlite.config import SqliteConfig, SqliteConnectionParams
+from sqlspec.adapters.sqlite.driver import SqliteCursor, SqliteDriver, SqliteExceptionHandler, sqlite_statement_config
+
+__all__ = (
+    "SqliteConfig",
+    "SqliteConnection",
+    "SqliteConnectionParams",
+    "SqliteCursor",
+    "SqliteDriver",
+    "SqliteExceptionHandler",
+    "sqlite_statement_config",
+)
