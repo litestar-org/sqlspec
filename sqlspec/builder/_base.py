@@ -45,14 +45,7 @@ class QueryBuilder(ABC):
     """Abstract base class for SQL query builders with SQLGlot optimization.
 
     Provides common functionality for dialect handling, parameter management,
-    query construction, and automatic query optimization using SQLGlot's
-    advanced capabilities.
-
-    New features:
-    - Automatic query optimization (join reordering, predicate pushdown)
-    - Query complexity analysis
-    - Smart parameter naming based on context
-    - Expression caching for performance
+    query construction, and query optimization using SQLGlot.
     """
 
     dialect: DialectType = field(default=None)
@@ -77,12 +70,8 @@ class QueryBuilder(ABC):
     def _create_base_expression(self) -> exp.Expression:
         """Create the base sqlglot expression for the specific query type.
 
-        Examples:
-            For a SELECT query, this would return `exp.Select()`.
-            For an INSERT query, this would return `exp.Insert()`.
-
         Returns:
-            exp.Expression: A new sqlglot expression.
+            A new sqlglot expression appropriate for the query type.
         """
 
     @property

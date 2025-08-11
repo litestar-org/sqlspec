@@ -46,13 +46,10 @@ class CommonTableExpressionMixin:
         elif isinstance(query, exp.Expression):
             cte_expr = query
         else:
-            # Query is a builder instance - trust the protocol
             built_query = query.to_statement()  # pyright: ignore
             cte_sql = built_query.sql
             cte_expr = exp.maybe_parse(cte_sql, dialect=self.dialect)  # type: ignore[attr-defined]
 
-            # Merge parameters - handle both dict and list formats
-            # We know builders have add_parameter method
             parameters = built_query.parameters
             if parameters:
                 if isinstance(parameters, dict):
@@ -67,14 +64,10 @@ class CommonTableExpressionMixin:
             raise SQLBuilderError(msg)
 
         if columns:
-            # CTE with explicit column list: name(col1, col2, ...)
             cte_alias_expr = exp.alias_(cte_expr, name, table=[exp.to_identifier(col) for col in columns])
         else:
-            # Simple CTE alias: name
             cte_alias_expr = exp.alias_(cte_expr, name)
 
-        # Different handling for different expression types
-        # Select, Insert, Update, Delete all support WITH clause
         existing_with = self._expression.args.get("with")  # pyright: ignore
         if existing_with:
             existing_with.expressions.append(cte_alias_expr)
@@ -131,7 +124,6 @@ class SetOperationMixin:
                     counter += 1
                     new_param_name = f"{param_name}_right_{counter}"
 
-                # Use AST transformation instead of string manipulation
                 def rename_parameter(node: exp.Expression) -> exp.Expression:
                     if isinstance(node, exp.Placeholder) and node.name == param_name:  # noqa: B023
                         return exp.Placeholder(this=new_param_name)  # noqa: B023
@@ -169,7 +161,6 @@ class SetOperationMixin:
         new_builder = type(self)()
         new_builder.dialect = self.dialect
         new_builder._expression = intersect_expr
-        # Merge parameters
         merged_parameters = dict(left_query.parameters)
         merged_parameters.update(right_query.parameters)
         new_builder._parameters = merged_parameters
@@ -198,7 +189,6 @@ class SetOperationMixin:
         new_builder = type(self)()
         new_builder.dialect = self.dialect
         new_builder._expression = except_expr
-        # Merge parameters
         merged_parameters = dict(left_query.parameters)
         merged_parameters.update(right_query.parameters)
         new_builder._parameters = merged_parameters

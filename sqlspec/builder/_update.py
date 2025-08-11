@@ -43,7 +43,6 @@ class Update(
 
     Example:
         ```python
-        # Basic UPDATE
         update_query = (
             Update()
             .table("users")
@@ -52,12 +51,10 @@ class Update(
             .where("id = 1")
         )
 
-        # Even more concise with constructor
         update_query = (
             Update("users").set(name="John Doe").where("id = 1")
         )
 
-        # UPDATE with parameterized conditions
         update_query = (
             Update()
             .table("users")
@@ -65,7 +62,6 @@ class Update(
             .where_eq("id", 123)
         )
 
-        # UPDATE with FROM clause (PostgreSQL style)
         update_query = (
             Update()
             .table("users", "u")
@@ -134,7 +130,6 @@ class Update(
             subquery_exp = exp.paren(exp.maybe_parse(subquery.sql, dialect=self.dialect))
             table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
 
-            # Merge parameters
             subquery_parameters = table._parameters
             if subquery_parameters:
                 for p_name, p_value in subquery_parameters.items():

@@ -1,26 +1,18 @@
-"""Enhanced SQLProcessor with integrated caching and single-pass processing.
+"""SQL processor with integrated caching and compilation.
 
-This module implements the core compilation system that provides 5-10x performance
-improvement over the current multi-pass processing system.
+This module implements the core compilation system for SQL statements with
+integrated parameter processing and caching.
 
-Key Performance Improvements:
-- Single SQLGlot parse instead of multiple parsing cycles
-- Integrated parameter processing eliminates redundant normalization
-- Unified caching system with efficient LRU eviction
-- AST-based operation type detection (no string parsing)
-- Zero-copy compilation results with immutable sharing
-
-Architecture:
-- CompiledSQL: Immutable result with complete compilation information
+Components:
+- CompiledSQL: Immutable compilation result with complete information
 - SQLProcessor: Single-pass compiler with integrated caching
 - Integrated parameter processing via ParameterProcessor
-- MyPyC optimization with __slots__ and efficient patterns
 
-Critical Compatibility:
-- Same external interfaces as current transformer.py
-- Complete StatementConfig support for all driver requirements
-- Identical operation type detection behavior
-- Same caching interfaces expected by drivers
+Features:
+- Single SQLGlot parse for efficient processing
+- AST-based operation type detection
+- Unified caching system with LRU eviction
+- Complete StatementConfig support
 """
 
 import hashlib
@@ -60,7 +52,6 @@ __all__ = ("CompiledSQL", "OperationType", "SQLProcessor")
 
 logger = get_logger("sqlspec.core.compiler")
 
-# Dictionary for runtime lookup
 _OPERATION_TYPES = {
     "SELECT": "SELECT",
     "INSERT": "INSERT",
@@ -77,21 +68,16 @@ _OPERATION_TYPES = {
 }
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=True)
 class CompiledSQL:
     """Immutable compiled SQL result with complete information.
 
-    This class represents the final result of single-pass SQL compilation,
-    containing all information needed for execution without further processing.
+    This class represents the result of SQL compilation, containing all
+    information needed for execution.
 
-    Performance Features:
-    - Immutable design enables safe sharing without defensive copying
-    - __slots__ for memory efficiency (40-60% reduction target)
+    Features:
+    - Immutable design for safe sharing
     - Cached hash for efficient dictionary operations
-    - Zero-copy parameter and SQL access
-
-    Compatibility Features:
-    - Same information available as current compilation results
     - Complete operation type detection
     - Parameter style and execution information
     - Support for execute_many operations
@@ -135,7 +121,7 @@ class CompiledSQL:
         self._hash: Optional[int] = None
 
     def __hash__(self) -> int:
-        """Cached hash for efficient cache operations."""
+        """Cached hash value."""
         if self._hash is None:
             hash_data = (self.compiled_sql, str(self.execution_parameters), self.operation_type, self.parameter_style)
             self._hash = hash(hash_data)
@@ -161,32 +147,25 @@ class CompiledSQL:
         )
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)  # Enable when MyPyC ready
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SQLProcessor:
-    """Enhanced SQLProcessor with integrated caching and full compatibility.
+    """SQL processor with integrated caching and compilation.
 
-    This is the core compilation engine that replaces the current multi-pass
-    processing system with a single-pass design for 5-10x performance improvement.
+    This is the core compilation engine that processes SQL statements with
+    integrated parameter processing and caching.
 
-    Single-Pass Processing Flow:
-    1. Parameter detection and Phase 1 normalization (if needed)
-    2. Single SQLGlot parse (eliminates redundant parsing cycles)
-    3. AST-based operation type detection (no string parsing)
-    4. Phase 2 parameter conversion (if needed)
+    Processing Flow:
+    1. Parameter detection and normalization (if needed)
+    2. Single SQLGlot parse
+    3. AST-based operation type detection
+    4. Parameter conversion (if needed)
     5. Final SQL generation with execution parameters
 
-    Performance Optimizations:
-    - LRU cache with O(1) operations using OrderedDict
-    - Single SQLGlot parse eliminates Parse #2 and Parse #3 cycles
-    - Integrated parameter processing eliminates redundant normalization
-    - Cached compilation results with efficient eviction
-    - MyPyC-optimized method calls and property access
-
-    Compatibility Requirements:
-    - Same external interface as current transformer system
-    - Complete StatementConfig support for all drivers
-    - Identical operation type detection results
-    - Same caching behavior expected by drivers
+    Features:
+    - LRU cache with O(1) operations
+    - Integrated parameter processing
+    - Cached compilation results
+    - Complete StatementConfig support
     """
 
     __slots__ = ("_cache", "_cache_hits", "_cache_misses", "_config", "_max_cache_size", "_parameter_processor")
@@ -206,16 +185,7 @@ class SQLProcessor:
         self._cache_misses = 0
 
     def compile(self, sql: str, parameters: Any = None, is_many: bool = False) -> CompiledSQL:
-        """Single-pass compilation with integrated caching.
-
-        This is the main compilation method that replaces the current multi-pass
-        system with optimized single-pass processing.
-
-        Performance Improvements vs Current System:
-        - Single SQLGlot parse vs 3 parsing cycles
-        - Integrated parameter processing vs separate normalization
-        - Cached compilation results with efficient LRU eviction
-        - AST-based operation detection vs string parsing
+        """Compile SQL statement with integrated caching.
 
         Args:
             sql: Raw SQL string for compilation
@@ -238,26 +208,17 @@ class SQLProcessor:
             self._cache_hits += 1
             return result
 
-        # Cache miss - compile and cache result
         self._cache_misses += 1
         result = self._compile_uncached(sql, parameters, is_many)
 
-        # Cache management - remove oldest if at capacity
         if len(self._cache) >= self._max_cache_size:
-            self._cache.popitem(last=False)  # Remove oldest (FIFO)
+            self._cache.popitem(last=False)
 
         self._cache[cache_key] = result
         return result
 
     def _compile_uncached(self, sql: str, parameters: Any, is_many: bool = False) -> CompiledSQL:
-        """Single-pass compilation without caching.
-
-        This method implements the core single-pass compilation logic:
-        1. Parameter processing (Phase 1 + Phase 2 as needed)
-        2. Single SQLGlot parse
-        3. AST-based operation type detection
-        4. Final SQL generation
-        5. CompiledSQL result creation
+        """Compile SQL without caching.
 
         Args:
             sql: Raw SQL string
@@ -268,7 +229,6 @@ class SQLProcessor:
             CompiledSQL result
         """
         try:
-            # Phase 1: Process parameters using integrated processor
             dialect_str = str(self._config.dialect) if self._config.dialect else None
             processed_sql, processed_params_tuple = self._parameter_processor.process(
                 sql=sql,
@@ -277,32 +237,23 @@ class SQLProcessor:
                 dialect=dialect_str,
                 is_many=is_many,
             )
-            # Explicit annotation for mypyc
             processed_params: Any = processed_params_tuple
 
-            # Phase 2: Get SQLGlot-compatible SQL for parsing and operation detection
-
-            # If static compilation was applied (processed_params is None), use the processed_sql
-            # for both execution and SQLGlot parsing, as parameters are already embedded
             if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
                 sqlglot_sql = processed_sql
             else:
-                # Use original SQL for SQLGlot parsing with parameters preserved
                 sqlglot_sql, _ = self._parameter_processor._get_sqlglot_compatible_sql(
                     sql, parameters, self._config.parameter_config, dialect_str
                 )
 
-            # Initialize variables that might be modified later
             final_parameters: Any = processed_params
             ast_was_transformed = False
 
             if self._config.enable_parsing:
                 try:
-                    # Parse SQLGlot-compatible SQL for AST and operation detection
                     expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)
                     operation_type = self._detect_operation_type(expression)
 
-                    # Apply AST-based transformations if configured
                     if self._config.parameter_config.ast_transformer:
                         expression, final_parameters = self._config.parameter_config.ast_transformer(
                             expression, processed_params
@@ -310,32 +261,25 @@ class SQLProcessor:
                         ast_was_transformed = True
 
                 except ParseError:
-                    # Fallback for unparsable SQL
                     expression = None
                     operation_type = "EXECUTE"
             else:
                 expression = None
                 operation_type = "EXECUTE"
 
-            # Phase 3: Generate final SQL - only once!
-            # For static compilation, preserve the processed SQL and parameters as-is
             if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
                 final_sql, final_params = processed_sql, processed_params
             elif ast_was_transformed and expression is not None:
-                # AST was transformed - generate SQL from the transformed AST
                 final_sql = expression.sql(dialect=dialect_str)
                 final_params = final_parameters
                 logger.debug("AST was transformed - final SQL: %s, final params: %s", final_sql, final_params)
-                # Apply output transformer if configured
                 if self._config.output_transformer:
                     final_sql, final_params = self._config.output_transformer(final_sql, final_params)
             else:
-                # No AST transformation - use existing final transformation logic
                 final_sql, final_params = self._apply_final_transformations(
                     expression, processed_sql, final_parameters, dialect_str
                 )
 
-            # Phase 5: Create immutable result
             return CompiledSQL(
                 compiled_sql=final_sql,
                 execution_parameters=final_params,
@@ -347,16 +291,12 @@ class SQLProcessor:
 
         except Exception as e:
             logger.warning("Compilation failed, using fallback: %s", e)
-            # Fallback compilation with minimal processing
             return CompiledSQL(
                 compiled_sql=sql, execution_parameters=parameters, operation_type=_OPERATION_TYPES["UNKNOWN"]
             )
 
     def _make_cache_key(self, sql: str, parameters: Any) -> str:
         """Generate cache key for compilation result.
-
-        Must generate consistent, unique keys based on SQL and parameter
-        configuration to enable effective caching.
 
         Args:
             sql: SQL string
@@ -377,21 +317,9 @@ class SQLProcessor:
         return f"sql_{hash_str}"
 
     def _detect_operation_type(self, expression: "exp.Expression") -> str:
-        """AST-based operation type detection.
+        """Detect operation type from AST.
 
-        Uses SQLGlot AST structure to determine operation type instead of
-        string parsing, providing more accurate and faster detection.
-
-        Operation Types:
-        - SELECT: Query operations
-        - INSERT: Insert operations
-        - UPDATE: Update operations
-        - DELETE: Delete operations
-        - COPY: PostgreSQL COPY operations
-        - DDL: Data definition language (CREATE, DROP, ALTER)
-        - SCRIPT: Multiple statements
-        - EXECUTE: Stored procedure execution
-        - UNKNOWN: Unrecognized operations
+        Uses SQLGlot AST structure to determine operation type.
 
         Args:
             expression: SQLGlot AST expression
@@ -410,7 +338,6 @@ class SQLProcessor:
         if isinstance(expression, (exp.Create, exp.Drop, exp.Alter)):
             return _OPERATION_TYPES["DDL"]
         if isinstance(expression, exp.Copy):
-            # SQLGlot uses 'kind' in args: True for FROM, False for TO
             if expression.args["kind"] is True:
                 return _OPERATION_TYPES["COPY_FROM"]
             if expression.args["kind"] is False:
@@ -425,11 +352,7 @@ class SQLProcessor:
     def _apply_final_transformations(
         self, expression: "Optional[exp.Expression]", sql: str, parameters: Any, dialect_str: "Optional[str]"
     ) -> "tuple[str, Any]":
-        """Apply final transformations with AST support.
-
-        When an AST expression is available, it's passed to output transformers for potential
-        manipulation before final SQL generation. This enables users to manipulate the AST
-        in their custom output transformers.
+        """Apply final transformations.
 
         Args:
             expression: SQLGlot AST expression (if available)
@@ -441,30 +364,22 @@ class SQLProcessor:
             Tuple of (final_sql, final_parameters)
         """
         if self._config.output_transformer:
-            # If AST is available, generate SQL from AST for consistency
             if expression is not None:
-                # Generate SQL from AST for transformer input
                 ast_sql = expression.sql(dialect=dialect_str)
                 return self._config.output_transformer(ast_sql, parameters)
-            # No AST available, use string-based transformation
             return self._config.output_transformer(sql, parameters)
 
-        # No transformer configured - use the processed SQL to preserve parameter style
-        # The processed_sql already has the correct parameter style conversion
         return sql, parameters
 
     def clear_cache(self) -> None:
-        """Clear compilation cache.
-
-        Provides cache management interface expected by current system.
-        """
+        """Clear compilation cache."""
         self._cache.clear()
         self._cache_hits = 0
         self._cache_misses = 0
 
     @property
     def cache_stats(self) -> "dict[str, int]":
-        """Get cache statistics for monitoring.
+        """Get cache statistics.
 
         Returns:
             Dictionary with cache hit/miss statistics

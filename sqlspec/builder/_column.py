@@ -62,7 +62,6 @@ class Column:
         self.name = name
         self.table = table
 
-        # Create SQLGlot column expression
         if table:
             self._expression = exp.Column(this=exp.Identifier(this=name), table=exp.Identifier(this=table))
         else:
@@ -319,8 +318,6 @@ class FunctionColumn:
     def alias(self, alias_name: str) -> exp.Expression:
         """Create an aliased function expression."""
         return exp.Alias(this=self._expression, alias=alias_name)
-
-    # Add other operators as needed...
 
     def __hash__(self) -> int:
         """Hash based on the SQL expression."""

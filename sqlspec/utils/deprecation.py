@@ -23,12 +23,12 @@ def warn_deprecation(
     info: Optional[str] = None,
     pending: bool = False,
 ) -> None:
-    """Warn about a call to a (soon to be) deprecated function.
+    """Warn about a call to a deprecated function.
 
     Args:
-        version: Advanced Alchemy version where the deprecation will occur
+        version: SQLSpec version where the deprecation will occur
         deprecated_name: Name of the deprecated function
-        removal_in: Advanced Alchemy version where the deprecated function will be removed
+        removal_in: SQLSpec version where the deprecated function will be removed
         alternative: Name of a function that should be used instead
         info: Additional information
         pending: Use :class:`warnings.PendingDeprecationWarning` instead of :class:`warnings.DeprecationWarning`
@@ -72,11 +72,11 @@ def deprecated(
     pending: bool = False,
     kind: Optional[Literal["function", "method", "classmethod", "property"]] = None,
 ) -> Callable[[Callable[P, T]], Callable[P, T]]:
-    """Create a decorator wrapping a function, method or property with a warning call about a (pending) deprecation.
+    """Create a decorator wrapping a function, method or property with a deprecation warning.
 
     Args:
-        version: Litestar version where the deprecation will occur
-        removal_in: Litestar version where the deprecated function will be removed
+        version: SQLSpec version where the deprecation will occur
+        removal_in: SQLSpec version where the deprecated function will be removed
         alternative: Name of a function that should be used instead
         info: Additional information
         pending: Use :class:`warnings.PendingDeprecationWarning` instead of :class:`warnings.DeprecationWarning`

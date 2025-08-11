@@ -66,7 +66,7 @@ def _normalize_dialect(dialect: "Union[str, Any, None]") -> str:
         dialect: Original dialect name (can be str, Dialect, type[Dialect], or None)
 
     Returns:
-        converted dialect name
+        Converted dialect name compatible with SQLGlot
     """
     if dialect is None:
         return "sql"
@@ -92,7 +92,7 @@ def _normalize_dialect(dialect: "Union[str, Any, None]") -> str:
 
 
 class _AiosqlAdapterBase:
-    """Base adapter for common logic."""
+    """Base adapter class providing common functionality for aiosql integration."""
 
     def __init__(self, driver: "Union[SyncDriverAdapterBase, AsyncDriverAdapterBase]") -> None:
         """Initialize the base adapter.
@@ -104,11 +104,28 @@ class _AiosqlAdapterBase:
         self.driver = driver
 
     def process_sql(self, query_name: str, op_type: "Any", sql: str) -> str:
-        """Process SQL for aiosql compatibility."""
+        """Process SQL string for aiosql compatibility.
+
+        Args:
+            query_name: Name of the query
+            op_type: Operation type
+            sql: SQL string to process
+
+        Returns:
+            Processed SQL string
+        """
         return sql
 
     def _create_sql_object(self, sql: str, parameters: "Any" = None) -> SQL:
-        """Create SQL object with proper configuration."""
+        """Create SQL object with proper configuration.
+
+        Args:
+            sql: SQL string
+            parameters: Query parameters
+
+        Returns:
+            Configured SQL object
+        """
         return SQL(
             sql,
             parameters,
@@ -118,11 +135,10 @@ class _AiosqlAdapterBase:
 
 
 class AiosqlSyncAdapter(_AiosqlAdapterBase):
-    """Sync adapter that implements aiosql protocol using SQLSpec drivers.
+    """Synchronous adapter that implements aiosql protocol using SQLSpec drivers.
 
-    This adapter bridges aiosql's sync driver protocol with SQLSpec's sync drivers,
-    enabling all of SQLSpec's drivers to work with queries loaded by aiosql.
-
+    This adapter bridges aiosql's synchronous driver protocol with SQLSpec's sync drivers,
+    enabling queries loaded by aiosql to be executed with SQLSpec drivers.
     """
 
     is_aio_driver: ClassVar[bool] = False
@@ -151,8 +167,8 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
             Query result rows
 
         Note:
-            record_class parameter is ignored. Use schema_type in driver.execute
-            or _sqlspec_schema_type in parameters for type mapping.
+            The record_class parameter is ignored for compatibility. Use schema_type
+            in driver.execute or _sqlspec_schema_type in parameters for type mapping.
         """
         if record_class is not None:
             logger.warning(
@@ -181,8 +197,8 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
             First result row or None
 
         Note:
-            record_class parameter is ignored. Use schema_type in driver.execute
-            or _sqlspec_schema_type in parameters for type mapping.
+            The record_class parameter is ignored for compatibility. Use schema_type
+            in driver.execute or _sqlspec_schema_type in parameters for type mapping.
         """
         if record_class is not None:
             logger.warning(
@@ -285,10 +301,10 @@ class AiosqlSyncAdapter(_AiosqlAdapterBase):
 
 
 class AiosqlAsyncAdapter(_AiosqlAdapterBase):
-    """Async adapter that implements aiosql protocol using SQLSpec drivers.
+    """Asynchronous adapter that implements aiosql protocol using SQLSpec drivers.
 
     This adapter bridges aiosql's async driver protocol with SQLSpec's async drivers,
-    enabling all of SQLSpec's features to work with queries loaded by aiosql.
+    enabling queries loaded by aiosql to be executed with SQLSpec async drivers.
     """
 
     is_aio_driver: ClassVar[bool] = True
@@ -317,8 +333,8 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
             List of query result rows
 
         Note:
-            record_class parameter is ignored. Use schema_type in driver.execute
-            or _sqlspec_schema_type in parameters for type mapping.
+            The record_class parameter is ignored for compatibility. Use schema_type
+            in driver.execute or _sqlspec_schema_type in parameters for type mapping.
         """
         if record_class is not None:
             logger.warning(
@@ -348,8 +364,8 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
             First result row or None
 
         Note:
-            record_class parameter is ignored. Use schema_type in driver.execute
-            or _sqlspec_schema_type in parameters for type mapping.
+            The record_class parameter is ignored for compatibility. Use schema_type
+            in driver.execute or _sqlspec_schema_type in parameters for type mapping.
         """
         if record_class is not None:
             logger.warning(
@@ -412,7 +428,7 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
             parameters: Query parameters
 
         Note:
-            Async version returns None per aiosql protocol
+            Returns None per aiosql async protocol
         """
         await self.driver.execute(self._create_sql_object(sql, parameters), connection=conn)  # type: ignore[misc]
 
@@ -426,7 +442,7 @@ class AiosqlAsyncAdapter(_AiosqlAdapterBase):
             parameters: Sequence of parameter sets
 
         Note:
-            Async version returns None per aiosql protocol
+            Returns None per aiosql async protocol
         """
         await self.driver.execute_many(self._create_sql_object(sql), parameters=parameters, connection=conn)  # type: ignore[misc]
 

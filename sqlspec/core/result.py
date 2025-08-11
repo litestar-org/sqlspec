@@ -1,26 +1,18 @@
-"""Enhanced SQL result classes with complete backward compatibility.
+"""SQL result classes for query execution results.
 
-This module provides the enhanced result system that maintains 100% backward
-compatibility while integrating with the CORE_ROUND_3 architecture.
+This module provides result classes for handling SQL query execution results
+including regular results and Apache Arrow format results.
 
-Key Features:
-- Complete interface preservation with existing result classes
-- __slots__ optimization for memory efficiency (40-60% reduction target)
-- Integration with enhanced SQL statement system
-- Same behavior and method signatures as existing implementation
-- MyPyC optimization compatibility for critical path performance
+Components:
+- StatementResult: Abstract base class for SQL results
+- SQLResult: Main implementation for regular results
+- ArrowResult: Arrow-based results for high-performance data interchange
 
-Architecture:
-- StatementResult: ABC base class with exact same interface
-- SQLResult: Main implementation with complete compatibility
-- ArrowResult: Arrow-based results with same capabilities
-
-Critical Compatibility:
-- Same __slots__ for memory efficiency
-- Same method signatures and return types
-- Same error handling and edge case behavior
-- Same type annotations and interfaces
-- Complete preservation of all properties and methods
+Features:
+- Consistent interface across all result types
+- Support for both regular and Arrow format results
+- Comprehensive result metadata and statistics
+- Iterator support for result rows
 """
 
 from abc import ABC, abstractmethod
@@ -46,21 +38,9 @@ T = TypeVar("T")
 class StatementResult(ABC):
     """Base class for SQL statement execution results.
 
-    This class provides a common interface for handling different types of
-    SQL operation results. Subclasses implement specific behavior for
-    SELECT, INSERT/UPDATE/DELETE, and script operations.
-
-    Performance Features:
-    - __slots__ for memory efficiency (40-60% reduction target)
-    - MyPyC optimization compatibility
-    - Zero-copy data access patterns
-    - Cached property evaluation
-
-    Compatibility Features:
-    - Identical interface to existing StatementResult
-    - Same method signatures and behavior
-    - Same error handling and edge cases
-    - Complete preservation of all attributes and methods
+    Provides a common interface for handling different types of SQL operation
+    results. Subclasses implement specific behavior for SELECT, INSERT/UPDATE/DELETE,
+    and script operations.
 
     Args:
         statement: The original SQL statement that was executed.
@@ -82,7 +62,7 @@ class StatementResult(ABC):
         execution_time: Optional[float] = None,
         metadata: Optional["dict[str, Any]"] = None,
     ) -> None:
-        """Initialize statement result with enhanced performance.
+        """Initialize statement result.
 
         Args:
             statement: The original SQL statement that was executed.
@@ -150,25 +130,13 @@ class StatementResult(ABC):
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class SQLResult(StatementResult):
-    """Unified result class for SQL operations that return a list of rows
-    or affect rows (e.g., SELECT, INSERT, UPDATE, DELETE).
+    """Result class for SQL operations that return rows or affect rows.
 
-    For DML operations with RETURNING clauses, the returned data will be in `self.data`.
-    The `operation_type` attribute helps distinguish the nature of the operation.
+    Handles SELECT, INSERT, UPDATE, DELETE operations. For DML operations with
+    RETURNING clauses, the returned data will be in `self.data`. The `operation_type`
+    attribute helps distinguish the nature of the operation.
 
     For script execution, this class also tracks multiple statement results and errors.
-
-    Performance Features:
-    - Enhanced __slots__ for memory optimization
-    - Cached property evaluation for frequently accessed values
-    - Optimized data access patterns
-    - MyPyC compatibility for critical methods
-
-    Compatibility Features:
-    - Complete interface preservation with existing SQLResult
-    - Same method signatures and behavior
-    - Same error handling patterns
-    - Identical property access and results
     """
 
     __slots__ = (
@@ -207,11 +175,7 @@ class SQLResult(StatementResult):
         total_statements: int = 0,
         successful_statements: int = 0,
     ) -> None:
-        """Initialize SQL result with enhanced performance.
-
-        All parameters have the same meaning and behavior as the existing SQLResult
-        to ensure complete compatibility.
-        """
+        """Initialize SQL result."""
         super().__init__(
             statement=statement,
             data=data,
@@ -233,7 +197,6 @@ class SQLResult(StatementResult):
         self.total_statements = total_statements
         self.successful_statements = successful_statements
 
-        # Preserve exact same initialization logic
         if not self.column_names and self.data is not None and self.data:
             self.column_names = list(self.data[0].keys())
         if self.total_count is None:
@@ -267,11 +230,6 @@ class SQLResult(StatementResult):
 
     def is_success(self) -> bool:
         """Check if the operation was successful.
-
-        Preserves exact same logic as existing implementation:
-        - For SELECT: True if data is not None and rows_affected is not negative.
-        - For DML (INSERT, UPDATE, DELETE, EXECUTE): True if rows_affected is >= 0.
-        - For SCRIPT: True if no errors and all statements succeeded.
 
         Returns:
             True if operation was successful, False otherwise.
@@ -638,7 +596,6 @@ class ArrowResult(StatementResult):
         return cast("int", self.data.num_columns)
 
 
-# Utility functions for result creation - Enhanced with performance optimizations
 def create_sql_result(
     statement: "SQL",
     data: Optional[list[dict[str, Any]]] = None,
@@ -648,10 +605,7 @@ def create_sql_result(
     metadata: Optional["dict[str, Any]"] = None,
     **kwargs: Any,
 ) -> SQLResult:
-    """Create SQLResult instance with performance optimization.
-
-    Factory function for creating SQLResult instances with consistent interface
-    and enhanced performance characteristics.
+    """Create SQLResult instance.
 
     Args:
         statement: The SQL statement that produced this result.
@@ -663,7 +617,7 @@ def create_sql_result(
         **kwargs: Additional arguments for SQLResult initialization.
 
     Returns:
-        SQLResult instance with enhanced performance.
+        SQLResult instance.
     """
     return SQLResult(
         statement=statement,
@@ -685,10 +639,7 @@ def create_arrow_result(
     metadata: Optional["dict[str, Any]"] = None,
     schema: Optional["dict[str, Any]"] = None,
 ) -> ArrowResult:
-    """Create ArrowResult instance with performance optimization.
-
-    Factory function for creating ArrowResult instances with Arrow data
-    and enhanced performance characteristics.
+    """Create ArrowResult instance.
 
     Args:
         statement: The SQL statement that produced this result.
@@ -700,7 +651,7 @@ def create_arrow_result(
         schema: Optional Arrow schema information.
 
     Returns:
-        ArrowResult instance with enhanced performance.
+        ArrowResult instance.
     """
     return ArrowResult(
         statement=statement,
@@ -711,10 +662,3 @@ def create_arrow_result(
         metadata=metadata,
         schema=schema,
     )
-
-
-# Implementation status tracking
-__module_status__ = "IMPLEMENTED"  # PLACEHOLDER → BUILDING → TESTING → COMPLETE
-__compatibility_target__ = "100%"  # Must maintain complete compatibility
-__performance_target__ = "40-60% memory reduction"  # Memory efficiency improvement target
-__integration_target__ = "Core pipeline"  # Integration with enhanced SQL system

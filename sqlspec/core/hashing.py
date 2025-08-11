@@ -3,7 +3,7 @@
 This module provides centralized hashing logic for SQL statements,
 including expressions, parameters, filters, and complete SQL objects.
 
-Also supports fine-grained AST sub-expression caching for performance optimization.
+Also supports fine-grained AST sub-expression caching.
 """
 
 from typing import TYPE_CHECKING, Any, Optional
@@ -141,7 +141,6 @@ def hash_parameters(
     if original_parameters is not None:
         if isinstance(original_parameters, list):
             # For execute_many, hash the count and first few items to avoid
-            # performance issues with large parameter sets
             param_hash ^= hash(("original_count", len(original_parameters)))
             if original_parameters:
                 # Hash first 3 items as representatives
@@ -279,7 +278,7 @@ def hash_optimized_expression(
     Args:
         expr: The unoptimized expression
         dialect: Target SQL dialect
-        schema: Schema information used during optimization
+        schema: Schema information
         optimizer_settings: Additional optimizer configuration
 
     Returns:

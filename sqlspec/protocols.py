@@ -182,16 +182,11 @@ class ObjectStoreItemProtocol(Protocol):
 
 @runtime_checkable
 class ObjectStoreProtocol(Protocol):
-    """Unified protocol for object storage operations.
+    """Protocol for object storage operations.
 
-    This protocol defines the interface for all storage backends with built-in
-    instrumentation support. Backends must implement both sync and async operations
-    where possible, with async operations suffixed with _async.
-
-    All methods use 'path' terminology for consistency with object store patterns.
+    Defines the interface for storage backends with both sync and async operations.
     """
 
-    # Class-level capability descriptor
     capabilities: ClassVar["StorageCapabilities"]
 
     protocol: str
@@ -199,7 +194,6 @@ class ObjectStoreProtocol(Protocol):
     def __init__(self, uri: str, **kwargs: Any) -> None:
         return
 
-    # Core Operations (sync)
     def read_bytes(self, path: "Union[str, Path]", **kwargs: Any) -> bytes:
         """Read bytes from an object."""
         return b""
@@ -216,7 +210,6 @@ class ObjectStoreProtocol(Protocol):
         """Write text to an object."""
         return
 
-    # Object Operations
     def exists(self, path: "Union[str, Path]", **kwargs: Any) -> bool:
         """Check if an object exists."""
         return False
@@ -233,7 +226,6 @@ class ObjectStoreProtocol(Protocol):
         """Move an object."""
         return
 
-    # Listing Operations
     def list_objects(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
         """List objects with optional prefix."""
         return []
@@ -242,7 +234,6 @@ class ObjectStoreProtocol(Protocol):
         """Find objects matching a glob pattern."""
         return []
 
-    # Path Operations
     def is_object(self, path: "Union[str, Path]") -> bool:
         """Check if path points to an object."""
         return False
@@ -255,32 +246,21 @@ class ObjectStoreProtocol(Protocol):
         """Get object metadata."""
         return {}
 
-    # Arrow Operations
     def read_arrow(self, path: "Union[str, Path]", **kwargs: Any) -> "ArrowTable":
-        """Read an Arrow table from storage.
-
-        For obstore backend, this should use native arrow operations when available.
-        """
+        """Read an Arrow table from storage."""
         msg = "Arrow reading not implemented"
         raise NotImplementedError(msg)
 
     def write_arrow(self, path: "Union[str, Path]", table: "ArrowTable", **kwargs: Any) -> None:
-        """Write an Arrow table to storage.
-
-        For obstore backend, this should use native arrow operations when available.
-        """
+        """Write an Arrow table to storage."""
         msg = "Arrow writing not implemented"
         raise NotImplementedError(msg)
 
     def stream_arrow(self, pattern: str, **kwargs: Any) -> "Iterator[ArrowRecordBatch]":
-        """Stream Arrow record batches from matching objects.
-
-        For obstore backend, this should use native streaming when available.
-        """
+        """Stream Arrow record batches from matching objects."""
         msg = "Arrow streaming not implemented"
         raise NotImplementedError(msg)
 
-    # Async versions
     async def read_bytes_async(self, path: "Union[str, Path]", **kwargs: Any) -> bytes:
         """Async read bytes from an object."""
         msg = "Async operations not implemented"

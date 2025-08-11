@@ -70,7 +70,6 @@ class MergeUsingClauseMixin:
         if isinstance(source, str):
             source_expr = exp.to_table(source, alias=alias)
         elif has_query_builder_parameters(source) and hasattr(source, "_expression"):
-            # Merge parameters from the SELECT builder or other builder
             subquery_builder_parameters = source.parameters
             if subquery_builder_parameters:
                 for p_name, p_value in subquery_builder_parameters.items():
@@ -281,7 +280,6 @@ class MergeNotMatchedClauseMixin:
             msg = "Specifying columns without values for INSERT action is complex and not fully supported yet. Consider providing full expressions."
             raise SQLBuilderError(msg)
         elif not columns and not values:
-            # INSERT DEFAULT VALUES case
             pass
         else:
             msg = "Cannot specify values without columns for INSERT action."

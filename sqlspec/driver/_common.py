@@ -1,18 +1,7 @@
-"""Common driver attributes and utilities with CORE_ROUND_3 architecture integration.
+"""Common driver attributes and utilities.
 
-This module provides the core driver infrastructure using only sqlspec.core modules:
-- Direct integration with sqlspec.core.statement for SQL processing
-- sqlspec.core.parameters for optimized parameter handling
-- sqlspec.core.cache for unified caching
-- sqlspec.core.config for centralized configuration
-- sqlspec.core.splitter for script splitting
-- sqlspec.core.result for enhanced result processing
-
-Performance Improvements:
-- 5-10x faster SQL compilation through single-pass processing
-- 40-60% memory reduction through __slots__ optimization
-- Enhanced caching for repeated statement execution
-- Zero-copy parameter processing where possible
+This module provides core driver infrastructure including execution result handling,
+common driver attributes, parameter processing, and SQL compilation utilities.
 """
 
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Optional, Union, cast
@@ -110,14 +99,11 @@ DEFAULT_EXECUTION_RESULT: Final[tuple[Any, Optional[int], Any]] = (None, None, N
 
 @trait
 class CommonDriverAttributesMixin:
-    """Common attributes and methods for driver adapters with CORE_ROUND_3 architecture.
+    """Common attributes and methods for driver adapters.
 
-    This mixin provides the foundation for all SQLSpec drivers using only core modules:
-    - Enhanced connection and configuration management
-    - Optimized parameter processing with 2-phase conversion system
-    - Unified caching and performance optimization
-    - Single-pass SQL compilation and execution
-    - Zero-copy data access where possible
+    This mixin provides the foundation for all SQLSpec drivers, including
+    connection and configuration management, parameter processing, caching,
+    and SQL compilation.
     """
 
     __slots__ = ("connection", "driver_features", "statement_config")
@@ -128,11 +114,11 @@ class CommonDriverAttributesMixin:
     def __init__(
         self, connection: "Any", statement_config: "StatementConfig", driver_features: "Optional[dict[str, Any]]" = None
     ) -> None:
-        """Initialize driver adapter with connection and enhanced core integration.
+        """Initialize driver adapter with connection and configuration.
 
         Args:
             connection: Database connection instance
-            statement_config: Statement configuration for the driver with core optimization
+            statement_config: Statement configuration for the driver
             driver_features: Driver-specific features like extensions, secrets, and connection callbacks
         """
         self.connection = connection
@@ -157,9 +143,6 @@ class CommonDriverAttributesMixin:
     ) -> ExecutionResult:
         """Create ExecutionResult with all necessary data for any operation type.
 
-        This consolidated method replaces multiple specialized creation methods and
-        integrates with core result processing for enhanced performance.
-
         Args:
             cursor_result: The raw result returned by the database cursor/driver
             rowcount_override: Optional override for the number of affected rows
@@ -176,21 +159,6 @@ class CommonDriverAttributesMixin:
 
         Returns:
             ExecutionResult configured for the specified operation type
-
-        Examples:
-            # SELECT operation
-            create_execution_result(cursor, selected_data=data, column_names=cols,
-                                  data_row_count=len(data), is_select_result=True)
-
-            # Script operation
-            create_execution_result(cursor, statement_count=5, successful_statements=5,
-                                  is_script_result=True)
-
-            # Regular execute operation
-            create_execution_result(cursor, rowcount_override=1)
-
-            # Execute many operation
-            create_execution_result(cursor, rowcount_override=10, is_many_result=True)
         """
         return ExecutionResult(
             cursor_result=cursor_result,
@@ -208,18 +176,17 @@ class CommonDriverAttributesMixin:
         )
 
     def build_statement_result(self, statement: "SQL", execution_result: ExecutionResult) -> "SQLResult":
-        """Build and return the SQLResult using enhanced core result processing.
+        """Build and return the SQLResult from ExecutionResult data.
 
-        This method creates SQLResult objects from ExecutionResult data without requiring
-        additional data extraction calls or script re-parsing, significantly improving
-        performance through core module integration and single-pass processing.
+        Creates SQLResult objects from ExecutionResult data without requiring
+        additional data extraction calls or script re-parsing.
 
         Args:
             statement: SQL statement that was executed
             execution_result: ExecutionResult containing all necessary data
 
         Returns:
-            SQLResult with complete execution data using core result system
+            SQLResult with complete execution data
         """
         if execution_result.is_script_result:
             return SQLResult(
@@ -252,11 +219,10 @@ class CommonDriverAttributesMixin:
         )
 
     def _determine_operation_type(self, statement: "Any") -> OperationType:
-        """Determine operation type from SQL statement expression using core processing.
+        """Determine operation type from SQL statement expression.
 
         Examines the statement's expression type to determine if it's
         INSERT, UPDATE, DELETE, SELECT, SCRIPT, or generic EXECUTE.
-        Enhanced with core module integration for better performance.
 
         Args:
             statement: SQL statement object with expression attribute
@@ -277,7 +243,6 @@ class CommonDriverAttributesMixin:
 
         expr_type = type(expression).__name__.upper()
 
-        # Handle Anonymous expressions that might be unparsable scripts
         if "ANONYMOUS" in expr_type and statement.is_script:
             return "SCRIPT"
 
@@ -301,10 +266,9 @@ class CommonDriverAttributesMixin:
         statement_config: "StatementConfig",
         kwargs: "Optional[dict[str, Any]]" = None,
     ) -> "SQL":
-        """Build SQL statement from various input types using enhanced core processing.
+        """Build SQL statement from various input types.
 
         Ensures dialect is set and preserves existing state when rebuilding SQL objects.
-        Enhanced with core module integration for optimal performance.
         """
         kwargs = kwargs or {}
 
@@ -316,16 +280,13 @@ class CommonDriverAttributesMixin:
                     (*statement._positional_parameters, *parameters) if parameters else statement._positional_parameters
                 )
                 return SQL(statement.sql, *merged_parameters, statement_config=statement_config, **kwargs)
-            # Check if we need to rebuild the SQL object due to config differences
             needs_rebuild = False
 
-            # Check dialect mismatch
             if statement_config.dialect and (
                 not statement.statement_config.dialect or statement.statement_config.dialect != statement_config.dialect
             ):
                 needs_rebuild = True
 
-            # Check parameter config mismatch - critical for ensuring correct parameter style
             if (
                 statement.statement_config.parameter_config.default_execution_parameter_style
                 != statement_config.parameter_config.default_execution_parameter_style
@@ -333,14 +294,9 @@ class CommonDriverAttributesMixin:
                 needs_rebuild = True
 
             if needs_rebuild:
-                # Use the driver's complete statement config to ensure correct parameter processing
-                # Use the original raw SQL if available, otherwise use the current SQL
                 sql_text = statement._raw_sql or statement.sql
 
-                # Rebuild the SQL object with the driver's config
-                # If is_many is set, we need to preserve the execute_many parameters
                 if statement.is_many and statement.parameters:
-                    # Create SQL with is_many=True and the execute_many parameters
                     new_sql = SQL(sql_text, statement.parameters, statement_config=statement_config, is_many=True)
                 elif statement._named_parameters:
                     new_sql = SQL(sql_text, statement_config=statement_config, **statement._named_parameters)
@@ -354,11 +310,10 @@ class CommonDriverAttributesMixin:
     def split_script_statements(
         self, script: str, statement_config: "StatementConfig", strip_trailing_semicolon: bool = False
     ) -> list[str]:
-        """Split a SQL script into individual statements using enhanced core splitter.
+        """Split a SQL script into individual statements.
 
-        Uses a robust lexer-driven state machine from sqlspec.core.splitter to handle
-        multi-statement scripts, including complex constructs like PL/SQL blocks,
-        T-SQL batches, and nested blocks. Enhanced for 5-10x better performance.
+        Uses a lexer-driven state machine to handle multi-statement scripts,
+        including complex constructs like PL/SQL blocks, T-SQL batches, and nested blocks.
 
         Args:
             script: The SQL script to split
@@ -379,11 +334,10 @@ class CommonDriverAttributesMixin:
     def prepare_driver_parameters(
         self, parameters: Any, statement_config: "StatementConfig", is_many: bool = False
     ) -> Any:
-        """Prepare parameters for database driver consumption using enhanced core processing.
+        """Prepare parameters for database driver consumption.
 
         Normalizes parameter structure and unwraps TypedParameter objects
         to their underlying values, which database drivers expect.
-        Enhanced with core module integration for optimal type handling.
 
         Args:
             parameters: Parameters in any format (dict, list, tuple, scalar, TypedParameter)
@@ -393,7 +347,6 @@ class CommonDriverAttributesMixin:
         Returns:
             Parameters with TypedParameter objects unwrapped to primitive values
         """
-        # For static compilation, preserve None parameters to indicate no parameters needed
         if parameters is None and statement_config.parameter_config.needs_static_script_compilation:
             return None
 
@@ -401,11 +354,8 @@ class CommonDriverAttributesMixin:
             return []
 
         if is_many:
-            # For execute_many, parameters is already a list of parameter sets
-            # Apply formatting to each parameter set without array conversion
             if isinstance(parameters, list):
                 return [self._format_parameter_set_for_many(param_set, statement_config) for param_set in parameters]
-            # If not a list, treat as single parameter set wrapped in a list
             return [self._format_parameter_set_for_many(parameters, statement_config)]
         return self._format_parameter_set(parameters, statement_config)
 
@@ -426,15 +376,12 @@ class CommonDriverAttributesMixin:
             return []
 
         def apply_type_coercion(value: Any) -> Any:
-            """Apply type coercion to a single value without structure conversion."""
+            """Apply type coercion to a single value."""
             unwrapped_value = value.value if isinstance(value, TypedParameter) else value
 
             if statement_config.parameter_config.type_coercion_map:
                 for type_check, converter in statement_config.parameter_config.type_coercion_map.items():
-                    # Skip list/tuple conversion for execute_many parameter structure
                     if type_check in {list, tuple} and isinstance(unwrapped_value, (list, tuple)):
-                        # Only apply if this is clearly a data value, not a parameter structure
-                        # For now, skip array conversion in execute_many context
                         continue
                     if isinstance(unwrapped_value, type_check):
                         return converter(unwrapped_value)
@@ -445,15 +392,13 @@ class CommonDriverAttributesMixin:
             return {k: apply_type_coercion(v) for k, v in parameters.items()}
 
         if isinstance(parameters, (list, tuple)):
-            # For execute_many, preserve structure but coerce individual values
             coerced_params = [apply_type_coercion(p) for p in parameters]
             return tuple(coerced_params) if isinstance(parameters, tuple) else coerced_params
 
-        # Single scalar parameter - just coerce it
         return apply_type_coercion(parameters)
 
     def _format_parameter_set(self, parameters: Any, statement_config: "StatementConfig") -> Any:
-        """Prepare a single parameter set for database driver consumption using core processing.
+        """Prepare a single parameter set for database driver consumption.
 
         Args:
             parameters: Single parameter set in any format
@@ -466,7 +411,7 @@ class CommonDriverAttributesMixin:
             return []
 
         def apply_type_coercion(value: Any) -> Any:
-            """Apply type coercion to a single value using core type system."""
+            """Apply type coercion to a single value."""
             unwrapped_value = value.value if isinstance(value, TypedParameter) else value
 
             if statement_config.parameter_config.type_coercion_map:
@@ -505,7 +450,6 @@ class CommonDriverAttributesMixin:
 
         if isinstance(parameters, (list, tuple)):
             coerced_params = [apply_type_coercion(p) for p in parameters]
-            # Preserve original parameter format if requested
             if statement_config.parameter_config.preserve_parameter_format and isinstance(parameters, tuple):
                 return tuple(coerced_params)
             return coerced_params
@@ -515,10 +459,10 @@ class CommonDriverAttributesMixin:
     def _get_compiled_sql(
         self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
     ) -> tuple[str, Any]:
-        """Get compiled SQL with optimal parameter style and enhanced core caching.
+        """Get compiled SQL with parameter style conversion and caching.
 
-        This method ensures single compilation by explicitly compiling the SQL object
-        and using the compiled result directly.
+        Compiles the SQL statement and applies parameter style conversion.
+        Results are cached when caching is enabled.
 
         Args:
             statement: SQL statement to compile
@@ -536,21 +480,17 @@ class CommonDriverAttributesMixin:
             if cached_result is not None:
                 return cached_result
 
-        # Explicitly compile the statement to get compiled SQL and parameters
         compiled_sql, execution_parameters = statement.compile()
 
-        # Prepare parameters for the driver
         prepared_parameters = self.prepare_driver_parameters(
             execution_parameters, statement_config, is_many=statement.is_many
         )
 
-        # Apply output transformer if configured (post-compilation)
         if statement_config.parameter_config.output_transformer:
             compiled_sql, prepared_parameters = statement_config.parameter_config.output_transformer(
                 compiled_sql, prepared_parameters
             )
 
-        # Cache the result
         if cache_key is not None:
             sql_cache.set(cache_key, (compiled_sql, prepared_parameters))
 
@@ -559,11 +499,10 @@ class CommonDriverAttributesMixin:
     def _generate_compilation_cache_key(
         self, statement: "SQL", config: "StatementConfig", flatten_single_parameters: bool
     ) -> str:
-        """Generate cache key that includes all compilation context using core hashing.
+        """Generate cache key that includes all compilation context.
 
-        This method creates a deterministic cache key that includes all factors
-        that affect SQL compilation, preventing cache contamination between
-        different compilation contexts. Enhanced with core processing.
+        Creates a deterministic cache key that includes all factors that affect SQL compilation,
+        preventing cache contamination between different compilation contexts.
         """
         context_hash = hash(
             (
@@ -578,10 +517,7 @@ class CommonDriverAttributesMixin:
             )
         )
 
-        # Create simple hash for core.statement.SQL (different from old SQL type)
-        # Convert parameters to hashable representation safely
-        # IMPORTANT: Access raw attributes directly to avoid triggering any processing
-        params = statement.parameters  # Now safe - returns original parameters without compilation
+        params = statement.parameters
         params_key: Any
 
         def make_hashable(obj: Any) -> Any:
@@ -598,7 +534,6 @@ class CommonDriverAttributesMixin:
             if isinstance(params, dict):
                 params_key = make_hashable(params)
             elif isinstance(params, (list, tuple)) and params:
-                # Handle list of dicts for execute_many
                 if isinstance(params[0], dict):
                     params_key = tuple(make_hashable(d) for d in params)
                 else:
@@ -608,10 +543,8 @@ class CommonDriverAttributesMixin:
             else:
                 params_key = params
         except (TypeError, AttributeError):
-            # If parameters contain unhashable elements, use string representation
             params_key = str(params)
 
-        # Now statement.sql returns raw SQL without compilation
         base_hash = hash((statement.sql, params_key, statement.is_many, statement.is_script))
         return f"compiled:{base_hash}:{context_hash}"
 
@@ -627,12 +560,10 @@ class CommonDriverAttributesMixin:
         if not parameters:
             return None
 
-        # Count occurrences of each style
         style_counts: dict[ParameterStyle, int] = {}
         for param in parameters:
             style_counts[param.style] = style_counts.get(param.style, 0) + 1
 
-        # Style precedence from old parameters.py
         precedence = {
             ParameterStyle.QMARK: 1,
             ParameterStyle.NUMERIC: 2,
@@ -644,15 +575,13 @@ class CommonDriverAttributesMixin:
             ParameterStyle.NAMED_PYFORMAT: 8,
         }
 
-        # Find the most frequent style, with precedence for ties
         return max(style_counts.keys(), key=lambda style: (style_counts[style], -precedence.get(style, 99)))
 
     def _create_count_query(self, original_sql: "SQL") -> "SQL":
-        """Create a COUNT query from the original SQL statement using core processing.
+        """Create a COUNT query from the original SQL statement.
 
         Transforms the original SELECT statement to count total rows while preserving
         WHERE, HAVING, and GROUP BY clauses but removing ORDER BY, LIMIT, and OFFSET.
-        Enhanced with core module integration for better performance.
         """
         if not original_sql.expression:
             msg = "Cannot create COUNT query from empty SQL expression"

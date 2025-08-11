@@ -1,25 +1,21 @@
-"""Enhanced filter system with complete backward compatibility.
+"""Filter system for SQL statement manipulation.
 
-This module provides the enhanced filter system that maintains 100% backward
-compatibility while integrating with the CORE_ROUND_3 architecture.
+This module provides filters that can be applied to SQL statements to add
+WHERE clauses, ORDER BY clauses, LIMIT/OFFSET, and other modifications.
 
-All filter classes preserve their exact same interfaces and behavior as the
-existing implementation to ensure full compatibility with dynamic SQL construction
-and driver integrations.
+Components:
+- StatementFilter: Abstract base class for all filters
+- BeforeAfterFilter: Date range filtering
+- InCollectionFilter: IN clause filtering
+- LimitOffsetFilter: Pagination support
+- OrderByFilter: Sorting support
+- SearchFilter: Text search filtering
+- Various collection and negation filters
 
-Architecture:
-- Complete copy of all existing filter classes from statement/filters.py
-- Same class hierarchy, method signatures, and behavior patterns
-- Integration with enhanced SQL statement system in core module
-- Performance optimizations through __slots__ and caching
-- Full interface preservation for all filter types
-
-Critical Compatibility:
-- Same __slots__ and class structures
-- Same method signatures and return types
-- Same parameter handling and validation
-- Same SQL generation and parameter binding
-- Complete preservation of all existing filter functionality
+Features:
+- Parameter conflict resolution
+- Type-safe filter application
+- Cacheable filter configurations
 """
 
 import uuid
@@ -85,7 +81,7 @@ class StatementFilter(ABC):
         return [], {}
 
     def _resolve_parameter_conflicts(self, statement: "SQL", proposed_names: list[str]) -> list[str]:
-        """Resolve parameter name conflicts by generating unique names if needed.
+        """Resolve parameter name conflicts.
 
         Args:
             statement: The SQL statement to check for existing parameters
@@ -105,16 +101,13 @@ class StatementFilter(ABC):
             else:
                 resolved_name = name
             resolved_names.append(resolved_name)
-            existing_params.add(resolved_name)  # Prevent conflicts within this filter
+            existing_params.add(resolved_name)
 
         return resolved_names
 
     @abstractmethod
     def get_cache_key(self) -> tuple[Any, ...]:
-        """Return a tuple of stable, hashable components that uniquely represent the filter's configuration.
-
-        The cache key should include all parameters that affect the filter's behavior.
-        For example, a LimitOffsetFilter would return (limit, offset).
+        """Return a cache key for this filter's configuration.
 
         Returns:
             Tuple of hashable values representing the filter's configuration
@@ -122,10 +115,9 @@ class StatementFilter(ABC):
 
 
 class BeforeAfterFilter(StatementFilter):
-    """Data required to filter a query on a ``datetime`` column.
+    """Filter for datetime range queries.
 
-    Note:
-        After applying this filter, only the filter's parameters (e.g., before/after) will be present in the resulting SQL statement's parameters. Original parameters from the statement are not preserved in the result.
+    Applies WHERE clauses for before/after datetime filtering.
     """
 
     __slots__ = ("_param_name_after", "_param_name_before", "after", "before", "field_name")
@@ -295,10 +287,9 @@ class InAnyFilter(StatementFilter, ABC, Generic[T]):
 
 
 class InCollectionFilter(InAnyFilter[T]):
-    """Data required to construct a ``WHERE ... IN (...)`` clause.
+    """Filter for IN clause queries.
 
-    Note:
-        After applying this filter, only the filter's parameters (e.g., the generated IN parameters) will be present in the resulting SQL statement's parameters. Original parameters from the statement are not preserved in the result.
+    Constructs WHERE ... IN (...) clauses.
     """
 
     __slots__ = ("_param_names", "field_name", "values")
@@ -559,7 +550,6 @@ class LimitOffsetFilter(PaginationFilter):
         self.limit = limit
         self.offset = offset
 
-        # Use simple names by default, will generate unique names if conflicts are detected
         self._limit_param_name = "limit"
         self._offset_param_name = "offset"
 
@@ -577,7 +567,6 @@ class LimitOffsetFilter(PaginationFilter):
         limit_placeholder = exp.Placeholder(this=limit_param_name)
         offset_placeholder = exp.Placeholder(this=offset_param_name)
 
-        # Handle None case for statement._statement
         if statement._statement is None:
             new_statement = exp.Select().limit(limit_placeholder)
         else:
@@ -592,7 +581,6 @@ class LimitOffsetFilter(PaginationFilter):
 
         result = statement.copy(statement=new_statement)
 
-        # Add parameters with the (possibly unique) names
         result = result.add_named_parameter(limit_param_name, self.limit)
         return result.add_named_parameter(offset_param_name, self.offset)
 
@@ -631,7 +619,6 @@ class OrderByFilter(StatementFilter):
         col_expr = exp.column(self.field_name)
         order_expr = col_expr.desc() if converted_sort_order == "desc" else col_expr.asc()
 
-        # Handle None case for statement._statement
         if statement._statement is None:
             new_statement = exp.Select().order_by(order_expr)
         elif isinstance(statement._statement, exp.Select):
@@ -647,10 +634,9 @@ class OrderByFilter(StatementFilter):
 
 
 class SearchFilter(StatementFilter):
-    """Data required to construct a ``WHERE field_name LIKE '%' || :value || '%'`` clause.
+    """Filter for text search queries.
 
-    Note:
-        After applying this filter, only the filter's parameters (e.g., the generated search parameter) will be present in the resulting SQL statement's parameters. Original parameters from the statement are not preserved in the result.
+    Constructs WHERE field_name LIKE '%value%' clauses.
     """
 
     __slots__ = ("_param_name", "field_name", "ignore_case", "value")
@@ -840,9 +826,3 @@ FilterTypes: TypeAlias = Union[
     AnyCollectionFilter[Any],
     NotAnyCollectionFilter[Any],
 ]
-
-
-# Implementation status tracking
-__module_status__ = "IMPLEMENTED"  # PLACEHOLDER → BUILDING → TESTING → COMPLETE
-__compatibility_target__ = "100%"  # Must maintain complete compatibility
-__integration_target__ = "Core pipeline"  # Integration with enhanced SQL system

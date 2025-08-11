@@ -15,7 +15,7 @@ __all__ = ("AsyncMigrationTracker", "SyncMigrationTracker")
 
 
 class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
-    """Sync version - tracks applied migrations in the database."""
+    """Tracks applied migrations in the database."""
 
     def ensure_tracking_table(self, driver: "SyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
@@ -60,7 +60,6 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             description: Description of the migration.
             execution_time_ms: Execution time in milliseconds.
             checksum: MD5 checksum of the migration content.
-            connection: Optional connection to use for the operation.
         """
         driver.execute(
             self._get_record_migration_sql(
@@ -74,19 +73,18 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
             version: Version number to remove.
-            connection: Optional connection to use for the operation.
         """
         driver.execute(self._get_remove_migration_sql(version))
 
 
 class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
-    """Async version - tracks applied migrations in the database."""
+    """Tracks applied migrations in the database."""
 
     async def ensure_tracking_table(self, driver: "AsyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
 
         Args:
-            driver: The async database driver to use.
+            driver: The database driver to use.
         """
         await driver.execute(self._get_create_table_sql())
 
@@ -94,7 +92,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         """Get the latest applied migration version.
 
         Args:
-            driver: The async database driver to use.
+            driver: The database driver to use.
 
         Returns:
             The current version number or None if no migrations applied.
@@ -106,7 +104,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         """Get all applied migrations in order.
 
         Args:
-            driver: The async database driver to use.
+            driver: The database driver to use.
 
         Returns:
             List of migration records.
@@ -120,7 +118,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         """Record a successfully applied migration.
 
         Args:
-            driver: The async database driver to use.
+            driver: The database driver to use.
             version: Version number of the migration.
             description: Description of the migration.
             execution_time_ms: Execution time in milliseconds.
@@ -136,7 +134,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         """Remove a migration record (used during downgrade).
 
         Args:
-            driver: The async database driver to use.
+            driver: The database driver to use.
             version: Version number to remove.
         """
         await driver.execute(self._get_remove_migration_sql(version))

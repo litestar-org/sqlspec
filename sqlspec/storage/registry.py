@@ -32,19 +32,16 @@ FSSPEC_ONLY_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https", "ftp", 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class StorageRegistry:
-    """Unified storage registry with URI-first access and intelligent backend selection.
+    """Storage registry with URI-first access and automatic backend selection.
 
-    Implements URI-first access pattern with automatic ObStore preference and
-    intelligent FSSpec fallback for unsupported schemes. Named aliases support
-    complex configurations with dependency-aware backend selection.
+    Provides URI-first access pattern with automatic backend selection.
+    Named aliases support complex configurations.
 
     Examples:
-        # Primary usage: Direct URI access (no registration needed)
-        backend = registry.get("s3://my-bucket/file.parquet")    # ObStore preferred
-        backend = registry.get("file:///tmp/data.csv")          # Obstore for local files
-        backend = registry.get("gs://bucket/data.json")         # ObStore for GCS
+        backend = registry.get("s3://my-bucket/file.parquet")
+        backend = registry.get("file:///tmp/data.csv")
+        backend = registry.get("gs://bucket/data.json")
 
-        # Secondary usage: Named aliases for complex configurations
         registry.register_alias(
             "production-s3",
             uri="s3://prod-bucket/data",
@@ -52,7 +49,7 @@ class StorageRegistry:
             aws_access_key_id="...",
             aws_secret_access_key="..."
         )
-        backend = registry.get("production-s3")  # Uses alias
+        backend = registry.get("production-s3")
     """
 
     __slots__ = ("_alias_configs", "_aliases", "_cache", "_instances")
@@ -97,14 +94,14 @@ class StorageRegistry:
         self._aliases[alias] = test_config
 
     def get(self, uri_or_alias: Union[str, Path], **kwargs: Any) -> ObjectStoreProtocol:
-        """Get backend instance using URI-first routing with intelligent backend selection.
+        """Get backend instance using URI-first routing with automatic backend selection.
 
         Args:
-            uri_or_alias: URI to resolve directly OR named alias (secondary feature)
+            uri_or_alias: URI to resolve directly OR named alias
             **kwargs: Additional backend-specific configuration options
 
         Returns:
-            Backend instance with automatic ObStore preference and FSSpec fallback
+            Backend instance with automatic backend selection
 
         Raises:
             ImproperConfigurationError: If alias not found or invalid input
@@ -158,7 +155,7 @@ class StorageRegistry:
         raise MissingDependencyError(msg)
 
     def _determine_backend_class(self, uri: str) -> type[ObjectStoreProtocol]:
-        """Determine the best backend class for a URI based on availability and capabilities."""
+        """Determine the backend class for a URI based on availability."""
         scheme = self._get_scheme(uri)
         if scheme in FSSPEC_ONLY_SCHEMES and FSSPEC_INSTALLED:
             return self._get_backend_class("fsspec")

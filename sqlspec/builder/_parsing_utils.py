@@ -32,7 +32,6 @@ def parse_column_expression(column_input: Union[str, exp.Expression, Any]) -> ex
     if isinstance(column_input, exp.Expression):
         return column_input
 
-    # Handle our custom Column objects
     if has_expression_attr(column_input):
         attr_value = getattr(column_input, "_expression", None)
         if isinstance(attr_value, exp.Expression):
@@ -44,7 +43,6 @@ def parse_column_expression(column_input: Union[str, exp.Expression, Any]) -> ex
 def parse_table_expression(table_input: str, explicit_alias: Optional[str] = None) -> exp.Expression:
     """Parses a table string that can be a name, a name with an alias, or a subquery string."""
     with contextlib.suppress(Exception):
-        # Wrapping in a SELECT statement is a robust way to parse various table-like syntaxes
         parsed = parse_one(f"SELECT * FROM {table_input}")
         if isinstance(parsed, exp.Select) and parsed.args.get("from"):
             from_clause = cast("exp.From", parsed.args.get("from"))
@@ -110,7 +108,6 @@ def parse_condition_expression(
         column_expr = parse_column_expression(column)
         if value is None:
             return exp.Is(this=column_expr, expression=exp.null())
-        # Use builder's parameter system if available
         if builder and has_parameter_builder(builder):
             _, param_name = builder.add_parameter(value)
             return exp.EQ(this=column_expr, expression=exp.Placeholder(this=param_name))
@@ -124,19 +121,15 @@ def parse_condition_expression(
         condition_input = str(condition_input)
 
     try:
-        # Parse as condition using SQLGlot's condition parser
         return exp.condition(condition_input)
     except Exception:
-        # If that fails, try parsing as a general expression
         try:
             parsed = exp.maybe_parse(condition_input)  # type: ignore[var-annotated]
             if parsed:
                 return parsed  # type:ignore[no-any-return]
         except Exception:  # noqa: S110
-            # SQLGlot condition parsing failed, will use raw condition
             pass
 
-    # Ultimate fallback: treat as raw condition string
     return exp.condition(condition_input)
 
 

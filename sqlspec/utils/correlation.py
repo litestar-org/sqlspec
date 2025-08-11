@@ -68,14 +68,12 @@ class CorrelationContext:
         if correlation_id is None:
             correlation_id = cls.generate()
 
-        # Save the current correlation ID
         previous_id = cls.get()
 
         try:
             cls.set(correlation_id)
             yield correlation_id
         finally:
-            # Restore the previous correlation ID
             cls.set(previous_id)
 
     @classmethod
@@ -111,7 +109,6 @@ def correlation_context(correlation_id: str | None = None) -> Generator[str, Non
                 "Processing request",
                 extra={"correlation_id": correlation_id},
             )
-            # All operations within this context will have the same correlation ID
         ```
     """
     with CorrelationContext.context(correlation_id) as cid:

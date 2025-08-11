@@ -61,11 +61,10 @@ def run_(async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]") -
     """Convert an async function to a blocking function using asyncio.run().
 
     Args:
-        async_function (Callable): The async function to convert.
+        async_function: The async function to convert.
 
     Returns:
-        Callable: A blocking function that runs the async function.
-
+        A blocking function that runs the async function.
     """
 
     @functools.wraps(async_function)
@@ -77,7 +76,6 @@ def run_(async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]") -
             loop = None
 
         if loop is not None:
-            # Running in an existing event loop
             return asyncio.run(partial_f())
         if uvloop and sys.platform != "win32":
             uvloop.install()  # pyright: ignore[reportUnknownMemberType]
@@ -92,12 +90,12 @@ def await_(
     """Convert an async function to a blocking one, running in the main async loop.
 
     Args:
-        async_function (Callable): The async function to convert.
-        raise_sync_error (bool, optional): If False, runs in a new event loop if no loop is present.
-                                         If True (default), raises RuntimeError if no loop is running.
+        async_function: The async function to convert.
+        raise_sync_error: If False, runs in a new event loop if no loop is present.
+                         If True (default), raises RuntimeError if no loop is running.
 
     Returns:
-        Callable: A blocking function that runs the async function.
+        A blocking function that runs the async function.
     """
 
     @functools.wraps(async_function)
@@ -136,12 +134,11 @@ def async_(
     """Convert a blocking function to an async one using asyncio.to_thread().
 
     Args:
-        function (Callable): The blocking function to convert.
-        cancellable (bool, optional): Allow cancellation of the operation.
-        limiter (CapacityLimiter, optional): Limit the total number of threads.
+        function: The blocking function to convert.
+        limiter: Limit the total number of threads.
 
     Returns:
-        Callable: An async function that runs the original function in a thread.
+        An async function that runs the original function in a thread.
     """
 
     @functools.wraps(function)
@@ -160,10 +157,10 @@ def ensure_async_(
     """Convert a function to an async one if it is not already.
 
     Args:
-        function (Callable): The function to convert.
+        function: The function to convert.
 
     Returns:
-        Callable: An async function that runs the original function.
+        An async function that runs the original function.
     """
     if inspect.iscoroutinefunction(function):
         return function
@@ -200,10 +197,10 @@ def with_ensure_async_(
     """Convert a context manager to an async one if it is not already.
 
     Args:
-        obj (AbstractContextManager[T] or AbstractAsyncContextManager[T]): The context manager to convert.
+        obj: The context manager to convert.
 
     Returns:
-        AbstractAsyncContextManager[T]: An async context manager that runs the original context manager.
+        An async context manager that runs the original context manager.
     """
 
     if isinstance(obj, AbstractContextManager):
@@ -212,30 +209,22 @@ def with_ensure_async_(
 
 
 class NoValue:
-    """A fake "Empty class"""
+    """Sentinel class for missing values."""
 
 
 async def get_next(iterable: Any, default: Any = NoValue, *args: Any) -> Any:  # pragma: no cover
     """Return the next item from an async iterator.
 
-    In Python <3.10, `anext` is not available. This function is a drop-in replacement.
-
-    This function will return the next value form an async iterable. If the
-    iterable is empty the StopAsyncIteration will be propagated. However, if
-    a default value is given as a second argument the exception is silenced and
-    the default value is returned instead.
-
     Args:
         iterable: An async iterable.
         default: An optional default value to return if the iterable is empty.
         *args: The remaining args
-    Return:
+
+    Returns:
         The next value of the iterable.
 
     Raises:
         StopAsyncIteration: The iterable given is not async.
-
-
     """
     has_default = bool(not isinstance(default, NoValue))
     try:

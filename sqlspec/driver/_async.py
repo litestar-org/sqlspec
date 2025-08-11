@@ -1,18 +1,7 @@
-"""Enhanced asynchronous driver protocol implementation with CORE_ROUND_3 architecture integration.
+"""Asynchronous driver protocol implementation.
 
-This module provides the async driver infrastructure using only sqlspec.core modules:
-- Direct integration with sqlspec.core.statement for SQL processing
-- sqlspec.core.parameters for optimized parameter handling
-- sqlspec.core.cache for unified caching
-- sqlspec.core.config for centralized configuration
-- sqlspec.core.splitter for script splitting
-- sqlspec.core.result for enhanced result processing
-
-Performance Improvements:
-- 5-10x faster SQL compilation through single-pass processing
-- 40-60% memory reduction through __slots__ optimization
-- Enhanced caching for repeated statement execution
-- Zero-copy parameter processing where possible
+This module provides the async driver infrastructure for database adapters,
+including connection management, transaction support, and result processing.
 """
 
 from abc import abstractmethod
@@ -42,48 +31,28 @@ EMPTY_FILTERS: "list[StatementFilter]" = []
 
 
 class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToSchemaMixin):
-    """Enhanced async driver base class with CORE_ROUND_3 architecture integration.
+    """Base class for asynchronous database drivers.
 
-    This async driver base class leverages the complete core module system for maximum performance:
-
-    Performance Improvements:
-    - 5-10x faster SQL compilation through single-pass processing
-    - 40-60% memory reduction through __slots__ optimization
-    - Enhanced caching for repeated statement execution
-    - Zero-copy parameter processing where possible
-    - Async-optimized resource management
-
-    Core Integration Features:
-    - sqlspec.core.statement for enhanced SQL processing
-    - sqlspec.core.parameters for optimized parameter handling
-    - sqlspec.core.cache for unified statement caching
-    - sqlspec.core.config for centralized configuration management
-
-    Compatibility:
-    - 100% backward compatibility with existing async driver interface
-    - All existing async driver tests pass without modification
-    - Complete StatementConfig API compatibility
-    - Preserved async execution patterns and exception handling
+    Provides the foundation for async database adapters, including connection management,
+    transaction support, and SQL execution methods. All database operations are performed
+    asynchronously and support context manager patterns for proper resource cleanup.
     """
 
     __slots__ = ()
 
     async def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
-        """Central execution dispatcher using the Template Method Pattern with core optimization.
+        """Central execution dispatcher using the Template Method Pattern.
 
-        This method orchestrates the common execution flow, delegating
-        database-specific steps to abstract methods that concrete adapters
-        must implement. Enhanced with core module integration for performance.
-
-        All database operations are wrapped in the mandatory exception handler,
-        ensuring consistent error handling across all drivers.
+        Orchestrates the common execution flow, delegating database-specific steps
+        to abstract methods that concrete adapters must implement.
+        All database operations are wrapped in exception handling.
 
         Args:
             statement: The SQL statement to execute
             connection: The database connection to use
 
         Returns:
-            The result of the SQL execution with core result processing
+            The result of the SQL execution
         """
         async with self.handle_database_exceptions(), self.with_cursor(connection) as cursor:
             special_result = await self._try_special_handling(cursor, statement)
@@ -103,9 +72,8 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
     def with_cursor(self, connection: Any) -> Any:
         """Create and return an async context manager for cursor acquisition and cleanup.
 
-        This method should return an async context manager that yields a cursor.
-        For async drivers, this is typically implemented using a custom async
-        context manager class with enhanced resource management.
+        Returns an async context manager that yields a cursor for database operations.
+        Concrete implementations handle database-specific cursor creation and cleanup.
         """
 
     @abstractmethod
@@ -145,10 +113,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         """
 
     async def _execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
-        """Execute a SQL script (multiple statements) using enhanced core processing.
+        """Execute a SQL script containing multiple statements.
 
-        Default implementation splits script and executes statements individually using
-        core module optimization for statement parsing and parameter processing.
+        Default implementation splits the script and executes statements individually.
         Drivers can override for database-specific script execution methods.
 
         Args:
@@ -162,7 +129,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
 
         for stmt in statements:
-            # Create individual statement for each script part with core processing
             single_stmt = statement.copy(statement=stmt, parameters=prepared_parameters)
             await self._execute_statement(cursor, single_stmt)
 
@@ -172,40 +138,30 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
 
     @abstractmethod
     async def _execute_many(self, cursor: Any, statement: "SQL") -> ExecutionResult:
-        """Execute SQL with multiple parameter sets (executemany) using core optimization.
+        """Execute SQL with multiple parameter sets (executemany).
 
-        Must be implemented by each driver for database-specific executemany logic
-        with core parameter processing for enhanced type handling and parameter conversion.
+        Must be implemented by each driver for database-specific executemany logic.
 
         Args:
             cursor: Database cursor/connection object
             statement: SQL statement object with all necessary data and configuration
-                      Use statement.sql and statement.parameters for driver data
 
         Returns:
             ExecutionResult with execution data for the many operation
-
-        Raises:
-            NotImplementedError: Must be implemented by driver subclasses
         """
 
     @abstractmethod
     async def _execute_statement(self, cursor: Any, statement: "SQL") -> ExecutionResult:
-        """Execute a single SQL statement using enhanced core processing.
+        """Execute a single SQL statement.
 
-        Must be implemented by each driver for database-specific execution logic
-        with core processing for optimal parameter handling and result processing.
+        Must be implemented by each driver for database-specific execution logic.
 
         Args:
             cursor: Database cursor/connection object
             statement: SQL statement object with all necessary data and configuration
-                      Use statement.sql and statement.parameters for driver data
 
         Returns:
             ExecutionResult with execution data
-
-        Raises:
-            NotImplementedError: Must be implemented by driver subclasses
         """
 
     async def execute(
@@ -216,7 +172,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "SQLResult":
-        """Execute a statement with enhanced core processing and parameter handling."""
+        """Execute a statement with parameter handling."""
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )
@@ -231,19 +187,15 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "SQLResult":
-        """Execute statement multiple times with different parameters using core optimization.
+        """Execute statement multiple times with different parameters.
 
         Parameters passed will be used as the batch execution sequence.
-        Enhanced with core parameter processing for optimal performance.
         """
         config = statement_config or self.statement_config
 
-        # Create SQL object with is_many=True and execute_many parameters using core processing
         if isinstance(statement, SQL):
-            # If already a SQL object, create a new one with is_many=True and the execute_many parameters
             sql_statement = SQL(statement._raw_sql, parameters, statement_config=config, is_many=True, **kwargs)
         else:
-            # Create new SQL object directly with is_many=True (handles str, QueryBuilder via prepare_statement logic)
             base_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
             sql_statement = SQL(base_statement._raw_sql, parameters, statement_config=config, is_many=True, **kwargs)
 
@@ -257,11 +209,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "SQLResult":
-        """Execute a multi-statement script with enhanced core processing.
+        """Execute a multi-statement script.
 
         By default, validates each statement and logs warnings for dangerous
         operations. Use suppress_warnings=True for migrations and admin scripts.
-        Enhanced with core module integration for better performance.
         """
         script_config = statement_config or self.statement_config
         sql_statement = self.prepare_statement(statement, parameters, statement_config=script_config, kwargs=kwargs)
@@ -299,10 +250,9 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "Union[ModelT, RowT,ModelDTOT]":  # pyright: ignore[reportInvalidTypeVarUse]
-        """Execute a select statement and return exactly one row with core result processing.
+        """Execute a select statement and return exactly one row.
 
         Raises an exception if no rows or more than one row is returned.
-        Enhanced with core module integration for better performance.
         """
         result = await self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         data = result.get_data()
@@ -348,11 +298,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "Optional[Union[ModelT, ModelDTOT]]":  # pyright: ignore[reportInvalidTypeVarUse]
-        """Execute a select statement and return at most one row with core result processing.
+        """Execute a select statement and return at most one row.
 
         Returns None if no rows are found.
         Raises an exception if more than one row is returned.
-        Enhanced with core module integration for better performance.
         """
         result = await self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         data = result.get_data()
@@ -393,7 +342,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "Union[list[ModelT], list[ModelDTOT]]":  # pyright: ignore[reportInvalidTypeVarUse]
-        """Execute a select statement and return all rows with core result processing."""
+        """Execute a select statement and return all rows."""
         result = await self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         return cast(
             "Union[list[ModelT], list[ModelDTOT]]",
@@ -408,11 +357,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> Any:
-        """Execute a select statement and return a single scalar value with core processing.
+        """Execute a select statement and return a single scalar value.
 
         Expects exactly one row with one column.
         Raises an exception if no rows or more than one row/column is returned.
-        Enhanced with core module integration for better performance.
         """
         result = await self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         try:
@@ -444,12 +392,11 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> Any:
-        """Execute a select statement and return a single scalar value or None with core processing.
+        """Execute a select statement and return a single scalar value or None.
 
         Returns None if no rows are found.
         Expects at most one row with one column.
         Raises an exception if more than one row is returned.
-        Enhanced with core module integration for better performance.
         """
         result = await self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         data = result.get_data()
@@ -499,11 +446,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> "tuple[Union[list[dict[str, Any]], list[ModelDTOT]], int]":
-        """Execute a select statement and return both the data and total count with core optimization.
+        """Execute a select statement and return both the data and total count.
 
         This method is designed for pagination scenarios where you need both
         the current page of data and the total number of rows that match the query.
-        Enhanced with core module integration for better performance.
 
         Args:
             statement: The SQL statement, QueryBuilder, or raw SQL string
@@ -516,13 +462,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, To
             A tuple containing:
             - List of data rows (transformed by schema_type if provided)
             - Total count of rows matching the query (ignoring LIMIT/OFFSET)
-
-        Example:
-            >>> data, total = await driver.select_with_total(
-            ...     "SELECT * FROM users WHERE active = ? LIMIT 10 OFFSET 20",
-            ...     True,
-            ... )
-            >>> print(f"Page data: {len(data)} rows, Total: {total} rows")
         """
         sql_statement = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs

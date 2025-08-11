@@ -1,18 +1,10 @@
-"""Enhanced ADBC driver with CORE_ROUND_3 architecture integration.
+"""ADBC driver implementation for Arrow Database Connectivity.
 
-This driver implements the complete CORE_ROUND_3 architecture for:
-- 5-10x faster SQL compilation through single-pass processing
-- 40-60% memory reduction through __slots__ optimization
-- Enhanced caching for repeated statement execution
-- Complete backward compatibility with existing functionality
-
-Architecture Features:
-- Direct integration with sqlspec.core modules
-- Enhanced parameter processing with type coercion
-- ADBC-optimized resource management
-- MyPyC-optimized performance patterns
-- Zero-copy data access where possible
-- Multi-dialect support with automatic detection
+This module provides ADBC driver integration with support for:
+- Multi-dialect database connections through ADBC
+- Arrow-native data handling with type coercion
+- Parameter style conversion for different database backends
+- Transaction management with proper error handling
 """
 
 import contextlib
@@ -43,7 +35,6 @@ __all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "get_adbc_stateme
 
 logger = get_logger("adapters.adbc")
 
-# Enhanced ADBC dialect detection patterns
 DIALECT_PATTERNS = {
     "postgres": ["postgres", "postgresql"],
     "bigquery": ["bigquery"],
@@ -53,7 +44,6 @@ DIALECT_PATTERNS = {
     "snowflake": ["snowflake"],
 }
 
-# Enhanced parameter style configuration per dialect
 DIALECT_PARAMETER_STYLES = {
     "postgres": (ParameterStyle.NUMERIC, [ParameterStyle.NUMERIC]),
     "postgresql": (ParameterStyle.NUMERIC, [ParameterStyle.NUMERIC]),
@@ -177,14 +167,13 @@ def _adbc_ast_transformer(expression: Any, parameters: Any) -> tuple[Any, Any]:
 
 
 def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
-    """Create ADBC statement configuration for the specified dialect with core optimizations."""
+    """Create ADBC statement configuration for the specified dialect."""
     default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
         detected_dialect, (ParameterStyle.QMARK, [ParameterStyle.QMARK])
     )
 
     type_map = get_type_coercion_map(detected_dialect)
 
-    # Normalize dialect for SQLGlot compatibility
     sqlglot_dialect = "postgres" if detected_dialect == "postgresql" else detected_dialect
 
     parameter_config = ParameterStyleConfig(
@@ -194,16 +183,14 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
         supported_execution_parameter_styles=set(supported_styles),
         type_coercion_map=type_map,
         has_native_list_expansion=True,
-        needs_static_script_compilation=False,  # Use parameter binding for ADBC/Arrow compatibility
+        needs_static_script_compilation=False,
         preserve_parameter_format=True,
-        # Use AST transformer for PostgreSQL to handle NULL parameters
         ast_transformer=_adbc_ast_transformer if detected_dialect in {"postgres", "postgresql"} else None,
     )
 
     return StatementConfig(
         dialect=sqlglot_dialect,
         parameter_config=parameter_config,
-        # Core processing features enabled for performance
         enable_parsing=True,
         enable_validation=True,
         enable_caching=True,
@@ -212,21 +199,15 @@ def get_adbc_statement_config(detected_dialect: str) -> StatementConfig:
 
 
 def _convert_array_for_postgres_adbc(value: Any) -> Any:
-    """Convert array values for PostgreSQL ADBC compatibility.
-
-    Simple array handling for ADBC - complex array issues are now handled
-    by the global parameter processing pipeline with remove_null_parameters=True.
-    """
+    """Convert array values for PostgreSQL ADBC compatibility."""
     if isinstance(value, tuple):
         return list(value)
     return value
 
 
 def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
-    """Get type coercion map for Arrow/ADBC type handling with enhanced compatibility."""
+    """Get type coercion map for Arrow/ADBC type handling."""
     type_map = {
-        # Standard type coercions for Arrow/ADBC compatibility
-        # NULL parameters are preserved for proper Arrow type inference
         datetime.datetime: lambda x: x,
         datetime.date: lambda x: x,
         datetime.time: lambda x: x,
@@ -241,7 +222,6 @@ def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
         dict: lambda x: x,
     }
 
-    # PostgreSQL-specific type handling
     if dialect in {"postgres", "postgresql"}:
         type_map[dict] = lambda x: to_json(x) if x is not None else None
 
@@ -249,7 +229,7 @@ def get_type_coercion_map(dialect: str) -> "dict[type, Any]":
 
 
 class AdbcCursor:
-    """Context manager for ADBC cursor management with enhanced error handling."""
+    """Context manager for ADBC cursor management."""
 
     __slots__ = ("connection", "cursor")
 
@@ -262,7 +242,7 @@ class AdbcCursor:
         return self.cursor
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
+        _ = (exc_type, exc_val, exc_tb)
         if self.cursor is not None:
             with contextlib.suppress(Exception):
                 self.cursor.close()  # type: ignore[no-untyped-call]
@@ -280,9 +260,7 @@ class AdbcExceptionHandler:
         if exc_type is None:
             return
 
-        # Handle ADBC-specific exceptions based on DB-API 2.0 standard
         try:
-            # Import ADBC exceptions dynamically to avoid import errors
             from adbc_driver_manager.dbapi import DatabaseError, IntegrityError, OperationalError, ProgrammingError
 
             if issubclass(exc_type, IntegrityError):
@@ -307,8 +285,6 @@ class AdbcExceptionHandler:
                 raise SQLSpecError(msg) from e
         except ImportError:
             pass
-
-        # Handle generic exceptions that might indicate SQL parsing issues
         if issubclass(exc_type, Exception):
             e = exc_val
             error_msg = str(e).lower()
@@ -320,35 +296,13 @@ class AdbcExceptionHandler:
 
 
 class AdbcDriver(SyncDriverAdapterBase):
-    """Enhanced ADBC driver with CORE_ROUND_3 architecture integration.
+    """ADBC driver for Arrow Database Connectivity.
 
-    This driver leverages the complete core module system for maximum performance:
-
-    Performance Improvements:
-    - 5-10x faster SQL compilation through single-pass processing
-    - 40-60% memory reduction through __slots__ optimization
-    - Enhanced caching for repeated statement execution
-    - Zero-copy parameter processing where possible
-    - ADBC-optimized resource management
-
-    Core Integration Features:
-    - sqlspec.core.statement for enhanced SQL processing
-    - sqlspec.core.parameters for optimized parameter handling
-    - sqlspec.core.cache for unified statement caching
-    - sqlspec.core.config for centralized configuration management
-
-    ADBC Features:
+    Provides database connectivity through ADBC with support for:
     - Multi-database dialect support with automatic detection
     - Arrow-native data handling with type coercion
-    - PostgreSQL-specific compatibility optimizations
-    - Enhanced NULL parameter handling for ADBC requirements
-    - Arrow Flight SQL support for distributed databases
-
-    Compatibility:
-    - 100% backward compatibility with existing ADBC driver interface
-    - All existing tests pass without modification
-    - Complete StatementConfig API compatibility
-    - Preserved dialect detection and parameter style handling
+    - Parameter style conversion for different backends
+    - Transaction management with proper error handling
     """
 
     __slots__ = ("_detected_dialect", "dialect")
@@ -359,18 +313,13 @@ class AdbcDriver(SyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Detect database dialect from ADBC connection
         self._detected_dialect = self._get_dialect(connection)
 
-        # Enhanced configuration with global settings integration
         if statement_config is None:
             cache_config = get_cache_config()
             base_config = get_adbc_statement_config(self._detected_dialect)
-            # Don't override the dialect - get_adbc_statement_config already normalized it
             enhanced_config = base_config.replace(
-                enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,  # Default to enabled
-                enable_validation=True,  # Default to enabled
+                enable_caching=cache_config.compiled_cache_enabled, enable_parsing=True, enable_validation=True
             )
             statement_config = enhanced_config
 
@@ -387,7 +336,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
     @staticmethod
     def _get_dialect(connection: "AdbcConnection") -> str:
-        """Detect database dialect from ADBC connection information with enhanced accuracy."""
+        """Detect database dialect from ADBC connection information."""
         try:
             driver_info = connection.adbc_get_info()
             vendor_name = driver_info.get("vendor_name", "").lower()
@@ -404,20 +353,20 @@ class AdbcDriver(SyncDriverAdapterBase):
         return "postgres"
 
     def _handle_postgres_rollback(self, cursor: "Cursor") -> None:
-        """Execute rollback for PostgreSQL after transaction failure with enhanced error handling."""
+        """Execute rollback for PostgreSQL after transaction failure."""
         if self.dialect == "postgres":
             with contextlib.suppress(Exception):
                 cursor.execute("ROLLBACK")
                 logger.debug("PostgreSQL rollback executed after ADBC transaction failure")
 
     def _handle_postgres_empty_parameters(self, parameters: Any) -> Any:
-        """Process empty parameters for PostgreSQL compatibility with enhanced type handling."""
+        """Process empty parameters for PostgreSQL compatibility."""
         if self.dialect == "postgres" and isinstance(parameters, dict) and not parameters:
             return None
         return parameters
 
     def with_cursor(self, connection: "AdbcConnection") -> "AdbcCursor":
-        """Create context manager for ADBC cursor with enhanced resource management."""
+        """Create context manager for ADBC cursor."""
         return AdbcCursor(connection)
 
     def handle_database_exceptions(self) -> "AbstractContextManager[None]":
@@ -425,33 +374,27 @@ class AdbcDriver(SyncDriverAdapterBase):
         return AdbcExceptionHandler()
 
     def _try_special_handling(self, cursor: "Cursor", statement: SQL) -> "Optional[SQLResult]":
-        """Handle ADBC-specific operations (currently none).
+        """Handle ADBC-specific operations.
 
         Args:
-            cursor: ADBC cursor object (reserved for future use)
-            statement: SQL statement to analyze (reserved for future use)
+            cursor: ADBC cursor object
+            statement: SQL statement to analyze
 
         Returns:
             SQLResult if special operation was handled, None for standard execution
         """
-        _ = (cursor, statement)  # Reserved for future ADBC-specific optimizations
+        _ = (cursor, statement)
         return None
 
     def _execute_many(self, cursor: "Cursor", statement: SQL) -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using optimized batch processing.
-
-        Leverages ADBC's executemany for efficient batch operations with
-        enhanced parameter format handling and PostgreSQL compatibility.
-        """
+        """Execute SQL with multiple parameter sets using batch processing."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         try:
             if not prepared_parameters:
-                # Handle empty parameters case
                 cursor._rowcount = 0
                 row_count = 0
             elif isinstance(prepared_parameters, list) and prepared_parameters:
-                # Process each parameter set for ADBC compatibility
                 processed_params = []
                 for param_set in prepared_parameters:
                     postgres_compatible = self._handle_postgres_empty_parameters(param_set)
@@ -474,11 +417,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
     def _execute_statement(self, cursor: "Cursor", statement: SQL) -> "ExecutionResult":
-        """Execute single SQL statement with enhanced data handling and performance optimization.
-
-        Uses core processing for optimal parameter handling and result processing.
-        Includes ADBC-specific optimizations for Arrow data handling.
-        """
+        """Execute single SQL statement with ADBC-specific data handling."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
         try:
@@ -489,12 +428,10 @@ class AdbcDriver(SyncDriverAdapterBase):
             self._handle_postgres_rollback(cursor)
             raise
 
-        # Enhanced SELECT result processing
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
 
-            # Handle Arrow/ADBC result format conversion
             if fetched_data and isinstance(fetched_data[0], tuple):
                 dict_data: list[dict[Any, Any]] = [dict(zip(column_names, row)) for row in fetched_data]
             else:
@@ -508,21 +445,14 @@ class AdbcDriver(SyncDriverAdapterBase):
                 is_select_result=True,
             )
 
-        # Enhanced non-SELECT result processing
         row_count = cursor.rowcount if cursor.rowcount is not None else -1
         return self.create_execution_result(cursor, rowcount_override=row_count)
 
     def _execute_script(self, cursor: "Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script with ADBC-specific handling for transaction isolation.
-
-        ADBC drivers may have transaction isolation issues where individual statements
-        in a script run in separate transactions. This implementation ensures proper
-        transaction handling for script execution.
-        """
-        # For scripts, use the raw SQL directly since _get_compiled_sql only processes the first statement
+        """Execute SQL script with ADBC-specific transaction handling."""
         if statement.is_script:
             sql = statement._raw_sql
-            prepared_parameters: list[Any] = []  # Scripts use static compilation, so no parameters
+            prepared_parameters: list[Any] = []
         else:
             sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
@@ -531,7 +461,6 @@ class AdbcDriver(SyncDriverAdapterBase):
         successful_count = 0
         last_rowcount = 0
 
-        # Execute statements individually to ensure proper execution
         try:
             for stmt in statements:
                 if prepared_parameters:
@@ -555,9 +484,8 @@ class AdbcDriver(SyncDriverAdapterBase):
             is_script_result=True,
         )
 
-    # Enhanced transaction management with ADBC-specific optimizations
     def begin(self) -> None:
-        """Begin database transaction with enhanced error handling."""
+        """Begin database transaction."""
         try:
             with self.with_cursor(self.connection) as cursor:
                 cursor.execute("BEGIN")
@@ -566,7 +494,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     def rollback(self) -> None:
-        """Rollback database transaction with enhanced error handling."""
+        """Rollback database transaction."""
         try:
             with self.with_cursor(self.connection) as cursor:
                 cursor.execute("ROLLBACK")
@@ -575,7 +503,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     def commit(self) -> None:
-        """Commit database transaction with enhanced error handling."""
+        """Commit database transaction."""
         try:
             with self.with_cursor(self.connection) as cursor:
                 cursor.execute("COMMIT")

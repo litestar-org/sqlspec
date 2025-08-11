@@ -1,4 +1,4 @@
-"""Test ADBC Arrow-specific features and integrations using CORE_ROUND_3 architecture."""
+"""Test ADBC Arrow-specific features and integrations."""
 
 from collections.abc import Generator
 
@@ -26,8 +26,7 @@ def adbc_postgresql_session(postgres_service: PostgresService) -> Generator[Adbc
 
 @pytest.mark.xdist_group("postgres")
 def test_arrow_table_metadata_handling(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test Arrow table metadata handling with ADBC using CORE_ROUND_3."""
-    # Create table with various column types for metadata testing
+    """Test Arrow table metadata handling with ADBC."""
     adbc_postgresql_session.execute_script("""
         CREATE TABLE IF NOT EXISTS arrow_metadata_test (
             id SERIAL PRIMARY KEY,
@@ -41,7 +40,6 @@ def test_arrow_table_metadata_handling(adbc_postgresql_session: AdbcDriver) -> N
         )
     """)
 
-    # Insert test data
     adbc_postgresql_session.execute(
         """
         INSERT INTO arrow_metadata_test (name, age, salary, is_active, tags, metadata)
@@ -50,16 +48,13 @@ def test_arrow_table_metadata_handling(adbc_postgresql_session: AdbcDriver) -> N
         ("John Doe", 30, 75000.50, True, ["developer", "senior"], {"department": "engineering", "level": "senior"}),
     )
 
-    # Query with column metadata
     result = adbc_postgresql_session.execute("SELECT * FROM arrow_metadata_test")
     assert isinstance(result, SQLResult)
 
-    # Verify column names are preserved
     expected_columns = ["id", "name", "age", "salary", "is_active", "created_at", "tags", "metadata"]
     for col in expected_columns:
         assert col in result.column_names
 
-    # Verify data types are handled correctly
     assert result.data is not None
     row = result.data[0]
     assert isinstance(row["id"], int)
@@ -68,14 +63,12 @@ def test_arrow_table_metadata_handling(adbc_postgresql_session: AdbcDriver) -> N
     assert isinstance(row["is_active"], bool)
     assert isinstance(row["tags"], list)
 
-    # Clean up
     adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS arrow_metadata_test")
 
 
 @pytest.mark.xdist_group("postgres")
 def test_arrow_null_value_handling(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test Arrow NULL value handling with ADBC using CORE_ROUND_3."""
-    # Create table for NULL testing
+    """Test Arrow NULL value handling with ADBC."""
     adbc_postgresql_session.execute_script("""
         CREATE TABLE IF NOT EXISTS arrow_null_test (
             id SERIAL PRIMARY KEY,
@@ -87,13 +80,11 @@ def test_arrow_null_value_handling(adbc_postgresql_session: AdbcDriver) -> None:
         )
     """)
 
-    # Insert rows with various NULL patterns
-    # Start with non-NULL case to establish schema, then test NULL handling
     test_cases = [
-        ("text1", 42, True, 123.45, [1, 2, 3]),  # No NULLs - establish schema first
-        (None, None, None, None, None),  # All NULLs
-        ("text2", None, False, None, None),  # Mixed NULLs
-        (None, 100, None, 200.00, [4, 5]),  # Mixed NULLs different pattern
+        ("text1", 42, True, 123.45, [1, 2, 3]),
+        (None, None, None, None, None),
+        ("text2", None, False, None, None),
+        (None, 100, None, 200.00, [4, 5]),
     ]
 
     for case in test_cases:
@@ -106,13 +97,11 @@ def test_arrow_null_value_handling(adbc_postgresql_session: AdbcDriver) -> None:
             case,
         )
 
-    # Query and verify NULL handling
     result = adbc_postgresql_session.execute("SELECT * FROM arrow_null_test ORDER BY id")
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert len(result.data) == 4
 
-    # Verify non-NULL values (first inserted row)
     no_nulls_row = result.data[0]
     assert no_nulls_row["nullable_text"] == "text1"
     assert no_nulls_row["nullable_int"] == 42
@@ -120,7 +109,6 @@ def test_arrow_null_value_handling(adbc_postgresql_session: AdbcDriver) -> None:
     assert float(no_nulls_row["nullable_decimal"]) == 123.45
     assert no_nulls_row["nullable_array"] == [1, 2, 3]
 
-    # Verify NULL preservation (second inserted row - all NULLs)
     all_nulls_row = result.data[1]
     assert all_nulls_row["nullable_text"] is None
     assert all_nulls_row["nullable_int"] is None
@@ -128,14 +116,12 @@ def test_arrow_null_value_handling(adbc_postgresql_session: AdbcDriver) -> None:
     assert all_nulls_row["nullable_decimal"] is None
     assert all_nulls_row["nullable_array"] is None
 
-    # Clean up
     adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS arrow_null_test")
 
 
 @pytest.mark.xdist_group("postgres")
 def test_arrow_large_dataset_handling(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test Arrow handling of larger datasets with ADBC using CORE_ROUND_3."""
-    # Create table for large dataset testing
+    """Test Arrow handling of larger datasets with ADBC."""
     adbc_postgresql_session.execute_script("""
         CREATE TABLE IF NOT EXISTS arrow_large_test (
             id SERIAL PRIMARY KEY,
@@ -145,7 +131,6 @@ def test_arrow_large_dataset_handling(adbc_postgresql_session: AdbcDriver) -> No
         )
     """)
 
-    # Generate and insert larger dataset (1000 rows)
     batch_size = 100
     total_rows = 1000
 
@@ -162,13 +147,11 @@ def test_arrow_large_dataset_handling(adbc_postgresql_session: AdbcDriver) -> No
             batch_data,
         )
 
-    # Query entire dataset
     result = adbc_postgresql_session.execute("SELECT COUNT(*) as total_count FROM arrow_large_test")
     assert isinstance(result, SQLResult)
     assert result.data is not None
     assert result.data[0]["total_count"] == total_rows
 
-    # Query with pagination to test Arrow streaming
     page_size = 50
     page_result = adbc_postgresql_session.execute(
         """
@@ -183,13 +166,11 @@ def test_arrow_large_dataset_handling(adbc_postgresql_session: AdbcDriver) -> No
     assert page_result.data is not None
     assert len(page_result.data) == page_size
 
-    # Verify ordering and data integrity
     for i, row in enumerate(page_result.data):
-        expected_id = 101 + i  # OFFSET 100 means starting from ID 101
+        expected_id = 101 + i
         assert row["name"] == f"name_{expected_id - 1:04d}"
         assert row["value"] == (expected_id - 1) * 10
 
-    # Test aggregation on large dataset
     agg_result = adbc_postgresql_session.execute("""
         SELECT
             COUNT(*) as count,
@@ -210,7 +191,6 @@ def test_arrow_large_dataset_handling(adbc_postgresql_session: AdbcDriver) -> No
     expected_avg = sum(range(total_rows)) * 10 / total_rows
     assert abs(float(agg_row["avg_value"]) - expected_avg) < 0.01
 
-    # Clean up
     adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS arrow_large_test")
 
 
@@ -218,11 +198,10 @@ def test_arrow_large_dataset_handling(adbc_postgresql_session: AdbcDriver) -> No
 @xfail_if_driver_missing
 @pytest.mark.xfail(reason="DuckDB ADBC driver has not fully implemented executemany support yet")
 def test_arrow_duckdb_advanced_analytics() -> None:
-    """Test DuckDB advanced analytics with Arrow using CORE_ROUND_3."""
+    """Test DuckDB advanced analytics with Arrow."""
     config = AdbcConfig(connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"})
 
     with config.provide_session() as session:
-        # Create analytical test dataset
         session.execute_script("""
             CREATE TABLE analytics_test (
                 id INTEGER,
@@ -233,7 +212,6 @@ def test_arrow_duckdb_advanced_analytics() -> None:
             )
         """)
 
-        # Insert analytical test data
         analytical_data = [
             (1, "A", 100.5, "2024-01-01 10:00:00", ["tag1", "tag2"]),
             (2, "B", 200.3, "2024-01-01 11:00:00", ["tag2", "tag3"]),
@@ -249,7 +227,6 @@ def test_arrow_duckdb_advanced_analytics() -> None:
             analytical_data,
         )
 
-        # Test DuckDB analytical functions with Arrow
         analytical_query = session.execute("""
             SELECT
                 category,
@@ -267,14 +244,12 @@ def test_arrow_duckdb_advanced_analytics() -> None:
 
         assert isinstance(analytical_query, SQLResult)
         assert analytical_query.data is not None
-        assert len(analytical_query.data) == 3  # Categories A, B, C
+        assert len(analytical_query.data) == 3
 
-        # Verify category A results
         category_a = next(row for row in analytical_query.data if row["category"] == "A")
         assert category_a["record_count"] == 2
-        assert abs(category_a["avg_value"] - 125.6) < 0.1  # (100.5 + 150.7) / 2
+        assert abs(category_a["avg_value"] - 125.6) < 0.1
 
-        # Test window functions
         window_query = session.execute("""
             SELECT
                 id,
@@ -294,11 +269,10 @@ def test_arrow_duckdb_advanced_analytics() -> None:
 
 @pytest.mark.xdist_group("adbc_sqlite")
 def test_arrow_sqlite_binary_data() -> None:
-    """Test Arrow binary data handling with SQLite using CORE_ROUND_3."""
+    """Test Arrow binary data handling with SQLite."""
     config = AdbcConfig(connection_config={"uri": ":memory:", "driver_name": "adbc_driver_sqlite"})
 
     with config.provide_session() as session:
-        # Create table for binary data testing
         session.execute_script("""
             CREATE TABLE binary_test (
                 id INTEGER PRIMARY KEY,
@@ -308,13 +282,12 @@ def test_arrow_sqlite_binary_data() -> None:
             )
         """)
 
-        # Test various binary data patterns
         binary_test_cases = [
             ("small_binary", b"small data", len(b"small data")),
             ("empty_binary", b"", 0),
             ("null_binary", None, None),
-            ("large_binary", b"x" * 1000, 1000),  # 1KB of data
-            ("mixed_binary", bytes(range(256)), 256),  # All byte values
+            ("large_binary", b"x" * 1000, 1000),
+            ("mixed_binary", bytes(range(256)), 256),
         ]
 
         for name, binary_data, size in binary_test_cases:
@@ -325,20 +298,17 @@ def test_arrow_sqlite_binary_data() -> None:
                 (name, binary_data, size),
             )
 
-        # Query and verify binary data handling
         result = session.execute("SELECT * FROM binary_test ORDER BY name")
         assert isinstance(result, SQLResult)
         assert result.data is not None
         assert len(result.data) == len(binary_test_cases)
 
-        # Verify each test case - order by name for consistent comparison
         expected_by_name = {name: (data, size) for name, data, size in binary_test_cases}
         for row in result.data:
             expected_data, expected_size = expected_by_name[row["name"]]
             assert row["binary_data"] == expected_data
             assert row["binary_size"] == expected_size
 
-        # Test binary data queries
         large_binary_result = session.execute("""
             SELECT name, length(binary_data) as actual_size, binary_size
             FROM binary_test
@@ -347,7 +317,7 @@ def test_arrow_sqlite_binary_data() -> None:
 
         assert isinstance(large_binary_result, SQLResult)
         assert large_binary_result.data is not None
-        assert len(large_binary_result.data) == 2  # large_binary and mixed_binary
+        assert len(large_binary_result.data) == 2
 
         for row in large_binary_result.data:
             assert row["actual_size"] == row["binary_size"]
@@ -356,8 +326,7 @@ def test_arrow_sqlite_binary_data() -> None:
 @pytest.mark.xdist_group("postgres")
 @pytest.mark.xfail(reason="ADBC PostgreSQL driver has array binding issues with Arrow schema inference")
 def test_arrow_postgresql_array_operations(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test PostgreSQL array operations with Arrow using CORE_ROUND_3."""
-    # Create table for array testing
+    """Test PostgreSQL array operations with Arrow."""
     adbc_postgresql_session.execute_script("""
         CREATE TABLE IF NOT EXISTS array_operations_test (
             id SERIAL PRIMARY KEY,
@@ -368,12 +337,11 @@ def test_arrow_postgresql_array_operations(adbc_postgresql_session: AdbcDriver) 
         )
     """)
 
-    # Insert array test data
     array_test_data = [
         ("arrays1", [1, 2, 3, 4, 5], ["a", "b", "c"], [[1, 2], [3, 4]]),
         ("arrays2", [10, 20, 30], ["x", "y", "z"], [[10, 20], [30, 40]]),
-        ("arrays3", [], [], []),  # Empty arrays
-        ("arrays4", None, None, None),  # NULL arrays
+        ("arrays3", [], [], []),
+        ("arrays4", None, None, None),
     ]
 
     for name, int_arr, text_arr, nested_arr in array_test_data:
@@ -385,7 +353,6 @@ def test_arrow_postgresql_array_operations(adbc_postgresql_session: AdbcDriver) 
             (name, int_arr, text_arr, nested_arr),
         )
 
-    # Test array operations and functions
     array_ops_result = adbc_postgresql_session.execute("""
         SELECT
             name,
@@ -403,9 +370,8 @@ def test_arrow_postgresql_array_operations(adbc_postgresql_session: AdbcDriver) 
 
     assert isinstance(array_ops_result, SQLResult)
     assert array_ops_result.data is not None
-    assert len(array_ops_result.data) == 3  # Excluding NULL array row
+    assert len(array_ops_result.data) == 3
 
-    # Verify array operations
     first_row = array_ops_result.data[0]
     assert first_row["name"] == "arrays1"
     assert first_row["int_array"] == [1, 2, 3, 4, 5]
@@ -416,7 +382,6 @@ def test_arrow_postgresql_array_operations(adbc_postgresql_session: AdbcDriver) 
     assert first_row["first_text"] == "a"
     assert first_row["concatenated_array"] == [1, 2, 3, 4, 5, 99, 100]
 
-    # Test array containment and overlap
     containment_result = adbc_postgresql_session.execute("""
         SELECT
             name,
@@ -432,9 +397,8 @@ def test_arrow_postgresql_array_operations(adbc_postgresql_session: AdbcDriver) 
     assert containment_result.data is not None
 
     arrays1_row = containment_result.data[0]
-    assert arrays1_row["contains_2_3"] is True  # [1,2,3,4,5] contains [2,3]
-    assert arrays1_row["overlaps_with_3_6_9"] is True  # [1,2,3,4,5] overlaps with [3,6,9] on 3
+    assert arrays1_row["contains_2_3"] is True
+    assert arrays1_row["overlaps_with_3_6_9"] is True
     assert arrays1_row["array_cardinality"] == 5
 
-    # Clean up
     adbc_postgresql_session.execute_script("DROP TABLE IF EXISTS array_operations_test")

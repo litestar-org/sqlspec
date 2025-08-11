@@ -29,7 +29,6 @@ from sqlspec.core.result import SQLResult
 __all__ = ("Select",)
 
 
-# This pattern is formatted with the table name and compiled for each hint.
 TABLE_HINT_PATTERN = r"\b{}\b(\s+AS\s+\w+)?"
 
 
@@ -76,15 +75,12 @@ class Select(
         """
         super().__init__(**kwargs)
 
-        # Manually initialize dataclass fields here because a custom __init__ is defined.
-        # This is necessary to support the `Select("col1", "col2")` shorthand initialization.
         self._with_parts = {}
         self._expression = None
         self._hints = []
 
         self._create_base_expression()
 
-        # Add columns if provided - just a shorthand for .select()
         if columns:
             self.select(*columns)
 
@@ -140,13 +136,11 @@ class Select(
         if isinstance(modified_expr, exp.Select):
             statement_hints = [h["hint"] for h in self._hints if h.get("location") == "statement"]
             if statement_hints:
-                # Parse each hint and create proper hint expressions
                 hint_expressions = []
 
                 def parse_hint(hint: Any) -> exp.Expression:
-                    """Parse a single hint with error handling."""
+                    """Parse a single hint."""
                     try:
-                        # Try to parse hint as an expression (e.g., "INDEX(users idx_name)")
                         hint_str = str(hint)  # Ensure hint is a string
                         hint_expr: Optional[exp.Expression] = exp.maybe_parse(hint_str, dialect=self.dialect_name)
                         if hint_expr:
@@ -161,8 +155,6 @@ class Select(
                     hint_node = exp.Hint(expressions=hint_expressions)
                     modified_expr.set("hint", hint_node)
 
-        # For table-level hints, we'll fall back to comment injection in SQL
-        # since SQLGlot doesn't have a standard way to attach hints to individual tables
         modified_sql = modified_expr.sql(dialect=self.dialect_name, pretty=True)
 
         table_hints = [h for h in self._hints if h.get("location") == "table" and h.get("table")]
@@ -170,7 +162,6 @@ class Select(
             for th in table_hints:
                 table = str(th["table"])
                 hint = th["hint"]
-                # More precise regex that captures the table and optional alias
                 pattern = TABLE_HINT_PATTERN.format(re.escape(table))
                 compiled_pattern = re.compile(pattern, re.IGNORECASE)
 

@@ -1,22 +1,7 @@
 """Global conftest.py for SQLSpec unit tests.
 
-Comprehensive shared fixtures following CORE_ROUND_3 architecture and pytest best practices.
-Provides fixtures for configuration, caching, SQL statements, mock databases, cleanup,
-and performance testing with proper scoping and test isolation.
-
-Fixture Categories:
-1. Configuration fixtures - StatementConfig, CacheConfig, and database configurations
-2. Cache fixtures - Mock cache instances and cache statistics tracking
-3. SQL fixtures - Sample SQL statements, parameters, and test data
-4. Mock database fixtures - Connections, cursors, and drivers for all supported databases
-5. Cleanup fixtures - Test isolation and cleanup functions with autouse
-6. Performance fixtures - Timing and benchmark utilities for performance testing
-
-Architecture Alignment:
-- Based on CORE_ROUND_3 architecture with core module fixtures
-- Compatible with existing test patterns from adapter conftest files
-- Provides unified fixture system for both sync and async testing
-- Supports all 12 database adapters with consistent mock interfaces
+Provides comprehensive fixtures for configuration, caching, SQL statements, mock databases,
+cleanup, and performance testing with proper scoping and test isolation.
 """
 
 import time

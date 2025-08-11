@@ -1,18 +1,10 @@
-"""Enhanced AsyncPG PostgreSQL driver with CORE_ROUND_3 architecture integration.
+"""AsyncPG PostgreSQL driver implementation for async PostgreSQL operations.
 
-This driver implements the complete CORE_ROUND_3 architecture for:
-- 5-10x faster SQL compilation through single-pass processing
-- 40-60% memory reduction through __slots__ optimization
-- Enhanced caching for repeated statement execution
-- Complete backward compatibility with existing functionality
-
-Architecture Features:
-- Direct integration with sqlspec.core modules
-- Enhanced parameter processing with type coercion
-- Async-optimized resource management
-- MyPyC-optimized performance patterns
-- Zero-copy data access where possible
+Provides async PostgreSQL connectivity with:
+- Parameter processing with type coercion
+- Resource management
 - PostgreSQL COPY operation support
+- Transaction management
 """
 
 import re

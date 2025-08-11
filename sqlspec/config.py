@@ -42,11 +42,6 @@ DriverT = TypeVar("DriverT", bound="Union[SyncDriverAdapterBase, AsyncDriverAdap
 logger = get_logger("config")
 
 
-# ==========================================
-# Unified Parameter Framework - Phase 1.1
-# ==========================================
-
-
 class LifecycleConfig(TypedDict, total=False):
     """Universal lifecycle hooks for all adapters.
 
@@ -170,17 +165,17 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self.driver_features = driver_features or {}
 
     def create_connection(self) -> ConnectionT:
-        """Create connection with instrumentation."""
+        """Create a database connection."""
         raise NotImplementedError
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[ConnectionT]":
-        """Provide connection with instrumentation."""
+        """Provide a database connection context manager."""
         raise NotImplementedError
 
     def provide_session(
         self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
     ) -> "AbstractContextManager[DriverT]":
-        """Provide session with instrumentation."""
+        """Provide a database session context manager."""
         raise NotImplementedError
 
     def create_pool(self) -> None:
@@ -223,17 +218,17 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self.driver_features = driver_features or {}
 
     async def create_connection(self) -> ConnectionT:
-        """Create connection with instrumentation."""
+        """Create a database connection."""
         raise NotImplementedError
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractAsyncContextManager[ConnectionT]":
-        """Provide connection with instrumentation."""
+        """Provide a database connection context manager."""
         raise NotImplementedError
 
     def provide_session(
         self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
     ) -> "AbstractAsyncContextManager[DriverT]":
-        """Provide session with instrumentation."""
+        """Provide a database session context manager."""
         raise NotImplementedError
 
     async def create_pool(self) -> None:
@@ -277,7 +272,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.driver_features = driver_features or {}
 
     def create_pool(self) -> PoolT:
-        """Create pool with instrumentation.
+        """Create and return the connection pool.
 
         Returns:
             The created pool.
@@ -288,7 +283,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         return self.pool_instance
 
     def close_pool(self) -> None:
-        """Close pool with instrumentation."""
+        """Close the connection pool."""
         self._close_pool()
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
@@ -298,17 +293,17 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         return self.pool_instance
 
     def create_connection(self) -> ConnectionT:
-        """Create connection with instrumentation."""
+        """Create a database connection."""
         raise NotImplementedError
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[ConnectionT]":
-        """Provide connection with instrumentation."""
+        """Provide a database connection context manager."""
         raise NotImplementedError
 
     def provide_session(
         self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
     ) -> "AbstractContextManager[DriverT]":
-        """Provide session with instrumentation."""
+        """Provide a database session context manager."""
         raise NotImplementedError
 
     @abstractmethod
@@ -355,7 +350,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         self.driver_features = driver_features or {}
 
     async def create_pool(self) -> PoolT:
-        """Create pool with instrumentation.
+        """Create and return the connection pool.
 
         Returns:
             The created pool.
@@ -366,7 +361,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         return self.pool_instance
 
     async def close_pool(self) -> None:
-        """Close pool with instrumentation."""
+        """Close the connection pool."""
         await self._close_pool()
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
@@ -376,17 +371,17 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         return self.pool_instance
 
     async def create_connection(self) -> ConnectionT:
-        """Create connection with instrumentation."""
+        """Create a database connection."""
         raise NotImplementedError
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractAsyncContextManager[ConnectionT]":
-        """Provide connection with instrumentation."""
+        """Provide a database connection context manager."""
         raise NotImplementedError
 
     def provide_session(
         self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
     ) -> "AbstractAsyncContextManager[DriverT]":
-        """Provide session with instrumentation."""
+        """Provide a database session context manager."""
         raise NotImplementedError
 
     @abstractmethod

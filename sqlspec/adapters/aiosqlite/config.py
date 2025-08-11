@@ -29,26 +29,16 @@ BUSY_TIMEOUT_SQL: Final[str] = "PRAGMA busy_timeout = 5000"  # 5 seconds
 
 
 class AiosqliteConnectionPool:
-    """Optimized connection pool for Aiosqlite.
+    """Connection pool for Aiosqlite using a single shared connection approach.
 
-    Instead of traditional pooling (which adds overhead for SQLite), this uses
-    a single shared connection per database file. Aiosqlite internally handles
-    queuing and serialization of operations, making pooling unnecessary.
-
-    This approach matches SQLAlchemy's StaticPool strategy for SQLite and
-    provides better performance by eliminating pool management overhead.
-
-    Key optimizations:
-    - Single shared connection eliminates pool overhead
-    - Aiosqlite's internal queue handles serialization
-    - WAL mode enables better concurrency
-    - Busy timeout handles transient locks gracefully
+    Uses a single shared connection per database file since aiosqlite internally
+    handles queuing and serialization of operations.
     """
 
     __slots__ = ("_closed", "_connection", "_connection_parameters", "_lock")
 
     def __init__(self, connection_parameters: "dict[str, Any]") -> None:
-        """Initialize optimized connection manager.
+        """Initialize connection manager.
 
         Args:
             connection_parameters: SQLite connection parameters
@@ -62,10 +52,8 @@ class AiosqliteConnectionPool:
         """Ensure we have a valid connection, creating one if needed."""
         async with self._lock:
             if self._connection is None or self._closed:
-                # Create new connection with optimizations
                 self._connection = await aiosqlite.connect(**self._connection_parameters)
 
-                # Apply core PRAGMAs for performance
                 await self._connection.execute(WAL_PRAGMA_SQL)
                 await self._connection.execute(FOREIGN_KEYS_SQL)
                 await self._connection.execute(SYNC_NORMAL_SQL)
@@ -73,7 +61,7 @@ class AiosqliteConnectionPool:
                 await self._connection.commit()
 
                 self._closed = False
-                logger.debug("Created new aiosqlite connection with optimizations")
+                logger.debug("Created new aiosqlite connection")
 
             return self._connection
 
@@ -81,19 +69,11 @@ class AiosqliteConnectionPool:
     async def get_connection(self) -> "AsyncGenerator[AiosqliteConnection, None]":
         """Get the shared connection.
 
-        This returns the single shared connection. Aiosqlite handles
-        internal queuing of operations, so we don't need connection pooling.
-
         Yields:
             The shared Aiosqlite connection instance.
         """
         connection = await self._ensure_connection()
-
-        # Just yield the connection - no need to return it to a pool
-        # since we're using a single shared connection
         yield connection
-
-        # No cleanup needed - connection stays open for reuse
 
     async def close(self) -> None:
         """Close the shared connection."""
@@ -104,20 +84,16 @@ class AiosqliteConnectionPool:
                 self._closed = True
                 logger.debug("Closed aiosqlite connection")
 
-    # Compatibility methods for code expecting pool-like interface
     def size(self) -> int:
-        """Get connection count (always 0 or 1 for single connection)."""
+        """Get connection count."""
         return 0 if self._closed or self._connection is None else 1
 
     def checked_out(self) -> int:
-        """Get number of checked out connections (always 0 for shared connection)."""
+        """Get number of checked out connections."""
         return 0
 
     async def acquire(self) -> "AiosqliteConnection":
         """Get the shared connection directly.
-
-        For compatibility with pool-like interface. The connection
-        doesn't need to be released since it's shared.
 
         Returns:
             The shared connection instance.
@@ -127,13 +103,10 @@ class AiosqliteConnectionPool:
     async def release(self, connection: "AiosqliteConnection") -> None:
         """No-op release for compatibility.
 
-        Since we use a single shared connection, there's nothing to release.
-
         Args:
             connection: Connection to release (ignored)
         """
-        _ = connection  # Mark as intentionally unused
-        # No-op - shared connection doesn't need releasing
+        _ = connection
 
 
 class AiosqliteConnectionParams(TypedDict, total=False):
@@ -149,7 +122,7 @@ class AiosqliteConnectionParams(TypedDict, total=False):
 
 
 class AiosqliteConfig(AsyncDatabaseConfig):
-    """Database configuration for AioSQLite engine with optimized connection management."""
+    """Database configuration for AioSQLite engine."""
 
     driver_type: ClassVar[type[AiosqliteDriver]] = AiosqliteDriver
     cursor_type: ClassVar[type[AiosqliteCursor]] = AiosqliteCursor
@@ -163,7 +136,7 @@ class AiosqliteConfig(AsyncDatabaseConfig):
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
     ) -> None:
-        """Initialize AioSQLite configuration with optimized connection management.
+        """Initialize AioSQLite configuration.
 
         Args:
             pool_instance: Optional pre-configured connection pool instance.
@@ -171,13 +144,7 @@ class AiosqliteConfig(AsyncDatabaseConfig):
             migration_config: Optional migration configuration.
             statement_config: Optional statement configuration.
             **kwargs: Additional connection parameters.
-
-        Notes:
-            Database path should be specified via pool_config["database"] or kwargs["database"].
-            If not specified, defaults to ":memory:" (shared memory mode).
         """
-        # Parse connection parameters from pool_config and kwargs
-        # kwargs should override pool_config values
         connection_params = {}
         if pool_config:
             connection_params.update(pool_config)
@@ -215,7 +182,6 @@ class AiosqliteConfig(AsyncDatabaseConfig):
             result["database"] = "file::memory:?cache=shared"
             result["uri"] = True
 
-        # Remove any pool-related parameters since we don't use pooling
         for pool_param in ["pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds"]:
             result.pop(pool_param, None)
 
@@ -223,7 +189,7 @@ class AiosqliteConfig(AsyncDatabaseConfig):
 
     @asynccontextmanager
     async def provide_connection(self) -> "AsyncGenerator[AiosqliteConnection, None]":
-        """Provide a database connection using optimized connection management.
+        """Provide a database connection.
 
         Yields:
             AiosqliteConnection: Database connection instance.
@@ -235,17 +201,17 @@ class AiosqliteConfig(AsyncDatabaseConfig):
     async def provide_session(
         self, *args: Any, statement_config: "Optional[StatementConfig]" = None, **kwargs: Any
     ) -> "AsyncGenerator[AiosqliteDriver, None]":
-        """Provide an async database session using optimized connection management.
+        """Provide an async database session.
 
         Args:
-            *args: Additional positional arguments (unused but required for compatibility).
+            *args: Additional positional arguments.
             statement_config: Optional statement configuration override.
-            **kwargs: Additional keyword arguments (unused but required for compatibility).
+            **kwargs: Additional keyword arguments.
 
         Yields:
             AiosqliteDriver: Database session instance.
         """
-        _ = args, kwargs  # Mark as intentionally unused
+        _ = args, kwargs
         effective_statement_config = statement_config or self.statement_config
         async with self.pool_instance.get_connection() as connection:
             session = self.driver_type(connection, statement_config=effective_statement_config)
@@ -278,10 +244,7 @@ class AiosqliteConfig(AsyncDatabaseConfig):
         return self.pool_instance
 
     async def _close_pool(self) -> None:
-        """Close the connection manager.
-
-        Closes the shared connection and releases resources.
-        """
+        """Close the connection manager."""
         if self.pool_instance:
             await self.pool_instance.close()
 

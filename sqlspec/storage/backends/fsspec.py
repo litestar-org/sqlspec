@@ -57,11 +57,11 @@ class _ArrowStreamer:
 
 
 class FSSpecBackend(ObjectStoreBase):
-    """Extended protocol support via fsspec.
+    """Storage backend using fsspec.
 
-    This backend implements the ObjectStoreProtocol using fsspec,
-    providing support for extended protocols not covered by obstore
-    and offering fallback capabilities.
+    Implements the ObjectStoreProtocol using fsspec,
+    providing support for various protocols including HTTP, HTTPS, FTP,
+    and cloud storage services.
     """
 
     _default_capabilities: ClassVar[StorageCapabilities] = StorageCapabilities(
@@ -323,18 +323,15 @@ class FSSpecBackend(ObjectStoreBase):
             yield from self._stream_file_batches(obj_path)
 
     async def read_bytes_async(self, path: Union[str, Path], **kwargs: Any) -> bytes:
-        """Async read bytes. Wraps the sync implementation."""
+        """Read bytes from storage asynchronously."""
         return await async_(self.read_bytes)(path, **kwargs)
 
     async def write_bytes_async(self, path: Union[str, Path], data: bytes, **kwargs: Any) -> None:
-        """Async write bytes. Wraps the sync implementation."""
+        """Write bytes to storage asynchronously."""
         return await async_(self.write_bytes)(path, data, **kwargs)
 
     def stream_arrow_async(self, pattern: str, **kwargs: Any) -> "AsyncIterator[ArrowRecordBatch]":
-        """Async stream Arrow record batches.
-
-        This implementation provides file-level async streaming. Each file is
-        read into memory before its batches are processed.
+        """Stream Arrow record batches from storage asynchronously.
 
         Args:
             pattern: The glob pattern to match.
@@ -349,41 +346,41 @@ class FSSpecBackend(ObjectStoreBase):
         return _ArrowStreamer(self, pattern, **kwargs)
 
     async def read_text_async(self, path: Union[str, Path], encoding: str = "utf-8", **kwargs: Any) -> str:
-        """Async read text. Wraps the sync implementation."""
+        """Read text from storage asynchronously."""
         return await async_(self.read_text)(path, encoding, **kwargs)
 
     async def write_text_async(self, path: Union[str, Path], data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
-        """Async write text. Wraps the sync implementation."""
+        """Write text to storage asynchronously."""
         await async_(self.write_text)(path, data, encoding, **kwargs)
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> list[str]:
-        """Async list objects. Wraps the sync implementation."""
+        """List objects in storage asynchronously."""
         return await async_(self.list_objects)(prefix, recursive, **kwargs)
 
     async def exists_async(self, path: Union[str, Path], **kwargs: Any) -> bool:
-        """Async exists check. Wraps the sync implementation."""
+        """Check if object exists in storage asynchronously."""
         return await async_(self.exists)(path, **kwargs)
 
     async def delete_async(self, path: Union[str, Path], **kwargs: Any) -> None:
-        """Async delete. Wraps the sync implementation."""
+        """Delete object from storage asynchronously."""
         await async_(self.delete)(path, **kwargs)
 
     async def copy_async(self, source: Union[str, Path], destination: Union[str, Path], **kwargs: Any) -> None:
-        """Async copy. Wraps the sync implementation."""
+        """Copy object in storage asynchronously."""
         await async_(self.copy)(source, destination, **kwargs)
 
     async def move_async(self, source: Union[str, Path], destination: Union[str, Path], **kwargs: Any) -> None:
-        """Async move. Wraps the sync implementation."""
+        """Move object in storage asynchronously."""
         await async_(self.move)(source, destination, **kwargs)
 
     async def get_metadata_async(self, path: Union[str, Path], **kwargs: Any) -> dict[str, Any]:
-        """Async get metadata. Wraps the sync implementation."""
+        """Get object metadata from storage asynchronously."""
         return await async_(self.get_metadata)(path, **kwargs)
 
     async def read_arrow_async(self, path: Union[str, Path], **kwargs: Any) -> "ArrowTable":
-        """Async read Arrow. Wraps the sync implementation."""
+        """Read Arrow table from storage asynchronously."""
         return await async_(self.read_arrow)(path, **kwargs)
 
     async def write_arrow_async(self, path: Union[str, Path], table: "ArrowTable", **kwargs: Any) -> None:
-        """Async write Arrow. Wraps the sync implementation."""
+        """Write Arrow table to storage asynchronously."""
         await async_(self.write_arrow)(path, table, **kwargs)

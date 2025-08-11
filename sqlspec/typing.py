@@ -27,8 +27,6 @@ from sqlspec._typing import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    # Import runtime types for function signatures
-    # Import stub types only for TypeVar bounds
     from sqlspec._typing import (
         UNSET,
         AiosqlAsyncProtocol,
@@ -67,7 +65,6 @@ if TYPE_CHECKING:
         trace,
     )
 else:
-    # At runtime, use the real implementations if available (already handled in _typing.py)
     from sqlspec._typing import (
         UNSET,
         AiosqlAsyncProtocol,
@@ -112,10 +109,9 @@ class DictLike(Protocol):
     def __len__(self) -> int: ...
 
 
-PYDANTIC_USE_FAILFAST = False  # leave permanently disabled for now
+PYDANTIC_USE_FAILFAST = False
 
 
-# TypeVars with TYPE_CHECKING guard for mypyc compatibility
 if TYPE_CHECKING:
     T = TypeVar("T")
     ConnectionT = TypeVar("ConnectionT")

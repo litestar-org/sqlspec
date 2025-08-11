@@ -1,27 +1,22 @@
 """Base class for storage backends."""
 
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
 from mypy_extensions import mypyc_attr
 
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
-
-    from sqlspec.typing import ArrowRecordBatch, ArrowTable
+from sqlspec.typing import ArrowRecordBatch, ArrowTable
 
 __all__ = ("ObjectStoreBase",)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class ObjectStoreBase(ABC):
-    """Base class for instrumented storage backends."""
+    """Base class for storage backends."""
 
     __slots__ = ()
 
-    # Sync Operations
     @abstractmethod
     def read_bytes(self, path: str, **kwargs: Any) -> bytes:
         """Read bytes from storage."""

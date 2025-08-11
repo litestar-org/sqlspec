@@ -1,31 +1,20 @@
-"""Enhanced caching system with unified cache management.
+"""Caching system with unified cache management.
 
-This module provides the enhanced caching system that replaces multiple cache
-layers with a unified, high-performance caching infrastructure optimized for
-the CORE_ROUND_3 architecture.
+This module provides a caching system with LRU eviction and TTL support for
+SQL statement processing, parameter processing, and expression caching.
 
-Key Features:
-- Unified cache system replacing statement, AST, and parameter cache layers
-- LRU caching with configurable size and TTL
-- __slots__ optimization for memory efficiency (40-60% reduction target)
-- MyPyC optimization compatibility for critical cache operations
-- Thread-safe cache operations for concurrent access
-- Performance-optimized cache key generation and lookup
-- Integration with enhanced SQL statement system
-
-Architecture:
-- CacheKey: Immutable cache key with high-performance hashing
+Components:
+- CacheKey: Immutable cache key with optimized hashing
 - UnifiedCache: Main cache implementation with LRU eviction and TTL
 - StatementCache: Specialized cache for compiled SQL statements
 - ExpressionCache: Specialized cache for parsed SQLGlot expressions
 - ParameterCache: Specialized cache for processed parameters
 
-Critical Performance Features:
-- O(1) cache lookup and insertion operations
-- __slots__ for memory efficiency
+Features:
+- LRU caching with configurable size and TTL
+- Thread-safe cache operations for concurrent access
 - Cached hash values to avoid recomputation
-- Minimal cache key allocation overhead
-- Fast cache key comparison and hashing
+- O(1) cache lookup and insertion operations
 """
 
 import threading
@@ -74,18 +63,15 @@ CACHE_STATS_SLOTS = ("hits", "misses", "evictions", "total_operations", "memory_
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class CacheKey:
-    """High-performance immutable cache key with optimized hashing.
+    """Immutable cache key with optimized hashing.
 
-    This class provides an immutable cache key optimized for high-performance
-    lookups and minimal memory overhead. Cache keys are used across all cache
-    types to ensure consistent and fast cache operations.
+    This class provides an immutable cache key for consistent cache operations
+    across all cache types.
 
-    Performance Features:
-    - __slots__ for memory efficiency (40-60% reduction target)
+    Features:
     - Cached hash value to avoid recomputation
     - Immutable design for safe sharing across threads
     - Fast equality comparison with short-circuit evaluation
-    - MyPyC optimization compatibility
 
     Args:
         key_data: Tuple of hashable values that uniquely identify the cached item
@@ -94,13 +80,11 @@ class CacheKey:
     __slots__ = ("_hash", "_key_data")
 
     def __init__(self, key_data: tuple[Any, ...]) -> None:
-        """Initialize cache key with performance optimization.
+        """Initialize cache key.
 
         Args:
             key_data: Tuple of hashable values for the cache key
         """
-        # For mypyc compatibility, we need to set attributes directly
-        # instead of using object.__setattr__ which doesn't work well with __slots__
         self._key_data = key_data
         self._hash = hash(key_data)
 
@@ -110,11 +94,11 @@ class CacheKey:
         return self._key_data
 
     def __hash__(self) -> int:
-        """Return cached hash value for O(1) performance."""
+        """Return cached hash value."""
         return self._hash
 
     def __eq__(self, other: object) -> bool:
-        """Fast equality comparison with short-circuit evaluation."""
+        """Equality comparison with short-circuit evaluation."""
         if type(other) is not CacheKey:
             return False
         other_key = other  # type: CacheKey
@@ -129,10 +113,10 @@ class CacheKey:
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class CacheStats:
-    """Cache statistics tracking with performance monitoring.
+    """Cache statistics tracking.
 
     Tracks cache performance metrics including hit rates, evictions,
-    and memory usage for monitoring and optimization.
+    and memory usage.
     """
 
     __slots__ = CACHE_STATS_SLOTS
@@ -214,26 +198,17 @@ class CacheNode:
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class UnifiedCache(Generic[CacheValueT]):
-    """Unified high-performance cache with LRU eviction and TTL support.
+    """Cache with LRU eviction and TTL support.
 
-    This class provides a thread-safe, high-performance cache implementation
-    that replaces multiple cache layers with a unified system optimized for
-    the CORE_ROUND_3 architecture.
+    This class provides a thread-safe cache implementation with LRU eviction
+    and time-based expiration.
 
-    Performance Features:
+    Features:
     - O(1) cache lookup, insertion, and deletion operations
     - LRU eviction policy with configurable size limits
     - TTL-based expiration for cache entries
-    - Thread-safe operations with minimal lock contention
-    - __slots__ optimization for memory efficiency
-    - MyPyC compatibility for critical cache paths
-
-    Features:
-    - Configurable maximum cache size with LRU eviction
-    - Time-to-live (TTL) support for automatic cache expiration
-    - Comprehensive statistics tracking
-    - Thread-safe concurrent access
-    - Memory usage monitoring and optimization
+    - Thread-safe operations
+    - Statistics tracking
 
     Args:
         max_size: Maximum number of items to cache (LRU eviction when exceeded)
@@ -243,7 +218,7 @@ class UnifiedCache(Generic[CacheValueT]):
     __slots__ = UNIFIED_CACHE_SLOTS
 
     def __init__(self, max_size: int = DEFAULT_MAX_SIZE, ttl_seconds: Optional[int] = DEFAULT_TTL_SECONDS) -> None:
-        """Initialize unified cache with performance optimization.
+        """Initialize unified cache.
 
         Args:
             max_size: Maximum number of cache entries
@@ -255,7 +230,6 @@ class UnifiedCache(Generic[CacheValueT]):
         self._ttl = ttl_seconds
         self._stats = CacheStats()
 
-        # Initialize LRU doubly-linked list with sentinel nodes
         self._head = CacheNode(CacheKey(()), None)
         self._tail = CacheNode(CacheKey(()), None)
         self._head.next = self._tail
@@ -358,7 +332,7 @@ class UnifiedCache(Generic[CacheValueT]):
         return self._stats
 
     def _add_to_head(self, node: CacheNode) -> None:
-        """Add node right after head (most recently used position)."""
+        """Add node after head."""
         node.prev = self._head
         head_next: Optional[CacheNode] = self._head.next
         node.next = head_next
@@ -376,7 +350,7 @@ class UnifiedCache(Generic[CacheValueT]):
             node_next.prev = node_prev
 
     def _move_to_head(self, node: CacheNode) -> None:
-        """Move existing node to head (most recently used)."""
+        """Move existing node to head."""
         self._remove_node(node)
         self._add_to_head(node)
 
@@ -385,7 +359,7 @@ class UnifiedCache(Generic[CacheValueT]):
         return len(self._cache)
 
     def __contains__(self, key: CacheKey) -> bool:
-        """Check if key exists in cache (without updating LRU)."""
+        """Check if key exists in cache."""
         with self._lock:
             node: Optional[CacheNode] = self._cache.get(key)
             if node is None:
@@ -404,8 +378,7 @@ class UnifiedCache(Generic[CacheValueT]):
 class StatementCache:
     """Specialized cache for compiled SQL statements.
 
-    This cache stores compiled SQL statements and their execution parameters
-    to avoid redundant compilation and parameter processing.
+    Caches compiled SQL statements and their execution parameters.
     """
 
     def __init__(self, max_size: int = DEFAULT_MAX_SIZE) -> None:
@@ -472,8 +445,7 @@ class StatementCache:
 class ExpressionCache:
     """Specialized cache for parsed SQLGlot expressions.
 
-    This cache stores parsed SQLGlot expressions to avoid redundant parsing
-    operations, which are computationally expensive.
+    Caches parsed SQLGlot expressions to avoid redundant parsing operations.
     """
 
     def __init__(self, max_size: int = DEFAULT_MAX_SIZE) -> None:
@@ -534,8 +506,7 @@ class ExpressionCache:
 class ParameterCache:
     """Specialized cache for processed parameters.
 
-    This cache stores processed parameter transformations to avoid redundant
-    parameter processing operations.
+    Caches processed parameter transformations.
     """
 
     def __init__(self, max_size: int = DEFAULT_MAX_SIZE) -> None:
@@ -592,7 +563,6 @@ class ParameterCache:
             key_data = ("parameters", param_key, config_hash)
             return CacheKey(key_data)
         except (TypeError, ValueError):
-            # Fallback for unhashable parameters
             param_key = (str(params), type(params).__name__)  # type: ignore[assignment]
             key_data = ("parameters", param_key, config_hash)
             return CacheKey(key_data)
@@ -606,7 +576,6 @@ class ParameterCache:
         return self._cache.get_stats()
 
 
-# Global cache instances for singleton access
 _default_cache: Optional[UnifiedCache[Any]] = None
 _statement_cache: Optional[StatementCache] = None
 _expression_cache: Optional[ExpressionCache] = None
@@ -670,7 +639,6 @@ def get_parameter_cache() -> ParameterCache:
     return _parameter_cache
 
 
-# Cache management functions
 def clear_all_caches() -> None:
     """Clear all cache instances."""
     if _default_cache is not None:
@@ -701,8 +669,6 @@ def get_cache_statistics() -> dict[str, CacheStats]:
     return stats
 
 
-# Compatibility functions for legacy interface used by _common.py and base.py
-# Global cache configuration instance - managed by SQLSpec base class
 _global_cache_config: "Optional[CacheConfig]" = None
 
 
@@ -710,8 +676,7 @@ _global_cache_config: "Optional[CacheConfig]" = None
 class CacheConfig:
     """Global cache configuration for SQLSpec.
 
-    This configuration controls all caching behavior across the entire SQLSpec system.
-    Configuration is centralized and managed through the SQLSpec base class.
+    Controls caching behavior across the SQLSpec system.
     """
 
     def __init__(
@@ -884,10 +849,9 @@ def log_cache_stats() -> None:
     logger.info("Cache Statistics: %s", stats)
 
 
-# Global cache instance for SQL compilation caching with compatible interface
 @mypyc_attr(allow_interpreted_subclasses=False)
 class SQLCompilationCache:
-    """Wrapper around StatementCache to provide compatible interface for _common.py."""
+    """Wrapper around StatementCache for compatibility."""
 
     __slots__ = ("_statement_cache", "_unified_cache")
 
@@ -897,22 +861,13 @@ class SQLCompilationCache:
 
     def get(self, cache_key: str) -> Optional[tuple[str, Any]]:
         """Get cached compiled SQL and parameters."""
-        # Use the unified cache with string keys for compatibility
         key = CacheKey((cache_key,))
         return self._unified_cache.get(key)
 
     def set(self, cache_key: str, value: tuple[str, Any]) -> None:
         """Set cached compiled SQL and parameters."""
-        # Use the unified cache with string keys for compatibility
         key = CacheKey((cache_key,))
         self._unified_cache.put(key, value)
 
 
 sql_cache = SQLCompilationCache()
-
-
-# Implementation status tracking
-__module_status__ = "IMPLEMENTED"  # PLACEHOLDER → BUILDING → TESTING → COMPLETE
-__compatibility_target__ = "100%"  # Must maintain complete compatibility
-__performance_target__ = "O(1) cache operations"  # Cache performance improvement target
-__integration_target__ = "Core pipeline"  # Integration with enhanced SQL system

@@ -15,7 +15,6 @@ __all__ = ("HasStorageCapabilities", "StorageCapabilities")
 class StorageCapabilities:
     """Tracks capabilities of a storage backend."""
 
-    # Basic operations
     supports_read: bool = True
     supports_write: bool = True
     supports_delete: bool = True
@@ -25,7 +24,6 @@ class StorageCapabilities:
     supports_move: bool = True
     supports_metadata: bool = True
 
-    # Advanced operations
     supports_arrow: bool = False
     supports_streaming: bool = False
     supports_async: bool = False
@@ -33,12 +31,10 @@ class StorageCapabilities:
     supports_multipart_upload: bool = False
     supports_compression: bool = False
 
-    # Protocol-specific features
     supports_s3_select: bool = False
     supports_gcs_compose: bool = False
     supports_azure_snapshots: bool = False
 
-    # Performance characteristics
     is_remote: bool = True
     is_cloud_native: bool = False
     has_low_latency: bool = False

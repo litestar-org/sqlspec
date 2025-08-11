@@ -26,7 +26,7 @@ console = Console()
 
 
 class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
-    """SQLSpec native migration commands (sync version)."""
+    """SQLSpec native migration commands."""
 
     def __init__(self, config: "SyncConfigT") -> None:
         """Initialize migration commands.
@@ -195,13 +195,13 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
 
 
 class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
-    """SQLSpec native async migration commands."""
+    """SQLSpec native migration commands."""
 
     def __init__(self, sqlspec_config: "AsyncConfigT") -> None:
-        """Initialize async migration commands.
+        """Initialize migration commands.
 
         Args:
-            sqlspec_config: The async SQLSpec configuration.
+            sqlspec_config: The SQLSpec configuration.
         """
         super().__init__(sqlspec_config)
         self.tracker = AsyncMigrationTracker(self.version_table)
@@ -253,7 +253,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         """Upgrade to a target revision.
 
         Args:
-            revision: Target revision (default: "head" for latest).
+            revision: Target revision or "head" for latest.
         """
         async with self.config.provide_session() as driver:
             await self.tracker.ensure_tracking_table(driver)
@@ -285,7 +285,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         """Downgrade to a target revision.
 
         Args:
-            revision: Target revision (default: "-1" for one step back).
+            revision: Target revision or "-1" for one step back.
         """
         async with self.config.provide_session() as driver:
             await self.tracker.ensure_tracking_table(driver)
@@ -347,7 +347,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         """Create a new migration file.
 
         Args:
-            message: Description of the migration.
+            message: Description for the migration.
             file_type: Type of migration file to create ('sql' or 'py').
         """
         existing = await self.runner.get_migration_files()
@@ -361,10 +361,10 @@ class MigrationCommands:
     """Unified migration commands that adapt to sync/async configs."""
 
     def __init__(self, config: "Union[SyncConfigT, AsyncConfigT]") -> None:
-        """Initialize migration commands with appropriate sync/async implementation.
+        """Initialize migration commands with sync/async implementation.
 
         Args:
-            config: The SQLSpec configuration (sync or async).
+            config: The SQLSpec configuration.
         """
         if config.is_async:
             self._impl: Union[AsyncMigrationCommands[Any], SyncMigrationCommands[Any]] = AsyncMigrationCommands(

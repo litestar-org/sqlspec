@@ -146,7 +146,7 @@ class SQLFileLoader(BaseMigrationLoader):
             raise MigrationLoadError(msg)
 
     def _extract_version(self, filename: str) -> str:
-        """Extract version from filename (e.g., '0001_initial.sql' -> '0001').
+        """Extract version from filename.
 
         Args:
             filename: Migration filename to parse.
@@ -169,16 +169,12 @@ class PythonFileLoader(BaseMigrationLoader):
         Args:
             migrations_dir: Directory containing migration files.
             project_root: Optional project root directory for imports.
-                         If not provided, will search upward for project markers.
         """
         self.migrations_dir = migrations_dir
         self.project_root = project_root if project_root is not None else self._find_project_root(migrations_dir)
 
     async def get_up_sql(self, path: Path) -> list[str]:
         """Load Python migration and execute upgrade function.
-
-        Supports both 'up()' and 'migrate_up()' function names.
-        Functions can be sync or async.
 
         Args:
             path: Path to Python migration file.
@@ -192,7 +188,6 @@ class PythonFileLoader(BaseMigrationLoader):
         with self._temporary_project_path():
             module = self._load_module_from_path(path)
 
-            # Try both 'up' and 'migrate_up' function names
             upgrade_func = None
             func_name = None
 
@@ -220,9 +215,6 @@ class PythonFileLoader(BaseMigrationLoader):
     async def get_down_sql(self, path: Path) -> list[str]:
         """Load Python migration and execute downgrade function.
 
-        Supports both 'down()' and 'migrate_down()' function names.
-        Functions can be sync or async.
-
         Args:
             path: Path to Python migration file.
 
@@ -232,7 +224,6 @@ class PythonFileLoader(BaseMigrationLoader):
         with self._temporary_project_path():
             module = self._load_module_from_path(path)
 
-            # Try both 'down' and 'migrate_down' function names
             downgrade_func = None
 
             if hasattr(module, "down") and callable(module.down):
@@ -255,8 +246,6 @@ class PythonFileLoader(BaseMigrationLoader):
     def validate_migration_file(self, path: Path) -> None:
         """Validate Python migration file has required upgrade function.
 
-        Supports both 'up()' and 'migrate_up()' function names.
-
         Args:
             path: Path to Python migration file.
 
@@ -266,7 +255,6 @@ class PythonFileLoader(BaseMigrationLoader):
         with self._temporary_project_path():
             module = self._load_module_from_path(path)
 
-            # Check for either 'up' or 'migrate_up' function
             upgrade_func = None
             func_name = None
 
@@ -291,7 +279,7 @@ class PythonFileLoader(BaseMigrationLoader):
             start_path: Directory to start searching from.
 
         Returns:
-            Path to project root or fallback to parent directory.
+            Path to project root or parent directory.
         """
         current_path = start_path.resolve()
 
@@ -353,14 +341,14 @@ class PythonFileLoader(BaseMigrationLoader):
         return module
 
     def _normalize_and_validate_sql(self, sql: Any, migration_path: Path) -> list[str]:
-        """Validate return type and normalize to List[str].
+        """Validate return type and normalize to list of strings.
 
         Args:
             sql: Return value from migration function.
             migration_path: Path to migration file for error messages.
 
         Returns:
-            Normalized list of SQL statements.
+            List of SQL statements.
 
         Raises:
             MigrationLoadError: If return type is invalid.

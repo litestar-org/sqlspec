@@ -504,21 +504,8 @@ class SQLSpec:
     def update_cache_config(config: CacheConfig) -> None:
         """Update the global cache configuration.
 
-        Affects all SQL statement processing globally. Changes take
-        effect immediately for all new SQL operations.
-
-        Clears existing caches when sizes are reduced.
-
         Args:
             config: The new cache configuration to apply.
-
-        Example:
-            >>> config = CacheConfig(
-            ...     sql_cache_size=5000,
-            ...     fragment_cache_size=10000,
-            ...     optimized_cache_size=2000,
-            ... )
-            >>> SQLSpec.update_cache_config(config)
         """
         update_cache_config(config)
 
@@ -526,42 +513,19 @@ class SQLSpec:
     def get_cache_stats() -> CacheStatsAggregate:
         """Get current cache statistics.
 
-        Returns metrics for all cache layers including hit rates,
-        sizes, and eviction counts.
-
         Returns:
             Cache statistics object with detailed metrics.
-
-        Example:
-            >>> stats = SQLSpec.get_cache_stats()
-            >>> print(f"SQL Cache Hit Rate: {stats.sql_hit_rate:.2%}")
-            >>> print(
-            ...     f"Total Cache Size: {stats.sql_size + stats.fragment_size}"
-            ... )
         """
         return get_cache_stats()
 
     @staticmethod
     def reset_cache_stats() -> None:
-        """Reset all cache statistics to zero.
-
-        Used for benchmarking specific operations or monitoring cache
-        performance over specific time periods.
-
-        Example:
-            >>> SQLSpec.reset_cache_stats()
-            >>> # Run operations to benchmark
-            >>> stats = SQLSpec.get_cache_stats()
-        """
+        """Reset all cache statistics to zero."""
         reset_cache_stats()
 
     @staticmethod
     def log_cache_stats() -> None:
-        """Log current cache statistics using the configured logger.
-
-        Outputs cache metrics to the logging system for monitoring
-        and debugging purposes.
-        """
+        """Log current cache statistics using the configured logger."""
         log_cache_stats()
 
     @staticmethod
@@ -574,9 +538,7 @@ class SQLSpec:
         fragment_cache_enabled: Optional[bool] = None,
         optimized_cache_enabled: Optional[bool] = None,
     ) -> None:
-        """Convenience method to update cache configuration with partial values.
-
-        Only specified parameters will be updated; others retain current values.
+        """Update cache configuration with partial values.
 
         Args:
             sql_cache_size: Size of the SQL statement cache
@@ -585,12 +547,6 @@ class SQLSpec:
             sql_cache_enabled: Enable/disable SQL cache
             fragment_cache_enabled: Enable/disable fragment cache
             optimized_cache_enabled: Enable/disable optimized cache
-
-        Example:
-            >>> # Just increase SQL cache size
-            >>> SQLSpec.configure_cache(sql_cache_size=10000)
-            >>> # Disable fragment cache
-            >>> SQLSpec.configure_cache(fragment_cache_enabled=False)
         """
         current_config = get_cache_config()
         update_cache_config(

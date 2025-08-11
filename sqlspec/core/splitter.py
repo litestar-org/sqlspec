@@ -1,35 +1,20 @@
-"""Enhanced SQL statement splitter with unified caching and dialect support.
+"""SQL statement splitter with caching and dialect support.
 
-This module provides an enhanced SQL script statement splitter that maintains
-100% backward compatibility while integrating with the CORE_ROUND_3 architecture.
+This module provides a SQL script statement splitter with caching and
+multiple dialect support.
 
-Key Features:
-- Complete interface preservation with existing StatementSplitter
-- Enhanced caching integration with unified cache system
-- __slots__ optimization for memory efficiency (40-60% reduction target)
-- MyPyC optimization compatibility for critical tokenization paths
-- Same lexer-driven state machine with performance optimizations
-- All dialect support: Oracle, T-SQL, PostgreSQL, MySQL, SQLite, DuckDB, BigQuery
+Components:
+- StatementSplitter: SQL splitter with caching
+- DialectConfig: Dialect configuration system
+- Token/TokenType: Tokenization system
+- Caching: LRU caching for split results
+- Pattern compilation caching
 
-Architecture:
-- StatementSplitter: Enhanced splitter with identical external interface
-- DialectConfig: Complete dialect configuration system
-- Token/TokenType: Same tokenization system with performance optimizations
-- Enhanced caching: Integrated with unified cache system
-- Pattern compilation caching for improved startup performance
-
-Performance Optimizations:
-- __slots__ for 40-60% memory reduction
-- Cached pattern compilation to avoid regex recompilation
-- Enhanced LRU caching for split results
-- Optimized tokenization with reduced allocations
-- Direct method calls optimized for MyPyC compilation
-
-Critical Compatibility:
-- Same function signatures and interfaces
-- Same dialect support and token handling
-- Identical parsing behavior and results
-- Same error handling and edge cases
+Features:
+- Support for multiple SQL dialects (Oracle, T-SQL, PostgreSQL, MySQL, SQLite, DuckDB, BigQuery)
+- Cached pattern compilation
+- LRU caching for split results
+- Optimized tokenization
 - Complete preservation of split_sql_script function
 """
 
@@ -60,12 +45,10 @@ __all__ = (
 
 logger = get_logger("sqlspec.core.splitter")
 
-# Enhanced caching configuration
 DEFAULT_PATTERN_CACHE_SIZE = 1000  # Compiled regex patterns
 DEFAULT_RESULT_CACHE_SIZE = 5000  # Split results
 DEFAULT_CACHE_TTL = 3600  # 1 hour TTL
 
-# Dialect configuration slots - optimized structure
 DIALECT_CONFIG_SLOTS = (
     "_block_starters",
     "_block_enders",
@@ -76,10 +59,8 @@ DIALECT_CONFIG_SLOTS = (
     "_name",
 )
 
-# Token slots for memory optimization
 TOKEN_SLOTS = ("type", "value", "line", "column", "position")
 
-# Splitter slots for memory efficiency
 SPLITTER_SLOTS = (
     "_dialect",
     "_strip_trailing_semicolon",
@@ -92,7 +73,7 @@ SPLITTER_SLOTS = (
 
 
 class TokenType(Enum):
-    """Types of tokens recognized by the enhanced SQL lexer."""
+    """Types of tokens recognized by the SQL lexer."""
 
     COMMENT_LINE = "COMMENT_LINE"
     COMMENT_BLOCK = "COMMENT_BLOCK"
@@ -107,7 +88,7 @@ class TokenType(Enum):
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class Token:
-    """Enhanced token with optimized memory usage."""
+    """SQL token with metadata."""
 
     __slots__ = TOKEN_SLOTS
 
@@ -129,13 +110,12 @@ CompiledTokenPattern: TypeAlias = Union[Pattern[str], TokenHandler]
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class DialectConfig(ABC):
-    """Enhanced abstract base class for SQL dialect configurations."""
+    """Abstract base class for SQL dialect configurations."""
 
     __slots__ = DIALECT_CONFIG_SLOTS
 
     def __init__(self) -> None:
-        """Initialize dialect configuration with performance optimization."""
-        # Cache frequently accessed properties for performance
+        """Initialize dialect configuration."""
         self._name: Optional[str] = None
         self._block_starters: Optional[set[str]] = None
         self._block_enders: Optional[set[str]] = None
@@ -224,7 +204,7 @@ class DialectConfig(ABC):
 
 
 class OracleDialectConfig(DialectConfig):
-    """Enhanced configuration for Oracle PL/SQL dialect."""
+    """Configuration for Oracle PL/SQL dialect."""
 
     @property
     def name(self) -> str:
@@ -333,7 +313,7 @@ class OracleDialectConfig(DialectConfig):
 
 
 class TSQLDialectConfig(DialectConfig):
-    """Enhanced configuration for T-SQL (SQL Server) dialect."""
+    """Configuration for T-SQL (SQL Server) dialect."""
 
     @property
     def name(self) -> str:
@@ -367,7 +347,7 @@ class TSQLDialectConfig(DialectConfig):
 
 
 class PostgreSQLDialectConfig(DialectConfig):
-    """Enhanced configuration for PostgreSQL dialect with dollar-quoted strings."""
+    """Configuration for PostgreSQL dialect with dollar-quoted strings."""
 
     @property
     def name(self) -> str:
@@ -417,7 +397,7 @@ class PostgreSQLDialectConfig(DialectConfig):
 
 
 class GenericDialectConfig(DialectConfig):
-    """Enhanced generic SQL dialect configuration for standard SQL."""
+    """Generic SQL dialect configuration for standard SQL."""
 
     @property
     def name(self) -> str:
@@ -445,7 +425,7 @@ class GenericDialectConfig(DialectConfig):
 
 
 class MySQLDialectConfig(DialectConfig):
-    """Enhanced configuration for MySQL dialect."""
+    """Configuration for MySQL dialect."""
 
     @property
     def name(self) -> str:
@@ -479,7 +459,7 @@ class MySQLDialectConfig(DialectConfig):
 
 
 class SQLiteDialectConfig(DialectConfig):
-    """Enhanced configuration for SQLite dialect."""
+    """Configuration for SQLite dialect."""
 
     @property
     def name(self) -> str:
@@ -507,7 +487,7 @@ class SQLiteDialectConfig(DialectConfig):
 
 
 class DuckDBDialectConfig(DialectConfig):
-    """Enhanced configuration for DuckDB dialect."""
+    """Configuration for DuckDB dialect."""
 
     @property
     def name(self) -> str:
@@ -535,7 +515,7 @@ class DuckDBDialectConfig(DialectConfig):
 
 
 class BigQueryDialectConfig(DialectConfig):
-    """Enhanced configuration for BigQuery dialect."""
+    """Configuration for BigQuery dialect."""
 
     @property
     def name(self) -> str:
@@ -562,7 +542,6 @@ class BigQueryDialectConfig(DialectConfig):
         return self._statement_terminators
 
 
-# Global cache instances for enhanced performance
 _pattern_cache: Optional[UnifiedCache[list[tuple[TokenType, CompiledTokenPattern]]]] = None
 _result_cache: Optional[UnifiedCache[list[str]]] = None
 _cache_lock = threading.Lock()
@@ -594,36 +573,31 @@ def _get_result_cache() -> UnifiedCache[list[str]]:
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class StatementSplitter:
-    """Enhanced SQL script splitter with unified caching and performance optimization."""
+    """SQL script splitter with caching and dialect support."""
 
     __slots__ = SPLITTER_SLOTS
 
     def __init__(self, dialect: DialectConfig, strip_trailing_semicolon: bool = False) -> None:
-        """Initialize the enhanced splitter with caching and performance optimization."""
+        """Initialize the splitter with caching and dialect support."""
         self._dialect = dialect
         self._strip_trailing_semicolon = strip_trailing_semicolon
         self._token_patterns = dialect.get_all_token_patterns()
 
-        # Create pattern cache key for compiled patterns
         self._pattern_cache_key = f"{dialect.name}:{hash(tuple(str(p) for _, p in self._token_patterns))}"
 
-        # Get cache instances
         self._pattern_cache = _get_pattern_cache()
         self._result_cache = _get_result_cache()
 
-        # Get or compile patterns with caching
         self._compiled_patterns = self._get_or_compile_patterns()
 
     def _get_or_compile_patterns(self) -> list[tuple[TokenType, CompiledTokenPattern]]:
         """Get compiled patterns from cache or compile and cache them."""
         cache_key = CacheKey(("pattern", self._pattern_cache_key))
 
-        # Try to get from cache
         cached_patterns = self._pattern_cache.get(cache_key)
         if cached_patterns is not None:
             return cached_patterns
 
-        # Compile patterns
         compiled: list[tuple[TokenType, CompiledTokenPattern]] = []
         for token_type, pattern in self._token_patterns:
             if isinstance(pattern, str):
@@ -631,12 +605,11 @@ class StatementSplitter:
             else:
                 compiled.append((token_type, pattern))
 
-        # Cache compiled patterns
         self._pattern_cache.put(cache_key, compiled)
         return compiled
 
     def _tokenize(self, sql: str) -> Generator[Token, None, None]:
-        """Enhanced tokenization with performance optimization."""
+        """Tokenize SQL string."""
         pos = 0
         line = 1
         line_start = 0
@@ -681,25 +654,21 @@ class StatementSplitter:
                 pos += 1
 
     def split(self, sql: str) -> list[str]:
-        """Enhanced split with result caching."""
-        # Create cache key for this split operation
+        """Split SQL script with result caching."""
         script_hash = hash(sql)
         cache_key = CacheKey(("split", self._dialect.name, script_hash, self._strip_trailing_semicolon))
 
-        # Try to get from cache
         cached_result = self._result_cache.get(cache_key)
         if cached_result is not None:
             return cached_result
 
-        # Perform the actual splitting
         statements = self._do_split(sql)
 
-        # Cache the result
         self._result_cache.put(cache_key, statements)
         return statements
 
     def _do_split(self, sql: str) -> list[str]:
-        """Perform the enhanced SQL script splitting with identical behavior."""
+        """Perform SQL script splitting."""
         statements = []
         current_statement_tokens = []
         current_statement_chars = []
@@ -791,18 +760,15 @@ class StatementSplitter:
 
 
 def split_sql_script(script: str, dialect: Optional[str] = None, strip_trailing_terminator: bool = False) -> list[str]:
-    """Enhanced split function with identical interface and behavior.
-
-    Splits a SQL script into individual statements using the appropriate dialect
-    with enhanced caching and performance optimization.
+    """Split SQL script into individual statements.
 
     Args:
         script: The SQL script to split
-        dialect: The SQL dialect name ('oracle', 'tsql', 'postgresql', etc.)
+        dialect: The SQL dialect name
         strip_trailing_terminator: If True, remove trailing terminators from statements
 
     Returns:
-        List of individual SQL statements with enhanced performance
+        List of individual SQL statements
     """
     if dialect is None:
         dialect = "generic"
@@ -830,7 +796,6 @@ def split_sql_script(script: str, dialect: Optional[str] = None, strip_trailing_
     return splitter.split(script)
 
 
-# Cache management functions for enhanced performance
 def clear_splitter_caches() -> None:
     """Clear all splitter caches for memory management."""
     pattern_cache = _get_pattern_cache()
@@ -852,10 +817,3 @@ def get_splitter_cache_stats() -> dict[str, Any]:
         "pattern_cache": {"size": pattern_cache.size(), "stats": pattern_cache.get_stats()},
         "result_cache": {"size": result_cache.size(), "stats": result_cache.get_stats()},
     }
-
-
-# Implementation status tracking
-__module_status__ = "IMPLEMENTED"  # PLACEHOLDER → BUILDING → TESTING → COMPLETE
-__compatibility_target__ = "100%"  # Must maintain complete compatibility
-__performance_target__ = "Enhanced caching + 40-60% memory reduction"  # Performance improvement target
-__integration_target__ = "Core pipeline"  # Integration with CORE_ROUND_3 architecture

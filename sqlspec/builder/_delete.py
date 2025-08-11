@@ -23,23 +23,6 @@ class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromCla
     This builder provides a fluent interface for constructing SQL DELETE statements
     with automatic parameter binding and validation. It does not support JOIN
     operations to maintain cross-dialect compatibility and safety.
-
-    Example:
-        ```python
-        # Basic DELETE
-        delete_query = Delete().from_("users").where("age < 18")
-
-        # Even more concise with constructor
-        delete_query = Delete("users").where("age < 18")
-
-        # DELETE with parameterized conditions
-        delete_query = (
-            Delete()
-            .from_("users")
-            .where_eq("status", "inactive")
-            .where_in("category", ["test", "demo"])
-        )
-        ```
     """
 
     _table: "Optional[str]" = field(default=None, init=False)
@@ -53,7 +36,6 @@ class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromCla
         """
         super().__init__(**kwargs)
 
-        # Initialize fields from dataclass
         self._table = None
 
         if table:

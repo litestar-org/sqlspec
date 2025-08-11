@@ -53,8 +53,6 @@ class InsertValuesMixin:
             raise SQLBuilderError(msg)
         column_exprs = [exp.column(col) if isinstance(col, str) else col for col in columns]
         self._expression.set("columns", column_exprs)
-        # Synchronize the _columns attribute on the builder if present
-        # Some test classes may not have this attribute
         try:
             cols = self._columns  # type: ignore[attr-defined]
             if not columns:
@@ -62,7 +60,7 @@ class InsertValuesMixin:
             else:
                 cols[:] = [col.name if isinstance(col, exp.Column) else str(col) for col in columns]
         except AttributeError:
-            pass  # Test classes may not have _columns
+            pass
         return self
 
     def values(self, *values: Any) -> Self:
@@ -72,14 +70,13 @@ class InsertValuesMixin:
         if not isinstance(self._expression, exp.Insert):
             msg = "Cannot add values to a non-INSERT expression."
             raise SQLBuilderError(msg)
-        # Check column count if _columns exists
         try:
             _columns = self._columns  # type: ignore[attr-defined]
             if _columns and len(values) != len(_columns):
                 msg = f"Number of values ({len(values)}) does not match the number of specified columns ({len(_columns)})."
                 raise SQLBuilderError(msg)
         except AttributeError:
-            pass  # Test classes may not have _columns
+            pass
         row_exprs = []
         for v in values:
             if isinstance(v, exp.Expression):
@@ -120,7 +117,6 @@ class InsertFromSelectMixin:
         Raises:
             SQLBuilderError: If the table is not set or the select_builder is invalid.
         """
-        # Check if _table is set - it should be for proper Insert classes
         try:
             if not self._table:  # type: ignore[attr-defined]
                 msg = "The target table must be set using .into() before adding values."
@@ -133,7 +129,6 @@ class InsertFromSelectMixin:
         if not isinstance(self._expression, exp.Insert):
             msg = "Cannot set INSERT source on a non-INSERT expression."
             raise SQLBuilderError(msg)
-        # Merge parameters from the SELECT builder - trust the protocol
         subquery_parameters = select_builder._parameters  # pyright: ignore[attr-defined]
         if subquery_parameters:
             for p_name, p_value in subquery_parameters.items():

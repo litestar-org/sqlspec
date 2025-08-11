@@ -443,7 +443,7 @@ async def test_aiosqlite_sqlite_specific_features(aiosqlite_session: AiosqliteDr
 
 @pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_sql_object_integration(aiosqlite_session: AiosqliteDriver) -> None:
-    """Test integration with SQL object from CORE_ROUND_3."""
+    """Test integration with SQL object."""
     # Test creating SQL object with aiosqlite
     sql_obj = SQL("SELECT name, value FROM test_table WHERE value > ?")
 
@@ -461,7 +461,7 @@ async def test_aiosqlite_sql_object_integration(aiosqlite_session: AiosqliteDriv
 
 @pytest.mark.xdist_group("aiosqlite")
 async def test_aiosqlite_core_result_features(aiosqlite_session: AiosqliteDriver) -> None:
-    """Test CORE_ROUND_3 SQLResult features."""
+    """Test SQLResult features."""
     # Insert test data
     test_data = [("core1", 10), ("core2", 20), ("core3", 30)]
     await aiosqlite_session.execute_many("INSERT INTO test_table (name, value) VALUES (?, ?)", test_data)

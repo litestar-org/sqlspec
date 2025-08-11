@@ -33,7 +33,6 @@ class JoinClauseMixin:
         if isinstance(table, str):
             table_expr = parse_table_expression(table, alias)
         elif has_query_builder_parameters(table):
-            # Work directly with AST when possible to avoid string parsing
             if hasattr(table, "_expression") and getattr(table, "_expression", None) is not None:
                 table_expr_value = getattr(table, "_expression", None)
                 if table_expr_value is not None:
@@ -46,7 +45,6 @@ class JoinClauseMixin:
                 sql_str = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
                 subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(builder, "dialect", None)))
                 table_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
-            # Parameter merging logic can be added here if needed
         else:
             table_expr = table
         on_expr: Optional[exp.Expression] = None

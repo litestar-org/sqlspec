@@ -62,8 +62,6 @@ def up() -> Union[str, List[str]]:
     Note: You can use either 'up()' or 'migrate_up()' for function names.
     Both support async versions: 'async def up()' or 'async def migrate_up()'
     """
-    # TODO: Add your upgrade SQL statements here
-    # Example:
     return """
     CREATE TABLE example (
         id INTEGER PRIMARY KEY,
@@ -83,8 +81,6 @@ def down() -> Union[str, List[str]]:
     Note: You can use either 'down()' or 'migrate_down()' for function names.
     Both support async versions: 'async def down()' or 'async def migrate_down()'
     """
-    # TODO: Add your downgrade SQL statements here (optional)
-    # Example:
     return "DROP TABLE example;"
 '''
     else:
@@ -97,13 +93,11 @@ def down() -> Union[str, List[str]]:
 -- Author: {get_author()}
 
 -- name: migrate-{version}-up
--- TODO: Add your upgrade SQL statements here
 CREATE TABLE placeholder (
     id INTEGER PRIMARY KEY
 );
 
 -- name: migrate-{version}-down
--- TODO: Add your downgrade SQL statements here (optional)
 DROP TABLE placeholder;
 """
 
@@ -123,15 +117,13 @@ def get_author() -> str:
 async def drop_all(engine: "AsyncDriverAdapterBase", version_table_name: str, metadata: Optional[Any] = None) -> None:
     """Drop all tables from the database.
 
-    This is a placeholder for database-specific implementations.
-
     Args:
         engine: The database engine/driver.
         version_table_name: Name of the version tracking table.
         metadata: Optional metadata object.
 
     Raises:
-        NotImplementedError: Always, as this requires database-specific logic.
+        NotImplementedError: Always raised.
     """
     msg = "drop_all functionality requires database-specific implementation"
     raise NotImplementedError(msg)

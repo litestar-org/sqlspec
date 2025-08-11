@@ -23,7 +23,6 @@ class SelectClauseMixin:
 
     _expression: Optional[exp.Expression] = None
 
-    # SELECT and DISTINCT methods
     def select(self, *columns: Union[str, exp.Expression, "Column", "FunctionColumn"]) -> Self:
         """Add columns to SELECT clause.
 
@@ -68,7 +67,6 @@ class SelectClauseMixin:
             builder._expression.set("distinct", exp.Distinct(expressions=distinct_columns))
         return cast("Self", builder)
 
-    # FROM clause method
     def from_(self, table: Union[str, exp.Expression, Any], alias: Optional[str] = None) -> Self:
         """Add FROM clause.
 
@@ -92,10 +90,8 @@ class SelectClauseMixin:
         if isinstance(table, str):
             from_expr = parse_table_expression(table, alias)
         elif is_expression(table):
-            # Direct sqlglot expression - use as is
             from_expr = exp.alias_(table, alias) if alias else table
         elif has_query_builder_parameters(table):
-            # Query builder with build() method
             subquery = table.build()
             sql_str = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
             subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(builder, "dialect", None)))
@@ -115,7 +111,6 @@ class SelectClauseMixin:
         builder._expression = builder._expression.from_(from_expr, copy=False)
         return cast("Self", builder)
 
-    # GROUP BY methods
     def group_by(self, *columns: Union[str, exp.Expression]) -> Self:
         """Add GROUP BY clause.
 
@@ -148,7 +143,6 @@ class SelectClauseMixin:
 
         Example:
             ```python
-            # GROUP BY ROLLUP(product, region)
             query = (
                 sql.select("product", "region", sql.sum("sales"))
                 .from_("sales_data")
@@ -173,7 +167,6 @@ class SelectClauseMixin:
 
         Example:
             ```python
-            # GROUP BY CUBE(product, region)
             query = (
                 sql.select("product", "region", sql.sum("sales"))
                 .from_("sales_data")
@@ -199,7 +192,6 @@ class SelectClauseMixin:
 
         Example:
             ```python
-            # GROUP BY GROUPING SETS ((product), (region), ())
             query = (
                 sql.select("product", "region", sql.sum("sales"))
                 .from_("sales_data")
@@ -216,13 +208,11 @@ class SelectClauseMixin:
                     columns = [exp.column(col) for col in column_set]
                     set_expressions.append(exp.Tuple(expressions=columns))
             else:
-                # Single column
                 set_expressions.append(exp.column(column_set))
 
         grouping_sets_expr = exp.GroupingSets(expressions=set_expressions)
         return self.group_by(grouping_sets_expr)
 
-    # Aggregate function methods
     def count_(self, column: "Union[str, exp.Expression]" = "*", alias: Optional[str] = None) -> Self:
         """Add COUNT function to SELECT clause.
 
@@ -439,7 +429,6 @@ class SelectClauseMixin:
         """
         builder = cast("SelectBuilderProtocol", self)
         col_expr = exp.column(column) if isinstance(column, str) else column
-        # Use GroupConcat which SQLGlot can translate to STRING_AGG for Postgres
         string_agg_expr = exp.GroupConcat(this=col_expr, separator=exp.convert(separator))
         select_expr = exp.alias_(string_agg_expr, alias) if alias else string_agg_expr
         return cast("Self", builder.select(select_expr))
@@ -460,7 +449,6 @@ class SelectClauseMixin:
         select_expr = exp.alias_(json_agg_expr, alias) if alias else json_agg_expr
         return cast("Self", builder.select(select_expr))
 
-    # Window function method
     def window(
         self,
         function_expr: Union[str, exp.Expression],
@@ -500,20 +488,19 @@ class SelectClauseMixin:
         else:
             func_expr_parsed = function_expr
 
-        over_args: dict[str, Any] = {}  # Stringified dict
+        over_args: dict[str, Any] = {}
         if partition_by:
             if isinstance(partition_by, str):
                 over_args["partition_by"] = [exp.column(partition_by)]
-            elif isinstance(partition_by, list):  # Check for list
+            elif isinstance(partition_by, list):
                 over_args["partition_by"] = [exp.column(col) if isinstance(col, str) else col for col in partition_by]
-            elif isinstance(partition_by, exp.Expression):  # Check for exp.Expression
+            elif isinstance(partition_by, exp.Expression):
                 over_args["partition_by"] = [partition_by]
 
         if order_by:
             if isinstance(order_by, str):
                 over_args["order"] = exp.column(order_by).asc()
             elif isinstance(order_by, list):
-                # Properly handle multiple ORDER BY columns using Order expression
                 order_expressions: list[Union[exp.Expression, exp.Column]] = []
                 for col in order_by:
                     if isinstance(col, str):
@@ -533,7 +520,6 @@ class SelectClauseMixin:
         self._expression.select(exp.alias_(window_expr, alias) if alias else window_expr, copy=False)
         return self
 
-    # CASE expression method
     def case_(self, alias: "Optional[str]" = None) -> "CaseBuilder":
         """Create a CASE expression for the SELECT clause.
 

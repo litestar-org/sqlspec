@@ -112,11 +112,8 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
     def _resolve_driver_name(self) -> str:
         """Resolve and normalize the ADBC driver name.
 
-        Supports both full driver paths and convenient aliases.
-
         Returns:
             The normalized driver connect function path.
-
         """
         driver_name = self.connection_config.get("driver_name")
         uri = self.connection_config.get("uri")

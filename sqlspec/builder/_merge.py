@@ -36,44 +36,6 @@ class Merge(
 
     This builder provides a fluent interface for constructing SQL MERGE statements
     (also known as UPSERT in some databases) with automatic parameter binding and validation.
-
-    Example:
-        ```python
-        # Basic MERGE statement
-        merge_query = (
-            Merge()
-            .into("target_table")
-            .using("source_table", "src")
-            .on("target_table.id = src.id")
-            .when_matched_then_update(
-                {"name": "src.name", "updated_at": "NOW()"}
-            )
-            .when_not_matched_then_insert(
-                columns=["id", "name", "created_at"],
-                values=["src.id", "src.name", "NOW()"],
-            )
-        )
-
-        # MERGE with subquery source
-        source_query = (
-            SelectBuilder()
-            .select("id", "name", "email")
-            .from_("temp_users")
-            .where("status = 'pending'")
-        )
-
-        merge_query = (
-            Merge()
-            .into("users")
-            .using(source_query, "src")
-            .on("users.email = src.email")
-            .when_matched_then_update({"name": "src.name"})
-            .when_not_matched_then_insert(
-                columns=["id", "name", "email"],
-                values=["src.id", "src.name", "src.email"],
-            )
-        )
-        ```
     """
 
     @property

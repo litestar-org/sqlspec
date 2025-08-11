@@ -1,24 +1,10 @@
-"""Enhanced AsyncMy MySQL driver with CORE_ROUND_3 architecture integration.
+"""AsyncMy MySQL driver implementation for async MySQL operations.
 
-This async driver implements the complete CORE_ROUND_3 architecture for MySQL/MariaDB connections using asyncmy:
-- 5-10x faster SQL compilation through single-pass processing
-- 40-60% memory reduction through __slots__ optimization
-- Enhanced caching for repeated statement execution
-- Complete backward compatibility with existing MySQL functionality
-
-Architecture Features:
-- Direct integration with sqlspec.core modules
-- Enhanced MySQL parameter processing with QMARK -> %s conversion
-- Thread-safe unified caching system
-- MyPyC-optimized performance patterns
-- Zero-copy data access where possible
-- Async context management for resource handling
-
-MySQL Features:
+Provides async MySQL/MariaDB connectivity with:
 - Parameter style conversion (QMARK to POSITIONAL_PYFORMAT)
 - MySQL-specific type coercion and data handling
-- Enhanced error categorization for MySQL/MariaDB
-- Transaction management with automatic commit/rollback
+- Error categorization for MySQL/MariaDB
+- Transaction management
 """
 
 import logging
@@ -34,8 +20,6 @@ from sqlspec.core.statement import StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.utils.serializers import to_json
-
-# AsyncMy parameter configuration uses core system's built-in conversion
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
@@ -66,9 +50,8 @@ asyncmy_statement_config = StatementConfig(
         },
         has_native_list_expansion=False,
         needs_static_script_compilation=True,
-        preserve_parameter_format=True,  # Core system handles conversion automatically
+        preserve_parameter_format=True,
     ),
-    # Core processing features enabled for performance
     enable_parsing=True,
     enable_validation=True,
     enable_caching=True,
@@ -77,7 +60,7 @@ asyncmy_statement_config = StatementConfig(
 
 
 class AsyncmyCursor:
-    """Async context manager for AsyncMy cursor management with enhanced error handling."""
+    """Async context manager for AsyncMy cursor management."""
 
     __slots__ = ("connection", "cursor")
 
@@ -90,7 +73,7 @@ class AsyncmyCursor:
         return self.cursor
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
+        _ = (exc_type, exc_val, exc_tb)
         if self.cursor is not None:
             await self.cursor.close()
 
@@ -142,36 +125,13 @@ class AsyncmyExceptionHandler:
 
 
 class AsyncmyDriver(AsyncDriverAdapterBase):
-    """Enhanced AsyncMy MySQL/MariaDB driver with CORE_ROUND_3 architecture integration.
+    """AsyncMy MySQL/MariaDB driver for async database operations.
 
-    This async driver leverages the complete core module system for maximum MySQL performance:
-
-    Performance Improvements:
-    - 5-10x faster SQL compilation through single-pass processing
-    - 40-60% memory reduction through __slots__ optimization
-    - Enhanced caching for repeated statement execution
-    - Zero-copy parameter processing where possible
-    - Async-optimized resource management
-    - Optimized MySQL parameter style conversion (QMARK -> %s)
-
-    MySQL Features:
+    Provides MySQL/MariaDB connectivity with:
     - Parameter style conversion (QMARK to POSITIONAL_PYFORMAT)
     - MySQL-specific type coercion (bool -> int, dict/list -> JSON)
-    - Enhanced error categorization for MySQL/MariaDB
-    - Transaction management with automatic commit/rollback
-    - MySQL-specific data handling
-
-    Core Integration Features:
-    - sqlspec.core.statement for enhanced SQL processing
-    - sqlspec.core.parameters for optimized parameter handling
-    - sqlspec.core.cache for unified statement caching
-    - sqlspec.core.config for centralized configuration management
-
-    Compatibility:
-    - 100% backward compatibility with existing AsyncMy driver interface
-    - All existing async MySQL tests pass without modification
-    - Complete StatementConfig API compatibility
-    - Preserved async cursor management and exception handling patterns
+    - Error categorization for MySQL/MariaDB
+    - Transaction management
     """
 
     __slots__ = ()
@@ -183,21 +143,20 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Enhanced configuration with global settings integration
         if statement_config is None:
             cache_config = get_cache_config()
             enhanced_config = asyncmy_statement_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,  # Default to enabled
-                enable_validation=True,  # Default to enabled
-                dialect="mysql",  # Use adapter-specific dialect
+                enable_parsing=True,
+                enable_validation=True,
+                dialect="mysql",
             )
             statement_config = enhanced_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: "AsyncmyConnection") -> "AsyncmyCursor":
-        """Create async context manager for AsyncMy cursor with enhanced resource management."""
+        """Create async context manager for AsyncMy cursor."""
         return AsyncmyCursor(connection)
 
     def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
@@ -206,9 +165,6 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
     async def _try_special_handling(self, cursor: Any, statement: "SQL") -> "Optional[SQLResult]":
         """Hook for AsyncMy-specific special operations.
-
-        AsyncMy doesn't have complex special operations like PostgreSQL COPY,
-        so this always returns None to proceed with standard execution.
 
         Args:
             cursor: AsyncMy cursor object

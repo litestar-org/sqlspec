@@ -1,31 +1,23 @@
-"""COMPREHENSIVE parameter pre-processing system for core.
+"""Parameter processing system for SQL statements.
 
-This module implements the complete parameter pre-processing pipeline that:
-1. Converts unsupported parameter types to SQLGlot-compatible formats (Phase 1)
-2. Converts final SQL to execution formats when SQLGlot can't render specific types (Phase 2)
-3. Handles all parameter style conversions and type coercions
-4. Provides complete backward compatibility with existing driver requirements
+This module implements parameter processing including type conversion,
+style conversion, and validation for SQL statements.
 
-Key Components:
-- ParameterStyle enum: All 11 parameter styles supported
-- TypedParameter: Preserves type information through processing pipeline
-- ParameterInfo: Tracks position, style, ordinal, name for each parameter
-- ParameterValidator: Extracts and validates parameters with dialect compatibility
-- ParameterConverter: Handles both phase conversions with optimized lookups
-- ParameterProcessor: High-level coordinator with caching and pipeline management
-- ParameterStyleConfig: Complete configuration for all driver requirements
+Components:
+- ParameterStyle enum: Supported parameter styles
+- TypedParameter: Preserves type information through processing
+- ParameterInfo: Tracks parameter metadata
+- ParameterValidator: Extracts and validates parameters
+- ParameterConverter: Handles parameter style conversions
+- ParameterProcessor: High-level coordinator with caching
+- ParameterStyleConfig: Configuration for parameter processing
 
-Performance Features:
-- Singledispatch for type-specific parameter wrapping (O(1) dispatch)
-- Hash-map lookups for parameter style conversions (O(1) operations)
-- Comprehensive caching system for parameter extraction and conversion
-- MyPyC optimization with __slots__ for memory efficiency
-
-Compatibility Requirements:
-- Preserve exact behavior from current parameters.py
-- Support all 11 parameter styles across 12 database adapters
-- Maintain driver-specific type coercion mappings
-- Complete StatementConfig.parameter_config interface preservation
+Features:
+- Two-phase processing: SQLGlot compatibility and execution format
+- Type-specific parameter wrapping
+- Parameter style conversions
+- Caching system for parameter extraction and conversion
+- Support for multiple parameter styles and database adapters
 """
 
 import re
@@ -74,17 +66,17 @@ _PARAMETER_REGEX = re.compile(
 
 
 class ParameterStyle(str, Enum):
-    """Parameter style enumeration - preserved interface.
+    """Parameter style enumeration.
 
-    Supports all parameter styles used across 12 database adapters:
-    - QMARK: ? placeholders (SQLite, DuckDB)
-    - NUMERIC: $1, $2 placeholders (PostgreSQL)
-    - POSITIONAL_PYFORMAT: %s placeholders (MySQL)
-    - NAMED_PYFORMAT: %(name)s placeholders (MySQL, PostgreSQL)
-    - NAMED_COLON: :name placeholders (Oracle, SQLite)
-    - NAMED_AT: @name placeholders (SQL Server, Oracle)
-    - NAMED_DOLLAR: $name placeholders (PostgreSQL)
-    - POSITIONAL_COLON: :1, :2 placeholders (Oracle)
+    Supported parameter styles:
+    - QMARK: ? placeholders
+    - NUMERIC: $1, $2 placeholders
+    - POSITIONAL_PYFORMAT: %s placeholders
+    - NAMED_PYFORMAT: %(name)s placeholders
+    - NAMED_COLON: :name placeholders
+    - NAMED_AT: @name placeholders
+    - NAMED_DOLLAR: $name placeholders
+    - POSITIONAL_COLON: :1, :2 placeholders
     - STATIC: Direct embedding of values in SQL
     - NONE: No parameters supported
     """
@@ -103,22 +95,17 @@ class ParameterStyle(str, Enum):
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class TypedParameter:
-    """Parameter wrapper that preserves type information for processing.
+    """Parameter wrapper that preserves type information.
 
-    Critical component for parameter pre-processing pipeline that maintains
-    type information through SQLGlot parsing and execution format conversion.
+    Maintains type information through SQLGlot parsing and execution
+    format conversion.
 
     Use Cases:
-    - Preserve boolean values through SQLGlot parsing (prevents "True"/"False" strings)
-    - Maintain Decimal precision for financial calculations
-    - Handle date/datetime formatting for different databases
-    - Preserve array/list structures for PostgreSQL arrays
+    - Preserve boolean values through SQLGlot parsing
+    - Maintain Decimal precision
+    - Handle date/datetime formatting
+    - Preserve array/list structures
     - Handle JSON serialization for dict parameters
-
-    Performance:
-    - __slots__ for memory efficiency
-    - Cached hash for O(1) dictionary operations
-    - Minimal overhead when type preservation not needed
     """
 
     __slots__ = ("_hash", "original_type", "semantic_name", "value")
@@ -137,7 +124,7 @@ class TypedParameter:
         self._hash: Optional[int] = None
 
     def __hash__(self) -> int:
-        """Cached hash for efficient dictionary operations."""
+        """Cached hash value."""
         if self._hash is None:
             self._hash = hash((id(self.value), self.original_type, self.semantic_name))
         return self._hash
@@ -158,16 +145,9 @@ class TypedParameter:
         return f"TypedParameter({self.value!r}, original_type={self.original_type.__name__}{name_part})"
 
 
-# CRITICAL: Type-specific parameter wrapping for SQLGlot compatibility
 @singledispatch
 def _wrap_parameter_by_type(value: Any, semantic_name: Optional[str] = None) -> Any:
-    """Type-specific parameter wrapping using singledispatch for performance.
-
-    This function uses Python's singledispatch for O(1) type-based dispatch
-    to wrap parameters that need special handling during SQLGlot processing.
-
-    Performance: Singledispatch provides faster type-based dispatch than
-    isinstance() chains, especially with many type checks.
+    """Type-specific parameter wrapping using singledispatch.
 
     Args:
         value: Parameter value to potentially wrap
@@ -176,11 +156,9 @@ def _wrap_parameter_by_type(value: Any, semantic_name: Optional[str] = None) -> 
     Returns:
         Either the original value or TypedParameter wrapper
     """
-    # Default case: most values don't need wrapping
     return value
 
 
-# Type-specific implementations for special cases that need preservation
 @_wrap_parameter_by_type.register
 def _(value: bool, semantic_name: Optional[str] = None) -> TypedParameter:
     """Wrap boolean values to prevent SQLGlot parsing issues."""
@@ -215,15 +193,12 @@ def _(value: bytes, semantic_name: Optional[str] = None) -> TypedParameter:
 class ParameterInfo:
     """Information about a detected parameter in SQL.
 
-    Tracks all necessary information for parameter conversion:
+    Tracks parameter metadata for conversion:
     - name: Parameter name (for named styles)
-    - style: Parameter style (QMARK, NAMED_COLON, etc.)
+    - style: Parameter style
     - position: Character position in SQL string
     - ordinal: Order of appearance (0-indexed)
-    - placeholder_text: Original text in SQL ("?", ":name", etc.)
-
-    This information enables accurate parameter style conversion
-    while preserving the original SQL structure.
+    - placeholder_text: Original text in SQL
     """
 
     __slots__ = ("name", "ordinal", "placeholder_text", "position", "style")
@@ -257,18 +232,14 @@ class ParameterInfo:
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterStyleConfig:
-    """Enhanced ParameterStyleConfig with complete backward compatibility.
+    """Configuration for parameter style processing.
 
-    Provides all attributes that drivers expect from parameter_config.
-    This is critical - drivers access these attributes directly and expect
-    them to work identically to the current implementation.
-
-    Critical Attributes (accessed by drivers):
+    Provides configuration for parameter processing including:
     - default_parameter_style: Primary parsing style
     - supported_parameter_styles: All input styles supported
     - supported_execution_parameter_styles: Styles driver can execute
     - default_execution_parameter_style: Target execution format
-    - type_coercion_map: Driver-specific type conversions
+    - type_coercion_map: Type conversions
     - output_transformer: Final SQL/parameter transformation hook
     - preserve_parameter_format: Maintain original parameter structure
     - needs_static_script_compilation: Embed parameters in SQL
@@ -336,15 +307,11 @@ class ParameterStyleConfig:
         self.preserve_original_params_for_many = preserve_original_params_for_many
 
     def hash(self) -> int:
-        """Generate hash for cache key generation - preserved interface.
-
-        This method is called by drivers for caching compiled statements.
-        Must return consistent hash based on configuration state.
+        """Generate hash for cache key generation.
 
         Returns:
             Hash value for cache key generation
         """
-        # Create hash from all configuration attributes
         hash_components = (
             self.default_parameter_style.value,
             frozenset(s.value for s in self.supported_parameter_styles),
@@ -357,31 +324,26 @@ class ParameterStyleConfig:
             tuple(sorted(self.type_coercion_map.keys(), key=str)) if self.type_coercion_map else None,
             self.has_native_list_expansion,
             self.preserve_original_params_for_many,
-            bool(self.output_transformer),  # Can't hash function, just presence
+            bool(self.output_transformer),
             self.needs_static_script_compilation,
             self.allow_mixed_parameter_styles,
             self.preserve_parameter_format,
-            bool(self.ast_transformer),  # Can't hash function, just presence
+            bool(self.ast_transformer),
         )
         return hash(hash_components)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterValidator:
-    """Parameter validation and extraction with comprehensive dialect support.
+    """Parameter validation and extraction.
 
-    Responsible for extracting parameter information from SQL strings
-    using the complex regex pattern and determining SQLGlot compatibility.
+    Extracts parameter information from SQL strings and determines
+    SQLGlot compatibility.
 
-    Performance Features:
+    Features:
     - Cached parameter extraction results
-    - Optimized regex matching with comprehensive pattern
-    - Dialect-specific compatibility matrices
-
-    Compatibility Features:
-    - Preserves exact parameter detection logic from current parameters.py
-    - Same regex pattern for consistent behavior
-    - Same SQLGlot compatibility checking
+    - Regex-based parameter detection
+    - Dialect-specific compatibility checking
     """
 
     __slots__ = ("_parameter_cache",)
@@ -391,10 +353,7 @@ class ParameterValidator:
         self._parameter_cache: dict[str, list[ParameterInfo]] = {}
 
     def extract_parameters(self, sql: str) -> "list[ParameterInfo]":
-        """Extract all parameters from SQL with complete style detection.
-
-        CRITICAL: This method preserves exact behavior from current parameters.py
-        while providing performance optimizations through caching.
+        """Extract all parameters from SQL.
 
         Args:
             sql: SQL string to analyze
@@ -402,16 +361,13 @@ class ParameterValidator:
         Returns:
             List of ParameterInfo objects for each detected parameter
         """
-        # Cache lookup for performance
         if sql in self._parameter_cache:
             return self._parameter_cache[sql]
 
         parameters: list[ParameterInfo] = []
         ordinal = 0
 
-        # Use the preserved regex pattern to find all parameter matches
         for match in _PARAMETER_REGEX.finditer(sql):
-            # Skip matches that are inside strings or comments
             if (
                 match.group("dquote")
                 or match.group("squote")
@@ -423,7 +379,6 @@ class ParameterValidator:
             ):
                 continue
 
-            # Extract parameter information based on match groups
             position = match.start()
             placeholder_text = match.group(0)
             name = None
@@ -459,22 +414,11 @@ class ParameterValidator:
                 parameters.append(param_info)
                 ordinal += 1
 
-        # Cache the result for future use
         self._parameter_cache[sql] = parameters
         return parameters
 
     def get_sqlglot_incompatible_styles(self, dialect: Optional[str] = None) -> "set[ParameterStyle]":
-        """Get parameter styles incompatible with SQLGlot for specific dialect.
-
-        CRITICAL: This determines which parameters need Phase 1 conversion
-        for SQLGlot compatibility.
-
-        Dialect-Specific Incompatibilities:
-        - mysql: %s (modulo conflict), %(name)s, :1, :2
-        - postgres: :1, :2 (only positional colon incompatible)
-        - sqlite: :1, :2 (only positional colon incompatible)
-        - oracle: %s, %(name)s, :1, :2 (base incompatible set)
-        - bigquery: %s, %(name)s, :1, :2 (base incompatible set)
+        """Get parameter styles incompatible with SQLGlot for dialect.
 
         Args:
             dialect: SQL dialect for compatibility checking
@@ -482,57 +426,43 @@ class ParameterValidator:
         Returns:
             Set of parameter styles incompatible with SQLGlot
         """
-        # Base incompatible styles that SQLGlot generally can't parse correctly
         base_incompatible = {
             ParameterStyle.POSITIONAL_PYFORMAT,  # %s, %d - modulo operator conflict
             ParameterStyle.NAMED_PYFORMAT,  # %(name)s - complex format string
             ParameterStyle.POSITIONAL_COLON,  # :1, :2 - numbered colon parameters
         }
 
-        # Dialect-specific incompatibility adjustments
         if dialect and dialect.lower() in {"mysql", "mariadb"}:
-            # MySQL has issues with both pyformat styles due to modulo operator
             return base_incompatible
         if dialect and dialect.lower() in {"postgres", "postgresql"}:
-            # PostgreSQL only has issues with positional colon, handles pyformat better
             return {ParameterStyle.POSITIONAL_COLON}
         if dialect and dialect.lower() == "sqlite":
-            # SQLite only has issues with positional colon
             return {ParameterStyle.POSITIONAL_COLON}
         if dialect and dialect.lower() in {"oracle", "bigquery"}:
-            # Oracle and BigQuery have the full base incompatible set
             return base_incompatible
-        # Default: return the base incompatible set for unknown/unspecified dialects
         return base_incompatible
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterConverter:
-    """Parameter style conversion with complete format support.
+    """Parameter style conversion.
 
-    CRITICAL: This handles both Phase 1 (SQLGlot compatibility) and
-    Phase 2 (execution format) conversions.
+    Handles two-phase parameter processing:
+    - Phase 1: SQLGlot compatibility normalization
+    - Phase 2: Execution format conversion
 
-    Two-Phase Processing:
-    Phase 1 - SQLGlot Compatibility Normalization:
-      - Converts incompatible styles to canonical :param_N format
-      - Enables SQLGlot parsing of problematic parameter styles
-      - Preserves original parameter information for Phase 2
-
-    Phase 2 - Execution Format Conversion:
-      - Converts from canonical format to driver-specific format
-      - Handles parameter format changes (list ↔ dict, positional ↔ named)
-      - Applies driver-specific type coercions and transformations
-
+    Features:
+    - Converts incompatible styles to canonical format
+    - Enables SQLGlot parsing of problematic parameter styles
+    - Handles parameter format changes (list ↔ dict, positional ↔ named)
     """
 
     __slots__ = ("_format_converters", "_placeholder_generators", "validator")
 
     def __init__(self) -> None:
-        """Initialize converter with optimized lookup tables."""
+        """Initialize converter with lookup tables."""
         self.validator = ParameterValidator()
 
-        # Hash-map lookup tables for O(1) conversions
         self._format_converters = {
             ParameterStyle.POSITIONAL_COLON: self._convert_to_positional_colon_format,
             ParameterStyle.NAMED_COLON: self._convert_to_named_colon_format,
@@ -544,7 +474,6 @@ class ParameterConverter:
             ParameterStyle.NAMED_DOLLAR: self._convert_to_named_colon_format,
         }
 
-        # Placeholder generators for different styles
         self._placeholder_generators: dict[ParameterStyle, Callable[[Any], str]] = {
             ParameterStyle.QMARK: lambda _: "?",
             ParameterStyle.NUMERIC: lambda i: f"${int(i) + 1}",
@@ -557,15 +486,10 @@ class ParameterConverter:
         }
 
     def normalize_sql_for_parsing(self, sql: str, dialect: Optional[str] = None) -> "tuple[str, list[ParameterInfo]]":
-        """PHASE 1: Convert SQL to SQLGlot-parsable format.
+        """Convert SQL to SQLGlot-parsable format.
 
-        This is the first phase of the two-phase parameter normalization system.
         Takes raw SQL with potentially incompatible parameter styles and converts
         them to a canonical format that SQLGlot can parse.
-
-        Example:
-            Input:  "SELECT * FROM users WHERE name = %s AND id = %(user_id)s"
-            Output: "SELECT * FROM users WHERE name = :param_0 AND id = :param_1"
 
         Args:
             sql: Raw SQL string with any parameter style
@@ -574,30 +498,24 @@ class ParameterConverter:
         Returns:
             Tuple of (parsable_sql, original_parameter_info)
         """
-        # 1. Extract all parameters with position/metadata
         param_info = self.validator.extract_parameters(sql)
 
-        # 2. Check if any parameters are SQLGlot-incompatible for this dialect
         incompatible_styles = self.validator.get_sqlglot_incompatible_styles(dialect)
         needs_conversion = any(p.style in incompatible_styles for p in param_info)
 
-        # 3. If no incompatible parameters, return as-is
         if not needs_conversion:
             return sql, param_info
 
-        # 4. Convert incompatible parameters to :param_N format
         converted_sql = self._convert_to_sqlglot_compatible(sql, param_info, incompatible_styles)
         return converted_sql, param_info
 
     def _convert_to_sqlglot_compatible(
         self, sql: str, param_info: "list[ParameterInfo]", incompatible_styles: "set[ParameterStyle]"
     ) -> str:
-        """Convert SQL with incompatible parameter styles to SQLGlot-compatible format."""
-        # Work backwards through parameters to maintain position accuracy
+        """Convert SQL to SQLGlot-compatible format."""
         converted_sql = sql
         for param in reversed(param_info):
             if param.style in incompatible_styles:
-                # Replace with canonical :param_N format
                 canonical_placeholder = f":param_{param.ordinal}"
                 converted_sql = (
                     converted_sql[: param.position]
@@ -610,14 +528,7 @@ class ParameterConverter:
     def convert_placeholder_style(
         self, sql: str, parameters: Any, target_style: ParameterStyle, is_many: bool = False
     ) -> "tuple[str, Any]":
-        """PHASE 2: Convert SQL and parameters to execution format.
-
-        This is the second phase that converts from the canonical SQLGlot format
-        to the final execution format required by the specific database driver.
-
-        Example:
-            Input:  ("SELECT * FROM users WHERE name = :param_0", ["john"], POSITIONAL_PYFORMAT)
-            Output: ("SELECT * FROM users WHERE name = %s", ["john"])
+        """Convert SQL and parameters to execution format.
 
         Args:
             sql: SQL string (possibly from Phase 1 normalization)
@@ -628,23 +539,18 @@ class ParameterConverter:
         Returns:
             Tuple of (final_sql, execution_parameters)
         """
-        # 1. Parameter extraction and validation
         param_info = self.validator.extract_parameters(sql)
 
-        # 2. Special handling for STATIC embedding (embed parameters directly in SQL)
         if target_style == ParameterStyle.STATIC:
             return self._embed_static_parameters(sql, parameters, param_info)
 
-        # 3. Check if conversion is needed
         current_styles = {p.style for p in param_info}
         if len(current_styles) == 1 and target_style in current_styles:
-            # Only parameter format conversion needed (e.g., dict → list)
             converted_parameters = self._convert_parameter_format(
                 parameters, param_info, target_style, parameters, preserve_parameter_format=True
             )
             return sql, converted_parameters
 
-        # 4. Full SQL placeholder conversion + parameter format conversion
         converted_sql = self._convert_placeholders_to_style(sql, param_info, target_style)
         converted_parameters = self._convert_parameter_format(
             parameters, param_info, target_style, parameters, preserve_parameter_format=True
@@ -679,7 +585,6 @@ class ParameterConverter:
             if param_key not in unique_params:
                 unique_params[param_key] = len(unique_params)
 
-        # Work backwards through parameters to maintain position accuracy
         converted_sql = sql
         for param in reversed(param_info):
             # Generate new placeholder based on target style
@@ -848,7 +753,6 @@ class ParameterConverter:
             if param_key not in unique_params:
                 unique_params[param_key] = len(unique_params)
 
-        # Work backwards through parameters to maintain position accuracy
         static_sql = sql
         for param in reversed(param_info):
             # Get parameter value using unique parameter mapping

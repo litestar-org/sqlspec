@@ -22,7 +22,7 @@ logger = get_logger("migrations.runner")
 
 
 class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase"]):
-    """Sync version - executes migrations using SQLFileLoader."""
+    """Executes migrations using SQLFileLoader."""
 
     def get_migration_files(self) -> "list[tuple[str, Path]]":
         """Get all migration files sorted by version.
@@ -88,13 +88,6 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase"]):
     def load_all_migrations(self) -> "dict[str, SQL]":
         """Load all migrations into a single namespace for bulk operations.
 
-        Returns a dictionary mapping query names to SQL objects.
-        Useful for:
-        - Migration analysis tools
-        - Documentation generation
-        - Validation and linting
-        - Migration squashing
-
         Returns:
             Dictionary mapping query names to SQL objects.
         """
@@ -125,7 +118,7 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase"]):
 
 
 class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase"]):
-    """Async version - executes migrations using SQLFileLoader."""
+    """Executes migrations using SQLFileLoader."""
 
     async def get_migration_files(self) -> "list[tuple[str, Path]]":
         """Get all migration files sorted by version.
@@ -190,13 +183,6 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase"]):
 
     async def load_all_migrations(self) -> "dict[str, SQL]":
         """Load all migrations into a single namespace for bulk operations.
-
-        Returns a dictionary mapping query names to SQL objects.
-        Useful for:
-        - Migration analysis tools
-        - Documentation generation
-        - Validation and linting
-        - Migration squashing
 
         Returns:
             Dictionary mapping query names to SQL objects.

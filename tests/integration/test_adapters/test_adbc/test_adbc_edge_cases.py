@@ -1,4 +1,4 @@
-"""Test ADBC edge cases and specialized functionality using CORE_ROUND_3 architecture."""
+"""Test ADBC edge cases and specialized functionality."""
 
 import math
 from collections.abc import Generator
@@ -8,8 +8,6 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.core.result import SQLResult
-
-# Import the decorator
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
 
@@ -38,7 +36,7 @@ def adbc_sqlite_session() -> Generator[AdbcDriver, None, None]:
 
 @pytest.mark.xdist_group("postgres")
 def test_null_parameter_handling(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test NULL parameter handling edge cases with ADBC using CORE_ROUND_3."""
+    """Test NULL parameter handling edge cases with ADBC."""
     # Create test table
     adbc_postgresql_session.execute_script("""
         CREATE TABLE IF NOT EXISTS null_param_test (
@@ -109,7 +107,7 @@ def test_null_parameter_handling(adbc_postgresql_session: AdbcDriver) -> None:
 
 @pytest.mark.xdist_group("postgres")
 def test_parameter_style_variations(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test parameter style handling variations with ADBC using CORE_ROUND_3."""
+    """Test parameter style handling variations with ADBC."""
     # Create test table
     adbc_postgresql_session.execute_script("""
         CREATE TABLE IF NOT EXISTS param_style_test (
@@ -171,7 +169,7 @@ def test_parameter_style_variations(adbc_postgresql_session: AdbcDriver) -> None
 @pytest.mark.xdist_group("postgres")
 @pytest.mark.xfail(reason="ADBC PostgreSQL driver cannot handle multi-statement prepared statements")
 def test_execute_script_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test execute_script edge cases with ADBC using CORE_ROUND_3."""
+    """Test execute_script edge cases with ADBC."""
     # Test script with mixed statement types
     mixed_script = """
         CREATE TABLE IF NOT EXISTS script_test (
@@ -237,7 +235,7 @@ def test_execute_script_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
 
 @pytest.mark.xdist_group("postgres")
 def test_returning_clause_support(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test RETURNING clause support with ADBC using CORE_ROUND_3."""
+    """Test RETURNING clause support with ADBC."""
     # Create test table
     adbc_postgresql_session.execute_script("""
         CREATE TABLE IF NOT EXISTS returning_test (
@@ -307,7 +305,7 @@ def test_returning_clause_support(adbc_postgresql_session: AdbcDriver) -> None:
 
 @pytest.mark.xdist_group("postgres")
 def test_data_type_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test edge cases in data type handling with ADBC using CORE_ROUND_3."""
+    """Test edge cases in data type handling with ADBC."""
     # Create table with edge case data types
     adbc_postgresql_session.execute_script("""
         CREATE TABLE IF NOT EXISTS data_type_edge_test (
@@ -384,7 +382,7 @@ def test_data_type_edge_cases(adbc_postgresql_session: AdbcDriver) -> None:
 
 @pytest.mark.xdist_group("adbc_sqlite")
 def test_sqlite_specific_edge_cases(adbc_sqlite_session: AdbcDriver) -> None:
-    """Test SQLite-specific edge cases with ADBC using CORE_ROUND_3."""
+    """Test SQLite-specific edge cases with ADBC."""
     # Test SQLite's dynamic typing
     adbc_sqlite_session.execute_script("""
         CREATE TABLE dynamic_type_test (
@@ -447,7 +445,7 @@ def test_sqlite_specific_edge_cases(adbc_sqlite_session: AdbcDriver) -> None:
 @pytest.mark.xdist_group("adbc_duckdb")
 @xfail_if_driver_missing
 def test_duckdb_specific_edge_cases() -> None:
-    """Test DuckDB-specific edge cases with ADBC using CORE_ROUND_3."""
+    """Test DuckDB-specific edge cases with ADBC."""
     config = AdbcConfig(connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"})
 
     with config.provide_session() as session:
@@ -503,7 +501,7 @@ def test_duckdb_specific_edge_cases() -> None:
 
 @pytest.mark.xdist_group("postgres")
 def test_connection_resilience(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test connection resilience and error recovery with ADBC using CORE_ROUND_3."""
+    """Test connection resilience and error recovery with ADBC."""
     # Test recovery from syntax errors
     with pytest.raises(Exception):
         adbc_postgresql_session.execute("INVALID SQL SYNTAX HERE")

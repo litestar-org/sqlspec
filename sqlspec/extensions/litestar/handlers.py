@@ -25,7 +25,6 @@ if TYPE_CHECKING:
     from sqlspec.typing import ConnectionT, PoolT
 
 SESSION_TERMINUS_ASGI_EVENTS = {HTTP_RESPONSE_START, HTTP_DISCONNECT, WEBSOCKET_DISCONNECT, WEBSOCKET_CLOSE}
-"""ASGI events that terminate a session scope."""
 
 __all__ = (
     "SESSION_TERMINUS_ASGI_EVENTS",
@@ -39,7 +38,7 @@ __all__ = (
 
 
 def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
-    """Set up the handler to close the connection.
+    """Create handler for manual connection management.
 
     Args:
         connection_scope_key: The key used to store the connection in the ASGI scope.
@@ -70,7 +69,7 @@ def autocommit_handler_maker(
     extra_commit_statuses: "Optional[set[int]]" = None,
     extra_rollback_statuses: "Optional[set[int]]" = None,
 ) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
-    """Set up the handler to issue a transaction commit or rollback based on response status codes.
+    """Create handler for automatic transaction commit/rollback based on response status.
 
     Args:
         connection_scope_key: The key used to store the connection in the ASGI scope.
@@ -125,27 +124,25 @@ def autocommit_handler_maker(
 def lifespan_handler_maker(
     config: "DatabaseConfigProtocol[Any, Any, Any]", pool_key: str
 ) -> "Callable[[Litestar], AbstractAsyncContextManager[None]]":
-    """Build the lifespan handler for managing the database connection pool.
-
-    The pool is created on application startup and closed on shutdown.
+    """Create lifespan handler for managing database connection pool lifecycle.
 
     Args:
         config: The database configuration object.
         pool_key: The key under which the connection pool will be stored in `app.state`.
 
     Returns:
-        The generated lifespan handler.
+        The lifespan handler function.
     """
 
     @contextlib.asynccontextmanager
     async def lifespan_handler(app: "Litestar") -> "AsyncGenerator[None, None]":
-        """Manages the database pool lifecycle.
+        """Manage database pool lifecycle for the application.
 
         Args:
             app: The Litestar application instance.
 
         Yields:
-            The generated lifespan handler.
+            Control to application during pool lifetime.
         """
         db_pool = await ensure_async_(config.create_pool)()
         app.state.update({pool_key: db_pool})
@@ -165,23 +162,22 @@ def lifespan_handler_maker(
 def pool_provider_maker(
     config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", pool_key: str
 ) -> "Callable[[State, Scope], Awaitable[PoolT]]":
-    """Build the pool provider to inject the application-level database pool.
+    """Create provider for injecting the application-level database pool.
 
     Args:
         config: The database configuration object.
         pool_key: The key used to store the connection pool in `app.state`.
 
     Returns:
-        The generated pool provider.
+        The pool provider function.
     """
 
     async def provide_pool(state: "State", scope: "Scope") -> "PoolT":
-        """Provides the database pool from `app.state`.
+        """Provide the database pool from application state.
 
         Args:
             state: The Litestar application State object.
             scope: The ASGI scope (unused for app-level pool).
-
 
         Returns:
             The database connection pool.

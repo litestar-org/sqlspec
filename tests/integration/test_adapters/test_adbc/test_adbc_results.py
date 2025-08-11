@@ -1,4 +1,4 @@
-"""Test ADBC result handling with Arrow table processing using CORE_ROUND_3 architecture."""
+"""Test ADBC result handling with Arrow table processing."""
 
 from collections.abc import Generator
 
@@ -7,8 +7,6 @@ from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.core.result import SQLResult
-
-# Import the decorator
 from tests.integration.test_adapters.test_adbc.conftest import xfail_if_driver_missing
 
 
@@ -23,7 +21,6 @@ def adbc_postgresql_session(postgres_service: PostgresService) -> "Generator[Adb
     )
 
     with config.provide_session() as session:
-        # Create test table with various data types
         session.execute_script("""
             CREATE TABLE IF NOT EXISTS result_test (
                 id SERIAL PRIMARY KEY,
@@ -63,7 +60,7 @@ def adbc_postgresql_session(postgres_service: PostgresService) -> "Generator[Adb
 
 @pytest.mark.xdist_group("postgres")
 def test_sql_result_basic_operations(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test basic SQLResult operations with ADBC using CORE_ROUND_3."""
+    """Test basic SQLResult operations with ADBC."""
     result = adbc_postgresql_session.execute("SELECT * FROM result_test ORDER BY name")
     assert isinstance(result, SQLResult)
 
@@ -90,7 +87,7 @@ def test_sql_result_basic_operations(adbc_postgresql_session: AdbcDriver) -> Non
 
 @pytest.mark.xdist_group("postgres")
 def test_sql_result_arrow_data_types(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test Arrow data type handling in SQLResult with ADBC using CORE_ROUND_3."""
+    """Test Arrow data type handling in SQLResult with ADBC."""
     result = adbc_postgresql_session.execute(
         """
         SELECT
@@ -145,7 +142,7 @@ def test_sql_result_arrow_data_types(adbc_postgresql_session: AdbcDriver) -> Non
 
 @pytest.mark.xdist_group("postgres")
 def test_sql_result_empty_results(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test SQLResult empty result handling with ADBC using CORE_ROUND_3."""
+    """Test SQLResult empty result handling with ADBC."""
     result = adbc_postgresql_session.execute("SELECT * FROM result_test WHERE name = $1", ("NonExistent",))
     assert isinstance(result, SQLResult)
 
@@ -159,7 +156,7 @@ def test_sql_result_empty_results(adbc_postgresql_session: AdbcDriver) -> None:
 
 @pytest.mark.xdist_group("postgres")
 def test_sql_result_null_value_handling(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test SQLResult NULL value handling with ADBC using CORE_ROUND_3."""
+    """Test SQLResult NULL value handling with ADBC."""
     # Insert row with NULL values
     adbc_postgresql_session.execute(
         """
@@ -185,7 +182,7 @@ def test_sql_result_null_value_handling(adbc_postgresql_session: AdbcDriver) -> 
 
 @pytest.mark.xdist_group("postgres")
 def test_sql_result_aggregation_results(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test SQLResult with aggregation queries using ADBC and CORE_ROUND_3."""
+    """Test SQLResult with aggregation queries using ADBC."""
     result = adbc_postgresql_session.execute("""
         SELECT
             COUNT(*) as total_products,
@@ -212,7 +209,7 @@ def test_sql_result_aggregation_results(adbc_postgresql_session: AdbcDriver) -> 
 
 @pytest.mark.xdist_group("postgres")
 def test_sql_result_complex_queries(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test SQLResult with complex queries using ADBC and CORE_ROUND_3."""
+    """Test SQLResult with complex queries using ADBC."""
     # Test JOIN-like query using LATERAL
     result = adbc_postgresql_session.execute("""
         SELECT
@@ -251,7 +248,7 @@ def test_sql_result_complex_queries(adbc_postgresql_session: AdbcDriver) -> None
 
 @pytest.mark.xdist_group("postgres")
 def test_sql_result_column_name_handling(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test SQLResult column name handling with aliases using ADBC and CORE_ROUND_3."""
+    """Test SQLResult column name handling with aliases using ADBC."""
     result = adbc_postgresql_session.execute(
         """
         SELECT
@@ -283,7 +280,7 @@ def test_sql_result_column_name_handling(adbc_postgresql_session: AdbcDriver) ->
 
 @pytest.mark.xdist_group("postgres")
 def test_sql_result_large_result_handling(adbc_postgresql_session: AdbcDriver) -> None:
-    """Test SQLResult handling of larger result sets using ADBC and CORE_ROUND_3."""
+    """Test SQLResult handling of larger result sets using ADBC."""
     # Insert additional test data
     bulk_data = [(f"Bulk Product {i}", i * 10, i * 2.5, i % 2 == 0) for i in range(1, 101)]
     adbc_postgresql_session.execute_many(
@@ -349,7 +346,7 @@ def adbc_sqlite_session() -> "Generator[AdbcDriver, None, None]":
 
 @pytest.mark.xdist_group("adbc_sqlite")
 def test_sql_result_arrow_sqlite_types(adbc_sqlite_session: AdbcDriver) -> None:
-    """Test SQLResult Arrow type handling with SQLite using CORE_ROUND_3."""
+    """Test SQLResult Arrow type handling with SQLite."""
     result = adbc_sqlite_session.execute("SELECT * FROM arrow_test ORDER BY id")
     assert isinstance(result, SQLResult)
     assert result.data is not None
@@ -371,7 +368,7 @@ def test_sql_result_arrow_sqlite_types(adbc_sqlite_session: AdbcDriver) -> None:
 @pytest.mark.xdist_group("adbc_duckdb")
 @xfail_if_driver_missing
 def test_sql_result_arrow_duckdb_advanced_types() -> None:
-    """Test SQLResult with DuckDB advanced Arrow types using CORE_ROUND_3."""
+    """Test SQLResult with DuckDB advanced Arrow types."""
     config = AdbcConfig(connection_config={"driver_name": "adbc_driver_duckdb.dbapi.connect"})
 
     with config.provide_session() as session:

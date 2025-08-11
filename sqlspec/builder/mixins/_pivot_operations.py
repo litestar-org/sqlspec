@@ -111,7 +111,6 @@ class UnpivotClauseMixin:
         """
         current_expr = self._expression
         if not isinstance(current_expr, exp.Select):
-            # SelectBuilder's __init__ ensures _expression is exp.Select.
             msg = "Unpivot can only be applied to a Select expression managed by Select."
             raise TypeError(msg)
 
@@ -125,7 +124,6 @@ class UnpivotClauseMixin:
             elif isinstance(col_name_or_expr, str):
                 unpivot_cols_exprs.append(exp.column(col_name_or_expr))
             else:
-                # Fallback for other types, should ideally be an error or more specific handling
                 unpivot_cols_exprs.append(exp.column(str(col_name_or_expr)))
 
         in_expr = exp.In(this=name_col_ident, expressions=unpivot_cols_exprs)

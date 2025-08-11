@@ -35,52 +35,6 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
 
     This builder facilitates the construction of SQL INSERT queries
     in a safe and dialect-agnostic manner with automatic parameter binding.
-
-    Example:
-        ```python
-        # Basic INSERT with values
-        insert_query = (
-            Insert()
-            .into("users")
-            .columns("name", "email", "age")
-            .values("John Doe", "john@example.com", 30)
-        )
-
-        # Even more concise with constructor
-        insert_query = Insert("users").values(
-            {"name": "John", "age": 30}
-        )
-
-        # Multi-row INSERT
-        insert_query = (
-            Insert()
-            .into("users")
-            .columns("name", "email")
-            .values("John", "john@example.com")
-            .values("Jane", "jane@example.com")
-        )
-
-        # INSERT from dictionary
-        insert_query = (
-            Insert()
-            .into("users")
-            .values_from_dict(
-                {"name": "John", "email": "john@example.com"}
-            )
-        )
-
-        # INSERT from SELECT
-        insert_query = (
-            Insert()
-            .into("users_backup")
-            .from_select(
-                Select()
-                .select("name", "email")
-                .from_("users")
-                .where("active = true")
-            )
-        )
-        ```
     """
 
     _table: "Optional[str]" = field(default=None, init=False)
@@ -96,7 +50,6 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
         """
         super().__init__(**kwargs)
 
-        # Initialize fields from dataclass
         self._table = None
         self._columns = []
         self._values_added_count = 0
@@ -177,8 +130,6 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
         elif isinstance(current_values_expression, exp.Values):
             current_values_expression.expressions.append(exp.Tuple(expressions=list(value_placeholders)))
         else:
-            # This case should ideally not be reached if logic is correct:
-            # means _values_added_count > 0 but expression is not exp.Values.
             new_values_node = exp.Values(expressions=[exp.Tuple(expressions=list(value_placeholders))])
             insert_expr.set("expression", new_values_node)
 
@@ -206,7 +157,6 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
         if not self._columns:
             self.columns(*data.keys())
         elif set(self._columns) != set(data.keys()):
-            # Verify that dictionary keys match existing columns
             msg = f"Dictionary keys {set(data.keys())} do not match existing columns {set(self._columns)}."
             raise SQLBuilderError(msg)
 
@@ -261,12 +211,10 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
             For a more general solution, you might need dialect-specific handling.
         """
         insert_expr = self._get_insert_expression()
-        # Using sqlglot's OnConflict expression if available
         try:
             on_conflict = exp.OnConflict(this=None, expressions=[])
             insert_expr.set("on", on_conflict)
         except AttributeError:
-            # Fallback for older sqlglot versions
             pass
         return self
 

@@ -2,10 +2,6 @@
 
 This module provides type-safe runtime checks that help the type checker
 understand type narrowing, replacing defensive hasattr() and duck typing patterns.
-
-NOTE: Some sqlspec imports are nested inside functions to prevent circular
-imports where necessary. This module is imported by core sqlspec modules,
-so imports that would create cycles are deferred.
 """
 
 from collections.abc import Sequence
@@ -236,9 +232,6 @@ def can_convert_to_schema(obj: Any) -> "TypeGuard[Any]":
     from sqlspec.driver.mixins import ToSchemaMixin
 
     return isinstance(obj, ToSchemaMixin)
-
-
-# Type guards migrated from typing.py
 
 
 def is_dataclass_instance(obj: Any) -> "TypeGuard[DataclassProtocol]":
@@ -648,9 +641,6 @@ def has_dict_attribute(obj: Any) -> "TypeGuard[DictProtocol]":
     return isinstance(obj, DictProtocol)
 
 
-# Dataclass utility functions
-
-
 def extract_dataclass_fields(
     obj: "DataclassProtocol",
     exclude_none: bool = False,
@@ -704,9 +694,7 @@ def extract_dataclass_items(
     include: "Optional[AbstractSet[str]]" = None,
     exclude: "Optional[AbstractSet[str]]" = None,
 ) -> "tuple[tuple[str, Any], ...]":
-    """Extract dataclass name, value pairs.
-
-    Unlike the 'asdict' method exports by the stdlib, this function does not pickle values.
+    """Extract name-value pairs from a dataclass instance.
 
     Args:
         obj: A dataclass instance.
@@ -729,11 +717,7 @@ def dataclass_to_dict(
     convert_nested: bool = True,
     exclude: "Optional[AbstractSet[str]]" = None,
 ) -> "dict[str, Any]":
-    """Convert a dataclass to a dictionary.
-
-    This method has important differences to the standard library version:
-    - it does not deepcopy values
-    - it does not recurse into collections
+    """Convert a dataclass instance to a dictionary.
 
     Args:
         obj: A dataclass instance.
@@ -783,9 +767,6 @@ def schema_dump(data: Any, exclude_unset: bool = True) -> "dict[str, Any]":
     if has_dict_attribute(data):
         return data.__dict__
     return cast("dict[str, Any]", data)
-
-
-# New type guards for hasattr() pattern replacement
 
 
 def can_extract_parameters(obj: Any) -> "TypeGuard[FilterParameterProtocol]":
@@ -898,9 +879,6 @@ def has_to_statement(obj: Any) -> "TypeGuard[Any]":
     from sqlspec.protocols import HasToStatementProtocol
 
     return isinstance(obj, HasToStatementProtocol)
-
-
-# SQLGlot expression helper functions (moved from _literal_parameterizer_helpers.py)
 
 
 def has_attr(obj: Any, attr: str) -> bool:
@@ -1028,7 +1006,6 @@ def is_string_literal(literal: "exp.Literal") -> bool:
     try:
         return bool(literal.is_string)
     except AttributeError:
-        # Fallback to checking the value type
         try:
             return isinstance(literal.this, str)
         except AttributeError:
@@ -1047,7 +1024,6 @@ def is_number_literal(literal: "exp.Literal") -> bool:
     try:
         return bool(literal.is_number)
     except AttributeError:
-        # Fallback to trying to convert to float
         try:
             if literal.this is not None:
                 float(str(literal.this))
@@ -1055,9 +1031,6 @@ def is_number_literal(literal: "exp.Literal") -> bool:
         except (AttributeError, ValueError, TypeError):
             pass
         return False
-
-
-# SQL processing helper functions (moved from _sql_helpers.py)
 
 
 def get_initial_expression(context: Any) -> "Optional[exp.Expression]":
@@ -1138,11 +1111,9 @@ def is_copy_statement(expression: Any) -> "TypeGuard[exp.Expression]":
     if expression is None:
         return False
 
-    # Check for explicit COPY expressions if SQLGlot supports them
     if has_attr(exp, "Copy") and isinstance(expression, getattr(exp, "Copy", type(None))):
         return True
 
-    # Check for COPY statements parsed as Command or Anonymous expressions
     if isinstance(expression, (exp.Command, exp.Anonymous)):
         sql_text = str(expression).strip().upper()
         return sql_text.startswith("COPY ")

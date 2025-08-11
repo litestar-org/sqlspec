@@ -134,7 +134,7 @@ async def test_file_database_pooling_enabled() -> None:
 
 @pytest.mark.xdist_group("aiosqlite")
 async def test_pooling_with_core_round_3(aiosqlite_config: AiosqliteConfig) -> None:
-    """Test pooling integration with CORE_ROUND_3 architecture."""
+    """Test pooling integration."""
     from sqlspec.core.statement import SQL
 
     # Create SQL object

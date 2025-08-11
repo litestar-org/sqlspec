@@ -1,4 +1,4 @@
-"""Test fixtures and configuration for ADBC integration tests with CORE_ROUND_3 architecture."""
+"""Test fixtures and configuration for ADBC integration tests."""
 
 import functools
 from typing import Any, Callable, TypeVar, cast

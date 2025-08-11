@@ -1,4 +1,4 @@
-# DDL builders for SQLSpec: DROP, CREATE INDEX, TRUNCATE, etc.
+"""DDL builders for SQLSpec: DROP, CREATE INDEX, TRUNCATE, etc."""
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional, Union
@@ -45,7 +45,6 @@ class DDLBuilder(QueryBuilder):
     _expression: Optional[exp.Expression] = field(default=None, init=False, repr=False, compare=False, hash=False)
 
     def __post_init__(self) -> None:
-        # Override to prevent QueryBuilder from calling _create_base_expression prematurely
         pass
 
     def _create_base_expression(self) -> exp.Expression:
@@ -54,7 +53,6 @@ class DDLBuilder(QueryBuilder):
 
     @property
     def _expected_result_type(self) -> "type[SQLResult]":
-        # DDL typically returns no rows; use object for now.
         return SQLResult
 
     def build(self) -> "SafeQuery":
@@ -209,10 +207,8 @@ class CreateTable(DDLBuilder):
 
     def primary_key_constraint(self, columns: "Union[str, list[str]]", name: "Optional[str]" = None) -> "Self":
         """Add a primary key constraint."""
-        # Normalize column list
         col_list = [columns] if isinstance(columns, str) else list(columns)
 
-        # Validation
         if not col_list:
             self._raise_sql_builder_error("Primary key must include at least one column")
 

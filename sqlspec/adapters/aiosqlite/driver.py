@@ -1,18 +1,10 @@
-"""Enhanced AIOSQLite driver with CORE_ROUND_3 architecture integration.
+"""AIOSQLite driver implementation for async SQLite operations.
 
-This async driver implements the complete CORE_ROUND_3 architecture for:
-- 5-10x faster SQL compilation through single-pass processing
-- 40-60% memory reduction through __slots__ optimization
-- Enhanced caching for repeated statement execution
-- Complete backward compatibility with existing async functionality
-
-Architecture Features:
-- Direct integration with sqlspec.core modules
-- Enhanced async parameter processing with type coercion
-- Thread-safe unified caching system
-- MyPyC-optimized performance patterns
-- Zero-copy data access where possible
-- Async context management for resource handling
+Provides async SQLite database connectivity with:
+- Async parameter processing with type coercion
+- Thread-safe caching system
+- Context management for resource handling
+- SQLite-specific optimizations
 """
 
 import contextlib
@@ -40,7 +32,6 @@ if TYPE_CHECKING:
 __all__ = ("AiosqliteCursor", "AiosqliteDriver", "AiosqliteExceptionHandler", "aiosqlite_statement_config")
 
 
-# Enhanced AIOSQLite statement configuration using core modules with performance optimizations
 aiosqlite_statement_config = StatementConfig(
     dialect="sqlite",
     parameter_config=ParameterStyleConfig(
@@ -61,7 +52,6 @@ aiosqlite_statement_config = StatementConfig(
         needs_static_script_compilation=False,
         preserve_parameter_format=True,
     ),
-    # Core processing features enabled for performance
     enable_parsing=True,
     enable_validation=True,
     enable_caching=True,
@@ -70,7 +60,7 @@ aiosqlite_statement_config = StatementConfig(
 
 
 class AiosqliteCursor:
-    """Async context manager for AIOSQLite cursor management with enhanced error handling."""
+    """Async context manager for AIOSQLite cursor management."""
 
     __slots__ = ("connection", "cursor")
 
@@ -83,7 +73,7 @@ class AiosqliteCursor:
         return self.cursor
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        _ = (exc_type, exc_val, exc_tb)  # Mark as intentionally unused
+        _ = (exc_type, exc_val, exc_tb)
         if self.cursor is not None:
             with contextlib.suppress(Exception):
                 await self.cursor.close()
@@ -134,28 +124,12 @@ class AiosqliteExceptionHandler:
 
 
 class AiosqliteDriver(AsyncDriverAdapterBase):
-    """Enhanced AIOSQLite driver with CORE_ROUND_3 architecture integration.
+    """AIOSQLite driver for async SQLite database operations.
 
-    This async driver leverages the complete core module system for maximum performance:
-
-    Performance Improvements:
-    - 5-10x faster SQL compilation through single-pass processing
-    - 40-60% memory reduction through __slots__ optimization
-    - Enhanced caching for repeated statement execution
-    - Zero-copy parameter processing where possible
-    - Async-optimized resource management
-
-    Core Integration Features:
-    - sqlspec.core.statement for enhanced SQL processing
-    - sqlspec.core.parameters for optimized parameter handling
-    - sqlspec.core.cache for unified statement caching
-    - sqlspec.core.config for centralized configuration management
-
-    Compatibility:
-    - 100% backward compatibility with existing AIOSQLite driver interface
-    - All existing async tests pass without modification
-    - Complete StatementConfig API compatibility
-    - Preserved async cursor management and exception handling patterns
+    Provides async SQLite connectivity with:
+    - Statement processing and parameter handling
+    - Cursor management and resource cleanup
+    - Exception handling for SQLite operations
     """
 
     __slots__ = ()
@@ -167,32 +141,28 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
-        # Enhanced configuration with global settings integration
         if statement_config is None:
             cache_config = get_cache_config()
             enhanced_config = aiosqlite_statement_config.replace(
                 enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,  # Default to enabled
-                enable_validation=True,  # Default to enabled
-                dialect="sqlite",  # Use adapter-specific dialect
+                enable_parsing=True,
+                enable_validation=True,
+                dialect="sqlite",
             )
             statement_config = enhanced_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 
     def with_cursor(self, connection: "AiosqliteConnection") -> "AiosqliteCursor":
-        """Create async context manager for AIOSQLite cursor with enhanced resource management."""
+        """Create async context manager for AIOSQLite cursor."""
         return AiosqliteCursor(connection)
 
     def handle_database_exceptions(self) -> "AbstractAsyncContextManager[None]":
-        """Handle AIOSQLite-specific exceptions with comprehensive error categorization."""
+        """Handle AIOSQLite-specific exceptions."""
         return AiosqliteExceptionHandler()
 
     async def _try_special_handling(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "Optional[SQLResult]":
         """Hook for AIOSQLite-specific special operations.
-
-        AIOSQLite doesn't have complex special operations like PostgreSQL COPY,
-        so this always returns None to proceed with standard execution.
 
         Args:
             cursor: AIOSQLite cursor object
@@ -201,15 +171,11 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         Returns:
             None - always proceeds with standard execution for AIOSQLite
         """
-        _ = (cursor, statement)  # Mark as intentionally unused
+        _ = (cursor, statement)
         return None
 
     async def _execute_script(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL script using enhanced statement splitting and parameter handling.
-
-        Uses core module optimization for statement parsing and parameter processing.
-        Parameters are embedded as static values for script execution compatibility.
-        """
+        """Execute SQL script using statement splitting and parameter handling."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
@@ -225,33 +191,24 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         )
 
     async def _execute_many(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute SQL with multiple parameter sets using optimized async batch processing.
-
-        Leverages core parameter processing for enhanced type handling and validation.
-        """
+        """Execute SQL with multiple parameter sets using async batch processing."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
 
-        # Enhanced parameter validation for executemany
         if not prepared_parameters:
             msg = "execute_many requires parameters"
             raise ValueError(msg)
 
         await cursor.executemany(sql, prepared_parameters)
 
-        # Calculate affected rows more accurately
         affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     async def _execute_statement(self, cursor: "aiosqlite.Cursor", statement: "SQL") -> "ExecutionResult":
-        """Execute single SQL statement with enhanced async data handling and performance optimization.
-
-        Uses core processing for optimal parameter handling and result processing.
-        """
+        """Execute single SQL statement with async data handling."""
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, prepared_parameters or ())
 
-        # Enhanced SELECT result processing
         if statement.returns_rows():
             fetched_data = await cursor.fetchall()
             column_names = [col[0] for col in cursor.description or []]
@@ -262,15 +219,12 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 cursor, selected_data=data, column_names=column_names, data_row_count=len(data), is_select_result=True
             )
 
-        # Enhanced non-SELECT result processing
         affected_rows = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-    # Async transaction management with enhanced error handling
     async def begin(self) -> None:
-        """Begin a database transaction with enhanced async error handling."""
+        """Begin a database transaction."""
         try:
-            # Only begin if not already in a transaction
             if not self.connection.in_transaction:
                 await self.connection.execute("BEGIN")
         except aiosqlite.Error as e:
@@ -278,7 +232,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     async def rollback(self) -> None:
-        """Rollback the current transaction with enhanced async error handling."""
+        """Rollback the current transaction."""
         try:
             await self.connection.rollback()
         except aiosqlite.Error as e:
@@ -286,7 +240,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
 
     async def commit(self) -> None:
-        """Commit the current transaction with enhanced async error handling."""
+        """Commit the current transaction."""
         try:
             await self.connection.commit()
         except aiosqlite.Error as e:

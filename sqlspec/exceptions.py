@@ -22,12 +22,12 @@ __all__ = (
 
 
 class SQLSpecError(Exception):
-    """Base exception class from which all Advanced Alchemy exceptions inherit."""
+    """Base exception class for SQLSpec exceptions."""
 
     detail: str
 
     def __init__(self, *args: Any, detail: str = "") -> None:
-        """Initialize ``AdvancedAlchemyException``.
+        """Initialize SQLSpecError.
 
         Args:
             *args: args are converted to :class:`str` before passing to :class:`Exception`
@@ -52,10 +52,7 @@ class SQLSpecError(Exception):
 
 
 class MissingDependencyError(SQLSpecError, ImportError):
-    """Missing optional dependency.
-
-    This exception is raised only when a module depends on a dependency that has not been installed.
-    """
+    """Raised when a required dependency is not installed."""
 
     def __init__(self, package: str, install_package: Optional[str] = None) -> None:
         super().__init__(
@@ -100,10 +97,7 @@ class SQLConversionError(SQLSpecError):
 
 
 class ImproperConfigurationError(SQLSpecError):
-    """Improper Configuration error.
-
-    This exception is raised only when a module depends on a dependency that has not been installed.
-    """
+    """Raised when configuration is invalid or incomplete."""
 
 
 class SerializationError(SQLSpecError):

@@ -156,7 +156,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         self.project_root: Optional[Path] = None
 
     def _extract_version(self, filename: str) -> Optional[str]:
-        """Extract version from filename (e.g., '0001_initial.sql' -> '0001').
+        """Extract version from filename.
 
         Args:
             filename: The migration filename.
@@ -174,14 +174,14 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             content: The migration file content.
 
         Returns:
-            The MD5 checksum hex string.
+            MD5 checksum hex string.
         """
         import hashlib
 
         return hashlib.md5(content.encode()).hexdigest()  # noqa: S324
 
     def _get_migration_files_sync(self) -> "list[tuple[str, Path]]":
-        """Get all migration files sorted by version (sync version).
+        """Get all migration files sorted by version.
 
         Returns:
             List of tuples containing (version, file_path).
@@ -207,7 +207,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             file_path: Path to the migration file.
 
         Returns:
-            Dictionary containing migration metadata.
+            Migration metadata dictionary.
         """
 
         loader = get_migration_loader(file_path, self.migrations_path, self.project_root)
@@ -317,10 +317,10 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
         self.project_root = Path(migration_config["project_root"]) if "project_root" in migration_config else None
 
     def _get_init_readme_content(self) -> str:
-        """Get the README content for migration directory initialization.
+        """Get README content for migration directory initialization.
 
         Returns:
-            The README markdown content.
+            README markdown content.
         """
         return """# SQLSpec Migrations
 
@@ -360,7 +360,7 @@ This naming ensures proper sorting and avoids conflicts when loading multiple fi
 """
 
     def init_directory(self, directory: str, package: bool = True) -> None:
-        """Initialize migration directory structure (sync implementation).
+        """Initialize migration directory structure.
 
         Args:
             directory: Directory to initialize migrations in.
@@ -376,11 +376,9 @@ This naming ensures proper sorting and avoids conflicts when loading multiple fi
         if package:
             (migrations_dir / "__init__.py").touch()
 
-        # Create README
         readme = migrations_dir / "README.md"
         readme.write_text(self._get_init_readme_content())
 
-        # Create .gitkeep for empty directory
         (migrations_dir / ".gitkeep").touch()
 
         console.print(f"[green]Initialized migrations in {directory}[/]")
