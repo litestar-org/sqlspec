@@ -1,15 +1,17 @@
 """Tests for the SQLResult iteration functionality."""
 
+from typing import Any
+
 import pytest
 
 from sqlspec.core.result import SQLResult, create_sql_result
 from sqlspec.core.statement import SQL
 
 
-def test_sqlresult_basic_iteration() -> None:
+def test_sql_result_basic_iteration() -> None:
     """Test basic iteration over SQLResult rows."""
     sql_stmt = SQL("SELECT * FROM users")
-    test_data = [
+    test_data: list[dict[str, Any]] = [
         {"id": 1, "name": "Alice", "email": "alice@example.com"},
         {"id": 2, "name": "Bob", "email": "bob@example.com"},
         {"id": 3, "name": "Charlie", "email": "charlie@example.com"},
@@ -25,7 +27,7 @@ def test_sqlresult_basic_iteration() -> None:
     assert rows[2]["name"] == "Charlie"
 
 
-def test_sqlresult_iteration_with_empty_data() -> None:
+def test_sql_result_iteration_with_empty_data() -> None:
     """Test iteration when SQLResult has no data."""
     sql_stmt = SQL("SELECT * FROM empty_table")
 
@@ -40,10 +42,10 @@ def test_sqlresult_iteration_with_empty_data() -> None:
     assert len(rows) == 0
 
 
-def test_sqlresult_iteration_with_list_comprehension() -> None:
+def test_sql_result_iteration_with_list_comprehension() -> None:
     """Test that SQLResult works with list comprehensions."""
     sql_stmt = SQL("SELECT * FROM users")
-    test_data = [
+    test_data: list[dict[str, Any]] = [
         {"id": 1, "name": "Alice", "age": 25},
         {"id": 2, "name": "Bob", "age": 30},
         {"id": 3, "name": "Charlie", "age": 35},
@@ -59,10 +61,10 @@ def test_sqlresult_iteration_with_list_comprehension() -> None:
     assert ages == [25, 30, 35]
 
 
-def test_sqlresult_iteration_with_filtering() -> None:
+def test_sql_result_iteration_with_filtering() -> None:
     """Test that SQLResult works with filtering during iteration."""
     sql_stmt = SQL("SELECT * FROM users")
-    test_data = [
+    test_data: list[dict[str, Any]] = [
         {"id": 1, "name": "Alice", "age": 25, "active": True},
         {"id": 2, "name": "Bob", "age": 30, "active": False},
         {"id": 3, "name": "Charlie", "age": 35, "active": True},
@@ -77,13 +79,10 @@ def test_sqlresult_iteration_with_filtering() -> None:
     assert active_users[1]["name"] == "Charlie"
 
 
-def test_sqlresult_iteration_preserves_existing_functionality() -> None:
+def test_sql_result_iteration_preserves_existing_functionality() -> None:
     """Test that iteration doesn't break existing SQLResult functionality."""
     sql_stmt = SQL("SELECT * FROM users")
-    test_data = [
-        {"id": 1, "name": "Alice"},
-        {"id": 2, "name": "Bob"},
-    ]
+    test_data: list[dict[str, Any]] = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
 
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=2)
 
@@ -102,13 +101,10 @@ def test_sqlresult_iteration_preserves_existing_functionality() -> None:
         assert row == result[i]
 
 
-def test_sqlresult_iteration_multiple_times() -> None:
+def test_sql_result_iteration_multiple_times() -> None:
     """Test that SQLResult can be iterated multiple times."""
     sql_stmt = SQL("SELECT * FROM users")
-    test_data = [
-        {"id": 1, "name": "Alice"},
-        {"id": 2, "name": "Bob"},
-    ]
+    test_data: list[dict[str, Any]] = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
 
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=2)
 
@@ -122,10 +118,10 @@ def test_sqlresult_iteration_multiple_times() -> None:
     assert first_iteration == second_iteration
 
 
-def test_sqlresult_iterator_protocol() -> None:
+def test_sql_result_iterator_protocol() -> None:
     """Test that SQLResult follows the iterator protocol correctly."""
     sql_stmt = SQL("SELECT * FROM users")
-    test_data = [{"id": 1, "name": "Alice"}]
+    test_data: list[dict[str, Any]] = [{"id": 1, "name": "Alice"}]
 
     result = SQLResult(statement=sql_stmt, data=test_data, rows_affected=1)
 
@@ -145,7 +141,7 @@ def test_sqlresult_iterator_protocol() -> None:
 def test_create_sql_result_iteration() -> None:
     """Test that create_sql_result function produces iterable results."""
     sql_stmt = SQL("SELECT * FROM users")
-    test_data = [{"id": 1, "name": "Alice"}]
+    test_data: list[dict[str, Any]] = [{"id": 1, "name": "Alice"}]
 
     result = create_sql_result(statement=sql_stmt, data=test_data, rows_affected=1)
 
