@@ -39,7 +39,7 @@ def get_database_migration_plugin(app: "Litestar") -> "SQLSpec":
     raise ImproperConfigurationError(msg)
 
 
-@click.group(cls=LitestarGroup, name="database")
+@click.group(cls=LitestarGroup, name="db")
 def database_group(ctx: "click.Context") -> None:
     """Manage SQLSpec database components."""
     ctx.obj = {"app": ctx.obj, "configs": get_database_migration_plugin(ctx.obj.app).config}

@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING, Any, Union
 
 from litestar.di import Provide
-from litestar.plugins import InitPluginProtocol
+from litestar.plugins import CLIPlugin, InitPluginProtocol
 
 from sqlspec.base import SQLSpec as SQLSpecBase
 from sqlspec.config import AsyncConfigT, DatabaseConfigProtocol, DriverT, SyncConfigT
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 logger = get_logger("extensions.litestar")
 
 
-class SQLSpec(InitPluginProtocol, SQLSpecBase):
+class SQLSpec(InitPluginProtocol, CLIPlugin, SQLSpecBase):
     """Litestar plugin for SQLSpec database integration."""
 
     __slots__ = ("_config", "_plugin_configs")
