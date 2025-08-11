@@ -81,7 +81,12 @@ class UpdateSetClauseMixin:
                     for p_name, p_value in val.parameters.items():
                         self.add_parameter(p_value, name=p_name)  # type: ignore[attr-defined]
             else:
-                param_name = self.add_parameter(val)[1]  # type: ignore[attr-defined]
+                column_name = col if isinstance(col, str) else str(col)
+                # Extract just the column part if table.column format
+                if "." in column_name:
+                    column_name = column_name.split(".")[-1]
+                param_name = self._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+                param_name = self.add_parameter(val, name=param_name)[1]  # type: ignore[attr-defined]
                 value_expr = exp.Placeholder(this=param_name)
             assignments.append(exp.EQ(this=col_expr, expression=value_expr))
         elif (len(args) == 1 and isinstance(args[0], Mapping)) or kwargs:
@@ -97,7 +102,12 @@ class UpdateSetClauseMixin:
                         for p_name, p_value in val.parameters.items():
                             self.add_parameter(p_value, name=p_name)  # type: ignore[attr-defined]
                 else:
-                    param_name = self.add_parameter(val)[1]  # type: ignore[attr-defined]
+                    # Extract column name for parameter naming
+                    column_name = col if isinstance(col, str) else str(col)
+                    if "." in column_name:
+                        column_name = column_name.split(".")[-1]
+                    param_name = self._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+                    param_name = self.add_parameter(val, name=param_name)[1]  # type: ignore[attr-defined]
                     value_expr = exp.Placeholder(this=param_name)
                 assignments.append(exp.EQ(this=exp.column(col), expression=value_expr))
         else:

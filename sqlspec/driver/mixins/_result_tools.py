@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from enum import Enum
 from functools import partial
 from pathlib import Path, PurePath
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union, overload
+from typing import Any, Callable, Optional, overload
 from uuid import UUID
 
 from mypy_extensions import trait
@@ -13,8 +13,6 @@ from mypy_extensions import trait
 from sqlspec.exceptions import SQLSpecError, wrap_exceptions
 from sqlspec.typing import (
     CATTRS_INSTALLED,
-    DataclassProtocol,
-    DictLike,
     ModelDTOT,
     ModelT,
     attrs_asdict,
@@ -24,9 +22,6 @@ from sqlspec.typing import (
     get_type_adapter,
 )
 from sqlspec.utils.type_guards import is_attrs_schema, is_dataclass, is_msgspec_struct, is_pydantic_model
-
-if TYPE_CHECKING:
-    from sqlspec._typing import AttrsInstanceStub, BaseModelStub, StructStub
 
 __all__ = ("_DEFAULT_TYPE_DECODERS", "_default_msgspec_deserializer")
 
@@ -74,10 +69,16 @@ class ToSchemaMixin:
     # Schema conversion overloads - handle common cases first
     @overload
     @staticmethod
+    def to_schema(data: "list[dict[str, Any]]") -> "list[dict[str, Any]]": ...
+    @overload
+    @staticmethod
     def to_schema(data: "list[dict[str, Any]]", *, schema_type: "type[ModelDTOT]") -> "list[ModelDTOT]": ...
     @overload
     @staticmethod
     def to_schema(data: "list[dict[str, Any]]", *, schema_type: None = None) -> "list[dict[str, Any]]": ...
+    @overload
+    @staticmethod
+    def to_schema(data: "dict[str, Any]") -> "dict[str, Any]": ...
     @overload
     @staticmethod
     def to_schema(data: "dict[str, Any]", *, schema_type: "type[ModelDTOT]") -> "ModelDTOT": ...
@@ -86,24 +87,19 @@ class ToSchemaMixin:
     def to_schema(data: "dict[str, Any]", *, schema_type: None = None) -> "dict[str, Any]": ...
     @overload
     @staticmethod
+    def to_schema(data: "list[ModelT]") -> "list[ModelT]": ...
+    @overload
+    @staticmethod
     def to_schema(data: "list[ModelT]", *, schema_type: "type[ModelDTOT]") -> "list[ModelDTOT]": ...
     @overload
     @staticmethod
     def to_schema(data: "list[ModelT]", *, schema_type: None = None) -> "list[ModelT]": ...
     @overload
     @staticmethod
-    def to_schema(
-        data: "Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub]",
-        *,
-        schema_type: "type[ModelDTOT]",
-    ) -> "ModelDTOT": ...
+    def to_schema(data: "ModelT") -> "ModelT": ...
     @overload
     @staticmethod
-    def to_schema(
-        data: "Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub]",
-        *,
-        schema_type: None = None,
-    ) -> "Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub]": ...
+    def to_schema(data: Any, *, schema_type: None = None) -> Any: ...
 
     @staticmethod
     def to_schema(data: Any, *, schema_type: "Optional[type[ModelDTOT]]" = None) -> Any:

@@ -558,6 +558,7 @@ class LimitOffsetFilter(PaginationFilter):
         return [], {self._limit_param_name: self.limit, self._offset_param_name: self.offset}
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
+        import sqlglot
         from sqlglot import exp
 
         # Resolve parameter name conflicts
@@ -567,17 +568,18 @@ class LimitOffsetFilter(PaginationFilter):
         limit_placeholder = exp.Placeholder(this=limit_param_name)
         offset_placeholder = exp.Placeholder(this=offset_param_name)
 
-        if statement._statement is None:
-            new_statement = exp.Select().limit(limit_placeholder)
-        else:
-            new_statement = (
-                statement._statement.limit(limit_placeholder)
-                if isinstance(statement._statement, exp.Select)
-                else exp.Select().from_(statement._statement).limit(limit_placeholder)
-            )
+        # Parse the current SQL to get the statement structure
+        try:
+            current_statement = sqlglot.parse_one(statement._raw_sql, dialect=getattr(statement, "_dialect", None))
+        except Exception:
+            # Fallback to wrapping in subquery if parsing fails
+            current_statement = exp.Select().from_(f"({statement._raw_sql})")
 
-        if isinstance(new_statement, exp.Select):
-            new_statement = new_statement.offset(offset_placeholder)
+        if isinstance(current_statement, exp.Select):
+            new_statement = current_statement.limit(limit_placeholder).offset(offset_placeholder)
+        else:
+            # Wrap non-SELECT statements in a subquery
+            new_statement = exp.Select().from_(current_statement).limit(limit_placeholder).offset(offset_placeholder)
 
         result = statement.copy(statement=new_statement)
 
