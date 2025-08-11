@@ -13,7 +13,6 @@ Tests cover:
 - Edge cases and error conditions
 """
 
-
 from sqlspec import sql
 
 
@@ -64,11 +63,13 @@ def test_where_any_uses_column_name_with_any_suffix() -> None:
 
 def test_multiple_where_conditions_preserve_column_names() -> None:
     """Test that multiple WHERE conditions preserve individual column names."""
-    query = (sql.select("*")
-             .from_("orders")
-             .where_eq("status", "pending")
-             .where_gt("total", 100.0)
-             .where_like("customer_email", "%@company.com"))
+    query = (
+        sql.select("*")
+        .from_("orders")
+        .where_eq("status", "pending")
+        .where_gt("total", 100.0)
+        .where_like("customer_email", "%@company.com")
+    )
     stmt = query.build()
 
     assert "status" in stmt.parameters
@@ -81,10 +82,7 @@ def test_multiple_where_conditions_preserve_column_names() -> None:
 
 def test_parameter_collision_handling() -> None:
     """Test that parameter name collisions are resolved with numbering."""
-    query = (sql.select("*")
-             .from_("products")
-             .where_gt("price", 10)
-             .where_lt("price", 100))
+    query = sql.select("*").from_("products").where_gt("price", 10).where_lt("price", 100)
     stmt = query.build()
 
     # Should have both price parameters with collision resolution
@@ -100,11 +98,13 @@ def test_parameter_collision_handling() -> None:
 
 def test_table_prefixed_columns_extract_column_name() -> None:
     """Test that table-prefixed columns extract just the column name."""
-    query = (sql.select("*")
-             .from_("users u")
-             .join("profiles p", "u.id = p.user_id")
-             .where_eq("u.email", "test@example.com")
-             .where_eq("p.status", "active"))
+    query = (
+        sql.select("*")
+        .from_("users u")
+        .join("profiles p", "u.id = p.user_id")
+        .where_eq("u.email", "test@example.com")
+        .where_eq("p.status", "active")
+    )
     stmt = query.build()
 
     # Should extract column names without table prefix
@@ -126,10 +126,7 @@ def test_update_set_single_column_uses_column_name() -> None:
 
 def test_update_set_multiple_columns_preserve_names() -> None:
     """Test that UPDATE SET with multiple columns preserves all names."""
-    query = (sql.update("products")
-             .set("name", "Updated Product")
-             .set("price", 49.99)
-             .set("in_stock", True))
+    query = sql.update("products").set("name", "Updated Product").set("price", 49.99).set("in_stock", True)
     stmt = query.build()
 
     assert "name" in stmt.parameters
@@ -142,11 +139,7 @@ def test_update_set_multiple_columns_preserve_names() -> None:
 
 def test_update_set_with_dict_uses_column_names() -> None:
     """Test that UPDATE SET with dictionary uses column names."""
-    query = sql.update("accounts").set({
-        "balance": 1500.75,
-        "last_transaction": "2023-01-15",
-        "is_verified": True
-    })
+    query = sql.update("accounts").set({"balance": 1500.75, "last_transaction": "2023-01-15", "is_verified": True})
     stmt = query.build()
 
     # Should use dictionary keys as parameter names
@@ -163,9 +156,9 @@ def test_update_set_with_dict_uses_column_names() -> None:
 
 def test_insert_with_columns_uses_column_names() -> None:
     """Test that INSERT with specified columns uses column names."""
-    query = (sql.insert("employees")
-             .columns("first_name", "last_name", "department")
-             .values("John", "Smith", "Engineering"))
+    query = (
+        sql.insert("employees").columns("first_name", "last_name", "department").values("John", "Smith", "Engineering")
+    )
     stmt = query.build()
 
     # Should use column names for parameters
@@ -179,31 +172,29 @@ def test_insert_with_columns_uses_column_names() -> None:
 
 def test_insert_values_from_dict_preserves_keys() -> None:
     """Test that INSERT values_from_dict preserves dictionary keys."""
-    query = sql.insert("orders").values_from_dict({
-        "customer_id": 12345,
-        "product_name": "Widget",
-        "quantity": 3,
-        "order_date": "2023-01-01"
-    })
+    query = sql.insert("orders").values_from_dict(
+        {"customer_id": 12345, "product_name": "Widget", "quantity": 3, "order_date": "2023-01-01"}
+    )
     stmt = query.build()
 
     # Should preserve dictionary keys in parameter names
     expected_keys = ["customer_id", "product_name", "quantity", "order_date"]
     for key in expected_keys:
         # Check if key exists directly or as part of parameter name
-        assert (key in stmt.parameters or
-                any(key in param_key for param_key in stmt.parameters.keys()))
+        assert key in stmt.parameters or any(key in param_key for param_key in stmt.parameters.keys())
 
 
 def test_complex_query_preserves_all_column_names() -> None:
     """Test that complex queries preserve column names across all operations."""
-    query = (sql.select("u.username", "p.title")
-             .from_("users u")
-             .join("posts p", "u.id = p.author_id")
-             .where_eq("u.status", "active")
-             .where_in("p.category", ["tech", "science"])
-             .where_between("p.views", 100, 10000)
-             .where_like("p.title", "%python%"))
+    query = (
+        sql.select("u.username", "p.title")
+        .from_("users u")
+        .join("posts p", "u.id = p.author_id")
+        .where_eq("u.status", "active")
+        .where_in("p.category", ["tech", "science"])
+        .where_between("p.views", 100, 10000)
+        .where_like("p.title", "%python%")
+    )
     stmt = query.build()
 
     params = stmt.parameters
@@ -233,9 +224,7 @@ def test_subquery_parameters_are_preserved() -> None:
     """Test that subquery parameters maintain their names."""
     subquery = sql.select("user_id").from_("subscriptions").where_eq("plan_type", "premium")
 
-    query = (sql.select("name", "email")
-             .from_("users")
-             .where_in("id", subquery))
+    query = sql.select("name", "email").from_("users").where_in("id", subquery)
     stmt = query.build()
 
     # Subquery parameter should be preserved
@@ -245,15 +234,19 @@ def test_subquery_parameters_are_preserved() -> None:
 
 def test_mixed_parameter_types_preserve_names() -> None:
     """Test that mixed parameter types preserve proper column names."""
-    query = (sql.update("user_profiles")
-             .set({
-                 "username": "john_doe",           # string
-                 "age": 28,                       # int
-                 "salary": 75000.50,              # float
-                 "is_active": True,               # bool
-                 "last_seen": None                # None
-             })
-             .where_eq("user_id", 12345))
+    query = (
+        sql.update("user_profiles")
+        .set(
+            {
+                "username": "john_doe",  # string
+                "age": 28,  # int
+                "salary": 75000.50,  # float
+                "is_active": True,  # bool
+                "last_seen": None,  # None
+            }
+        )
+        .where_eq("user_id", 12345)
+    )
     stmt = query.build()
 
     params = stmt.parameters
@@ -323,10 +316,9 @@ def test_no_generic_param_names_in_insert_operations() -> None:
 
 def test_parameter_names_are_sql_safe() -> None:
     """Test that generated parameter names are safe for SQL usage."""
-    query = (sql.select("*")
-             .from_("test_table")
-             .where_eq("column_name", "value")
-             .where_in("other_column", ["a", "b", "c"]))
+    query = (
+        sql.select("*").from_("test_table").where_eq("column_name", "value").where_in("other_column", ["a", "b", "c"])
+    )
     stmt = query.build()
 
     for param_name in stmt.parameters.keys():
@@ -342,13 +334,17 @@ def test_parameter_names_are_sql_safe() -> None:
 
 def test_empty_and_null_values_preserve_column_names() -> None:
     """Test that empty and null values still preserve column names."""
-    query = (sql.update("users")
-             .set({
-                 "middle_name": "",           # empty string
-                 "phone": None,               # null
-                 "notes": "   ",              # whitespace
-             })
-             .where_eq("id", 1))
+    query = (
+        sql.update("users")
+        .set(
+            {
+                "middle_name": "",  # empty string
+                "phone": None,  # null
+                "notes": "   ",  # whitespace
+            }
+        )
+        .where_eq("id", 1)
+    )
     stmt = query.build()
 
     params = stmt.parameters
@@ -367,9 +363,7 @@ def test_empty_and_null_values_preserve_column_names() -> None:
 
 def test_original_user_example_works_correctly() -> None:
     """Test the exact user example that was originally failing."""
-    query = (sql.select("id", "name", "slug")
-             .from_("test_table")
-             .where_eq("slug", "test-item"))
+    query = sql.select("id", "name", "slug").from_("test_table").where_eq("slug", "test-item")
     stmt = query.build()
 
     # Should use :slug parameter, not :param_1
@@ -383,10 +377,12 @@ def test_original_user_example_works_correctly() -> None:
 
 def test_parameter_naming_with_special_characters_in_values() -> None:
     """Test that parameter naming works with special characters in values."""
-    query = (sql.select("*")
-             .from_("logs")
-             .where_eq("message", "Error: Connection failed!")
-             .where_like("details", "%SQL injection attempt: DROP TABLE%"))
+    query = (
+        sql.select("*")
+        .from_("logs")
+        .where_eq("message", "Error: Connection failed!")
+        .where_like("details", "%SQL injection attempt: DROP TABLE%")
+    )
     stmt = query.build()
 
     # Should preserve column names despite special characters in values

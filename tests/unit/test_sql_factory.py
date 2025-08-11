@@ -154,11 +154,7 @@ def test_where_not_any_with_values_uses_placeholders() -> None:
 def test_multiple_where_conditions_sequential_parameters() -> None:
     """Test that multiple WHERE conditions create descriptive parameters."""
     query = (
-        sql.select("*")
-        .from_("users")
-        .where_eq("name", "John")
-        .where_gt("age", 21)
-        .where_like("email", "%@gmail.com")
+        sql.select("*").from_("users").where_eq("name", "John").where_gt("age", 21).where_like("email", "%@gmail.com")
     )
     stmt = query.build()
 
@@ -174,11 +170,7 @@ def test_multiple_where_conditions_sequential_parameters() -> None:
 
 def test_user_reproducible_example_fixed() -> None:
     """Test the exact user example that was failing before the fix."""
-    query = (
-        sql.select("id", "name", "slug")
-        .from_("test_table")
-        .where_eq("slug", "test-item")
-    )
+    query = sql.select("id", "name", "slug").from_("test_table").where_eq("slug", "test-item")
 
     stmt = query.build()
 
@@ -210,11 +202,7 @@ def test_raw_with_named_parameters_returns_sql_object() -> None:
 
 def test_raw_with_multiple_named_parameters() -> None:
     """Test raw SQL with multiple named parameters."""
-    stmt = sql.raw(
-        "price BETWEEN :min_price AND :max_price",
-        min_price=100,
-        max_price=500
-    )
+    stmt = sql.raw("price BETWEEN :min_price AND :max_price", min_price=100, max_price=500)
 
     assert isinstance(stmt, SQL)
     assert stmt.sql == "price BETWEEN :min_price AND :max_price"
@@ -224,11 +212,7 @@ def test_raw_with_multiple_named_parameters() -> None:
 
 def test_raw_with_complex_sql_and_parameters() -> None:
     """Test raw SQL with complex query and named parameters."""
-    stmt = sql.raw(
-        "LOWER(name) LIKE LOWER(:pattern) AND status = :status",
-        pattern="%test%",
-        status="active"
-    )
+    stmt = sql.raw("LOWER(name) LIKE LOWER(:pattern) AND status = :status", pattern="%test%", status="active")
 
     assert isinstance(stmt, SQL)
     assert "LOWER(name) LIKE LOWER(:pattern)" in stmt.sql
@@ -240,10 +224,7 @@ def test_raw_with_complex_sql_and_parameters() -> None:
 def test_raw_with_various_parameter_types() -> None:
     """Test raw SQL with different parameter value types."""
     stmt = sql.raw(
-        "id = :user_id AND active = :is_active AND score >= :min_score",
-        user_id=123,
-        is_active=True,
-        min_score=4.5
+        "id = :user_id AND active = :is_active AND score >= :min_score", user_id=123, is_active=True, min_score=4.5
     )
 
     assert isinstance(stmt, SQL)
@@ -270,10 +251,7 @@ def test_raw_none_values_in_parameters() -> None:
 
 def test_raw_parameter_overwrite_behavior() -> None:
     """Test behavior when same parameter name used multiple times."""
-    stmt = sql.raw(
-        "field1 = :value AND field2 = :value",
-        value="test"
-    )
+    stmt = sql.raw("field1 = :value AND field2 = :value", value="test")
 
     assert isinstance(stmt, SQL)
     assert stmt.parameters["value"] == "test"
@@ -360,10 +338,19 @@ def test_alter_table_method_exists() -> None:
 def test_all_ddl_methods_exist() -> None:
     """Test that all expected DDL methods exist on the sql factory."""
     ddl_methods = [
-        "create_table", "create_view", "create_index", "create_schema",
-        "create_materialized_view", "create_table_as_select",
-        "drop_table", "drop_view", "drop_index", "drop_schema",
-        "alter_table", "rename_table", "comment_on"
+        "create_table",
+        "create_view",
+        "create_index",
+        "create_schema",
+        "create_materialized_view",
+        "create_table_as_select",
+        "drop_table",
+        "drop_view",
+        "drop_index",
+        "drop_schema",
+        "alter_table",
+        "rename_table",
+        "comment_on",
     ]
 
     for method_name in ddl_methods:
@@ -445,12 +432,7 @@ def test_empty_raw_sql() -> None:
 
 def test_parameter_names_use_column_names() -> None:
     """Test that parameters use column names when possible."""
-    query = (
-        sql.select("*")
-        .from_("users")
-        .where_eq("name", "John")
-        .where_eq("status", "active")
-    )
+    query = sql.select("*").from_("users").where_eq("name", "John").where_eq("status", "active")
     stmt = query.build()
 
     assert "name" in stmt.parameters
@@ -461,12 +443,7 @@ def test_parameter_names_use_column_names() -> None:
 
 def test_parameter_values_preserved_correctly() -> None:
     """Test that parameter values are preserved exactly."""
-    test_values = [
-        ("string_val", "test"),
-        ("int_val", 42),
-        ("float_val", 3.14159),
-        ("bool_val", True),
-    ]
+    test_values = [("string_val", "test"), ("int_val", 42), ("float_val", 3.14159), ("bool_val", True)]
 
     query = sql.select("*").from_("test")
     for column_name, value in test_values:

@@ -22,11 +22,7 @@ def test_update_set_uses_column_names() -> None:
 
 def test_update_set_with_dict_uses_column_names() -> None:
     """Test that UPDATE SET with dictionary uses column names for parameters."""
-    query = sql.update("products").set({
-        "name": "Widget",
-        "price": 29.99,
-        "category": "Tools"
-    })
+    query = sql.update("products").set({"name": "Widget", "price": 29.99, "category": "Tools"})
     stmt = query.build()
 
     assert "name" in stmt.parameters
@@ -39,9 +35,7 @@ def test_update_set_with_dict_uses_column_names() -> None:
 
 def test_insert_with_columns_uses_column_names() -> None:
     """Test that INSERT with specified columns uses column names for parameters."""
-    query = (sql.insert("users")
-             .columns("name", "email", "age")
-             .values("Alice Smith", "alice@test.com", 28))
+    query = sql.insert("users").columns("name", "email", "age").values("Alice Smith", "alice@test.com", 28)
     stmt = query.build()
 
     assert "name" in stmt.parameters
@@ -54,12 +48,9 @@ def test_insert_with_columns_uses_column_names() -> None:
 
 def test_insert_values_from_dict_uses_column_names() -> None:
     """Test that INSERT values_from_dict uses column names for parameters."""
-    query = sql.insert("orders").values_from_dict({
-        "customer_id": 123,
-        "product_name": "Laptop",
-        "quantity": 2,
-        "total": 1999.98
-    })
+    query = sql.insert("orders").values_from_dict(
+        {"customer_id": 123, "product_name": "Laptop", "quantity": 2, "total": 1999.98}
+    )
     stmt = query.build()
 
     # Should preserve the dictionary key names as parameter names
@@ -82,13 +73,15 @@ def test_insert_without_columns_uses_positional_names() -> None:
 
 def test_case_when_uses_descriptive_names() -> None:
     """Test that CASE WHEN expressions use descriptive parameter names."""
-    query = (sql.select("name")
-             .from_("users")
-             .case_()
-             .when("age > 65", "Senior")
-             .when("age > 18", "Adult")
-             .else_("Minor")
-             .end())
+    query = (
+        sql.select("name")
+        .from_("users")
+        .case_()
+        .when("age > 65", "Senior")
+        .when("age > 18", "Adult")
+        .else_("Minor")
+        .end()
+    )
     stmt = query.build()
 
     # Should use descriptive names for CASE values
@@ -105,12 +98,14 @@ def test_case_when_uses_descriptive_names() -> None:
 
 def test_complex_query_preserves_column_names() -> None:
     """Test that complex queries with multiple operations preserve column names."""
-    query = (sql.select("u.name", "p.title")
-             .from_("users u")
-             .join("posts p", "u.id = p.user_id")
-             .where_eq("u.status", "active")
-             .where_in("p.category", ["tech", "science"])
-             .where_between("p.created_at", "2023-01-01", "2023-12-31"))
+    query = (
+        sql.select("u.name", "p.title")
+        .from_("users u")
+        .join("posts p", "u.id = p.user_id")
+        .where_eq("u.status", "active")
+        .where_in("p.category", ["tech", "science"])
+        .where_between("p.created_at", "2023-01-01", "2023-12-31")
+    )
     stmt = query.build()
 
     # Should use descriptive parameter names
@@ -135,11 +130,9 @@ def test_complex_query_preserves_column_names() -> None:
 
 def test_parameter_collision_handling() -> None:
     """Test that parameter name collisions are handled gracefully."""
-    query = (sql.select("*")
-             .from_("events")
-             .where_gt("priority", 1)
-             .where_lt("priority", 10)
-             .where_eq("status", "active"))
+    query = (
+        sql.select("*").from_("events").where_gt("priority", 1).where_lt("priority", 10).where_eq("status", "active")
+    )
     stmt = query.build()
 
     params = stmt.parameters
@@ -162,9 +155,7 @@ def test_subquery_parameter_preservation() -> None:
     """Test that parameters in subqueries are properly preserved."""
     subquery = sql.select("id").from_("active_users").where_eq("status", "verified")
 
-    query = (sql.select("name")
-             .from_("posts")
-             .where_in("author_id", subquery))
+    query = sql.select("name").from_("posts").where_in("author_id", subquery)
     stmt = query.build()
 
     # Should preserve the subquery parameter name
@@ -174,10 +165,7 @@ def test_subquery_parameter_preservation() -> None:
 
 def test_table_prefixed_columns_extract_column_name() -> None:
     """Test that table-prefixed columns extract just the column name for parameters."""
-    query = (sql.select("*")
-             .from_("users u")
-             .where_eq("u.email", "test@example.com")
-             .where_gt("u.age", 21))
+    query = sql.select("*").from_("users u").where_eq("u.email", "test@example.com").where_gt("u.age", 21)
     stmt = query.build()
 
     # Should extract column names without table prefix
@@ -189,14 +177,11 @@ def test_table_prefixed_columns_extract_column_name() -> None:
 
 def test_mixed_parameter_types_preserve_names() -> None:
     """Test that mixed parameter types (strings, numbers, booleans) preserve proper names."""
-    query = (sql.update("accounts")
-             .set({
-                 "username": "john_doe",
-                 "balance": 1500.75,
-                 "is_active": True,
-                 "last_login": None
-             })
-             .where_eq("account_id", 12345))
+    query = (
+        sql.update("accounts")
+        .set({"username": "john_doe", "balance": 1500.75, "is_active": True, "last_login": None})
+        .where_eq("account_id", 12345)
+    )
     stmt = query.build()
 
     params = stmt.parameters
