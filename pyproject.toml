@@ -13,7 +13,7 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.9, <4.0"
-version = "0.14.1"
+version = "0.15.0"
 
 [project.urls]
 Discord = "https://discord.gg/litestar"
@@ -56,7 +56,7 @@ uuid = ["uuid-utils"]
 
 [dependency-groups]
 benchmarks = ["sqlalchemy[asyncio]", "psutil", "types-psutil", "rich", "rich-click", "duckdb"]
-build = ["bump-my-version", "hatch-mypyc"]
+build = ["bump-my-version", "hatch-mypyc", "pydantic-settings"]
 dev = [
   { include-group = "extras" },
   { include-group = "lint" },
@@ -188,7 +188,7 @@ opt_level = "3"   # Maximum optimization (0-3)
 allow_dirty = true
 commit = false
 commit_args = "--no-verify"
-current_version = "0.14.1"
+current_version = "0.15.0"
 ignore_missing_files = false
 ignore_missing_version = false
 message = "chore(release): bump to v{new_version}"
