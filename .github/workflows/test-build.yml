@@ -91,7 +91,14 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Install dependencies with mypyc
-        run: uv sync --extra performance --group build
+        run: uv sync --extra mypyc --group build
+
+      - name: Set up MyPyC environment variables
+        run: |
+          echo "MYPYC_OPT_LEVEL=3" >> $GITHUB_ENV
+          echo "MYPYC_DEBUG_LEVEL=0" >> $GITHUB_ENV
+          echo "MYPYC_MULTI_FILE=1" >> $GITHUB_ENV
+        shell: bash
 
       - name: Build MyPyC wheel
         run: uv build --wheel
@@ -107,6 +114,7 @@ jobs:
               mv "$wheel" "$dir/${base}+mypyc.whl"
             fi
           done
+        shell: bash
 
       - name: Test mypyc wheel installation
         run: |
