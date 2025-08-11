@@ -32,7 +32,7 @@ jobs:
           path: dist/*.tar.gz
 
   build-wheels-standard:
-    name: Build standard wheels (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    name: Std ${{ matrix.os }} py${{ matrix.python-version }}
     strategy:
       fail-fast: false
       matrix:
@@ -68,7 +68,7 @@ jobs:
           path: dist/*.whl
 
   build-wheels-mypyc:
-    name: Build MyPyC wheels (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    name: MyPyC ${{ matrix.os }} py${{ matrix.python-version }}
     strategy:
       fail-fast: false
       matrix:
@@ -104,9 +104,9 @@ jobs:
       - name: Build MyPyC wheel
         run: uv build --wheel
         env:
-          HATCH_BUILD_HOOK_ENABLE_MYPYC: "1"
+          HATCH_BUILD_HOOKS_ENABLE: "1"
 
-      - name: Rename wheel to indicate mypyc
+      - name: Rename wheel with mypyc tag
         run: |
           for wheel in dist/*.whl; do
             if [[ -f "$wheel" ]]; then
@@ -123,60 +123,9 @@ jobs:
           name: wheels-mypyc-${{ matrix.os }}-py${{ matrix.python-version }}
           path: dist/*.whl
 
-  build-universal-wheels:
-    name: Build universal wheels with cibuildwheel
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        cibw_python: ["cp39", "cp310", "cp311", "cp312", "cp313"]
-        cibw_arch: ["x86_64", "aarch64", "arm64"]
-        exclude:
-          - os: ubuntu-latest
-            cibw_arch: arm64
-          - os: windows-latest
-            cibw_arch: aarch64
-          - os: windows-latest
-            cibw_arch: arm64
-          - os: macos-latest
-            cibw_arch: aarch64
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up QEMU (for ARM builds on Linux)
-        if: matrix.os == 'ubuntu-latest' && matrix.cibw_arch == 'aarch64'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      - name: Build wheels with cibuildwheel
-        uses: pypa/cibuildwheel@v2.16.5
-        env:
-          CIBW_BUILD: ${{ matrix.cibw_python }}-*
-          CIBW_ARCHS: ${{ matrix.cibw_arch }}
-          CIBW_BUILD_VERBOSITY: 2
-          CIBW_ENVIRONMENT: >
-            MYPYC_OPT_LEVEL=3
-            MYPYC_DEBUG_LEVEL=0
-            MYPYC_MULTI_FILE=1
-            HATCH_BUILD_HOOK_ENABLE_MYPYC=1
-          CIBW_BEFORE_BUILD: |
-            python -m pip install uv
-            uv sync --extra mypyc --group build
-          CIBW_BUILD_FRONTEND: "build[uv]"
-          CIBW_TEST_SKIP: "*"
-
-      - name: Upload cibuildwheel artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-cibw-${{ matrix.os }}-${{ matrix.cibw_python }}-${{ matrix.cibw_arch }}
-          path: wheelhouse/*.whl
 
   test-wheels:
-    name: Test wheels on ${{ matrix.os }}
+    name: Test ${{ matrix.os }} py${{ matrix.python-version }}
     needs: [build-wheels-standard, build-wheels-mypyc]
     strategy:
       fail-fast: false
@@ -221,7 +170,7 @@ jobs:
 
   publish-release:
     name: Publish to PyPI
-    needs: [build-source, build-wheels-standard, build-wheels-mypyc, build-universal-wheels, test-wheels]
+    needs: [build-source, build-wheels-standard, build-wheels-mypyc, test-wheels]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
