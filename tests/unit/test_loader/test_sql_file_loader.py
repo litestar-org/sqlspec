@@ -56,7 +56,7 @@ def test_named_statement_slots() -> None:
         stmt.arbitrary_attr = "value"  # type: ignore[attr-defined]
 
 
-def test_sqlfile_creation() -> None:
+def test_sql_file_creation() -> None:
     """Test SQLFile creation with content and path."""
     content = "SELECT * FROM users WHERE id = ?"
     path = "/tmp/test.sql"
@@ -70,7 +70,7 @@ def test_sqlfile_creation() -> None:
     assert sql_file.loaded_at  # Should be set
 
 
-def test_sqlfile_checksum_calculation() -> None:
+def test_sql_file_checksum_calculation() -> None:
     """Test that SQLFile calculates consistent checksums."""
     content = "SELECT * FROM users WHERE id = ?"
 
@@ -84,7 +84,7 @@ def test_sqlfile_checksum_calculation() -> None:
     assert file1.checksum != file3.checksum
 
 
-def test_sqlfile_with_metadata() -> None:
+def test_sql_file_with_metadata() -> None:
     """Test SQLFile creation with metadata."""
     metadata = {"author": "test", "version": "1.0"}
     sql_file = SQLFile("SELECT 1", "test.sql", metadata=metadata)
