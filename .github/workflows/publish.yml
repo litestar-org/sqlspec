@@ -91,6 +91,11 @@ jobs:
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
 
+      - name: Set version to include mypyc suffix
+        run: |
+          sed -i 's/version = "0.15.0"/version = "0.15.0+mypyc"/' pyproject.toml
+        shell: bash
+
       - name: Install dependencies with mypyc extras
         run: uv sync --extra mypyc --group build
 
@@ -105,17 +110,6 @@ jobs:
         run: uv build --wheel
         env:
           HATCH_BUILD_HOOKS_ENABLE: "1"
-
-      - name: Rename wheel with mypyc tag
-        run: |
-          for wheel in dist/*.whl; do
-            if [[ -f "$wheel" ]]; then
-              base=$(basename "$wheel" .whl)
-              dir=$(dirname "$wheel")
-              mv "$wheel" "$dir/${base}+mypyc.whl"
-            fi
-          done
-        shell: bash
 
       - name: Upload mypyc wheel artifacts
         uses: actions/upload-artifact@v4
@@ -179,6 +173,9 @@ jobs:
       url: https://pypi.org/project/sqlspec/
 
     steps:
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
