@@ -159,13 +159,13 @@ jobs:
       - name: Test standard wheel installation
         run: |
           uv venv test-standard
-          uv pip install --find-links dist-standard/ sqlspec
+          uv pip install --python test-standard --find-links dist-standard/ sqlspec
           uv run --python test-standard python -c "import sqlspec; print('Standard wheel OK')"
 
       - name: Test mypyc wheel installation
         run: |
           uv venv test-mypyc
-          uv pip install --find-links dist-mypyc/ sqlspec
+          uv pip install --python test-mypyc --find-links dist-mypyc/ sqlspec
           uv run --python test-mypyc python -c "import sqlspec; print('MyPyC wheel OK')"
 
   publish-release:

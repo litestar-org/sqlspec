@@ -3,9 +3,9 @@ authors = [{ name = "Cody Fincher", email = "cody@litestar.dev" }]
 dependencies = [
   "typing-extensions",
   "eval_type_backport; python_version < \"3.10\"",
-  "click",
   "sqlglot>=19.9.0",
   "mypy-extensions",
+  "rich-click",
 ]
 description = "SQL Experiments in Python"
 license = "MIT"

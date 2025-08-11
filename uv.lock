@@ -1191,7 +1191,7 @@ name = "exceptiongroup"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0b/9f/a65090624ecf468cdca03533906e7c69ed7588582240cfe7cc9e770b50eb/exceptiongroup-1.3.0.tar.gz", hash = "sha256:b241f5885f560bc56a59ee63ca4c6a8bfa46ae4ad651af316d4e81817bb9fd88", size = 29749, upload-time = "2025-05-10T17:42:51.123Z" }
 wheels = [
@@ -4956,10 +4956,9 @@ name = "sqlspec"
 version = "0.15.0"
 source = { editable = "." }
 dependencies = [
-    { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "click", version = "8.2.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "eval-type-backport", marker = "python_full_version < '3.10'" },
     { name = "mypy-extensions" },
+    { name = "rich-click" },
     { name = "sqlglot" },
     { name = "typing-extensions" },
 ]
@@ -5205,7 +5204,6 @@ requires-dist = [
     { name = "asyncpg", marker = "extra == 'asyncpg'" },
     { name = "attrs", marker = "extra == 'attrs'" },
     { name = "cattrs", marker = "extra == 'attrs'" },
-    { name = "click" },
     { name = "duckdb", marker = "extra == 'duckdb'" },
     { name = "eval-type-backport", marker = "python_full_version < '3.10'" },
     { name = "fastapi", marker = "extra == 'fastapi'" },
@@ -5234,6 +5232,7 @@ requires-dist = [
     { name = "pydantic-extra-types", marker = "extra == 'pydantic'" },
     { name = "pymssql", marker = "extra == 'pymssql'" },
     { name = "pymysql", marker = "extra == 'pymysql'" },
+    { name = "rich-click" },
     { name = "rich-click", marker = "extra == 'cli'" },
     { name = "sqlglot", specifier = ">=19.9.0" },
     { name = "sqlglot", extras = ["rs"], marker = "extra == 'performance'" },
