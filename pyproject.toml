@@ -36,6 +36,7 @@ flask = ["flask"]
 fsspec = ["fsspec"]
 litestar = ["litestar"]
 msgspec = ["msgspec"]
+mypyc = []
 nanoid = ["fastnanoid>=0.4.1"]
 obstore = ["obstore"]
 opentelemetry = ["opentelemetry-instrumentation"]
@@ -175,7 +176,7 @@ mypy-args = [
   "--follow-imports=skip",
 ]
 require-runtime-dependencies = true
-require-runtime-features = ["performance"]
+require-runtime-features = ["mypyc"]
 
 [tool.hatch.build.targets.wheel.hooks.mypyc.options]
 debug_level = "0" # No debug info in production (0-2)
