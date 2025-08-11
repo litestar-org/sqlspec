@@ -3,47 +3,58 @@ name: Test Build Configuration
 on:
   workflow_dispatch:
     inputs:
-      test_os:
-        description: 'OS to test (or "all")'
+      test_matrix:
+        description: 'Test full matrix or subset'
         required: false
-        default: 'ubuntu-latest'
+        default: 'subset'
         type: choice
         options:
-          - 'all'
-          - 'ubuntu-latest'
-          - 'windows-latest'
-          - 'macos-latest'
-          - 'macos-13'
-      test_python:
-        description: 'Python version to test (or "all")'
-        required: false
-        default: '3.12'
-        type: choice
-        options:
-          - 'all'
-          - '3.9'
-          - '3.10'
-          - '3.11'
-          - '3.12'
-          - '3.13'
+          - 'full'
+          - 'subset'
   pull_request:
     paths:
       - '.github/workflows/publish.yml'
       - 'pyproject.toml'
 
 jobs:
-  test-standard-build:
-    name: Test Std ${{ matrix.os }} py${{ matrix.python-version }}
+  build-source:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra performance --group build
+
+      - name: Build source distribution
+        run: uv build --sdist
+
+      - name: Upload source artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-dist
+          path: dist/*.tar.gz
+
+  build-wheels-standard:
+    name: Std ${{ matrix.os }} py${{ matrix.python-version }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest, macos-13]
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        os: ${{ github.event.inputs.test_matrix == 'full' && fromJSON('["ubuntu-latest", "windows-latest", "macos-latest", "macos-13"]') || fromJSON('["ubuntu-latest"]') }}
+        python-version: ${{ github.event.inputs.test_matrix == 'full' && fromJSON('["3.9", "3.10", "3.11", "3.12", "3.13"]') || fromJSON('["3.12"]') }}
         exclude:
           - os: macos-13
             python-version: "3.13"
           - os: windows-latest
             python-version: "3.9"
+
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository
@@ -61,24 +72,25 @@ jobs:
       - name: Build standard wheel
         run: uv build --wheel
 
-      - name: Test wheel installation
-        run: |
-          uv venv test-env --python ${{ matrix.python-version }}
-          uv pip install --python test-env --find-links dist/ sqlspec
-          uv run --python test-env python -c "import sqlspec; print('Standard wheel test passed')"
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-standard-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: dist/*.whl
 
-  test-mypyc-build:
-    name: Test MyPyC ${{ matrix.os }} py${{ matrix.python-version }}
+  build-wheels-mypyc:
+    name: MyPyC ${{ matrix.os }} py${{ matrix.python-version }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest, macos-13]
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        os: ${{ github.event.inputs.test_matrix == 'full' && fromJSON('["ubuntu-latest", "windows-latest", "macos-latest", "macos-13"]') || fromJSON('["ubuntu-latest"]') }}
+        python-version: ${{ github.event.inputs.test_matrix == 'full' && fromJSON('["3.9", "3.10", "3.11", "3.12", "3.13"]') || fromJSON('["3.12"]') }}
         exclude:
           - os: windows-latest
             python-version: "3.9"
           - os: macos-13
             python-version: "3.13"
+
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository
@@ -90,7 +102,7 @@ jobs:
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
 
-      - name: Install dependencies with mypyc
+      - name: Install dependencies with mypyc extras
         run: uv sync --extra mypyc --group build
 
       - name: Set up MyPyC environment variables
@@ -116,13 +128,80 @@ jobs:
           done
         shell: bash
 
+      - name: Upload mypyc wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-mypyc-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: dist/*.whl
+
+  test-wheels:
+    name: Test ${{ matrix.os }} py${{ matrix.python-version }}
+    needs: [build-wheels-standard, build-wheels-mypyc]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ github.event.inputs.test_matrix == 'full' && fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') || fromJSON('["ubuntu-latest"]') }}
+        python-version: ${{ github.event.inputs.test_matrix == 'full' && fromJSON('["3.10", "3.12"]') || fromJSON('["3.12"]') }}
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Download standard wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels-standard-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: dist-standard/
+
+      - name: Download mypyc wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels-mypyc-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: dist-mypyc/
+
+      - name: Test standard wheel installation
+        run: |
+          uv venv test-standard --python ${{ matrix.python-version }}
+          uv pip install --python test-standard --find-links dist-standard/ sqlspec
+          uv run --python test-standard python -c "import sqlspec; print('Standard wheel OK')"
+
       - name: Test mypyc wheel installation
         run: |
-          uv venv test-env --python ${{ matrix.python-version }}
-          uv pip install --python test-env --find-links dist/ sqlspec
-          uv run --python test-env python -c "import sqlspec; print('MyPyC wheel test passed')"
+          uv venv test-mypyc --python ${{ matrix.python-version }}
+          uv pip install --python test-mypyc --find-links dist-mypyc/ sqlspec
+          uv run --python test-mypyc python -c "import sqlspec; print('MyPyC wheel OK')"
 
-      - name: Verify wheel integrity
+  verify-packages:
+    name: Verify package integrity
+    needs: [build-source, build-wheels-standard, build-wheels-mypyc]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*"
+          merge-multiple: true
+          path: dist/
+
+      - name: List all built packages
+        run: |
+          echo "=== All built packages ==="
+          find dist/ -name "*.whl" -o -name "*.tar.gz" | sort
+          echo "=== Package count ==="
+          find dist/ -name "*.whl" | wc -l
+          find dist/ -name "*.tar.gz" | wc -l
+
+      - name: Verify package integrity
         run: |
           uv tool install twine
           uv tool run twine check dist/*

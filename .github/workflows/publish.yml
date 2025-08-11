@@ -179,6 +179,9 @@ jobs:
       url: https://pypi.org/project/sqlspec/
 
     steps:
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
