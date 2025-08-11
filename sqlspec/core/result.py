@@ -32,6 +32,8 @@ from typing_extensions import TypeVar
 from sqlspec.core.compiler import OperationType
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from sqlspec.core.statement import SQL
 
 
@@ -427,6 +429,16 @@ class SQLResult(StatementResult):
             msg = "No data available"
             raise IndexError(msg)
         return cast("dict[str, Any]", self.data[index])
+
+    def __iter__(self) -> "Iterator[dict[str, Any]]":
+        """Iterate over the rows in the result.
+
+        Returns:
+            Iterator that yields each row as a dictionary
+        """
+        if self.data is None:
+            return iter([])
+        return iter(self.data)
 
     def all(self) -> list[dict[str, Any]]:
         """Return all rows as a list.

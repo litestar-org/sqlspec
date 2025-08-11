@@ -249,7 +249,7 @@ class ParameterInfo:
     def __repr__(self) -> str:
         """String representation for debugging."""
         return (
-            f"ParameterInfo(name={self.name!r}, style={self.style}, "
+            f"ParameterInfo(name={self.name!r}, style={self.style!r}, "
             f"position={self.position}, ordinal={self.ordinal}, "
             f"placeholder_text={self.placeholder_text!r})"
         )
