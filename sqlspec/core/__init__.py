@@ -1,30 +1,23 @@
-"""SQLSpec Core Module - High-Performance SQL Processing System.
+"""SQLSpec Core Module - SQL Processing System.
 
-This module implements the CORE_ROUND_3 architecture redesign for 5-10x performance
-improvements and 40-60% memory reduction while maintaining 100% backward compatibility.
+This module implements the core SQL processing architecture that provides
+performance improvements and memory reduction while maintaining backward compatibility.
 
 Key Design Principles:
 - Single-pass processing (Parse → Transform → Cache → Execute)
 - Complete API compatibility with existing statement processing
 - MyPyC optimization with __slots__ and efficient patterns
 - Zero-copy data access and thread-safe unified caching
-- Research → Build → Migrate → Delete implementation strategy
 
 Architecture Overview:
-- statement.py: Enhanced SQL class with complete StatementConfig compatibility
-- parameters.py: Consolidated 2-phase parameter processing pipeline
-- compiler.py: Single-pass SQLProcessor with integrated caching
-- result.py: Preserved result classes (StatementResult, SQLResult, ArrowResult)
-- filters.py: Preserved filter system (StatementFilter interface)
-- cache.py: Single unified cache system replacing all cache layers
-- splitter.py: Moved from statement/ (preserved as-is)
-- config.py: Enhanced configuration management
-
-Performance Targets:
-- 5-10x compilation speed improvement
-- 40-60% memory usage reduction
-- 100% test compatibility (2,000+ tests)
-- All 12 database adapters migrated successfully
+- statement.py: SQL class with complete StatementConfig compatibility
+- parameters.py: 2-phase parameter processing pipeline
+- compiler.py: SQLProcessor with integrated caching
+- result.py: Result classes (StatementResult, SQLResult, ArrowResult)
+- filters.py: Filter system (StatementFilter interface)
+- cache.py: Unified cache system
+- splitter.py: SQL statement splitter
+- hashing.py: Cache key generation utilities
 """
 
 from sqlspec.core import filters

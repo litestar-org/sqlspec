@@ -58,17 +58,17 @@ __all__ = ("AdbcConfig", "AdbcConnectionParams")
 
 
 class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
-    """Enhanced ADBC configuration with universal database connectivity.
+    """ADBC configuration for Arrow Database Connectivity.
 
     ADBC (Arrow Database Connectivity) provides a unified interface for connecting
-    to multiple database systems with high-performance Arrow-native data transfer.
+    to multiple database systems with Arrow-native data transfer.
 
     This configuration supports:
     - Universal driver detection and loading
-    - High-performance Arrow data streaming
+    - Arrow data streaming
     - Bulk ingestion operations
     - Multiple database backends (PostgreSQL, SQLite, DuckDB, BigQuery, Snowflake, etc.)
-    - Intelligent driver path resolution
+    - Driver path resolution
     - Cloud database integrations
     """
 
@@ -82,13 +82,12 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         statement_config: Optional[StatementConfig] = None,
         migration_config: Optional[dict[str, Any]] = None,
     ) -> None:
-        """Initialize ADBC configuration with universal connectivity features.
+        """Initialize ADBC configuration.
 
         Args:
             connection_config: Connection configuration parameters
             statement_config: Default SQL statement configuration
             migration_config: Migration configuration
-
         """
         if connection_config is None:
             connection_config = {}

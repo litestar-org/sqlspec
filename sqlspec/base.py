@@ -36,14 +36,15 @@ logger = get_logger()
 
 
 class SQLSpec:
-    """Type-safe configuration manager and registry for database connections and pools."""
+    """Configuration manager and registry for database connections and pools."""
 
-    __slots__ = ("_configs", "_instance_cache_config")
+    __slots__ = ("_cleanup_tasks", "_configs", "_instance_cache_config")
 
     def __init__(self) -> None:
         self._configs: dict[Any, DatabaseConfigProtocol[Any, Any, Any]] = {}
         atexit.register(self._cleanup_pools)
         self._instance_cache_config: Optional[CacheConfig] = None
+        self._cleanup_tasks: list[asyncio.Task[None]] = []
 
     @staticmethod
     def _get_config_name(obj: Any) -> str:
@@ -63,8 +64,8 @@ class SQLSpec:
                             try:
                                 loop = asyncio.get_running_loop()
                                 if loop.is_running():
-                                    _task = asyncio.ensure_future(close_pool_awaitable, loop=loop)  # noqa: RUF006
-
+                                    task = asyncio.create_task(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
+                                    self._cleanup_tasks.append(task)
                                 else:
                                     asyncio.run(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
                             except RuntimeError:
@@ -74,6 +75,14 @@ class SQLSpec:
                     cleaned_count += 1
                 except Exception as e:
                     logger.warning("Failed to clean up pool for config %s: %s", config_type.__name__, e)
+
+        if self._cleanup_tasks:
+            try:
+                loop = asyncio.get_running_loop()
+                if loop.is_running():
+                    asyncio.gather(*self._cleanup_tasks, return_exceptions=True)
+            except RuntimeError:
+                pass
 
         self._configs.clear()
         logger.info("Pool cleanup completed. Cleaned %d pools.", cleaned_count)
@@ -495,10 +504,10 @@ class SQLSpec:
     def update_cache_config(config: CacheConfig) -> None:
         """Update the global cache configuration.
 
-        This affects all SQL statement processing globally. Changes take
+        Affects all SQL statement processing globally. Changes take
         effect immediately for all new SQL operations.
 
-        Note: This will clear all existing caches when sizes are reduced.
+        Clears existing caches when sizes are reduced.
 
         Args:
             config: The new cache configuration to apply.
@@ -517,7 +526,7 @@ class SQLSpec:
     def get_cache_stats() -> CacheStatsAggregate:
         """Get current cache statistics.
 
-        Returns performance metrics for all cache layers including hit rates,
+        Returns metrics for all cache layers including hit rates,
         sizes, and eviction counts.
 
         Returns:
@@ -536,7 +545,7 @@ class SQLSpec:
     def reset_cache_stats() -> None:
         """Reset all cache statistics to zero.
 
-        Useful for benchmarking specific operations or monitoring cache
+        Used for benchmarking specific operations or monitoring cache
         performance over specific time periods.
 
         Example:
@@ -550,7 +559,7 @@ class SQLSpec:
     def log_cache_stats() -> None:
         """Log current cache statistics using the configured logger.
 
-        Outputs detailed cache metrics to the logging system for monitoring
+        Outputs cache metrics to the logging system for monitoring
         and debugging purposes.
         """
         log_cache_stats()

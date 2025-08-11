@@ -1,8 +1,7 @@
 """Safe SQL query builder with validation and parameter binding.
 
 This module provides a fluent interface for building SQL queries safely,
-with automatic parameter binding and validation. Enhanced with SQLGlot's
-advanced builder patterns and optimization capabilities.
+with automatic parameter binding and validation.
 """
 
 from abc import ABC, abstractmethod
