@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 try:
     import uvloop  # pyright: ignore[reportMissingImports]
 except ImportError:
-    uvloop = None  # type: ignore[assignment]
+    uvloop = None  # type: ignore[assignment,unused-ignore]
 
 
 ReturnT = TypeVar("ReturnT")
