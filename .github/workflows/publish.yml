@@ -91,27 +91,35 @@ jobs:
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
 
-      - name: Set version to include mypyc suffix
-        run: |
-          # Replace only the first version line (project version) with mypyc suffix
-          sed -i.bak '1,20s/^version = "\([^"]*\)"/version = "\1+mypyc"/' pyproject.toml
-          rm pyproject.toml.bak
-        shell: bash
-
       - name: Install dependencies with mypyc extras
         run: uv sync --extra mypyc --group build
 
-      - name: Set up MyPyC environment variables
+      - name: Build MyPyC wheel in separate directory
         run: |
-          echo "MYPYC_OPT_LEVEL=3" >> $GITHUB_ENV
-          echo "MYPYC_DEBUG_LEVEL=0" >> $GITHUB_ENV
-          echo "MYPYC_MULTI_FILE=1" >> $GITHUB_ENV
-        shell: bash
-
-      - name: Build MyPyC wheel
-        run: uv build --wheel
+          # Create isolated build directory
+          mkdir -p mypyc-build
+          # Copy everything except the mypyc-build directory itself
+          find . -maxdepth 1 -not -name mypyc-build -not -name . -exec cp -r {} mypyc-build/ \;
+          cd mypyc-build
+          
+          # Extract current version and modify for mypyc
+          CURRENT_VERSION=$(grep '^version = "' pyproject.toml | head -1 | cut -d'"' -f2)
+          echo "Building MyPyC wheel with version ${CURRENT_VERSION}+mypyc"
+          
+          # Modify version for mypyc build
+          sed -i '1,20s/^version = "'"$CURRENT_VERSION"'"$/version = "'"$CURRENT_VERSION"'+mypyc"/' pyproject.toml
+          
+          # Build the wheel
+          uv build --wheel
+          
+          # Move wheel back to main dist directory
+          mv dist/*.whl ../dist/
         env:
           HATCH_BUILD_HOOKS_ENABLE: "1"
+          MYPYC_OPT_LEVEL: "3"
+          MYPYC_DEBUG_LEVEL: "0"
+          MYPYC_MULTI_FILE: "1"
+        shell: bash
 
       - name: Upload mypyc wheel artifacts
         uses: actions/upload-artifact@v4
