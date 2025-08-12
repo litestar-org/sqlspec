@@ -91,6 +91,15 @@ jobs:
           MYPYC_DEBUG_LEVEL: "0"
           MYPYC_MULTI_FILE: "1"
 
+      - name: Repair Linux wheels with auditwheel
+        if: runner.os == 'Linux'
+        run: |
+          for wheel in dist/*.whl; do
+            echo "Repairing $wheel"
+            uv tool run auditwheel repair "$wheel" -w dist/ --plat manylinux_2_17_x86_64
+            rm "$wheel"
+          done
+
       - name: Upload mypyc wheel artifacts
         uses: actions/upload-artifact@v4
         with:
