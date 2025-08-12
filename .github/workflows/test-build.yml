@@ -104,7 +104,13 @@ jobs:
 
       - name: Set version to include mypyc suffix
         run: |
-          sed -i 's/version = "0.15.0"/version = "0.15.0+mypyc"/' pyproject.toml
+          # Extract current version and add mypyc suffix
+          CURRENT_VERSION=$(grep '^version = ' pyproject.toml | cut -d'"' -f2)
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            sed -i '' "s/version = \"$CURRENT_VERSION\"/version = \"$CURRENT_VERSION+mypyc\"/" pyproject.toml
+          else
+            sed -i "s/version = \"$CURRENT_VERSION\"/version = \"$CURRENT_VERSION+mypyc\"/" pyproject.toml
+          fi
         shell: bash
 
       - name: Install dependencies with mypyc extras
