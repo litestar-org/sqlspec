@@ -94,19 +94,6 @@ jobs:
       - name: Install dependencies with mypyc extras
         run: uv sync --extra mypyc --group build
 
-      - name: Set version to include mypyc suffix
-        run: |
-          CURRENT_VERSION=$(grep '^version = ' pyproject.toml | head -1 | cut -d'"' -f2)
-          sed -i.bak 's/version = "'"$CURRENT_VERSION"'"/version = "'"$CURRENT_VERSION"'+mypyc"/' pyproject.toml
-        shell: bash
-
-      - name: Set up MyPyC environment variables
-        run: |
-          echo "MYPYC_OPT_LEVEL=3" >> $GITHUB_ENV
-          echo "MYPYC_DEBUG_LEVEL=0" >> $GITHUB_ENV
-          echo "MYPYC_MULTI_FILE=1" >> $GITHUB_ENV
-        shell: bash
-
       - name: Build MyPyC wheel
         run: uv build --wheel
         env:
@@ -114,7 +101,6 @@ jobs:
           MYPYC_OPT_LEVEL: "3"
           MYPYC_DEBUG_LEVEL: "0"
           MYPYC_MULTI_FILE: "1"
-        shell: bash
 
       - name: Upload mypyc wheel artifacts
         uses: actions/upload-artifact@v4
