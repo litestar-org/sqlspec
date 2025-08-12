@@ -101,17 +101,17 @@ jobs:
           # Copy everything except the mypyc-build directory itself
           find . -maxdepth 1 -not -name mypyc-build -not -name . -exec cp -r {} mypyc-build/ \;
           cd mypyc-build
-          
+
           # Extract current version and modify for mypyc
           CURRENT_VERSION=$(grep '^version = "' pyproject.toml | head -1 | cut -d'"' -f2)
           echo "Building MyPyC wheel with version ${CURRENT_VERSION}+mypyc"
-          
+
           # Modify version for mypyc build
           sed -i '1,20s/^version = "'"$CURRENT_VERSION"'"$/version = "'"$CURRENT_VERSION"'+mypyc"/' pyproject.toml
-          
+
           # Build the wheel
           uv build --wheel
-          
+
           # Move wheel back to main dist directory
           mv dist/*.whl ../dist/
         env:
