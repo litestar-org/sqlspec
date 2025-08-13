@@ -234,6 +234,8 @@ class SQLProcessor:
             dialect_str = str(self._config.dialect) if self._config.dialect else None
 
             # Process parameters in single call
+            processed_sql: str
+            processed_params: Any
             processed_sql, processed_params = self._parameter_processor.process(
                 sql=sql,
                 parameters=parameters,
