@@ -5,7 +5,6 @@ with automatic parameter binding and validation.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NoReturn, Optional, Union, cast
 
 import sqlglot
@@ -31,16 +30,19 @@ __all__ = ("QueryBuilder", "SafeQuery")
 logger = get_logger(__name__)
 
 
-@dataclass(frozen=True)
 class SafeQuery:
     """A safely constructed SQL query with bound parameters."""
 
-    sql: str
-    parameters: dict[str, Any] = field(default_factory=dict)
-    dialect: DialectType = field(default=None)
+    __slots__ = ("dialect", "parameters", "sql")
+
+    def __init__(
+        self, sql: str, parameters: Optional[dict[str, Any]] = None, dialect: Optional[DialectType] = None
+    ) -> None:
+        self.sql = sql
+        self.parameters = parameters if parameters is not None else {}
+        self.dialect = dialect
 
 
-@dataclass
 class QueryBuilder(ABC):
     """Abstract base class for SQL query builders with SQLGlot optimization.
 
@@ -48,18 +50,43 @@ class QueryBuilder(ABC):
     query construction, and query optimization using SQLGlot.
     """
 
-    dialect: DialectType = field(default=None)
-    schema: Optional[dict[str, dict[str, str]]] = field(default=None)
-    _expression: Optional[exp.Expression] = field(default=None, init=False, repr=False, compare=False, hash=False)
-    _parameters: dict[str, Any] = field(default_factory=dict, init=False, repr=False, compare=False, hash=False)
-    _parameter_counter: int = field(default=0, init=False, repr=False, compare=False, hash=False)
-    _with_ctes: dict[str, exp.CTE] = field(default_factory=dict, init=False, repr=False, compare=False, hash=False)
-    enable_optimization: bool = field(default=True, init=True)
-    optimize_joins: bool = field(default=True, init=True)
-    optimize_predicates: bool = field(default=True, init=True)
-    simplify_expressions: bool = field(default=True, init=True)
+    __slots__ = (
+        "_expression",
+        "_parameter_counter",
+        "_parameters",
+        "_with_ctes",
+        "dialect",
+        "enable_optimization",
+        "optimize_joins",
+        "optimize_predicates",
+        "schema",
+        "simplify_expressions",
+    )
 
-    def __post_init__(self) -> None:
+    def __init__(
+        self,
+        dialect: Optional[DialectType] = None,
+        schema: Optional[dict[str, dict[str, str]]] = None,
+        enable_optimization: bool = True,
+        optimize_joins: bool = True,
+        optimize_predicates: bool = True,
+        simplify_expressions: bool = True,
+    ) -> None:
+        self.dialect = dialect
+        self.schema = schema
+        self.enable_optimization = enable_optimization
+        self.optimize_joins = optimize_joins
+        self.optimize_predicates = optimize_predicates
+        self.simplify_expressions = simplify_expressions
+
+        # Initialize mutable attributes
+        self._expression: Optional[exp.Expression] = None
+        self._parameters: dict[str, Any] = {}
+        self._parameter_counter: int = 0
+        self._with_ctes: dict[str, exp.CTE] = {}
+
+    def _initialize_expression(self) -> None:
+        """Initialize the base expression. Called after __init__."""
         self._expression = self._create_base_expression()
         if not self._expression:
             self._raise_sql_builder_error(
@@ -135,7 +162,7 @@ class QueryBuilder(ABC):
                 return exp.Placeholder(this=param_name)
             return node
 
-        return expression.transform(replacer, copy=True)
+        return expression.transform(replacer, copy=False)
 
     def add_parameter(self: Self, value: Any, name: Optional[str] = None) -> tuple[Self, str]:
         """Explicitly adds a parameter to the query.
@@ -154,13 +181,13 @@ class QueryBuilder(ABC):
         if name:
             if name in self._parameters:
                 self._raise_sql_builder_error(f"Parameter name '{name}' already exists.")
-            param_name_to_use = name
-        else:
-            self._parameter_counter += 1
-            param_name_to_use = f"param_{self._parameter_counter}"
+            self._parameters[name] = value
+            return self, name
 
-        self._parameters[param_name_to_use] = value
-        return self, param_name_to_use
+        self._parameter_counter += 1
+        param_name = f"param_{self._parameter_counter}"
+        self._parameters[param_name] = value
+        return self, param_name
 
     def _generate_unique_parameter_name(self, base_name: str) -> str:
         """Generate unique parameter name when collision occurs.
@@ -174,12 +201,15 @@ class QueryBuilder(ABC):
         if base_name not in self._parameters:
             return base_name
 
-        i = 1
-        while True:
+        for i in range(1, 1000):  # Reasonable upper bound to prevent infinite loops
             name = f"{base_name}_{i}"
             if name not in self._parameters:
                 return name
-            i += 1
+
+        # Fallback for edge case
+        import uuid
+
+        return f"{base_name}_{uuid.uuid4().hex[:8]}"
 
     def _generate_builder_cache_key(self, config: "Optional[StatementConfig]" = None) -> str:
         """Generate cache key based on builder state and configuration.
@@ -192,11 +222,14 @@ class QueryBuilder(ABC):
         """
         import hashlib
 
-        state_components = [
-            f"expression:{self._expression.sql() if self._expression else 'None'}",
+        dialect_name: str = self.dialect_name or "default"
+        expr_sql: str = self._expression.sql() if self._expression else "None"
+
+        state_parts = [
+            f"expression:{expr_sql}",
             f"parameters:{sorted(self._parameters.items())}",
             f"ctes:{sorted(self._with_ctes.keys())}",
-            f"dialect:{self.dialect_name or 'default'}",
+            f"dialect:{dialect_name}",
             f"schema:{self.schema}",
             f"optimization:{self.enable_optimization}",
             f"optimize_joins:{self.optimize_joins}",
@@ -205,7 +238,7 @@ class QueryBuilder(ABC):
         ]
 
         if config:
-            config_components = [
+            config_parts = [
                 f"config_dialect:{config.dialect or 'default'}",
                 f"enable_parsing:{config.enable_parsing}",
                 f"enable_validation:{config.enable_validation}",
@@ -214,12 +247,10 @@ class QueryBuilder(ABC):
                 f"enable_caching:{config.enable_caching}",
                 f"param_style:{config.parameter_config.default_parameter_style.value}",
             ]
-            state_components.extend(config_components)
+            state_parts.extend(config_parts)
 
-        state_string = "|".join(state_components)
-        cache_key = hashlib.sha256(state_string.encode()).hexdigest()[:16]
-
-        return f"builder:{cache_key}"
+        state_string = "|".join(state_parts)
+        return f"builder:{hashlib.sha256(state_string.encode()).hexdigest()[:16]}"
 
     def with_cte(self: Self, alias: str, query: "Union[QueryBuilder, exp.Select, str]") -> Self:
         """Adds a Common Table Expression (CTE) to the query.
@@ -243,7 +274,7 @@ class QueryBuilder(ABC):
             if not isinstance(query._expression, exp.Select):
                 msg = f"CTE query builder expression must be a Select, got {type(query._expression).__name__}."
                 self._raise_sql_builder_error(msg)
-            cte_select_expression = query._expression.copy()
+            cte_select_expression = query._expression
             for p_name, p_value in query.parameters.items():
                 unique_name = self._generate_unique_parameter_name(p_name)
                 self.add_parameter(p_value, unique_name)
@@ -261,7 +292,7 @@ class QueryBuilder(ABC):
                 msg = f"An unexpected error occurred while parsing CTE query string: {e!s}"
                 self._raise_sql_builder_error(msg, e)
         elif isinstance(query, exp.Select):
-            cte_select_expression = query.copy()
+            cte_select_expression = query
         else:
             msg = f"Invalid query type for CTE: {type(query).__name__}"
             self._raise_sql_builder_error(msg)
@@ -280,14 +311,14 @@ class QueryBuilder(ABC):
             self._raise_sql_builder_error("QueryBuilder expression not initialized.")
 
         if self._with_ctes:
-            final_expression = self._expression.copy()
+            final_expression = self._expression
             if has_with_method(final_expression):
                 for alias, cte_node in self._with_ctes.items():
                     final_expression = cast("Any", final_expression).with_(cte_node.args["this"], as_=alias, copy=False)
             elif isinstance(final_expression, (exp.Select, exp.Insert, exp.Update, exp.Delete, exp.Union)):
                 final_expression = exp.With(expressions=list(self._with_ctes.values()), this=final_expression)
         else:
-            final_expression = self._expression.copy() if self.enable_optimization else self._expression
+            final_expression = self._expression
 
         if self.enable_optimization and isinstance(final_expression, exp.Expression):
             final_expression = self._optimize_expression(final_expression)
@@ -335,10 +366,10 @@ class QueryBuilder(ABC):
 
         try:
             optimized = optimize(
-                expression.copy(), schema=self.schema, dialect=self.dialect_name, optimizer_settings=optimizer_settings
+                expression, schema=self.schema, dialect=self.dialect_name, optimizer_settings=optimizer_settings
             )
 
-            unified_cache.put(cache_key_obj, optimized.copy())
+            unified_cache.put(cache_key_obj, optimized)
 
         except Exception:
             return expression
@@ -430,8 +461,10 @@ class QueryBuilder(ABC):
                 return self.dialect.__name__.lower()
             if isinstance(self.dialect, Dialect):
                 return type(self.dialect).__name__.lower()
-            if hasattr(self.dialect, "__name__"):
+            try:
                 return self.dialect.__name__.lower()
+            except AttributeError:
+                pass
         return None
 
     @property

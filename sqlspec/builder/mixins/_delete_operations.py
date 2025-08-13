@@ -2,6 +2,7 @@
 
 from typing import Optional
 
+from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
@@ -10,10 +11,14 @@ from sqlspec.exceptions import SQLBuilderError
 __all__ = ("DeleteFromClauseMixin",)
 
 
+@trait
 class DeleteFromClauseMixin:
     """Mixin providing FROM clause for DELETE builders."""
 
-    _expression: Optional[exp.Expression] = None
+    __slots__ = ()
+
+    # Type annotation for PyRight - this will be provided by the base class
+    _expression: Optional[exp.Expression]
 
     def from_(self, table: str) -> Self:
         """Set the target table for the DELETE statement.

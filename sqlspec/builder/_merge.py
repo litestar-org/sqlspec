@@ -4,7 +4,7 @@ This module provides a fluent interface for building SQL queries safely,
 with automatic parameter binding and validation.
 """
 
-from dataclasses import dataclass
+from typing import Any, Optional
 
 from sqlglot import exp
 
@@ -22,7 +22,6 @@ from sqlspec.core.result import SQLResult
 __all__ = ("Merge",)
 
 
-@dataclass(unsafe_hash=True)
 class Merge(
     QueryBuilder,
     MergeUsingClauseMixin,
@@ -37,6 +36,22 @@ class Merge(
     This builder provides a fluent interface for constructing SQL MERGE statements
     (also known as UPSERT in some databases) with automatic parameter binding and validation.
     """
+
+    __slots__ = ()
+    _expression: Optional[exp.Expression]
+
+    def __init__(self, target_table: Optional[str] = None, **kwargs: Any) -> None:
+        """Initialize MERGE with optional target table.
+
+        Args:
+            target_table: Target table name
+            **kwargs: Additional QueryBuilder arguments
+        """
+        super().__init__(**kwargs)
+        self._initialize_expression()
+
+        if target_table:
+            self.into(target_table)
 
     @property
     def _expected_result_type(self) -> "type[SQLResult]":

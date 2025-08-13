@@ -33,7 +33,6 @@ def build_column_expression(col: "ColumnDefinition") -> "exp.Expression":
             else:
                 default_expr = exp.convert(col.default)
         else:
-            # Use exp.convert for all other types (int, float, bool, None, etc.)
             default_expr = exp.convert(col.default)
 
         constraints.append(exp.ColumnConstraint(kind=default_expr))

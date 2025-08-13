@@ -5,7 +5,7 @@ including connection management, transaction support, and result processing.
 """
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Optional, Union, cast, overload
 
 from sqlspec.core import SQL
 from sqlspec.driver._common import CommonDriverAttributesMixin, ExecutionResult
@@ -20,14 +20,15 @@ if TYPE_CHECKING:
 
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQLResult, Statement, StatementConfig, StatementFilter
-    from sqlspec.typing import ModelDTOT, ModelT, RowT, StatementParameters
+    from sqlspec.typing import ModelDTOT, StatementParameters
 
-logger = get_logger("sqlspec")
+_LOGGER_NAME: Final[str] = "sqlspec"
+logger = get_logger(_LOGGER_NAME)
 
 __all__ = ("SyncDriverAdapterBase",)
 
 
-EMPTY_FILTERS: "list[StatementFilter]" = []
+EMPTY_FILTERS: Final["list[StatementFilter]"] = []
 
 
 class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToSchemaMixin):
@@ -128,12 +129,16 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         sql, prepared_parameters = self._get_compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
 
+        statement_count: int = len(statements)
+        successful_count: int = 0
+
         for stmt in statements:
             single_stmt = statement.copy(statement=stmt, parameters=prepared_parameters)
             self._execute_statement(cursor, single_stmt)
+            successful_count += 1
 
         return self.create_execution_result(
-            cursor, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
+            cursor, statement_count=statement_count, successful_statements=successful_count, is_script_result=True
         )
 
     @abstractmethod
@@ -214,8 +219,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         By default, validates each statement and logs warnings for dangerous
         operations. Use suppress_warnings=True for migrations and admin scripts.
         """
-        script_config = statement_config or self.statement_config
-        sql_statement = self.prepare_statement(statement, parameters, statement_config=script_config, kwargs=kwargs)
+        config = statement_config or self.statement_config
+        sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
 
         return self.dispatch_statement_execution(statement=sql_statement.as_script(), connection=self.connection)
 
@@ -239,7 +244,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         schema_type: None = None,
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
-    ) -> "Union[ModelT, RowT, dict[str, Any]]": ...  # pyright: ignore[reportInvalidTypeVarUse]
+    ) -> "dict[str, Any]": ...
 
     def select_one(
         self,
@@ -249,23 +254,20 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         schema_type: "Optional[type[ModelDTOT]]" = None,
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
-    ) -> "Union[ModelT, RowT, ModelDTOT]":  # pyright: ignore[reportInvalidTypeVarUse]
+    ) -> "Union[dict[str, Any], ModelDTOT]":
         """Execute a select statement and return exactly one row.
 
         Raises an exception if no rows or more than one row is returned.
         """
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         data = result.get_data()
-        if not data:
-            msg = "No rows found"
-            raise NotFoundError(msg)
-        if len(data) > 1:
-            msg = f"Expected exactly one row, found {len(data)}"
-            raise ValueError(msg)
-        return cast(
-            "Union[ModelT, RowT, ModelDTOT]",
-            self.to_schema(data[0], schema_type=schema_type) if schema_type else data[0],
-        )
+        data_len: int = len(data)
+        if data_len == 0:
+            self._raise_no_rows_found()
+        if data_len > 1:
+            self._raise_expected_one_row(data_len)
+        first_row = data[0]
+        return self.to_schema(first_row, schema_type=schema_type) if schema_type else first_row
 
     @overload
     def select_one_or_none(
@@ -287,7 +289,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         schema_type: None = None,
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
-    ) -> "Optional[ModelT]": ...  # pyright: ignore[reportInvalidTypeVarUse]
+    ) -> "Optional[dict[str, Any]]": ...
 
     def select_one_or_none(
         self,
@@ -297,7 +299,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         schema_type: "Optional[type[ModelDTOT]]" = None,
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
-    ) -> "Optional[Union[ModelT, ModelDTOT]]":  # pyright: ignore[reportInvalidTypeVarUse]
+    ) -> "Optional[Union[dict[str, Any], ModelDTOT]]":
         """Execute a select statement and return at most one row.
 
         Returns None if no rows are found.
@@ -305,12 +307,16 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         """
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         data = result.get_data()
-        if not data:
+        data_len: int = len(data)
+        if data_len == 0:
             return None
-        if len(data) > 1:
-            msg = f"Expected at most one row, found {len(data)}"
-            raise ValueError(msg)
-        return cast("Optional[Union[ModelT, ModelDTOT]]", self.to_schema(data[0], schema_type=schema_type))
+        if data_len > 1:
+            self._raise_expected_at_most_one_row(data_len)
+        first_row = data[0]
+        return cast(
+            "Optional[Union[dict[str, Any], ModelDTOT]]",
+            self.to_schema(first_row, schema_type=schema_type) if schema_type else first_row,
+        )
 
     @overload
     def select(
@@ -332,7 +338,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         schema_type: None = None,
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
-    ) -> "list[ModelT]": ...  # pyright: ignore[reportInvalidTypeVarUse]
+    ) -> "list[dict[str, Any]]": ...
 
     def select(
         self,
@@ -342,12 +348,11 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         schema_type: "Optional[type[ModelDTOT]]" = None,
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
-    ) -> "Union[list[ModelT], list[ModelDTOT]]":  # pyright: ignore[reportInvalidTypeVarUse]
+    ) -> "Union[list[dict[str, Any]], list[ModelDTOT]]":
         """Execute a select statement and return all rows."""
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         return cast(
-            "Union[list[ModelT], list[ModelDTOT]]",
-            self.to_schema(cast("list[ModelT]", result.get_data()), schema_type=schema_type),
+            "Union[list[dict[str, Any]], list[ModelDTOT]]", self.to_schema(result.get_data(), schema_type=schema_type)
         )
 
     def select_value(
@@ -367,23 +372,19 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         try:
             row = result.one()
         except ValueError as e:
-            msg = "No rows found"
-            raise NotFoundError(msg) from e
+            self._raise_no_rows_found_from_exception(e)
         if not row:
-            msg = "No rows found"
-            raise NotFoundError(msg)
+            self._raise_no_rows_found()
         if is_dict_row(row):
             if not row:
-                msg = "Row has no columns"
-                raise ValueError(msg)
+                self._raise_row_no_columns()
             return next(iter(row.values()))
         if is_indexable_row(row):
             if not row:
-                msg = "Row has no columns"
-                raise ValueError(msg)
+                self._raise_row_no_columns()
             return row[0]
-        msg = f"Unexpected row type: {type(row)}"
-        raise ValueError(msg)
+        self._raise_unexpected_row_type(type(row))
+        return None
 
     def select_value_or_none(
         self,
@@ -401,10 +402,11 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         """
         result = self.execute(statement, *parameters, statement_config=statement_config, **kwargs)
         data = result.get_data()
-        if not data:
+        data_len: int = len(data)
+        if data_len == 0:
             return None
-        if len(data) > 1:
-            msg = f"Expected at most one row, found {len(data)}"
+        if data_len > 1:
+            msg = f"Expected at most one row, found {data_len}"
             raise ValueError(msg)
         row = data[0]
         if isinstance(row, dict):
@@ -471,3 +473,31 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToS
         select_result = self.execute(sql_statement)
 
         return (self.to_schema(select_result.get_data(), schema_type=schema_type), count_result.scalar())
+
+    def _raise_no_rows_found(self) -> NoReturn:
+        msg = "No rows found"
+        raise NotFoundError(msg)
+
+    def _raise_no_rows_found_from_exception(self, e: ValueError) -> NoReturn:
+        msg = "No rows found"
+        raise NotFoundError(msg) from e
+
+    def _raise_expected_one_row(self, data_len: int) -> NoReturn:
+        msg = f"Expected exactly one row, found {data_len}"
+        raise ValueError(msg)
+
+    def _raise_expected_at_most_one_row(self, data_len: int) -> NoReturn:
+        msg = f"Expected at most one row, found {data_len}"
+        raise ValueError(msg)
+
+    def _raise_row_no_columns(self) -> NoReturn:
+        msg = "Row has no columns"
+        raise ValueError(msg)
+
+    def _raise_unexpected_row_type(self, row_type: type) -> NoReturn:
+        msg = f"Unexpected row type: {row_type}"
+        raise ValueError(msg)
+
+    def _raise_cannot_extract_value_from_row_type(self, type_name: str) -> NoReturn:
+        msg = f"Cannot extract value from row type {type_name}"
+        raise TypeError(msg)

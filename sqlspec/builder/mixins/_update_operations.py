@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 from typing import Any, Optional, Union
 
+from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
@@ -14,10 +15,14 @@ __all__ = ("UpdateFromClauseMixin", "UpdateSetClauseMixin", "UpdateTableClauseMi
 MIN_SET_ARGS = 2
 
 
+@trait
 class UpdateTableClauseMixin:
     """Mixin providing TABLE clause for UPDATE builders."""
 
-    _expression: Optional[exp.Expression] = None
+    __slots__ = ()
+
+    # Type annotation for PyRight - this will be provided by the base class
+    _expression: Optional[exp.Expression]
 
     def table(self, table_name: str, alias: Optional[str] = None) -> Self:
         """Set the table to update.
@@ -37,10 +42,24 @@ class UpdateTableClauseMixin:
         return self
 
 
+@trait
 class UpdateSetClauseMixin:
     """Mixin providing SET clause for UPDATE builders."""
 
-    _expression: Optional[exp.Expression] = None
+    __slots__ = ()
+
+    # Type annotation for PyRight - this will be provided by the base class
+    _expression: Optional[exp.Expression]
+
+    def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
+        """Add parameter - provided by QueryBuilder."""
+        msg = "Method must be provided by QueryBuilder subclass"
+        raise NotImplementedError(msg)
+
+    def _generate_unique_parameter_name(self, base_name: str) -> str:
+        """Generate unique parameter name - provided by QueryBuilder."""
+        msg = "Method must be provided by QueryBuilder subclass"
+        raise NotImplementedError(msg)
 
     def set(self, *args: Any, **kwargs: Any) -> Self:
         """Set columns and values for the UPDATE statement.
@@ -79,14 +98,13 @@ class UpdateSetClauseMixin:
                 value_expr = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(self, "dialect", None)))
                 if has_query_builder_parameters(val):
                     for p_name, p_value in val.parameters.items():
-                        self.add_parameter(p_value, name=p_name)  # type: ignore[attr-defined]
+                        self.add_parameter(p_value, name=p_name)
             else:
                 column_name = col if isinstance(col, str) else str(col)
-                # Extract just the column part if table.column format
                 if "." in column_name:
                     column_name = column_name.split(".")[-1]
-                param_name = self._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
-                param_name = self.add_parameter(val, name=param_name)[1]  # type: ignore[attr-defined]
+                param_name = self._generate_unique_parameter_name(column_name)
+                param_name = self.add_parameter(val, name=param_name)[1]
                 value_expr = exp.Placeholder(this=param_name)
             assignments.append(exp.EQ(this=col_expr, expression=value_expr))
         elif (len(args) == 1 and isinstance(args[0], Mapping)) or kwargs:
@@ -100,14 +118,13 @@ class UpdateSetClauseMixin:
                     value_expr = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(self, "dialect", None)))
                     if has_query_builder_parameters(val):
                         for p_name, p_value in val.parameters.items():
-                            self.add_parameter(p_value, name=p_name)  # type: ignore[attr-defined]
+                            self.add_parameter(p_value, name=p_name)
                 else:
-                    # Extract column name for parameter naming
                     column_name = col if isinstance(col, str) else str(col)
                     if "." in column_name:
                         column_name = column_name.split(".")[-1]
-                    param_name = self._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
-                    param_name = self.add_parameter(val, name=param_name)[1]  # type: ignore[attr-defined]
+                    param_name = self._generate_unique_parameter_name(column_name)
+                    param_name = self.add_parameter(val, name=param_name)[1]
                     value_expr = exp.Placeholder(this=param_name)
                 assignments.append(exp.EQ(this=exp.column(col), expression=value_expr))
         else:
@@ -118,8 +135,14 @@ class UpdateSetClauseMixin:
         return self
 
 
+@trait
 class UpdateFromClauseMixin:
     """Mixin providing FROM clause for UPDATE builders (e.g., PostgreSQL style)."""
+
+    __slots__ = ()
+
+    # Type annotation for PyRight - this will be provided by the base class
+    _expression: Optional[exp.Expression]
 
     def from_(self, table: Union[str, exp.Expression, Any], alias: Optional[str] = None) -> Self:
         """Add a FROM clause to the UPDATE statement.
@@ -134,7 +157,7 @@ class UpdateFromClauseMixin:
         Raises:
             SQLBuilderError: If the current expression is not an UPDATE statement.
         """
-        if self._expression is None or not isinstance(self._expression, exp.Update):  # type: ignore[attr-defined]
+        if self._expression is None or not isinstance(self._expression, exp.Update):
             msg = "Cannot add FROM clause to non-UPDATE expression. Set the main table first."
             raise SQLBuilderError(msg)
         table_expr: exp.Expression
@@ -152,9 +175,9 @@ class UpdateFromClauseMixin:
         else:
             msg = f"Unsupported table type for FROM clause: {type(table)}"
             raise SQLBuilderError(msg)
-        if self._expression.args.get("from") is None:  # type: ignore[attr-defined]
-            self._expression.set("from", exp.From(expressions=[]))  # type: ignore[attr-defined]
-        from_clause = self._expression.args["from"]  # type: ignore[attr-defined]
+        if self._expression.args.get("from") is None:
+            self._expression.set("from", exp.From(expressions=[]))
+        from_clause = self._expression.args["from"]
         if hasattr(from_clause, "append"):
             from_clause.append("expressions", table_expr)
         else:

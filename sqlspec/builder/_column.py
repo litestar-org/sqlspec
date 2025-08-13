@@ -67,7 +67,6 @@ class Column:
         else:
             self._expression = exp.Column(this=exp.Identifier(this=name))
 
-    # Comparison operators
     def __eq__(self, other: object) -> ColumnExpression:  # type: ignore[override]
         """Equal to (==)."""
         if other is None:
@@ -100,7 +99,6 @@ class Column:
         """Apply NOT operator (~)."""
         return ColumnExpression(exp.Not(this=self._expression))
 
-    # SQL-specific methods
     def like(self, pattern: str, escape: Optional[str] = None) -> ColumnExpression:
         """SQL LIKE pattern matching."""
         if escape:
@@ -152,7 +150,6 @@ class Column:
         converted_values = [exp.convert(v) for v in values]
         return ColumnExpression(exp.NEQ(this=self._expression, expression=exp.Any(expressions=converted_values)))
 
-    # SQL Functions
     def lower(self) -> "FunctionColumn":
         """SQL LOWER() function."""
         return FunctionColumn(exp.Lower(this=self._expression))
@@ -203,7 +200,6 @@ class Column:
         """SQL CAST() function."""
         return FunctionColumn(exp.Cast(this=self._expression, to=exp.DataType.build(data_type)))
 
-    # Aggregate functions
     def count(self) -> "FunctionColumn":
         """SQL COUNT() function."""
         return FunctionColumn(exp.Count(this=self._expression))

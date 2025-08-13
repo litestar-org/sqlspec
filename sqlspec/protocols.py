@@ -371,6 +371,9 @@ class SQLBuilderProtocol(Protocol):
     _expression: "Optional[exp.Expression]"
     _parameters: dict[str, Any]
     _parameter_counter: int
+    _columns: Any  # Optional attribute for some builders
+    _table: Any  # Optional attribute for some builders
+    _with_ctes: Any  # Optional attribute for some builders
     dialect: Any
     dialect_name: "Optional[str]"
 
@@ -381,6 +384,10 @@ class SQLBuilderProtocol(Protocol):
 
     def add_parameter(self, value: Any, name: "Optional[str]" = None) -> tuple[Any, str]:
         """Add a parameter to the builder."""
+        ...
+
+    def _generate_unique_parameter_name(self, base_name: str) -> str:
+        """Generate a unique parameter name."""
         ...
 
     def _parameterize_expression(self, expression: "exp.Expression") -> "exp.Expression":

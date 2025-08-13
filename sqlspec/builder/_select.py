@@ -5,8 +5,7 @@ with automatic parameter binding and validation.
 """
 
 import re
-from dataclasses import dataclass, field
-from typing import Any, Optional, Union
+from typing import Any, Callable, Final, Optional, Union
 
 from sqlglot import exp
 from typing_extensions import Self
@@ -29,10 +28,9 @@ from sqlspec.core.result import SQLResult
 __all__ = ("Select",)
 
 
-TABLE_HINT_PATTERN = r"\b{}\b(\s+AS\s+\w+)?"
+TABLE_HINT_PATTERN: Final[str] = r"\b{}\b(\s+AS\s+\w+)?"
 
 
-@dataclass
 class Select(
     QueryBuilder,
     WhereClauseMixin,
@@ -58,9 +56,8 @@ class Select(
         >>> result = driver.execute(builder)
     """
 
-    _with_parts: "dict[str, Union[exp.CTE, Select]]" = field(default_factory=dict, init=False)
-    _expression: Optional[exp.Expression] = field(default=None, init=False, repr=False, compare=False, hash=False)
-    _hints: "list[dict[str, object]]" = field(default_factory=list, init=False, repr=False)
+    __slots__ = ("_hints", "_with_parts")
+    _expression: Optional[exp.Expression]
 
     def __init__(self, *columns: str, **kwargs: Any) -> None:
         """Initialize SELECT with optional columns.
@@ -75,11 +72,11 @@ class Select(
         """
         super().__init__(**kwargs)
 
-        self._with_parts = {}
-        self._expression = None
-        self._hints = []
+        # Initialize Select-specific attributes
+        self._with_parts: dict[str, Union[exp.CTE, Select]] = {}
+        self._hints: list[dict[str, object]] = []
 
-        self._create_base_expression()
+        self._initialize_expression()
 
         if columns:
             self.select(*columns)
@@ -93,7 +90,8 @@ class Select(
         """
         return SQLResult
 
-    def _create_base_expression(self) -> "exp.Select":
+    def _create_base_expression(self) -> exp.Select:
+        """Create base SELECT expression."""
         if self._expression is None or not isinstance(self._expression, exp.Select):
             self._expression = exp.Select()
         return self._expression
@@ -131,44 +129,42 @@ class Select(
         if not self._hints:
             return safe_query
 
-        modified_expr = self._expression.copy() if self._expression else self._create_base_expression()
+        modified_expr = self._expression or self._create_base_expression()
 
         if isinstance(modified_expr, exp.Select):
             statement_hints = [h["hint"] for h in self._hints if h.get("location") == "statement"]
             if statement_hints:
-                hint_expressions = []
 
-                def parse_hint(hint: Any) -> exp.Expression:
-                    """Parse a single hint."""
+                def parse_hint_safely(hint: Any) -> exp.Expression:
                     try:
-                        hint_str = str(hint)  # Ensure hint is a string
+                        hint_str = str(hint)
                         hint_expr: Optional[exp.Expression] = exp.maybe_parse(hint_str, dialect=self.dialect_name)
-                        if hint_expr:
-                            return hint_expr
-                        return exp.Anonymous(this=hint_str)
+                        return hint_expr or exp.Anonymous(this=hint_str)
                     except Exception:
                         return exp.Anonymous(this=str(hint))
 
-                hint_expressions = [parse_hint(hint) for hint in statement_hints]
+                hint_expressions: list[exp.Expression] = [parse_hint_safely(hint) for hint in statement_hints]
 
                 if hint_expressions:
-                    hint_node = exp.Hint(expressions=hint_expressions)
-                    modified_expr.set("hint", hint_node)
+                    modified_expr.set("hint", exp.Hint(expressions=hint_expressions))
 
         modified_sql = modified_expr.sql(dialect=self.dialect_name, pretty=True)
 
-        table_hints = [h for h in self._hints if h.get("location") == "table" and h.get("table")]
-        if table_hints:
-            for th in table_hints:
-                table = str(th["table"])
-                hint = th["hint"]
+        for hint_dict in self._hints:
+            if hint_dict.get("location") == "table" and hint_dict.get("table"):
+                table = str(hint_dict["table"])
+                hint = str(hint_dict["hint"])
                 pattern = TABLE_HINT_PATTERN.format(re.escape(table))
-                compiled_pattern = re.compile(pattern, re.IGNORECASE)
 
-                def replacement_func(match: re.Match[str]) -> str:
-                    alias_part = match.group(1) or ""
-                    return f"/*+ {hint} */ {table}{alias_part}"  # noqa: B023
+                def make_replacement(hint_val: str, table_val: str) -> "Callable[[re.Match[str]], str]":
+                    def replacement_func(match: re.Match[str]) -> str:
+                        alias_part = match.group(1) or ""
+                        return f"/*+ {hint_val} */ {table_val}{alias_part}"
 
-                modified_sql = compiled_pattern.sub(replacement_func, modified_sql, count=1)
+                    return replacement_func
+
+                modified_sql = re.sub(
+                    pattern, make_replacement(hint, table), modified_sql, count=1, flags=re.IGNORECASE
+                )
 
         return SafeQuery(sql=modified_sql, parameters=safe_query.parameters, dialect=safe_query.dialect)

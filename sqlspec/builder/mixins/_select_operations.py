@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
+from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
@@ -11,17 +12,20 @@ from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_query_builder_parameters, is_expression
 
 if TYPE_CHECKING:
-    from sqlspec.builder._base import QueryBuilder
     from sqlspec.builder._column import Column, FunctionColumn
     from sqlspec.protocols import SelectBuilderProtocol, SQLBuilderProtocol
 
 __all__ = ("CaseBuilder", "SelectClauseMixin")
 
 
+@trait
 class SelectClauseMixin:
     """Consolidated mixin providing all SELECT-related clauses and functionality."""
 
-    _expression: Optional[exp.Expression] = None
+    __slots__ = ()
+
+    # Type annotation for PyRight - this will be provided by the base class
+    _expression: Optional[exp.Expression]
 
     def select(self, *columns: Union[str, exp.Expression, "Column", "FunctionColumn"]) -> Self:
         """Add columns to SELECT clause.
@@ -529,7 +533,7 @@ class SelectClauseMixin:
         Returns:
             CaseBuilder: A CaseBuilder instance for building the CASE expression.
         """
-        builder = cast("QueryBuilder", self)  # pyright: ignore
+        builder = cast("SelectBuilderProtocol", self)
         return CaseBuilder(builder, alias)
 
 
@@ -537,15 +541,15 @@ class SelectClauseMixin:
 class CaseBuilder:
     """Builder for CASE expressions."""
 
-    _parent: "QueryBuilder"  # pyright: ignore
+    _parent: "SelectBuilderProtocol"
     _alias: Optional[str]
     _case_expr: exp.Case
 
-    def __init__(self, parent: "QueryBuilder", alias: "Optional[str]" = None) -> None:
+    def __init__(self, parent: "SelectBuilderProtocol", alias: "Optional[str]" = None) -> None:
         """Initialize CaseBuilder.
 
         Args:
-            parent: The parent builder.
+            parent: The parent builder with select capabilities.
             alias: Optional alias for the CASE expression.
         """
         self._parent = parent
@@ -589,11 +593,11 @@ class CaseBuilder:
         self._case_expr.set("default", value_expr)
         return self
 
-    def end(self) -> "QueryBuilder":
+    def end(self) -> "SelectBuilderProtocol":
         """Finalize the CASE expression and add it to the SELECT clause.
 
         Returns:
             The parent builder instance.
         """
         select_expr = exp.alias_(self._case_expr, self._alias) if self._alias else self._case_expr
-        return cast("QueryBuilder", self._parent.select(select_expr))  # type: ignore[attr-defined]
+        return self._parent.select(select_expr)

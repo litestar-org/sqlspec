@@ -45,7 +45,8 @@ class DDLBuilder(QueryBuilder):
     _expression: Optional[exp.Expression] = field(default=None, init=False, repr=False, compare=False, hash=False)
 
     def __post_init__(self) -> None:
-        pass
+        # Initialize parent class attributes since dataclass doesn't call super().__init__()
+        super().__init__(dialect=self.dialect)
 
     def _create_base_expression(self) -> exp.Expression:
         msg = "Subclasses must implement _create_base_expression."
@@ -64,7 +65,6 @@ class DDLBuilder(QueryBuilder):
         return super().to_statement(config=config)
 
 
-# --- Data Structures for CREATE TABLE ---
 @dataclass
 class ColumnDefinition:
     """Column definition for CREATE TABLE."""
@@ -78,7 +78,7 @@ class ColumnDefinition:
     auto_increment: bool = False
     comment: "Optional[str]" = None
     check: "Optional[str]" = None
-    generated: "Optional[str]" = None  # For computed columns
+    generated: "Optional[str]" = None
     collate: "Optional[str]" = None
 
 
@@ -86,7 +86,7 @@ class ColumnDefinition:
 class ConstraintDefinition:
     """Constraint definition for CREATE TABLE."""
 
-    constraint_type: str  # 'PRIMARY KEY', 'FOREIGN KEY', 'UNIQUE', 'CHECK'
+    constraint_type: str
     name: "Optional[str]" = None
     columns: "list[str]" = field(default_factory=list)
     references_table: "Optional[str]" = None
@@ -98,7 +98,6 @@ class ConstraintDefinition:
     initially_deferred: bool = False
 
 
-# --- CREATE TABLE ---
 @dataclass
 class CreateTable(DDLBuilder):
     """Builder for CREATE TABLE statements with columns and constraints.
@@ -199,7 +198,6 @@ class CreateTable(DDLBuilder):
 
         self._columns.append(column_def)
 
-        # If primary key is specified on column, also add a constraint
         if primary_key and not any(c.constraint_type == "PRIMARY KEY" for c in self._constraints):
             self.primary_key_constraint([name])
 
@@ -235,12 +233,10 @@ class CreateTable(DDLBuilder):
         initially_deferred: bool = False,
     ) -> "Self":
         """Add a foreign key constraint."""
-        # Normalize inputs
         col_list = [columns] if isinstance(columns, str) else list(columns)
 
         ref_col_list = [references_columns] if isinstance(references_columns, str) else list(references_columns)
 
-        # Validation
         if len(col_list) != len(ref_col_list):
             self._raise_sql_builder_error("Foreign key columns and referenced columns must have same length")
 
@@ -267,7 +263,6 @@ class CreateTable(DDLBuilder):
 
     def unique_constraint(self, columns: "Union[str, list[str]]", name: "Optional[str]" = None) -> "Self":
         """Add a unique constraint."""
-        # Normalize column list
         col_list = [columns] if isinstance(columns, str) else list(columns)
 
         if not col_list:
@@ -285,11 +280,9 @@ class CreateTable(DDLBuilder):
 
         condition_str: str
         if hasattr(condition, "sqlglot_expression"):
-            # This is a ColumnExpression - render as raw SQL for DDL (no parameters)
             sqlglot_expr = getattr(condition, "sqlglot_expression", None)
             condition_str = sqlglot_expr.sql(dialect=self.dialect) if sqlglot_expr else str(condition)
         else:
-            # String condition - use as-is
             condition_str = str(condition)
 
         constraint = ConstraintDefinition(constraint_type="CHECK", name=name, condition=condition_str)
@@ -338,7 +331,6 @@ class CreateTable(DDLBuilder):
             column_defs.append(col_expr)
 
         for constraint in self._constraints:
-            # Skip PRIMARY KEY constraints that are already defined on columns
             if constraint.constraint_type == "PRIMARY KEY" and len(constraint.columns) == 1:
                 col_name = constraint.columns[0]
                 if any(c.name == col_name and c.primary_key for c in self._columns):
@@ -361,7 +353,7 @@ class CreateTable(DDLBuilder):
             props.append(exp.Property(this=exp.to_identifier("PARTITION BY"), value=exp.convert(self._partition_by)))
 
         for key, value in self._table_options.items():
-            if key != "engine":  # Skip already handled options
+            if key != "engine":
                 props.append(exp.Property(this=exp.to_identifier(key.upper()), value=exp.convert(value)))
 
         properties_node = exp.Properties(expressions=props) if props else None
@@ -393,14 +385,13 @@ class CreateTable(DDLBuilder):
         return build_constraint_expression(constraint)
 
 
-# --- DROP TABLE ---
 @dataclass
 class DropTable(DDLBuilder):
     """Builder for DROP TABLE [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
     _table_name: Optional[str] = None
     _if_exists: bool = False
-    _cascade: Optional[bool] = None  # True: CASCADE, False: RESTRICT, None: not set
+    _cascade: Optional[bool] = None
 
     def __init__(self, table_name: str, **kwargs: Any) -> None:
         """Initialize DROP TABLE with table name.
@@ -436,7 +427,6 @@ class DropTable(DDLBuilder):
         )
 
 
-# --- DROP INDEX ---
 @dataclass
 class DropIndex(DDLBuilder):
     """Builder for DROP INDEX [IF EXISTS] ... [ON table] [CASCADE|RESTRICT]."""
@@ -488,7 +478,6 @@ class DropIndex(DDLBuilder):
         )
 
 
-# --- DROP VIEW ---
 @dataclass
 class DropView(DDLBuilder):
     """Builder for DROP VIEW [IF EXISTS] ... [CASCADE|RESTRICT]."""
@@ -521,7 +510,6 @@ class DropView(DDLBuilder):
         )
 
 
-# --- DROP SCHEMA ---
 @dataclass
 class DropSchema(DDLBuilder):
     """Builder for DROP SCHEMA [IF EXISTS] ... [CASCADE|RESTRICT]."""
@@ -554,7 +542,6 @@ class DropSchema(DDLBuilder):
         )
 
 
-# --- CREATE INDEX ---
 @dataclass
 class CreateIndex(DDLBuilder):
     """Builder for CREATE [UNIQUE] INDEX [IF NOT EXISTS] ... ON ... (...).
@@ -579,7 +566,6 @@ class CreateIndex(DDLBuilder):
         """
         super().__init__(**kwargs)
         self._index_name = index_name
-        # Initialize dataclass fields that may not be set by super().__init__
         if not hasattr(self, "_columns"):
             self._columns = []
 
@@ -627,7 +613,6 @@ class CreateIndex(DDLBuilder):
         where_expr = None
         if self._where:
             where_expr = exp.condition(self._where) if isinstance(self._where, str) else self._where
-        # Use exp.Create for CREATE INDEX
         return exp.Create(
             kind="INDEX",
             this=exp.to_identifier(self._index_name),
@@ -640,14 +625,13 @@ class CreateIndex(DDLBuilder):
         )
 
 
-# --- TRUNCATE TABLE ---
 @dataclass
 class Truncate(DDLBuilder):
     """Builder for TRUNCATE TABLE ... [CASCADE|RESTRICT] [RESTART IDENTITY|CONTINUE IDENTITY]."""
 
     _table_name: Optional[str] = None
     _cascade: Optional[bool] = None
-    _identity: Optional[str] = None  # "RESTART" or "CONTINUE"
+    _identity: Optional[str] = None
 
     def table(self, name: str) -> Self:
         self._table_name = name
@@ -676,7 +660,6 @@ class Truncate(DDLBuilder):
         return exp.TruncateTable(this=exp.to_table(self._table_name), cascade=self._cascade, identity=identity_expr)
 
 
-# --- ALTER TABLE ---
 @dataclass
 class AlterOperation:
     """Represents a single ALTER TABLE operation."""
@@ -693,7 +676,6 @@ class AlterOperation:
     using_expression: "Optional[str]" = None
 
 
-# --- CREATE SCHEMA ---
 @dataclass
 class CreateSchema(DDLBuilder):
     """Builder for CREATE SCHEMA [IF NOT EXISTS] schema_name [AUTHORIZATION user_name]."""
@@ -757,7 +739,7 @@ class CreateTableAsSelect(DDLBuilder):
     _table_name: Optional[str] = None
     _if_not_exists: bool = False
     _columns: list[str] = field(default_factory=list)
-    _select_query: Optional[object] = None  # SQL, SelectBuilder, or str
+    _select_query: Optional[object] = None
 
     def name(self, table_name: str) -> Self:
         self._table_name = table_name
@@ -797,11 +779,7 @@ class CreateTableAsSelect(DDLBuilder):
             if with_ctes and select_expr and isinstance(select_expr, exp.Select):
                 for alias, cte in with_ctes.items():
                     if hasattr(select_expr, "with_"):
-                        select_expr = select_expr.with_(
-                            cte.this,  # The CTE's SELECT expression
-                            as_=alias,
-                            copy=False,
-                        )
+                        select_expr = select_expr.with_(cte.this, as_=alias, copy=False)
         elif isinstance(self._select_query, str):
             select_expr = exp.maybe_parse(self._select_query)
             select_parameters = None
@@ -810,11 +788,8 @@ class CreateTableAsSelect(DDLBuilder):
         if select_expr is None:
             self._raise_sql_builder_error("SELECT query must be a valid SELECT expression.")
 
-        # Merge parameters from SELECT if present
         if select_parameters:
             for p_name, p_value in select_parameters.items():
-                # Always preserve the original parameter name
-                # The SELECT query already has unique parameter names
                 self._parameters[p_name] = p_value
 
         schema_expr = None
@@ -840,8 +815,8 @@ class CreateMaterializedView(DDLBuilder):
     _view_name: Optional[str] = None
     _if_not_exists: bool = False
     _columns: list[str] = field(default_factory=list)
-    _select_query: Optional[object] = None  # SQL, SelectBuilder, or str
-    _with_data: Optional[bool] = None  # True: WITH DATA, False: NO DATA, None: not set
+    _select_query: Optional[object] = None
+    _with_data: Optional[bool] = None
     _refresh_mode: Optional[str] = None
     _storage_parameters: dict[str, Any] = field(default_factory=dict)
     _tablespace: Optional[str] = None
@@ -917,11 +892,8 @@ class CreateMaterializedView(DDLBuilder):
         if select_expr is None or not isinstance(select_expr, exp.Select):
             self._raise_sql_builder_error("SELECT query must be a valid SELECT expression.")
 
-        # Merge parameters from SELECT if present
         if select_parameters:
             for p_name, p_value in select_parameters.items():
-                # Always preserve the original parameter name
-                # The SELECT query already has unique parameter names
                 self._parameters[p_name] = p_value
 
         schema_expr = None
@@ -964,7 +936,7 @@ class CreateView(DDLBuilder):
     _view_name: Optional[str] = None
     _if_not_exists: bool = False
     _columns: list[str] = field(default_factory=list)
-    _select_query: Optional[object] = None  # SQL, SelectBuilder, or str
+    _select_query: Optional[object] = None
     _hints: list[str] = field(default_factory=list)
 
     def name(self, view_name: str) -> Self:
@@ -1012,11 +984,8 @@ class CreateView(DDLBuilder):
         if select_expr is None or not isinstance(select_expr, exp.Select):
             self._raise_sql_builder_error("SELECT query must be a valid SELECT expression.")
 
-        # Merge parameters from SELECT if present
         if select_parameters:
             for p_name, p_value in select_parameters.items():
-                # Always preserve the original parameter name
-                # The SELECT query already has unique parameter names
                 self._parameters[p_name] = p_value
 
         schema_expr = None
@@ -1164,17 +1133,14 @@ class AlterTable(DDLBuilder):
         if constraint_type.upper() not in valid_types:
             self._raise_sql_builder_error(f"Invalid constraint type: {constraint_type}")
 
-        # Normalize columns
         col_list = None
         if columns is not None:
             col_list = [columns] if isinstance(columns, str) else list(columns)
 
-        # Normalize reference columns
         ref_col_list = None
         if references_columns is not None:
             ref_col_list = [references_columns] if isinstance(references_columns, str) else list(references_columns)
 
-        # Handle ColumnExpression for CHECK constraints
         condition_str: Optional[str] = None
         if condition is not None:
             if hasattr(condition, "sqlglot_expression"):
@@ -1246,9 +1212,6 @@ class AlterTable(DDLBuilder):
         if op_type == "ADD COLUMN":
             if not op.column_definition:
                 self._raise_sql_builder_error("Column definition required for ADD COLUMN")
-            # SQLGlot expects a ColumnDef directly for ADD COLUMN actions
-            # Note: SQLGlot doesn't support AFTER/FIRST positioning in standard ALTER TABLE ADD COLUMN
-            # These would need to be handled at the dialect level
             return build_column_expression(op.column_definition)
 
         if op_type == "DROP COLUMN":
@@ -1311,7 +1274,7 @@ class AlterTable(DDLBuilder):
             return exp.AlterColumn(this=exp.to_identifier(op.column_name), kind="DROP DEFAULT")
 
         self._raise_sql_builder_error(f"Unknown operation type: {op.operation_type}")
-        raise AssertionError  # This line is unreachable but satisfies the linter
+        raise AssertionError
 
 
 @dataclass
@@ -1321,7 +1284,7 @@ class CommentOn(DDLBuilder):
     Supports COMMENT ON TABLE and COMMENT ON COLUMN.
     """
 
-    _target_type: Optional[str] = None  # 'TABLE' or 'COLUMN'
+    _target_type: Optional[str] = None
     _table: Optional[str] = None
     _column: Optional[str] = None
     _comment: Optional[str] = None
@@ -1352,7 +1315,7 @@ class CommentOn(DDLBuilder):
                 expression=exp.convert(self._comment),
             )
         self._raise_sql_builder_error("Must specify target and comment for COMMENT ON statement.")
-        raise AssertionError  # This line is unreachable but satisfies the linter
+        raise AssertionError
 
 
 @dataclass

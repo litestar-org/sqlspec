@@ -17,6 +17,7 @@ from sqlspec.core.filters import (
     apply_filter,
 )
 from sqlspec.core.statement import SQL
+from sqlspec.driver._common import CommonDriverAttributesMixin
 
 
 def test_before_after_filter_uses_column_based_parameters() -> None:
@@ -255,3 +256,99 @@ def test_filter_sql_generation_preserves_parameter_names() -> None:
     assert "status_in_1" in result.parameters
     assert result.parameters["status_in_0"] == "active"
     assert result.parameters["status_in_1"] == "pending"
+
+
+def test_find_filter_returns_matching_filter() -> None:
+    """Test that find_filter returns the first matching filter of the specified type."""
+    # Create a list of filters with different types
+    search_filter = SearchFilter("name", "john")
+    limit_filter = LimitOffsetFilter(10, 0)
+    in_filter = InCollectionFilter("status", ["active", "pending"])
+    order_filter = OrderByFilter("created_at", "desc")
+
+    filters = [search_filter, limit_filter, in_filter, order_filter]
+
+    # Test finding each type of filter
+    found_search = CommonDriverAttributesMixin.find_filter(SearchFilter, filters)
+    assert found_search is search_filter
+    assert found_search is not None
+    assert found_search.field_name == "name"
+    assert found_search.value == "john"
+
+    found_limit = CommonDriverAttributesMixin.find_filter(LimitOffsetFilter, filters)
+    assert found_limit is limit_filter
+    assert found_limit is not None
+    assert found_limit.limit == 10
+    assert found_limit.offset == 0
+
+    found_in = CommonDriverAttributesMixin.find_filter(InCollectionFilter, filters)
+    assert found_in is in_filter
+    assert found_in is not None
+    assert found_in.field_name == "status"
+    assert found_in.values == ["active", "pending"]
+
+    found_order = CommonDriverAttributesMixin.find_filter(OrderByFilter, filters)
+    assert found_order is order_filter
+    assert found_order is not None
+    assert found_order.field_name == "created_at"
+    assert found_order.sort_order == "desc"
+
+
+def test_find_filter_returns_none_when_not_found() -> None:
+    """Test that find_filter returns None when no matching filter is found."""
+    # Create a list of filters without BeforeAfterFilter
+    search_filter = SearchFilter("name", "john")
+    limit_filter = LimitOffsetFilter(10, 0)
+
+    filters = [search_filter, limit_filter]
+
+    # Try to find a filter type that doesn't exist in the list
+    found_filter = CommonDriverAttributesMixin.find_filter(BeforeAfterFilter, filters)
+    assert found_filter is None
+
+
+def test_find_filter_returns_first_match_when_multiple_exist() -> None:
+    """Test that find_filter returns the first matching filter when multiple of the same type exist."""
+    # Create multiple filters of the same type
+    filter1 = SearchFilter("name", "john")
+    filter2 = SearchFilter("email", "test@example.com")
+    other_filter = LimitOffsetFilter(10, 0)
+
+    filters = [filter1, other_filter, filter2]
+
+    # Should return the first matching filter
+    found_filter = CommonDriverAttributesMixin.find_filter(SearchFilter, filters)
+    assert found_filter is filter1
+    assert found_filter is not None
+    assert found_filter.field_name == "name"
+    assert found_filter.value == "john"
+
+
+def test_find_filter_with_empty_filters_list() -> None:
+    """Test that find_filter returns None when given an empty filters list."""
+    filters: list[object] = []
+
+    found_filter = CommonDriverAttributesMixin.find_filter(SearchFilter, filters)
+    assert found_filter is None
+
+
+def test_find_filter_with_mixed_parameter_types() -> None:
+    """Test that find_filter works with mixed filter and parameter types."""
+    # Test with a mixture of filters and other objects (simulating StatementParameters)
+    search_filter = SearchFilter("name", "john")
+    some_parameter = {"key": "value"}  # Simulating StatementParameters
+    limit_filter = LimitOffsetFilter(5, 10)
+
+    # Mixed list with different types
+    filters: list[object] = [search_filter, some_parameter, limit_filter]
+
+    # Should find the filter even with mixed types
+    found_search = CommonDriverAttributesMixin.find_filter(SearchFilter, filters)
+    assert found_search is search_filter
+
+    found_limit = CommonDriverAttributesMixin.find_filter(LimitOffsetFilter, filters)
+    assert found_limit is limit_filter
+
+    # Should return None for filter types not in the list
+    found_order = CommonDriverAttributesMixin.find_filter(OrderByFilter, filters)
+    assert found_order is None

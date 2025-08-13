@@ -841,9 +841,13 @@ def has_sql_method(obj: Any) -> "TypeGuard[HasSQLMethodProtocol]":
 
 def has_query_builder_parameters(obj: Any) -> "TypeGuard[SQLBuilderProtocol]":
     """Check if an object is a query builder with parameters property."""
-    from sqlspec.protocols import SQLBuilderProtocol
-
-    return isinstance(obj, SQLBuilderProtocol)
+    return (
+        hasattr(obj, "build")
+        and callable(getattr(obj, "build", None))
+        and hasattr(obj, "parameters")
+        and hasattr(obj, "add_parameter")
+        and callable(getattr(obj, "add_parameter", None))
+    )
 
 
 def is_object_store_item(obj: Any) -> "TypeGuard[ObjectStoreItemProtocol]":

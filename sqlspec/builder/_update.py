@@ -4,7 +4,6 @@ This module provides a fluent interface for building SQL queries safely,
 with automatic parameter binding and validation.
 """
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from sqlglot import exp
@@ -27,7 +26,6 @@ if TYPE_CHECKING:
 __all__ = ("Update",)
 
 
-@dataclass(unsafe_hash=True)
 class Update(
     QueryBuilder,
     WhereClauseMixin,
@@ -72,6 +70,9 @@ class Update(
         ```
     """
 
+    __slots__ = ("_table",)
+    _expression: Optional[exp.Expression]
+
     def __init__(self, table: Optional[str] = None, **kwargs: Any) -> None:
         """Initialize UPDATE with optional table.
 
@@ -80,6 +81,7 @@ class Update(
             **kwargs: Additional QueryBuilder arguments
         """
         super().__init__(**kwargs)
+        self._initialize_expression()
 
         if table:
             self.table(table)

@@ -5,7 +5,7 @@ that users might pass as strings to various builder methods.
 """
 
 import contextlib
-from typing import Any, Optional, Union, cast
+from typing import Any, Final, Optional, Union, cast
 
 from sqlglot import exp, maybe_parse, parse_one
 
@@ -33,9 +33,12 @@ def parse_column_expression(column_input: Union[str, exp.Expression, Any]) -> ex
         return column_input
 
     if has_expression_attr(column_input):
-        attr_value = getattr(column_input, "_expression", None)
-        if isinstance(attr_value, exp.Expression):
-            return attr_value
+        try:
+            attr_value = column_input._expression
+            if isinstance(attr_value, exp.Expression):
+                return attr_value
+        except AttributeError:
+            pass
 
     return exp.maybe_parse(column_input) or exp.column(str(column_input))
 
@@ -102,7 +105,7 @@ def parse_condition_expression(
     if isinstance(condition_input, exp.Expression):
         return condition_input
 
-    tuple_condition_parts = 2
+    tuple_condition_parts: Final[int] = 2
     if isinstance(condition_input, tuple) and len(condition_input) == tuple_condition_parts:
         column, value = condition_input
         column_expr = parse_column_expression(column)
@@ -129,12 +132,9 @@ def parse_condition_expression(
     except Exception:
         try:
             parsed = exp.maybe_parse(condition_input)  # type: ignore[var-annotated]
-            if parsed:
-                return parsed  # type:ignore[no-any-return]
-        except Exception:  # noqa: S110
-            pass
-
-    return exp.condition(condition_input)
+            return parsed or exp.condition(condition_input)
+        except Exception:
+            return exp.condition(condition_input)
 
 
 __all__ = ("parse_column_expression", "parse_condition_expression", "parse_order_expression", "parse_table_expression")

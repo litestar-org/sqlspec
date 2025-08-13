@@ -2,6 +2,7 @@
 
 from typing import TYPE_CHECKING, Optional, Union, cast
 
+from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
@@ -14,10 +15,14 @@ if TYPE_CHECKING:
 __all__ = ("LimitOffsetClauseMixin", "OrderByClauseMixin", "ReturningClauseMixin")
 
 
+@trait
 class OrderByClauseMixin:
     """Mixin providing ORDER BY clause."""
 
-    _expression: Optional[exp.Expression] = None
+    __slots__ = ()
+
+    # Type annotation for PyRight - this will be provided by the base class
+    _expression: Optional[exp.Expression]
 
     def order_by(self, *items: Union[str, exp.Ordered], desc: bool = False) -> Self:
         """Add ORDER BY clause.
@@ -50,10 +55,14 @@ class OrderByClauseMixin:
         return cast("Self", builder)
 
 
+@trait
 class LimitOffsetClauseMixin:
     """Mixin providing LIMIT and OFFSET clauses."""
 
-    _expression: Optional[exp.Expression] = None
+    __slots__ = ()
+
+    # Type annotation for PyRight - this will be provided by the base class
+    _expression: Optional[exp.Expression]
 
     def limit(self, value: int) -> Self:
         """Add LIMIT clause.
@@ -94,10 +103,13 @@ class LimitOffsetClauseMixin:
         return cast("Self", builder)
 
 
+@trait
 class ReturningClauseMixin:
     """Mixin providing RETURNING clause."""
 
-    _expression: Optional[exp.Expression] = None
+    __slots__ = ()
+    # Type annotation for PyRight - this will be provided by the base class
+    _expression: Optional[exp.Expression]
 
     def returning(self, *columns: Union[str, exp.Expression]) -> Self:
         """Add RETURNING clause to the statement.

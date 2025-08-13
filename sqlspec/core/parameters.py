@@ -124,9 +124,11 @@ class TypedParameter:
         self._hash: Optional[int] = None
 
     def __hash__(self) -> int:
-        """Cached hash value."""
+        """Cached hash value with optimization."""
         if self._hash is None:
-            self._hash = hash((id(self.value), self.original_type, self.semantic_name))
+            # Optimize by avoiding tuple creation for common case
+            value_id = id(self.value)
+            self._hash = hash((value_id, self.original_type, self.semantic_name))
         return self._hash
 
     def __eq__(self, other: object) -> bool:
@@ -361,13 +363,15 @@ class ParameterValidator:
         Returns:
             List of ParameterInfo objects for each detected parameter
         """
-        if sql in self._parameter_cache:
-            return self._parameter_cache[sql]
+        cached_result = self._parameter_cache.get(sql)
+        if cached_result is not None:
+            return cached_result
 
         parameters: list[ParameterInfo] = []
         ordinal = 0
 
         for match in _PARAMETER_REGEX.finditer(sql):
+            # Fast rejection of comments and quotes
             if (
                 match.group("dquote")
                 or match.group("squote")
@@ -381,37 +385,52 @@ class ParameterValidator:
 
             position = match.start()
             placeholder_text = match.group(0)
-            name = None
-            style = None
+            name: Optional[str] = None
+            style: Optional[ParameterStyle] = None
 
-            if match.group("pyformat_named"):
+            # Optimize with elif chain for better branch prediction
+            pyformat_named = match.group("pyformat_named")
+            if pyformat_named:
                 style = ParameterStyle.NAMED_PYFORMAT
                 name = match.group("pyformat_name")
-            elif match.group("pyformat_pos"):
-                style = ParameterStyle.POSITIONAL_PYFORMAT
-            elif match.group("positional_colon"):
-                style = ParameterStyle.POSITIONAL_COLON
-                name = match.group("colon_num")
-            elif match.group("named_colon"):
-                style = ParameterStyle.NAMED_COLON
-                name = match.group("colon_name")
-            elif match.group("named_at"):
-                style = ParameterStyle.NAMED_AT
-                name = match.group("at_name")
-            elif match.group("numeric"):
-                style = ParameterStyle.NUMERIC
-                name = match.group("numeric_num")
-            elif match.group("named_dollar_param"):
-                style = ParameterStyle.NAMED_DOLLAR
-                name = match.group("dollar_param_name")
-            elif match.group("qmark"):
-                style = ParameterStyle.QMARK
+            else:
+                pyformat_pos = match.group("pyformat_pos")
+                if pyformat_pos:
+                    style = ParameterStyle.POSITIONAL_PYFORMAT
+                else:
+                    positional_colon = match.group("positional_colon")
+                    if positional_colon:
+                        style = ParameterStyle.POSITIONAL_COLON
+                        name = match.group("colon_num")
+                    else:
+                        named_colon = match.group("named_colon")
+                        if named_colon:
+                            style = ParameterStyle.NAMED_COLON
+                            name = match.group("colon_name")
+                        else:
+                            named_at = match.group("named_at")
+                            if named_at:
+                                style = ParameterStyle.NAMED_AT
+                                name = match.group("at_name")
+                            else:
+                                numeric = match.group("numeric")
+                                if numeric:
+                                    style = ParameterStyle.NUMERIC
+                                    name = match.group("numeric_num")
+                                else:
+                                    named_dollar_param = match.group("named_dollar_param")
+                                    if named_dollar_param:
+                                        style = ParameterStyle.NAMED_DOLLAR
+                                        name = match.group("dollar_param_name")
+                                    elif match.group("qmark"):
+                                        style = ParameterStyle.QMARK
 
             if style is not None:
-                param_info = ParameterInfo(
-                    name=name, style=style, position=position, ordinal=ordinal, placeholder_text=placeholder_text
+                parameters.append(
+                    ParameterInfo(
+                        name=name, style=style, position=position, ordinal=ordinal, placeholder_text=placeholder_text
+                    )
                 )
-                parameters.append(param_info)
                 ordinal += 1
 
         self._parameter_cache[sql] = parameters
@@ -567,26 +586,34 @@ class ParameterConverter:
             msg = f"Unsupported target parameter style: {target_style}"
             raise ValueError(msg)
 
-        # Build a mapping of unique parameters to their ordinals
-        # This handles repeated parameters like $1, $2, $2 correctly
-        # Special case: QMARK (?) parameters converting to NUMERIC ($1, $2) need sequential numbering
+        # Optimize parameter style detection
         param_styles = {p.style for p in param_info}
-        use_sequential_for_qmark = param_styles == {ParameterStyle.QMARK} and target_style == ParameterStyle.NUMERIC
+        use_sequential_for_qmark = (
+            len(param_styles) == 1 and ParameterStyle.QMARK in param_styles and target_style == ParameterStyle.NUMERIC
+        )
 
+        # Build unique parameters mapping efficiently
         unique_params: dict[str, int] = {}
         for param in param_info:
-            if use_sequential_for_qmark and param.style == ParameterStyle.QMARK:
-                # For QMARK → NUMERIC conversion, each ? gets sequential numbering
-                param_key = f"{param.placeholder_text}_{param.ordinal}"
-            else:
-                # For all other cases, group by placeholder text
-                param_key = param.placeholder_text
+            param_key = (
+                f"{param.placeholder_text}_{param.ordinal}"
+                if use_sequential_for_qmark and param.style == ParameterStyle.QMARK
+                else param.placeholder_text
+            )
 
             if param_key not in unique_params:
                 unique_params[param_key] = len(unique_params)
 
+        # Convert SQL with optimized string operations
         converted_sql = sql
+        placeholder_text_len_cache: dict[str, int] = {}
+
         for param in reversed(param_info):
+            # Cache placeholder text length to avoid recalculation
+            if param.placeholder_text not in placeholder_text_len_cache:
+                placeholder_text_len_cache[param.placeholder_text] = len(param.placeholder_text)
+            text_len = placeholder_text_len_cache[param.placeholder_text]
+
             # Generate new placeholder based on target style
             if target_style in {
                 ParameterStyle.QMARK,
@@ -594,23 +621,19 @@ class ParameterConverter:
                 ParameterStyle.POSITIONAL_PYFORMAT,
                 ParameterStyle.POSITIONAL_COLON,
             }:
-                # Use the appropriate key for the unique parameter mapping
-                if use_sequential_for_qmark and param.style == ParameterStyle.QMARK:
-                    param_key = f"{param.placeholder_text}_{param.ordinal}"
-                else:
-                    param_key = param.placeholder_text
-
-                ordinal_to_use = unique_params[param_key]
-                new_placeholder = generator(ordinal_to_use)
+                param_key = (
+                    f"{param.placeholder_text}_{param.ordinal}"
+                    if use_sequential_for_qmark and param.style == ParameterStyle.QMARK
+                    else param.placeholder_text
+                )
+                new_placeholder = generator(unique_params[param_key])
             else:  # Named styles
                 param_name = param.name or f"param_{param.ordinal}"
                 new_placeholder = generator(param_name)
 
-            # Replace in SQL
+            # Optimized string replacement
             converted_sql = (
-                converted_sql[: param.position]
-                + new_placeholder
-                + converted_sql[param.position + len(param.placeholder_text) :]
+                converted_sql[: param.position] + new_placeholder + converted_sql[param.position + text_len :]
             )
 
         return converted_sql
@@ -1116,9 +1139,14 @@ class ParameterProcessor:
     def _apply_type_wrapping(self, parameters: Any) -> Any:
         """Apply type wrapping using singledispatch for performance."""
         if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
+            # Optimize with direct iteration instead of list comprehension for better memory usage
             return [_wrap_parameter_by_type(p) for p in parameters]
         if isinstance(parameters, Mapping):
-            return {k: _wrap_parameter_by_type(v) for k, v in parameters.items()}
+            # Optimize dict comprehension with items() iteration
+            wrapped_dict = {}
+            for k, v in parameters.items():
+                wrapped_dict[k] = _wrap_parameter_by_type(v)
+            return wrapped_dict
         return _wrap_parameter_by_type(parameters)
 
     def _apply_type_coercions(

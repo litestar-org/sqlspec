@@ -4,7 +4,6 @@ This module provides a fluent interface for building SQL queries safely,
 with automatic parameter binding and validation.
 """
 
-from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from sqlglot import exp
@@ -12,11 +11,11 @@ from sqlglot import exp
 from sqlspec.builder._base import QueryBuilder, SafeQuery
 from sqlspec.builder.mixins import DeleteFromClauseMixin, ReturningClauseMixin, WhereClauseMixin
 from sqlspec.core.result import SQLResult
+from sqlspec.exceptions import SQLBuilderError
 
 __all__ = ("Delete",)
 
 
-@dataclass(unsafe_hash=True)
 class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromClauseMixin):
     """Builder for DELETE statements.
 
@@ -25,7 +24,8 @@ class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromCla
     operations to maintain cross-dialect compatibility and safety.
     """
 
-    _table: "Optional[str]" = field(default=None, init=False)
+    __slots__ = ("_table",)
+    _expression: Optional[exp.Expression]
 
     def __init__(self, table: Optional[str] = None, **kwargs: Any) -> None:
         """Initialize DELETE with optional table.
@@ -35,6 +35,7 @@ class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromCla
             **kwargs: Additional QueryBuilder arguments
         """
         super().__init__(**kwargs)
+        self._initialize_expression()
 
         self._table = None
 
@@ -69,8 +70,6 @@ class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromCla
         """
 
         if not self._table:
-            from sqlspec.exceptions import SQLBuilderError
-
             msg = "DELETE requires a table to be specified. Use from() to set the table."
             raise SQLBuilderError(msg)
 
