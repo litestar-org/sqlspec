@@ -32,8 +32,10 @@ class MockAiosqliteConnection:
 
     def __await__(self) -> Any:
         """Make this object awaitable to simulate aiosqlite.connect() behavior."""
+
         async def _await() -> "MockAiosqliteConnection":
             return self
+
         return _await().__await__()
 
     def is_alive(self) -> bool:
