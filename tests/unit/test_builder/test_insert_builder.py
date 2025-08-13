@@ -45,11 +45,7 @@ def test_insert_values_from_dict() -> None:
 
 def test_insert_values_from_dicts_multiple_rows() -> None:
     """Test INSERT using values_from_dicts for multiple rows."""
-    data = [
-        {"id": 1, "name": "John"},
-        {"id": 2, "name": "Jane"},
-        {"id": 3, "name": "Bob"}
-    ]
+    data = [{"id": 1, "name": "John"}, {"id": 2, "name": "Jane"}, {"id": 3, "name": "Bob"}]
     query = sql.insert("users").values_from_dicts(data)
     stmt = query.build()
 
@@ -85,12 +81,7 @@ def test_insert_mixed_args_kwargs_error() -> None:
 
 def test_insert_multiple_values_calls() -> None:
     """Test multiple calls to values() method for multi-row insert."""
-    query = (
-        sql.insert("users")
-        .columns("name", "email")
-        .values("John", "john@test.com")
-        .values("Jane", "jane@test.com")
-    )
+    query = sql.insert("users").columns("name", "email").values("John", "john@test.com").values("Jane", "jane@test.com")
     stmt = query.build()
 
     assert "INSERT INTO" in stmt.sql
@@ -140,7 +131,7 @@ def test_insert_inconsistent_dict_keys_error() -> None:
     """Test that inconsistent dictionary keys in values_from_dicts raises error."""
     data = [
         {"id": 1, "name": "John"},
-        {"id": 2, "email": "jane@test.com"}  # Missing name, has email instead
+        {"id": 2, "email": "jane@test.com"},  # Missing name, has email instead
     ]
     with pytest.raises(SQLBuilderError, match="do not match expected keys"):
         sql.insert("users").values_from_dicts(data).build()
@@ -148,11 +139,7 @@ def test_insert_inconsistent_dict_keys_error() -> None:
 
 def test_insert_with_sql_raw_expressions() -> None:
     """Test INSERT with sql.raw expressions."""
-    query = sql.insert("logs").values(
-        message="Test message",
-        created_at=sql.raw("NOW()"),
-        uuid=sql.raw("UUID()")
-    )
+    query = sql.insert("logs").values(message="Test message", created_at=sql.raw("NOW()"), uuid=sql.raw("UUID()"))
     stmt = query.build()
 
     assert "INSERT INTO" in stmt.sql
@@ -165,8 +152,7 @@ def test_insert_with_sql_raw_expressions() -> None:
 def test_insert_with_sql_raw_parameters() -> None:
     """Test INSERT with sql.raw that has parameters."""
     query = sql.insert("users").values(
-        name="John",
-        computed_field=sql.raw("COALESCE(:fallback, 'default')", fallback="custom")
+        name="John", computed_field=sql.raw("COALESCE(:fallback, 'default')", fallback="custom")
     )
     stmt = query.build()
 
@@ -314,10 +300,7 @@ def test_on_conflict_parameter_merging() -> None:
         sql.insert("users")
         .values(id=1, name="John")
         .on_conflict("id")
-        .do_update(
-            name=sql.raw("COALESCE(:new_name, name)", new_name="Updated"),
-            updated_at=sql.raw("NOW()")
-        )
+        .do_update(name=sql.raw("COALESCE(:new_name, name)", new_name="Updated"), updated_at=sql.raw("NOW()"))
     )
     stmt = query.build()
 
