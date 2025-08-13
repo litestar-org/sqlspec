@@ -106,8 +106,9 @@ jobs:
           # Skip problematic combinations
           CIBW_SKIP: "cp39-win_arm64 *-musllinux*"
 
-          # Use uv for faster dependency resolution
+          # Use uv for faster dependency resolution and set mypyc environment
           CIBW_BEFORE_BUILD: "pip install uv && uv sync --extra mypyc --group build"
+          CIBW_ENVIRONMENT: "HATCH_BUILD_HOOKS_ENABLE=1 MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1"
 
           # Test the built wheels
           CIBW_TEST_COMMAND: "python -c \"import sqlspec; print('MyPyC wheel test passed')\""
