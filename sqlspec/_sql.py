@@ -1531,7 +1531,7 @@ class WindowFunctionBuilder:
                 self._order_by_cols.append(exp.Ordered(this=col, desc=False))
         return self
 
-    def as_(self, alias: str) -> exp.Expression:
+    def as_(self, alias: str) -> exp.Alias:
         """Complete the window function with an alias.
 
         Args:
@@ -1755,11 +1755,11 @@ class JoinBuilder:
         if isinstance(self._table, str):
             table_expr = exp.to_table(self._table)
             if self._alias:
-                table_expr = cast("exp.Expression", exp.alias_(table_expr, self._alias))
+                table_expr = exp.alias_(table_expr, self._alias)
         else:
             table_expr = self._table
             if self._alias:
-                table_expr = cast("exp.Expression", exp.alias_(table_expr, self._alias))
+                table_expr = exp.alias_(table_expr, self._alias)
 
         # Create the appropriate join type using same pattern as existing JoinClauseMixin
         if self._join_type == "INNER JOIN":
