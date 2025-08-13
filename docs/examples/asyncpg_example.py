@@ -1,4 +1,3 @@
-# type: ignore
 """Example demonstrating asyncpg driver usage with query mixins.
 
 This example shows how to use the asyncpg driver with the development PostgreSQL
@@ -22,9 +21,9 @@ async def asyncpg_example() -> None:
         pool_config={
             "host": "localhost",
             "port": 5433,
-            "user": "postgres", 
+            "user": "postgres",
             "password": "postgres",
-            "database": "postgres"
+            "database": "postgres",
         }
     )
     spec.add_config(config)
@@ -45,17 +44,18 @@ async def asyncpg_example() -> None:
         await driver.execute("TRUNCATE TABLE products RESTART IDENTITY")
 
         # Insert data
-        await driver.execute("INSERT INTO products (name, price, category) VALUES ($1, $2, $3)", 
-                           "Laptop", 999.99, "Electronics")
+        await driver.execute(
+            "INSERT INTO products (name, price, category) VALUES ($1, $2, $3)", "Laptop", 999.99, "Electronics"
+        )
 
         # Insert multiple rows
         await driver.execute_many(
             "INSERT INTO products (name, price, category) VALUES ($1, $2, $3)",
             [
                 ("Mouse", 29.99, "Electronics"),
-                ("Keyboard", 79.99, "Electronics"), 
+                ("Keyboard", 79.99, "Electronics"),
                 ("Monitor", 299.99, "Electronics"),
-                ("Coffee Mug", 12.50, "Office")
+                ("Coffee Mug", 12.50, "Office"),
             ],
         )
 

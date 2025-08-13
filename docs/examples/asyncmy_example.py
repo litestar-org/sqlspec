@@ -1,4 +1,3 @@
-# type: ignore
 """Example demonstrating asyncmy driver usage with query mixins.
 
 This example shows how to use the asyncmy driver with the development MySQL
@@ -19,13 +18,7 @@ async def asyncmy_example() -> None:
     # Create SQLSpec instance with MySQL (connects to dev container)
     spec = SQLSpec()
     config = AsyncmyConfig(
-        pool_config={
-            "host": "localhost",
-            "port": 3307,
-            "user": "root",
-            "password": "mysql",
-            "database": "test"
-        }
+        pool_config={"host": "localhost", "port": 3307, "user": "root", "password": "mysql", "database": "test"}
     )
     spec.add_config(config)
 
@@ -46,17 +39,22 @@ async def asyncmy_example() -> None:
         await driver.execute("TRUNCATE TABLE inventory")
 
         # Insert data
-        await driver.execute("INSERT INTO inventory (item_name, quantity, price, supplier) VALUES (%s, %s, %s, %s)", 
-                           "Laptop", 50, 1299.99, "TechCorp")
+        await driver.execute(
+            "INSERT INTO inventory (item_name, quantity, price, supplier) VALUES (%s, %s, %s, %s)",
+            "Laptop",
+            50,
+            1299.99,
+            "TechCorp",
+        )
 
         # Insert multiple rows
         await driver.execute_many(
             "INSERT INTO inventory (item_name, quantity, price, supplier) VALUES (%s, %s, %s, %s)",
             [
                 ("Mouse", 200, 25.99, "TechCorp"),
-                ("Keyboard", 150, 89.99, "TechCorp"), 
+                ("Keyboard", 150, 89.99, "TechCorp"),
                 ("Monitor", 75, 399.99, "DisplayCo"),
-                ("Headphones", 100, 159.99, "AudioPlus")
+                ("Headphones", 100, 159.99, "AudioPlus"),
             ],
         )
 
@@ -77,7 +75,9 @@ async def asyncmy_example() -> None:
         print(f"Total inventory value: ${total_value:.2f}")
 
         # Update
-        result = await driver.execute("UPDATE inventory SET quantity = quantity + %s WHERE supplier = %s", 10, "TechCorp")
+        result = await driver.execute(
+            "UPDATE inventory SET quantity = quantity + %s WHERE supplier = %s", 10, "TechCorp"
+        )
         print(f"Added stock for {result.rows_affected} TechCorp items")
 
         # Delete

@@ -1,7 +1,7 @@
-# type: ignore
+# ruff: noqa: FBT003
 """Example demonstrating psycopg sync driver usage with query mixins.
 
-This example shows how to use the psycopg synchronous driver with the development 
+This example shows how to use the psycopg synchronous driver with the development
 PostgreSQL container started by `make infra-up`.
 """
 
@@ -20,9 +20,9 @@ def psycopg_sync_example() -> None:
         pool_config={
             "host": "localhost",
             "port": 5433,
-            "user": "postgres", 
+            "user": "postgres",
             "password": "postgres",
-            "dbname": "postgres"
+            "dbname": "postgres",
         }
     )
     spec.add_config(config)
@@ -44,17 +44,21 @@ def psycopg_sync_example() -> None:
         driver.execute("TRUNCATE TABLE customers RESTART IDENTITY")
 
         # Insert data
-        driver.execute("INSERT INTO customers (name, email, is_active) VALUES (%s, %s, %s)", 
-                      "Alice Cooper", "alice@example.com", True)
+        driver.execute(
+            "INSERT INTO customers (name, email, is_active) VALUES (%s, %s, %s)",
+            "Alice Cooper",
+            "alice@example.com",
+            True,
+        )
 
         # Insert multiple rows
         driver.execute_many(
             "INSERT INTO customers (name, email, is_active) VALUES (%s, %s, %s)",
             [
                 ("Bob Miller", "bob@example.com", True),
-                ("Carol Davis", "carol@company.org", True), 
+                ("Carol Davis", "carol@company.org", True),
                 ("David Lee", "david@example.com", False),
-                ("Emma White", "emma@startup.io", True)
+                ("Emma White", "emma@startup.io", True),
             ],
         )
 

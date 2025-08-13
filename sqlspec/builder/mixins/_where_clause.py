@@ -214,20 +214,22 @@ class WhereClauseMixin:
         condition: Union[
             str, exp.Expression, exp.Condition, tuple[str, Any], tuple[str, str, Any], "ColumnExpression", "SQL"
         ],
-        value: Optional[Any] = None,
+        *values: Any,
         operator: Optional[str] = None,
+        **kwargs: Any,
     ) -> Self:
         """Add a WHERE clause to the statement.
 
         Args:
             condition: The condition for the WHERE clause. Can be:
-                - A string condition (when value is None)
-                - A string column name (when value is provided)
+                - A string condition with or without parameter placeholders
+                - A string column name (when values are provided)
                 - A sqlglot Expression or Condition
                 - A 2-tuple (column, value) for equality comparison
                 - A 3-tuple (column, operator, value) for custom comparison
-            value: Value for comparison (when condition is a column name)
-            operator: Operator for comparison (when both condition and value provided)
+            *values: Positional values for parameter binding (when condition contains placeholders or is a column name)
+            operator: Operator for comparison (when condition is a column name)
+            **kwargs: Named parameters for parameter binding (when condition contains named placeholders)
 
         Raises:
             SQLBuilderError: If the current expression is not a supported statement type.
@@ -248,16 +250,63 @@ class WhereClauseMixin:
             msg = "WHERE clause requires a table to be set. Use from() to set the table first."
             raise SQLBuilderError(msg)
 
-        if value is not None:
+        # Handle string conditions with external parameters
+        if values or kwargs:
             if not isinstance(condition, str):
-                msg = "When value is provided, condition must be a column name (string)"
+                msg = "When values are provided, condition must be a string"
                 raise SQLBuilderError(msg)
 
-            if operator is not None:
-                where_expr = self._process_tuple_condition((condition, operator, value))
+            # Check if condition contains parameter placeholders
+            from sqlspec.core.parameters import ParameterStyle, ParameterValidator
+
+            validator = ParameterValidator()
+            param_info = validator.extract_parameters(condition)
+
+            if param_info:
+                # String condition with placeholders - create SQL object with parameters
+                from sqlspec import sql as sql_factory
+
+                # Create parameter mapping based on the detected parameter info
+                param_dict = dict(kwargs)  # Start with named parameters
+
+                # Handle positional parameters - these are ordinal-based ($1, $2, :1, :2, ?)
+                positional_params = [
+                    param
+                    for param in param_info
+                    if param.style in {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON, ParameterStyle.QMARK}
+                ]
+
+                # Map positional values to positional parameters
+                if len(values) != len(positional_params):
+                    msg = f"Parameter count mismatch: condition has {len(positional_params)} positional placeholders, got {len(values)} values"
+                    raise SQLBuilderError(msg)
+
+                for i, value in enumerate(values):
+                    param_dict[f"param_{i}"] = value
+
+                # Create SQL object with parameters that will be processed correctly
+                condition = sql_factory.raw(condition, **param_dict)
+                # Fall through to existing SQL object handling logic
+
+            elif len(values) == 1 and not kwargs:
+                # Single value - treat as column = value
+                if operator is not None:
+                    where_expr = self._process_tuple_condition((condition, operator, values[0]))
+                else:
+                    where_expr = self._process_tuple_condition((condition, values[0]))
+                # Process this condition and skip the rest
+                if isinstance(builder._expression, (exp.Select, exp.Update, exp.Delete)):
+                    builder._expression = builder._expression.where(where_expr, copy=False)
+                else:
+                    msg = f"WHERE clause not supported for {type(builder._expression).__name__}"
+                    raise SQLBuilderError(msg)
+                return self
             else:
-                where_expr = self._process_tuple_condition((condition, value))
-        elif isinstance(condition, str):
+                msg = f"Cannot bind parameters to condition without placeholders: {condition}"
+                raise SQLBuilderError(msg)
+
+        # Handle all condition types (including SQL objects created above)
+        if isinstance(condition, str):
             where_expr = parse_condition_expression(condition)
         elif isinstance(condition, (exp.Expression, exp.Condition)):
             where_expr = condition

@@ -69,7 +69,13 @@ class SQLSpec:
                                 else:
                                     asyncio.run(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
                             except RuntimeError:
-                                asyncio.run(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
+                                try:
+                                    asyncio.run(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
+                                except RuntimeError:
+                                    # Event loop is closed, cannot perform async cleanup
+                                    logger.debug(
+                                        "Event loop closed, skipping async pool cleanup for %s", config_type.__name__
+                                    )
                     else:
                         config.close_pool()
                     cleaned_count += 1

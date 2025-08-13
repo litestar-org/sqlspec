@@ -1521,3 +1521,63 @@ def test_merge_comprehensive_example() -> None:
     assert "WHEN NOT MATCHED BY SOURCE THEN UPDATE" in stmt.sql
     assert "NOW()" in stmt.sql
     assert len(stmt.parameters) >= 6  # Should have multiple parameters
+
+
+def test_querybuilder_parameter_style_handling_regression() -> None:
+    """Regression test for QueryBuilder parameter style handling fix."""
+    # Test the exact scenario that was failing: QueryBuilder with external parameters
+    query = sql.select("id", "name", "price").from_("products").where("category = $1", "Electronics")
+    stmt = query.build()
+
+    # Should successfully build without "Incorrect number of bindings supplied" error
+    assert "WHERE" in stmt.sql
+    assert "category" in stmt.sql
+    assert len(stmt.parameters) == 1
+    assert "Electronics" in stmt.parameters.values()
+
+
+def test_querybuilder_handles_all_parameter_styles() -> None:
+    """Test that QueryBuilder handles all parameter styles correctly."""
+    # Test different parameter styles work in QueryBuilder WHERE clauses with external parameters
+
+    # Test $1 style parameter
+    query1 = sql.select("*").from_("test_table").where("category = $1", "Electronics")
+    stmt1 = query1.build()
+    assert "WHERE" in stmt1.sql
+    assert len(stmt1.parameters) == 1
+    assert "Electronics" in stmt1.parameters.values()
+
+    # Test named parameter style
+    query2 = sql.select("*").from_("test_table").where("status = :status", status="active")
+    stmt2 = query2.build()
+    assert "WHERE" in stmt2.sql
+    assert len(stmt2.parameters) == 1
+    assert "active" in stmt2.parameters.values()
+
+    # Test ? style parameter
+    query3 = sql.select("*").from_("test_table").where("name = ?", "John")
+    stmt3 = query3.build()
+    assert "WHERE" in stmt3.sql
+    assert len(stmt3.parameters) == 1
+    assert "John" in stmt3.parameters.values()
+
+
+def test_querybuilder_parameter_conversion_preserves_functionality() -> None:
+    """Test that parameter conversion in QueryBuilder preserves all functionality."""
+    # Test multiple parameters in same condition
+    query = sql.select("*").from_("orders").where("total > $1 AND status = $2", 100.0, "pending")
+    stmt = query.build()
+
+    assert "WHERE" in stmt.sql
+    assert len(stmt.parameters) == 2
+    assert 100.0 in stmt.parameters.values()
+    assert "pending" in stmt.parameters.values()
+
+    # Test with complex conditions
+    complex_query = sql.select("*").from_("events").where("created_at > $1 AND type = $2", "2023-01-01", "click")
+    complex_stmt = complex_query.build()
+
+    assert "WHERE" in complex_stmt.sql
+    assert len(complex_stmt.parameters) == 2
+    assert "2023-01-01" in complex_stmt.parameters.values()
+    assert "click" in complex_stmt.parameters.values()

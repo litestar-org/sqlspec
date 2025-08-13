@@ -27,6 +27,7 @@ from litestar import Litestar, get
 from sqlspec import SQL
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgPoolConfig
 from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec
+from sqlspec.typing import ConnectionT, PoolT
 
 
 @get("/")
@@ -75,14 +76,19 @@ sqlspec = SQLSpec(
         DatabaseConfig(
             config=AsyncpgConfig(
                 pool_config=AsyncpgPoolConfig(
-                    dsn="postgresql://postgres:test@localhost:5432/postgres", min_size=1, max_size=5
+                    dsn="postgresql://postgres:postgres@localhost:5433/postgres", min_size=5, max_size=5
                 )
             ),
             commit_mode="autocommit",
         )
     ]
 )
-app = Litestar(route_handlers=[hello_world, get_version, list_tables, get_status], plugins=[sqlspec], debug=True)
+app = Litestar(
+    route_handlers=[hello_world, get_version, list_tables, get_status],
+    plugins=[sqlspec],
+    debug=True,
+    signature_namespace={"ConnectionT": ConnectionT, "PoolT": PoolT},
+)
 
 if __name__ == "__main__":
     import os

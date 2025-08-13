@@ -1,4 +1,3 @@
-# type: ignore
 """Example demonstrating PSQLPy driver usage with query mixins.
 
 This example shows how to use the psqlpy (Rust-based) async PostgreSQL driver
@@ -22,9 +21,9 @@ async def psqlpy_example() -> None:
         pool_config={
             "host": "localhost",
             "port": 5433,
-            "username": "postgres", 
+            "username": "postgres",
             "password": "postgres",
-            "db_name": "postgres"
+            "db_name": "postgres",
         }
     )
     spec.add_config(config)
@@ -46,17 +45,21 @@ async def psqlpy_example() -> None:
         await driver.execute("TRUNCATE TABLE orders RESTART IDENTITY")
 
         # Insert data
-        await driver.execute("INSERT INTO orders (customer_name, order_total, status) VALUES ($1, $2, $3)", 
-                           "John Doe", 150.75, "completed")
+        await driver.execute(
+            "INSERT INTO orders (customer_name, order_total, status) VALUES ($1, $2, $3)",
+            "John Doe",
+            150.75,
+            "completed",
+        )
 
         # Insert multiple rows
         await driver.execute_many(
             "INSERT INTO orders (customer_name, order_total, status) VALUES ($1, $2, $3)",
             [
                 ("Jane Smith", 89.50, "pending"),
-                ("Bob Johnson", 234.00, "completed"), 
+                ("Bob Johnson", 234.00, "completed"),
                 ("Alice Brown", 45.25, "cancelled"),
-                ("Charlie Wilson", 312.80, "pending")
+                ("Charlie Wilson", 312.80, "pending"),
             ],
         )
 
@@ -90,7 +93,12 @@ async def psqlpy_example() -> None:
         print(f"Pending orders: {pending_orders}")
 
         # Query builder with comparison
-        query = Select("customer_name", "order_total").from_("orders").where("order_total > $1").order_by("order_total DESC")
+        query = (
+            Select("customer_name", "order_total")
+            .from_("orders")
+            .where("order_total > $1")
+            .order_by("order_total DESC")
+        )
         large_orders = await driver.select(query, 200.0)
         print(f"Large orders: {large_orders}")
 

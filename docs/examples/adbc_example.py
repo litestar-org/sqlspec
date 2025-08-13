@@ -1,4 +1,3 @@
-# type: ignore
 """Example demonstrating ADBC driver usage with query mixins.
 
 This example shows how to use the ADBC (Arrow Database Connectivity) driver
@@ -16,12 +15,7 @@ def adbc_example() -> None:
     """Demonstrate ADBC database driver usage with query mixins."""
     # Create SQLSpec instance with ADBC (connects to dev PostgreSQL container)
     spec = SQLSpec()
-    config = AdbcConfig(
-        pool_config={
-            "driver": "adbc_driver_postgresql",
-            "uri": "postgresql://postgres:postgres@localhost:5433/postgres"
-        }
-    )
+    config = AdbcConfig(connection_config={"uri": "postgresql://postgres:postgres@localhost:5433/postgres"})
     spec.add_config(config)
 
     # Get a driver directly (drivers now have built-in query methods)
@@ -41,17 +35,21 @@ def adbc_example() -> None:
         driver.execute("TRUNCATE TABLE analytics_data RESTART IDENTITY")
 
         # Insert data
-        driver.execute("INSERT INTO analytics_data (metric_name, metric_value, dimensions) VALUES ($1, $2, $3)", 
-                      "page_views", 1250.0, '{"source": "organic", "device": "desktop"}')
+        driver.execute(
+            "INSERT INTO analytics_data (metric_name, metric_value, dimensions) VALUES ($1, $2, $3::jsonb)",
+            "page_views",
+            1250.0,
+            '{"source": "organic", "device": "desktop"}',
+        )
 
         # Insert multiple rows
         driver.execute_many(
-            "INSERT INTO analytics_data (metric_name, metric_value, dimensions) VALUES ($1, $2, $3)",
+            "INSERT INTO analytics_data (metric_name, metric_value, dimensions) VALUES ($1, $2, $3::jsonb)",
             [
                 ("conversion_rate", 0.045, '{"funnel": "signup", "campaign": "summer"}'),
-                ("revenue", 15420.50, '{"product": "pro", "region": "us"}'), 
+                ("revenue", 15420.50, '{"product": "pro", "region": "us"}'),
                 ("bounce_rate", 0.32, '{"page": "landing", "source": "paid"}'),
-                ("session_duration", 180.5, '{"device": "mobile", "browser": "chrome"}')
+                ("session_duration", 180.5, '{"device": "mobile", "browser": "chrome"}'),
             ],
         )
 
@@ -72,8 +70,11 @@ def adbc_example() -> None:
         print(f"Average metric value: {avg_value:.2f}")
 
         # Update
-        result = driver.execute("UPDATE analytics_data SET dimensions = $1 WHERE metric_name = $2", 
-                               '{"updated": true}', "bounce_rate")
+        result = driver.execute(
+            "UPDATE analytics_data SET dimensions = $1::jsonb WHERE metric_name = $2",
+            '{"updated": true}',
+            "bounce_rate",
+        )
         print(f"Updated {result.rows_affected} bounce rate records")
 
         # Delete
@@ -85,9 +86,11 @@ def adbc_example() -> None:
         page_view_metrics = driver.select(query, "page_views")
         print(f"Page view metrics: {page_view_metrics}")
 
-        # Query builder with JSON operations (PostgreSQL-specific)
-        query = Select("metric_name", "metric_value", "dimensions->>'device' as device").from_("analytics_data").where("dimensions->>'device' = $1")
-        mobile_metrics = driver.select(query, "mobile")
+        # JSON operations (PostgreSQL-specific) - using raw SQL due to SQLGlot JSON operator conversion
+        mobile_metrics = driver.select(
+            "SELECT metric_name, metric_value, dimensions->>'device' as device FROM analytics_data WHERE dimensions->>'device' = $1",
+            "mobile",
+        )
         print(f"Mobile metrics: {mobile_metrics}")
 
         # Demonstrate pagination

@@ -1,7 +1,6 @@
-# type: ignore
 """Example demonstrating psycopg async driver usage with query mixins.
 
-This example shows how to use the psycopg asynchronous driver with the development 
+This example shows how to use the psycopg asynchronous driver with the development
 PostgreSQL container started by `make infra-up`.
 """
 
@@ -22,9 +21,9 @@ async def psycopg_async_example() -> None:
         pool_config={
             "host": "localhost",
             "port": 5433,
-            "user": "postgres", 
+            "user": "postgres",
             "password": "postgres",
-            "dbname": "postgres"
+            "dbname": "postgres",
         }
     )
     spec.add_config(config)
@@ -47,17 +46,22 @@ async def psycopg_async_example() -> None:
         await driver.execute("TRUNCATE TABLE transactions RESTART IDENTITY")
 
         # Insert data
-        await driver.execute("INSERT INTO transactions (account_id, amount, transaction_type, description) VALUES (%s, %s, %s, %s)", 
-                           1001, 250.00, "deposit", "Initial deposit")
+        await driver.execute(
+            "INSERT INTO transactions (account_id, amount, transaction_type, description) VALUES (%s, %s, %s, %s)",
+            1001,
+            250.00,
+            "deposit",
+            "Initial deposit",
+        )
 
         # Insert multiple rows
         await driver.execute_many(
             "INSERT INTO transactions (account_id, amount, transaction_type, description) VALUES (%s, %s, %s, %s)",
             [
                 (1001, -50.00, "withdrawal", "ATM withdrawal"),
-                (1002, 1000.00, "deposit", "Salary deposit"), 
+                (1002, 1000.00, "deposit", "Salary deposit"),
                 (1001, -25.99, "purchase", "Online purchase"),
-                (1002, -150.00, "transfer", "Transfer to savings")
+                (1002, -150.00, "transfer", "Transfer to savings"),
             ],
         )
 
@@ -78,7 +82,9 @@ async def psycopg_async_example() -> None:
         print(f"Account 1001 balance: ${account_balance:.2f}")
 
         # Update
-        result = await driver.execute("UPDATE transactions SET description = %s WHERE amount < %s", "Small transaction", 0)
+        result = await driver.execute(
+            "UPDATE transactions SET description = %s WHERE amount < %s", "Small transaction", 0
+        )
         print(f"Updated {result.rows_affected} negative transactions")
 
         # Delete
@@ -96,7 +102,9 @@ async def psycopg_async_example() -> None:
         print(f"Large transactions: {large_transactions}")
 
         # Demonstrate pagination
-        page_transactions = await driver.select("SELECT * FROM transactions ORDER BY created_at LIMIT %s OFFSET %s", 2, 0)
+        page_transactions = await driver.select(
+            "SELECT * FROM transactions ORDER BY created_at LIMIT %s OFFSET %s", 2, 0
+        )
         total_count = await driver.select_value("SELECT COUNT(*) FROM transactions")
         print(f"Page 1: {page_transactions}, Total: {total_count}")
 
