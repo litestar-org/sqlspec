@@ -1,3 +1,4 @@
+-- name: oracle-sysdba-ddl
 -- Oracle 23AI Database Schema for Coffee Recommendation System
 -- This script creates all necessary tables with Oracle 23AI features
 

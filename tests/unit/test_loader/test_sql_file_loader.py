@@ -17,7 +17,6 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from sqlspec.core.parameters import ParameterStyle
 from sqlspec.core.statement import SQL
 from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError
 from sqlspec.loader import CachedSQLFile, NamedStatement, SQLFile, SQLFileLoader
@@ -460,16 +459,17 @@ def test_get_sql_basic() -> None:
     assert "SELECT * FROM users WHERE id = ?" in sql.sql
 
 
-def test_get_sql_with_parameters() -> None:
-    """Test getting SQL with parameters."""
+def test_get_sql_simplified() -> None:
+    """Test getting SQL without parameters (simplified interface)."""
     loader = SQLFileLoader()
     loader.add_named_sql("test_query", "SELECT * FROM users WHERE id = :user_id")
 
-    sql = loader.get_sql("test_query", {"user_id": 123})
+    sql = loader.get_sql("test_query")
 
     assert isinstance(sql, SQL)
-    # Parameters are wrapped in CORE_ROUND_3 architecture
-    assert sql.parameters == {"parameters": {"user_id": 123}}
+    assert "SELECT * FROM users WHERE id = :user_id" in sql.sql
+    # Parameters should be passed during execution, not creation
+    assert sql.parameters == []
 
 
 def test_get_sql_with_dialect() -> None:
@@ -483,17 +483,6 @@ def test_get_sql_with_dialect() -> None:
     # Currently dialect is not being preserved properly in SQL objects
     # TODO: Fix dialect preservation in SQLFileLoader
     # assert sql.dialect == "postgres"
-
-
-def test_get_sql_with_dialect_override() -> None:
-    """Test overriding dialect in get_sql."""
-    loader = SQLFileLoader()
-    loader.add_named_sql("test_query", "SELECT * FROM users", dialect="postgres")
-
-    sql = loader.get_sql("test_query", dialect="mysql")
-
-    assert isinstance(sql, SQL)
-    assert sql._dialect == "mysql"  # Override should take precedence
 
 
 def test_get_sql_parameter_style_detection() -> None:
@@ -534,6 +523,41 @@ def test_get_sql_name_normalization() -> None:
     assert isinstance(sql2, SQL)
 
 
+def test_get_sql_usage_pattern() -> None:
+    """Test the simplified usage pattern for get_sql method."""
+    loader = SQLFileLoader()
+
+    # Add the asset maintenance alert query
+    asset_maintenance_query = """
+with inserted_data as (
+insert into alert_users (user_id, asset_maintenance_id, alert_definition_id)
+select responsible_id, id, (select id from alert_definition where name = 'maintenances_today') from asset_maintenance
+where planned_date_start is not null
+and planned_date_start between :date_start and :date_end
+and cancelled = False ON CONFLICT ON CONSTRAINT unique_alert DO NOTHING
+returning *)
+select inserted_data.*, to_jsonb(users.*) as user
+from inserted_data
+left join users on users.id = inserted_data.user_id;
+"""
+
+    loader.add_named_sql("asset_maintenance_alert", asset_maintenance_query.strip())
+
+    # Test the simplified usage pattern
+    sql = loader.get_sql("asset_maintenance_alert")
+
+    assert isinstance(sql, SQL)
+    assert "inserted_data" in sql.sql
+    assert ":date_start" in sql.sql
+    assert ":date_end" in sql.sql
+    assert "alert_users" in sql.sql
+
+    # Verify no parameters are pre-loaded in the SQL object
+    assert sql.parameters == []
+
+    # The SQL should be ready for execution with parameters passed at runtime
+
+
 def test_get_file_methods() -> None:
     """Test file retrieval methods."""
     loader = SQLFileLoader()
@@ -557,24 +581,16 @@ def test_get_file_methods() -> None:
     assert loader.get_file_for_query("nonexistent") is None
 
 
-@patch("sqlspec.loader.ParameterValidator")
-def test_parameter_style_detection_with_validator(mock_validator_class: Mock) -> None:
-    """Test parameter style detection using ParameterValidator."""
-    mock_validator = Mock()
-    mock_validator.extract_parameters.return_value = [
-        Mock(style=ParameterStyle.QMARK),
-        Mock(style=ParameterStyle.QMARK),
-    ]
-    mock_validator_class.return_value = mock_validator
-
+def test_parameter_style_detection_simplified() -> None:
+    """Test that SQL objects are created without parameter style detection."""
     loader = SQLFileLoader()
     loader.add_named_sql("test_query", "SELECT * FROM users WHERE id = ? AND active = ?")
 
     sql = loader.get_sql("test_query")
 
     assert isinstance(sql, SQL)
-    # Should have called parameter validator
-    mock_validator.extract_parameters.assert_called_once()
+    # Simplified loader should just create basic SQL object
+    assert "SELECT * FROM users WHERE id = ? AND active = ?" in sql.sql
 
 
 def test_dialect_normalization() -> None:
@@ -956,7 +972,8 @@ class TestFixtureBasedIntegration:
         queries = loader.list_queries()
         test_query = queries[0]  # Get first query
 
-        # Create SQL with parameters
-        sql = loader.get_sql(test_query, {"DMA_SOURCE_ID": "test", "PKEY": "pk123"})
+        # Create SQL object without parameters
+        sql = loader.get_sql(test_query)
         assert isinstance(sql, SQL)
-        assert sql.parameters is not None
+        # Parameters should be passed during execution
+        assert sql.parameters == []

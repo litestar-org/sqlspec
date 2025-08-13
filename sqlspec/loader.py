@@ -14,8 +14,7 @@ from pathlib import Path
 from typing import Any, Optional, Union
 
 from sqlspec.core.cache import CacheKey, get_cache_config, get_default_cache
-from sqlspec.core.parameters import ParameterStyleConfig, ParameterValidator
-from sqlspec.core.statement import SQL, StatementConfig
+from sqlspec.core.statement import SQL
 from sqlspec.exceptions import (
     MissingDependencyError,
     SQLFileNotFoundError,
@@ -34,7 +33,7 @@ logger = get_logger("loader")
 # Matches: -- name: query_name (supports hyphens and special suffixes)
 # We capture the name plus any trailing special characters
 QUERY_NAME_PATTERN = re.compile(r"^\s*--\s*name\s*:\s*([\w-]+[^\w\s]*)\s*$", re.MULTILINE | re.IGNORECASE)
-TRIM_SPECIAL_CHARS = re.compile(r"[^\w-]")
+TRIM_SPECIAL_CHARS = re.compile(r"[^\w.-]")
 
 # Matches: -- dialect: dialect_name (optional dialect specification)
 DIALECT_PATTERN = re.compile(r"^\s*--\s*dialect\s*:\s*(?P<dialect>[a-zA-Z0-9_]+)\s*$", re.IGNORECASE | re.MULTILINE)
@@ -581,8 +580,11 @@ class SQLFileLoader:
         Raises:
             ValueError: If query name already exists.
         """
-        if name in self._queries:
-            existing_source = self._query_to_file.get(name, "<directly added>")
+        # Normalize the name for consistency with file-loaded queries
+        normalized_name = _normalize_query_name(name)
+
+        if normalized_name in self._queries:
+            existing_source = self._query_to_file.get(normalized_name, "<directly added>")
             msg = f"Query name '{name}' already exists (source: {existing_source})"
             raise ValueError(msg)
 
@@ -599,21 +601,16 @@ class SQLFileLoader:
             else:
                 dialect = normalized_dialect
 
-        statement = NamedStatement(name=name, sql=sql.strip(), dialect=dialect, start_line=0)
-        self._queries[name] = statement
-        self._query_to_file[name] = "<directly added>"
+        statement = NamedStatement(name=normalized_name, sql=sql.strip(), dialect=dialect, start_line=0)
+        self._queries[normalized_name] = statement
+        self._query_to_file[normalized_name] = "<directly added>"
 
-    def get_sql(
-        self, name: str, parameters: "Optional[Any]" = None, dialect: "Optional[str]" = None, **kwargs: "Any"
-    ) -> "SQL":
-        """Get a SQL object by statement name with dialect support.
+    def get_sql(self, name: str) -> "SQL":
+        """Get a SQL object by statement name.
 
         Args:
             name: Name of the statement (from -- name: in SQL file).
                   Hyphens in names are converted to underscores.
-            parameters: Parameters for the SQL statement.
-            dialect: Optional dialect override.
-            **kwargs: Additional parameters to pass to the SQL object.
 
         Returns:
             SQL object ready for execution.
@@ -640,46 +637,11 @@ class SQLFileLoader:
             raise SQLFileNotFoundError(name, path=f"Statement '{name}' not found. Available statements: {available}")
 
         parsed_statement = self._queries[safe_name]
-
-        effective_dialect = dialect or parsed_statement.dialect
-
-        if dialect is not None:
-            normalized_dialect = _normalize_dialect(dialect)
-            if normalized_dialect not in SUPPORTED_DIALECTS:
-                suggestions = _get_dialect_suggestions(normalized_dialect)
-                warning_msg = f"Unknown dialect '{dialect}'"
-                if suggestions:
-                    warning_msg += f". Did you mean: {', '.join(suggestions)}?"
-                warning_msg += f". Supported dialects: {', '.join(sorted(SUPPORTED_DIALECTS))}. Using dialect as-is."
-                logger.warning(warning_msg)
-                effective_dialect = dialect.lower()
-            else:
-                effective_dialect = normalized_dialect
-
-        sql_kwargs = dict(kwargs)
-        if parameters is not None:
-            sql_kwargs["parameters"] = parameters
-
         sqlglot_dialect = None
-        if effective_dialect:
-            sqlglot_dialect = _normalize_dialect_for_sqlglot(effective_dialect)
+        if parsed_statement.dialect:
+            sqlglot_dialect = _normalize_dialect_for_sqlglot(parsed_statement.dialect)
 
-        if not effective_dialect and "statement_config" not in sql_kwargs:
-            validator = ParameterValidator()
-            param_info = validator.extract_parameters(parsed_statement.sql)
-            if param_info:
-                styles = {p.style for p in param_info}
-                if styles:
-                    detected_style = next(iter(styles))
-                    sql_kwargs["statement_config"] = StatementConfig(
-                        parameter_config=ParameterStyleConfig(
-                            default_parameter_style=detected_style,
-                            supported_parameter_styles=styles,
-                            preserve_parameter_format=True,
-                        )
-                    )
-
-        return SQL(parsed_statement.sql, dialect=sqlglot_dialect, **sql_kwargs)
+        return SQL(parsed_statement.sql, dialect=sqlglot_dialect)
 
     def get_file(self, path: Union[str, Path]) -> "Optional[SQLFile]":
         """Get a loaded SQLFile object by path.
