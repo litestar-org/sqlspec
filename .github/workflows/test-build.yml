@@ -68,7 +68,7 @@ jobs:
           path: dist/*.whl
 
   build-wheels-mypyc:
-    name: Build MyPyC wheels
+    name: Build MyPyC wheels for all platforms
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -99,9 +99,9 @@ jobs:
           CIBW_BUILD_VERBOSITY: 1
 
           # Platform configuration - limited for testing
-          CIBW_ARCHS_LINUX: ${{ github.event.inputs.test_matrix == 'full' && '"x86_64 aarch64"' || '"x86_64"' }}
-          CIBW_ARCHS_MACOS: ${{ github.event.inputs.test_matrix == 'full' && '"x86_64 arm64"' || '"x86_64"' }}
-          CIBW_ARCHS_WINDOWS: ${{ github.event.inputs.test_matrix == 'full' && '"AMD64"' || '"AMD64"' }}
+          CIBW_ARCHS_LINUX: ${{ github.event.inputs.test_matrix == 'full' && 'x86_64 aarch64' || 'x86_64' }}
+          CIBW_ARCHS_MACOS: ${{ github.event.inputs.test_matrix == 'full' && 'x86_64 arm64' || 'x86_64' }}
+          CIBW_ARCHS_WINDOWS: ${{ github.event.inputs.test_matrix == 'full' && 'AMD64' || 'AMD64' }}
 
           # Skip problematic combinations
           CIBW_SKIP: "cp39-win_arm64 *-musllinux*"
@@ -117,6 +117,7 @@ jobs:
         with:
           name: wheels-mypyc-py${{ matrix.python-version }}
           path: wheelhouse/*.whl
+
 
   test-wheels:
     name: Test ${{ matrix.os }} py${{ matrix.python-version }}
