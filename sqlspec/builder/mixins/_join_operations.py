@@ -9,6 +9,7 @@ from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_query_builder_parameters
 
 if TYPE_CHECKING:
+    from sqlspec.core.statement import SQL
     from sqlspec.protocols import SQLBuilderProtocol
 
 __all__ = ("JoinClauseMixin",)
@@ -26,7 +27,7 @@ class JoinClauseMixin:
     def join(
         self,
         table: Union[str, exp.Expression, Any],
-        on: Optional[Union[str, exp.Expression]] = None,
+        on: Optional[Union[str, exp.Expression, "SQL"]] = None,
         alias: Optional[str] = None,
         join_type: str = "INNER",
     ) -> Self:
@@ -56,7 +57,33 @@ class JoinClauseMixin:
             table_expr = table
         on_expr: Optional[exp.Expression] = None
         if on is not None:
-            on_expr = exp.condition(on) if isinstance(on, str) else on
+            if isinstance(on, str):
+                on_expr = exp.condition(on)
+            elif hasattr(on, "expression") and hasattr(on, "sql"):
+                # Handle SQL objects (from sql.raw with parameters)
+                expression = getattr(on, "expression", None)
+                if expression is not None and isinstance(expression, exp.Expression):
+                    # Merge parameters from SQL object into builder
+                    if hasattr(on, "parameters") and hasattr(builder, "add_parameter"):
+                        sql_parameters = getattr(on, "parameters", {})
+                        for param_name, param_value in sql_parameters.items():
+                            builder.add_parameter(param_value, name=param_name)
+                    on_expr = expression
+                else:
+                    # If expression is None, fall back to parsing the raw SQL
+                    sql_text = getattr(on, "sql", "")
+                    # Merge parameters even when parsing raw SQL
+                    if hasattr(on, "parameters") and hasattr(builder, "add_parameter"):
+                        sql_parameters = getattr(on, "parameters", {})
+                        for param_name, param_value in sql_parameters.items():
+                            builder.add_parameter(param_value, name=param_name)
+                    on_expr = exp.maybe_parse(sql_text) or exp.condition(str(sql_text))
+            # For other types (should be exp.Expression)
+            elif isinstance(on, exp.Expression):
+                on_expr = on
+            else:
+                # Last resort - convert to string and parse
+                on_expr = exp.condition(str(on))
         join_type_upper = join_type.upper()
         if join_type_upper == "INNER":
             join_expr = exp.Join(this=table_expr, on=on_expr)
@@ -73,22 +100,22 @@ class JoinClauseMixin:
         return cast("Self", builder)
 
     def inner_join(
-        self, table: Union[str, exp.Expression, Any], on: Union[str, exp.Expression], alias: Optional[str] = None
+        self, table: Union[str, exp.Expression, Any], on: Union[str, exp.Expression, "SQL"], alias: Optional[str] = None
     ) -> Self:
         return self.join(table, on, alias, "INNER")
 
     def left_join(
-        self, table: Union[str, exp.Expression, Any], on: Union[str, exp.Expression], alias: Optional[str] = None
+        self, table: Union[str, exp.Expression, Any], on: Union[str, exp.Expression, "SQL"], alias: Optional[str] = None
     ) -> Self:
         return self.join(table, on, alias, "LEFT")
 
     def right_join(
-        self, table: Union[str, exp.Expression, Any], on: Union[str, exp.Expression], alias: Optional[str] = None
+        self, table: Union[str, exp.Expression, Any], on: Union[str, exp.Expression, "SQL"], alias: Optional[str] = None
     ) -> Self:
         return self.join(table, on, alias, "RIGHT")
 
     def full_join(
-        self, table: Union[str, exp.Expression, Any], on: Union[str, exp.Expression], alias: Optional[str] = None
+        self, table: Union[str, exp.Expression, Any], on: Union[str, exp.Expression, "SQL"], alias: Optional[str] = None
     ) -> Self:
         return self.join(table, on, alias, "FULL")
 

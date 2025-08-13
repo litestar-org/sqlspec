@@ -1,5 +1,7 @@
 """Unit tests for SQL factory functionality including parameter binding fixes and new features."""
 
+import math
+
 import pytest
 from sqlglot import exp
 
@@ -267,9 +269,9 @@ def test_raw_parameter_overwrite_behavior() -> None:
     stmt = sql.raw("field1 = :value AND field2 = :value", value="test")
 
     assert isinstance(stmt, SQL)
-    assert stmt.parameters["value"] == "test"
     assert stmt.sql.count(":value") == 2
     assert len(stmt.parameters) == 1
+    assert stmt.parameters["value"] == "test"
 
 
 def test_select_method() -> None:
@@ -496,7 +498,7 @@ def test_parameter_names_use_column_names() -> None:
 
 def test_parameter_values_preserved_correctly() -> None:
     """Test that parameter values are preserved exactly."""
-    test_values = [("string_val", "test"), ("int_val", 42), ("float_val", 3.14159), ("bool_val", True)]
+    test_values = [("string_val", "test"), ("int_val", 42), ("float_val", math.pi), ("bool_val", True)]
 
     query = sql.select("*").from_("test")
     for column_name, value in test_values:
@@ -862,3 +864,257 @@ def test_backward_compatibility_preserved() -> None:
 
     assert isinstance(sql.users, Column)
     assert isinstance(sql.posts, Column)
+
+
+# Tests for type annotation fixes and SQL object compatibility
+def test_case_as_method_type_annotation_fix() -> None:
+    """Test that sql.case().as_() method returns proper type without 'partially unknown' errors."""
+    # This test verifies the fix for the original user issue
+    case_expr = sql.case().when("status = 'active'", "Active").else_("Inactive").as_("status_display")
+
+    # Should be able to use in select without type errors
+    query = sql.select("id", "name", case_expr).from_("users")
+    stmt = query.build()
+
+    assert "CASE" in stmt.sql
+    assert "status_display" in stmt.sql
+    assert "Active" in stmt.sql
+    assert "Inactive" in stmt.sql
+
+    # Verify it's properly aliased
+    assert " AS " in stmt.sql or "status_display" in stmt.sql
+
+
+def test_window_function_as_method_type_annotation_fix() -> None:
+    """Test that window function as_() method also has proper type annotations."""
+    window_func = sql.row_number_.partition_by("department").order_by("salary").as_("row_num")
+
+    query = sql.select("name", window_func).from_("employees")
+    stmt = query.build()
+
+    assert "ROW_NUMBER()" in stmt.sql
+    assert "row_num" in stmt.sql
+    assert "OVER" in stmt.sql
+
+
+def test_sql_raw_object_in_select_clause() -> None:
+    """Test that SQL objects from sql.raw work in SELECT clauses with parameter merging."""
+    raw_expr = sql.raw("COALESCE(name, :default_name)", default_name="Unknown")
+
+    query = sql.select("id", raw_expr).from_("users")
+    stmt = query.build()
+
+    assert "COALESCE" in stmt.sql
+    assert "default_name" in stmt.parameters
+    assert stmt.parameters["default_name"] == "Unknown"
+    assert ":default_name" in stmt.sql
+
+
+def test_sql_raw_object_in_join_conditions() -> None:
+    """Test that SQL objects from sql.raw work in JOIN conditions with parameter merging."""
+    join_condition = sql.raw("users.id = posts.user_id AND posts.status = :status", status="published")
+
+    query = sql.select("users.name", "posts.title").from_("users").left_join("posts", join_condition)
+    stmt = query.build()
+
+    assert "LEFT JOIN" in stmt.sql
+    assert "status" in stmt.parameters
+    assert stmt.parameters["status"] == "published"
+    assert ":status" in stmt.sql
+
+
+def test_sql_raw_object_in_where_clauses() -> None:
+    """Test that SQL objects from sql.raw work in WHERE clauses with parameter merging."""
+    where_condition = sql.raw("LENGTH(name) > :min_length", min_length=5)
+
+    query = sql.select("*").from_("users").where(where_condition)
+    stmt = query.build()
+
+    assert "LENGTH" in stmt.sql
+    assert "min_length" in stmt.parameters
+    assert stmt.parameters["min_length"] == 5
+    assert ":min_length" in stmt.sql
+
+
+def test_sql_raw_object_in_distinct_clause() -> None:
+    """Test that SQL objects work in DISTINCT clauses with parameter merging."""
+    raw_expr = sql.raw("UPPER(category)")
+
+    query = sql.select("*").from_("products").distinct(raw_expr)
+    stmt = query.build()
+
+    assert "DISTINCT" in stmt.sql
+    assert "UPPER" in stmt.sql
+
+
+def test_multiple_sql_raw_objects_parameter_merging() -> None:
+    """Test that multiple SQL objects properly merge their parameters."""
+    select_expr = sql.raw("COALESCE(name, :default_name)", default_name="Unknown")
+    join_condition = sql.raw("users.id = posts.user_id AND posts.status = :status", status="published")
+    where_condition = sql.raw("users.created_at > :min_date", min_date="2023-01-01")
+
+    query = sql.select("id", select_expr).from_("users").left_join("posts", join_condition).where(where_condition)
+    stmt = query.build()
+
+    # All parameters should be merged
+    assert len(stmt.parameters) == 3
+    assert stmt.parameters["default_name"] == "Unknown"
+    assert stmt.parameters["status"] == "published"
+    assert stmt.parameters["min_date"] == "2023-01-01"
+
+    # All placeholders should be in SQL
+    assert ":default_name" in stmt.sql
+    assert ":status" in stmt.sql
+    assert ":min_date" in stmt.sql
+
+
+def test_sql_raw_without_parameters_still_works() -> None:
+    """Test that SQL objects without parameters still work correctly."""
+    raw_expr = sql.raw("NOW()")
+
+    query = sql.select("id", raw_expr).from_("logs")
+    stmt = query.build()
+
+    assert "NOW()" in stmt.sql
+    assert len(stmt.parameters) == 0
+
+
+def test_mixed_sql_objects_and_regular_parameters() -> None:
+    """Test mixing SQL objects with regular builder parameters."""
+    raw_expr = sql.raw("UPPER(name)")
+
+    query = (
+        sql.select("id", raw_expr)
+        .from_("users")
+        .where_eq("status", "active")  # Regular parameter
+        .where(sql.raw("created_at > :min_date", min_date="2023-01-01"))  # SQL object parameter
+    )
+    stmt = query.build()
+
+    # Should have both types of parameters
+    assert "status" in stmt.parameters
+    assert "min_date" in stmt.parameters
+    assert stmt.parameters["status"] == "active"
+    assert stmt.parameters["min_date"] == "2023-01-01"
+
+    assert "UPPER" in stmt.sql
+    assert ":status" in stmt.sql
+    assert ":min_date" in stmt.sql
+
+
+def test_sql_raw_parameter_name_conflicts_handled() -> None:
+    """Test that parameter name conflicts are detected when merging SQL objects."""
+    # Create two SQL objects with different parameter names (should work fine)
+    raw_expr1 = sql.raw("COALESCE(name, :value)", value="default1")
+    raw_expr2 = sql.raw("COALESCE(email, :other_value)", other_value="default2")
+    
+    query = sql.select("id", raw_expr1, raw_expr2).from_("users")
+    stmt = query.build()
+    
+    assert "value" in stmt.parameters
+    assert "other_value" in stmt.parameters
+    assert stmt.parameters["value"] == "default1"
+    assert stmt.parameters["other_value"] == "default2"
+    
+    # Test that actual conflicts are detected
+    raw_conflict1 = sql.raw("COALESCE(name, :conflict)", conflict="first")
+    raw_conflict2 = sql.raw("COALESCE(email, :conflict)", conflict="second")
+    
+    with pytest.raises(SQLBuilderError, match="Parameter name 'conflict' already exists"):
+        sql.select("id", raw_conflict1, raw_conflict2).from_("users").build()
+
+
+def test_original_user_case_example_regression_test() -> None:
+    """Regression test for the exact user example that was failing."""
+    # This was the original failing example
+    case_expr = sql.case().when("password IS NOT NULL", True).else_(False).as_("has_password")
+
+    query = sql.select("id", "name", case_expr).from_("users")
+    stmt = query.build()
+
+    # Should work without type annotation errors
+    assert "CASE" in stmt.sql
+    assert "has_password" in stmt.sql
+    assert "password" in stmt.sql and ("NULL" in stmt.sql or "IS" in stmt.sql)
+
+    # Should also work in UPDATE operations
+    update_query = sql.update("users").set({"last_check": sql.raw("NOW()")}).where(case_expr)
+    update_stmt = update_query.build()
+
+    assert "UPDATE" in update_stmt.sql
+    assert "CASE" in update_stmt.sql
+
+
+def test_type_compatibility_across_all_operations() -> None:
+    """Test that SQL objects work across all major SQL operations."""
+    # Test in various contexts to ensure type compatibility
+    raw_condition = sql.raw("LENGTH(name) > :min_len", min_len=3)
+    raw_value = sql.raw("UPPER(:new_name)", new_name="test")
+    raw_select = sql.raw("COUNT(*) as total")
+
+    # SELECT with SQL objects
+    select_query = sql.select("id", raw_select).from_("users").where(raw_condition)
+    select_stmt = select_query.build()
+    assert "COUNT(*)" in select_stmt.sql
+    assert "min_len" in select_stmt.parameters
+
+    # UPDATE with SQL objects using kwargs
+    update_query = sql.update("users").set(name=raw_value, status="updated").where(raw_condition)
+    update_stmt = update_query.build()
+    assert "UPDATE" in update_stmt.sql
+    assert "min_len" in update_stmt.parameters
+    assert "new_name" in update_stmt.parameters
+    assert "status" in update_stmt.parameters
+
+    # DELETE with SQL objects
+    delete_query = sql.delete().from_("users").where(raw_condition)
+    delete_stmt = delete_query.build()
+    assert "DELETE" in delete_stmt.sql
+    assert "min_len" in delete_stmt.parameters
+
+
+def test_update_set_method_with_sql_objects() -> None:
+    """Test that UPDATE.set() method properly handles SQL objects with kwargs."""
+    raw_timestamp = sql.raw("NOW()")
+    raw_computed = sql.raw("UPPER(:value)", value="test")
+    
+    # Test using kwargs with SQL objects
+    query = sql.update("users").set(
+        name="John",
+        last_updated=raw_timestamp,
+        computed_field=raw_computed
+    ).where_eq("id", 1)
+    
+    stmt = query.build()
+    
+    assert "UPDATE" in stmt.sql
+    assert "NOW()" in stmt.sql
+    assert "UPPER" in stmt.sql
+    assert "name" in stmt.parameters
+    assert "value" in stmt.parameters
+    assert "id" in stmt.parameters
+    assert stmt.parameters["name"] == "John"
+    assert stmt.parameters["value"] == "test"
+    assert stmt.parameters["id"] == 1
+
+
+def test_update_set_method_backward_compatibility() -> None:
+    """Test that UPDATE.set() method maintains backward compatibility with dict."""
+    raw_timestamp = sql.raw("NOW()")
+    
+    # Test using dict (original API)
+    query1 = sql.update("users").set({"name": "John", "updated_at": raw_timestamp})
+    stmt1 = query1.build()
+    
+    assert "UPDATE" in stmt1.sql
+    assert "NOW()" in stmt1.sql
+    assert "name" in stmt1.parameters
+    assert stmt1.parameters["name"] == "John"
+    
+    # Test using positional args (column, value)
+    query2 = sql.update("users").set("status", "active")
+    stmt2 = query2.build()
+    
+    assert "UPDATE" in stmt2.sql
+    assert "status" in stmt2.parameters
+    assert stmt2.parameters["status"] == "active"

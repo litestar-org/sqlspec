@@ -99,6 +99,25 @@ class UpdateSetClauseMixin:
                 if has_query_builder_parameters(val):
                     for p_name, p_value in val.parameters.items():
                         self.add_parameter(p_value, name=p_name)
+            elif hasattr(val, "expression") and hasattr(val, "sql"):
+                # Handle SQL objects (from sql.raw with parameters)
+                expression = getattr(val, "expression", None)
+                if expression is not None and isinstance(expression, exp.Expression):
+                    # Merge parameters from SQL object into builder
+                    if hasattr(val, "parameters"):
+                        sql_parameters = getattr(val, "parameters", {})
+                        for param_name, param_value in sql_parameters.items():
+                            self.add_parameter(param_value, name=param_name)
+                    value_expr = expression
+                else:
+                    # If expression is None, fall back to parsing the raw SQL
+                    sql_text = getattr(val, "sql", "")
+                    # Merge parameters even when parsing raw SQL
+                    if hasattr(val, "parameters"):
+                        sql_parameters = getattr(val, "parameters", {})
+                        for param_name, param_value in sql_parameters.items():
+                            self.add_parameter(param_value, name=param_name)
+                    value_expr = exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
             else:
                 column_name = col if isinstance(col, str) else str(col)
                 if "." in column_name:
@@ -119,6 +138,25 @@ class UpdateSetClauseMixin:
                     if has_query_builder_parameters(val):
                         for p_name, p_value in val.parameters.items():
                             self.add_parameter(p_value, name=p_name)
+                elif hasattr(val, "expression") and hasattr(val, "sql"):
+                    # Handle SQL objects (from sql.raw with parameters)
+                    expression = getattr(val, "expression", None)
+                    if expression is not None and isinstance(expression, exp.Expression):
+                        # Merge parameters from SQL object into builder
+                        if hasattr(val, "parameters"):
+                            sql_parameters = getattr(val, "parameters", {})
+                            for param_name, param_value in sql_parameters.items():
+                                self.add_parameter(param_value, name=param_name)
+                        value_expr = expression
+                    else:
+                        # If expression is None, fall back to parsing the raw SQL
+                        sql_text = getattr(val, "sql", "")
+                        # Merge parameters even when parsing raw SQL
+                        if hasattr(val, "parameters"):
+                            sql_parameters = getattr(val, "parameters", {})
+                            for param_name, param_value in sql_parameters.items():
+                                self.add_parameter(param_value, name=param_name)
+                        value_expr = exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
                 else:
                     column_name = col if isinstance(col, str) else str(col)
                     if "." in column_name:

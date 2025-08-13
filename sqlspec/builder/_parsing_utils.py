@@ -12,7 +12,9 @@ from sqlglot import exp, maybe_parse, parse_one
 from sqlspec.utils.type_guards import has_expression_attr, has_parameter_builder
 
 
-def parse_column_expression(column_input: Union[str, exp.Expression, Any]) -> exp.Expression:
+def parse_column_expression(
+    column_input: Union[str, exp.Expression, Any], builder: Optional[Any] = None
+) -> exp.Expression:
     """Parse a column input that might be a complex expression.
 
     Handles cases like:
@@ -22,15 +24,37 @@ def parse_column_expression(column_input: Union[str, exp.Expression, Any]) -> ex
     - Function calls: "MAX(price)" -> Max(this=Column(price))
     - Complex expressions: "CASE WHEN ... END" -> Case(...)
     - Custom Column objects from our builder
+    - SQL objects with raw SQL expressions
 
     Args:
-        column_input: String, SQLGlot expression, or Column object
+        column_input: String, SQLGlot expression, SQL object, or Column object
+        builder: Optional builder instance for parameter merging
 
     Returns:
         exp.Expression: Parsed SQLGlot expression
     """
     if isinstance(column_input, exp.Expression):
         return column_input
+
+    # Handle SQL objects (from sql.raw with parameters)
+    if hasattr(column_input, "expression") and hasattr(column_input, "sql"):
+        # This is likely a SQL object
+        expression = getattr(column_input, "expression", None)
+        if expression is not None and isinstance(expression, exp.Expression):
+            # Merge parameters from SQL object into builder if available
+            if builder and hasattr(column_input, "parameters") and hasattr(builder, "add_parameter"):
+                sql_parameters = getattr(column_input, "parameters", {})
+                for param_name, param_value in sql_parameters.items():
+                    builder.add_parameter(param_value, name=param_name)
+            return cast("exp.Expression", expression)
+        # If expression is None, fall back to parsing the raw SQL
+        sql_text = getattr(column_input, "sql", "")
+        # Merge parameters even when parsing raw SQL
+        if builder and hasattr(column_input, "parameters") and hasattr(builder, "add_parameter"):
+            sql_parameters = getattr(column_input, "parameters", {})
+            for param_name, param_value in sql_parameters.items():
+                builder.add_parameter(param_value, name=param_name)
+        return exp.maybe_parse(sql_text) or exp.column(str(sql_text))
 
     if has_expression_attr(column_input):
         try:

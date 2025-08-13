@@ -267,6 +267,25 @@ class WhereClauseMixin:
                 where_expr = builder._parameterize_expression(raw_expr)
             else:
                 where_expr = parse_condition_expression(str(condition))
+        elif hasattr(condition, "expression") and hasattr(condition, "sql"):
+            # Handle SQL objects (from sql.raw with parameters)
+            expression = getattr(condition, "expression", None)
+            if expression is not None and isinstance(expression, exp.Expression):
+                # Merge parameters from SQL object into builder
+                if hasattr(condition, "parameters") and hasattr(builder, "add_parameter"):
+                    sql_parameters = getattr(condition, "parameters", {})
+                    for param_name, param_value in sql_parameters.items():
+                        builder.add_parameter(param_value, name=param_name)
+                where_expr = expression
+            else:
+                # If expression is None, fall back to parsing the raw SQL
+                sql_text = getattr(condition, "sql", "")
+                # Merge parameters even when parsing raw SQL
+                if hasattr(condition, "parameters") and hasattr(builder, "add_parameter"):
+                    sql_parameters = getattr(condition, "parameters", {})
+                    for param_name, param_value in sql_parameters.items():
+                        builder.add_parameter(param_value, name=param_name)
+                where_expr = parse_condition_expression(sql_text)
         else:
             msg = f"Unsupported condition type: {type(condition).__name__}"
             raise SQLBuilderError(msg)
@@ -596,7 +615,6 @@ class HavingClauseMixin:
 
     __slots__ = ()
 
-    # Type annotation for PyRight - this will be provided by the base class
     _expression: Optional[exp.Expression]
 
     def having(self, condition: Union[str, exp.Expression]) -> Self:

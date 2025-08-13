@@ -13,6 +13,7 @@ from sqlspec.utils.type_guards import has_query_builder_parameters, is_expressio
 
 if TYPE_CHECKING:
     from sqlspec.builder._column import Column, FunctionColumn
+    from sqlspec.core.statement import SQL
     from sqlspec.protocols import SelectBuilderProtocol, SQLBuilderProtocol
 
 __all__ = ("CaseBuilder", "SelectClauseMixin")
@@ -27,7 +28,7 @@ class SelectClauseMixin:
     # Type annotation for PyRight - this will be provided by the base class
     _expression: Optional[exp.Expression]
 
-    def select(self, *columns: Union[str, exp.Expression, "Column", "FunctionColumn"]) -> Self:
+    def select(self, *columns: Union[str, exp.Expression, "Column", "FunctionColumn", "SQL"]) -> Self:
         """Add columns to SELECT clause.
 
         Raises:
@@ -43,7 +44,7 @@ class SelectClauseMixin:
             msg = "Cannot add select columns to a non-SELECT expression."
             raise SQLBuilderError(msg)
         for column in columns:
-            builder._expression = builder._expression.select(parse_column_expression(column), copy=False)
+            builder._expression = builder._expression.select(parse_column_expression(column, builder), copy=False)
         return cast("Self", builder)
 
     def distinct(self, *columns: Union[str, exp.Expression, "Column", "FunctionColumn"]) -> Self:
@@ -67,7 +68,7 @@ class SelectClauseMixin:
         if not columns:
             builder._expression.set("distinct", exp.Distinct())
         else:
-            distinct_columns = [parse_column_expression(column) for column in columns]
+            distinct_columns = [parse_column_expression(column, builder) for column in columns]
             builder._expression.set("distinct", exp.Distinct(expressions=distinct_columns))
         return cast("Self", builder)
 
