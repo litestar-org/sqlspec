@@ -75,7 +75,7 @@ sqlspec = SQLSpec(
         DatabaseConfig(
             config=AsyncpgConfig(
                 pool_config=AsyncpgPoolConfig(
-                    dsn="postgresql://postgres:test@localhost:5432/postgres", min_size=1, max_size=5
+                    dsn="postgresql://postgres:postgres@localhost:5433/postgres", min_size=5, max_size=5
                 )
             ),
             commit_mode="autocommit",

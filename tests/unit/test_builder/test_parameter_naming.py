@@ -390,3 +390,112 @@ def test_parameter_naming_with_special_characters_in_values() -> None:
     assert "details" in stmt.parameters
     assert stmt.parameters["message"] == "Error: Connection failed!"
     assert stmt.parameters["details"] == "%SQL injection attempt: DROP TABLE%"
+
+
+def test_where_string_condition_with_dollar_sign_parameters() -> None:
+    """Test that WHERE string conditions with $1, $2 style parameters work correctly."""
+    query = sql.select("*").from_("products").where("category = $1", "Electronics")
+    stmt = query.build()
+
+    # Should handle $1 parameter style correctly
+    assert len(stmt.parameters) == 1
+    assert "Electronics" in stmt.parameters.values()
+    assert "WHERE" in stmt.sql
+    assert "category" in stmt.sql
+
+
+def test_where_string_condition_parameter_parsing() -> None:
+    """Test that WHERE string conditions parse parameters correctly through _parsing_utils."""
+    # Test that the parsing utilities can handle different parameter styles
+    from sqlspec.builder._parsing_utils import parse_condition_expression
+
+    # These should parse without errors due to our parameter conversion fix
+    expr1 = parse_condition_expression("category = $1")
+    assert expr1 is not None
+
+    expr2 = parse_condition_expression("name = ?")
+    assert expr2 is not None
+
+    expr3 = parse_condition_expression("id = :1")
+    assert expr3 is not None
+
+
+def test_where_string_condition_with_colon_numeric_parameters() -> None:
+    """Test that WHERE string conditions with :1, :2 style parameters work correctly."""
+    query = sql.select("*").from_("orders").where("status = :1", "pending")
+    stmt = query.build()
+
+    # Should handle :1 parameter style correctly
+    assert len(stmt.parameters) == 1
+    assert "pending" in stmt.parameters.values()
+    assert "WHERE" in stmt.sql
+    assert "status" in stmt.sql
+
+
+def test_where_string_condition_with_named_parameters() -> None:
+    """Test that WHERE string conditions with :name style parameters work correctly."""
+    query = sql.select("*").from_("events").where("type = :event_type", event_type="click")
+    stmt = query.build()
+
+    # Should handle named parameter style correctly
+    assert len(stmt.parameters) == 1
+    assert "click" in stmt.parameters.values()
+    assert "WHERE" in stmt.sql
+    assert "type" in stmt.sql
+
+
+def test_where_string_condition_mixed_parameter_styles() -> None:
+    """Test that WHERE string conditions handle mixed parameter styles correctly."""
+    query = sql.select("*").from_("mixed_table").where("col1 = $1 AND col2 = :named", "value1", named="value2")
+    stmt = query.build()
+
+    # Should handle mixed parameter styles correctly
+    assert len(stmt.parameters) == 2
+    assert "value1" in stmt.parameters.values()
+    assert "value2" in stmt.parameters.values()
+    assert "WHERE" in stmt.sql
+
+
+def test_where_string_condition_no_parameters() -> None:
+    """Test that WHERE string conditions without parameters work correctly."""
+    query = sql.select("*").from_("users").where("active = TRUE")
+    stmt = query.build()
+
+    # Should work without parameters
+    assert len(stmt.parameters) == 0
+    assert "WHERE" in stmt.sql
+    assert "active" in stmt.sql and "TRUE" in stmt.sql.upper()
+
+
+def test_querybuilder_parameter_regression_test() -> None:
+    """Regression test for the specific QueryBuilder parameter issue that was fixed."""
+    # This test reproduces the exact scenario that was failing before the fix
+    query = sql.select("id", "name", "price").from_("products").where("category = $1", "Electronics")
+    stmt = query.build()
+
+    # Should not raise "Incorrect number of bindings supplied" error
+    assert "WHERE" in stmt.sql
+    assert "category" in stmt.sql
+    assert len(stmt.parameters) == 1
+    assert "Electronics" in stmt.parameters.values()
+
+    # Should generate valid SQL that can be executed
+    assert stmt.sql.count("$") == 0  # $1 should be converted to :param_0
+
+
+def test_parameter_style_conversion_in_parsing_utils() -> None:
+    """Test that _parsing_utils correctly converts parameter styles."""
+    # Test the specific functionality that was added to parse_condition_expression
+    from sqlspec.builder._parsing_utils import parse_condition_expression
+
+    # Test $1 style parameter conversion
+    condition_expr = parse_condition_expression("category = $1")
+    assert condition_expr is not None
+
+    # Test %s style parameter conversion
+    condition_expr2 = parse_condition_expression("name = %s")
+    assert condition_expr2 is not None
+
+    # Test :1 style parameter conversion
+    condition_expr3 = parse_condition_expression("id = :1")
+    assert condition_expr3 is not None

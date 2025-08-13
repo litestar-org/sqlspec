@@ -9,6 +9,7 @@ from typing import Any, Final, Optional, Union, cast
 
 from sqlglot import exp, maybe_parse, parse_one
 
+from sqlspec.core.parameters import ParameterStyle
 from sqlspec.utils.type_guards import has_expression_attr, has_parameter_builder
 
 
@@ -150,6 +151,32 @@ def parse_condition_expression(
 
     if not isinstance(condition_input, str):
         condition_input = str(condition_input)
+
+    # Convert database-specific parameter styles to SQLGlot-compatible format
+    # This ensures that placeholders like $1, %s, :1 are properly recognized as parameters
+    from sqlspec.core.parameters import ParameterValidator
+
+    validator = ParameterValidator()
+    param_info = validator.extract_parameters(condition_input)
+
+    # If we found parameters, convert incompatible ones to SQLGlot-compatible format
+    if param_info:
+        # Convert problematic parameter styles to :param_N format for SQLGlot
+        converted_condition = condition_input
+        for param in reversed(param_info):  # Reverse to preserve positions
+            if param.style in {
+                ParameterStyle.NUMERIC,
+                ParameterStyle.POSITIONAL_PYFORMAT,
+                ParameterStyle.POSITIONAL_COLON,
+            }:
+                # Convert $1, %s, :1 to :param_0, :param_1, etc.
+                placeholder = f":param_{param.ordinal}"
+                converted_condition = (
+                    converted_condition[: param.position]
+                    + placeholder
+                    + converted_condition[param.position + len(param.placeholder_text) :]
+                )
+        condition_input = converted_condition
 
     try:
         return exp.condition(condition_input)

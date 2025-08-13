@@ -18,87 +18,49 @@ from sqlspec._typing import (
     PROMETHEUS_INSTALLED,
     PYARROW_INSTALLED,
     PYDANTIC_INSTALLED,
+    UNSET,
+    AiosqlAsyncProtocol,
+    AiosqlParamType,
+    AiosqlProtocol,
+    AiosqlSQLOperationType,
+    AiosqlSyncProtocol,
+    ArrowRecordBatch,
+    ArrowTable,
+    AttrsInstance,
+    AttrsInstanceStub,
+    BaseModel,
+    BaseModelStub,
+    Counter,
     DataclassProtocol,
+    DTOData,
     Empty,
     EmptyEnum,
     EmptyType,
+    FailFast,
+    Gauge,
+    Histogram,
+    Span,
+    Status,
+    StatusCode,
+    Struct,
+    StructStub,
+    Tracer,
+    TypeAdapter,
+    UnsetType,
+    aiosql,
+    attrs_asdict,
+    attrs_define,
+    attrs_field,
+    attrs_fields,
+    attrs_has,
+    cattrs_structure,
+    cattrs_unstructure,
+    convert,
+    trace,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-
-    from sqlspec._typing import (
-        UNSET,
-        AiosqlAsyncProtocol,
-        AiosqlParamType,
-        AiosqlProtocol,
-        AiosqlSQLOperationType,
-        AiosqlSyncProtocol,
-        ArrowRecordBatch,
-        ArrowTable,
-        AttrsInstance,
-        AttrsInstanceStub,
-        BaseModel,
-        BaseModelStub,
-        Counter,
-        DTOData,
-        FailFast,
-        Gauge,
-        Histogram,
-        Span,
-        Status,
-        StatusCode,
-        Struct,
-        StructStub,
-        Tracer,
-        TypeAdapter,
-        UnsetType,
-        aiosql,
-        attrs_asdict,
-        attrs_define,
-        attrs_field,
-        attrs_fields,
-        attrs_has,
-        cattrs_structure,
-        cattrs_unstructure,
-        convert,
-        trace,
-    )
-else:
-    from sqlspec._typing import (
-        UNSET,
-        AiosqlAsyncProtocol,
-        AiosqlParamType,
-        AiosqlProtocol,
-        AiosqlSQLOperationType,
-        AiosqlSyncProtocol,
-        ArrowRecordBatch,
-        ArrowTable,
-        AttrsInstance,
-        BaseModel,
-        Counter,
-        DTOData,
-        FailFast,
-        Gauge,
-        Histogram,
-        Span,
-        Status,
-        StatusCode,
-        Struct,
-        Tracer,
-        TypeAdapter,
-        UnsetType,
-        aiosql,
-        attrs_asdict,
-        attrs_define,
-        attrs_field,
-        attrs_fields,
-        attrs_has,
-        cattrs_structure,
-        cattrs_unstructure,
-        convert,
-        trace,
-    )
 
 
 class DictLike(Protocol):
@@ -112,36 +74,28 @@ class DictLike(Protocol):
 PYDANTIC_USE_FAILFAST = False
 
 
-if TYPE_CHECKING:
-    T = TypeVar("T")
-    ConnectionT = TypeVar("ConnectionT")
-    """Type variable for connection types.
+T = TypeVar("T")
+ConnectionT = TypeVar("ConnectionT")
+"""Type variable for connection types.
 
-    :class:`~sqlspec.typing.ConnectionT`
-    """
-    PoolT = TypeVar("PoolT")
-    """Type variable for pool types.
+:class:`~sqlspec.typing.ConnectionT`
+"""
+PoolT = TypeVar("PoolT")
+"""Type variable for pool types.
 
-    :class:`~sqlspec.typing.PoolT`
-    """
-    PoolT_co = TypeVar("PoolT_co", covariant=True)
-    """Type variable for covariant pool types.
+:class:`~sqlspec.typing.PoolT`
+"""
+PoolT_co = TypeVar("PoolT_co", covariant=True)
+"""Type variable for covariant pool types.
 
-    :class:`~sqlspec.typing.PoolT_co`
-    """
-    ModelT = TypeVar("ModelT", bound="Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub]")
-    """Type variable for model types.
+:class:`~sqlspec.typing.PoolT_co`
+"""
+ModelT = TypeVar("ModelT", bound="Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub]")
+"""Type variable for model types.
 
-    :class:`DictLike` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
-    """
-    RowT = TypeVar("RowT", bound="dict[str, Any]")
-else:
-    T = Any
-    ConnectionT = Any
-    PoolT = Any
-    PoolT_co = Any
-    ModelT = Any
-    RowT = dict[str, Any]
+:class:`DictLike` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
+"""
+RowT = TypeVar("RowT", bound="dict[str, Any]")
 
 
 DictRow: TypeAlias = "dict[str, Any]"

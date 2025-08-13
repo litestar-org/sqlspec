@@ -8,11 +8,13 @@ from sqlspec.adapters.duckdb.config import (
     DuckDBSecretConfig,
 )
 from sqlspec.adapters.duckdb.driver import DuckDBCursor, DuckDBDriver, DuckDBExceptionHandler, duckdb_statement_config
+from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool
 
 __all__ = (
     "DuckDBConfig",
     "DuckDBConnection",
     "DuckDBConnectionParams",
+    "DuckDBConnectionPool",
     "DuckDBCursor",
     "DuckDBDriver",
     "DuckDBExceptionHandler",

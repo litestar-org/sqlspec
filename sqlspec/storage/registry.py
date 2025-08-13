@@ -151,8 +151,8 @@ class StorageRegistry:
                 return self._create_backend("fsspec", uri, **kwargs)
             except (ValueError, ImportError, NotImplementedError):
                 pass
-        msg = f"No storage backend available for scheme '{scheme}'. Install obstore or fsspec."
-        raise MissingDependencyError(msg)
+        msg = "obstore"
+        raise MissingDependencyError(msg, "fsspec")
 
     def _determine_backend_class(self, uri: str) -> type[ObjectStoreProtocol]:
         """Determine the backend class for a URI based on availability."""

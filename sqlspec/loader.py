@@ -16,7 +16,12 @@ from typing import Any, Optional, Union
 from sqlspec.core.cache import CacheKey, get_cache_config, get_default_cache
 from sqlspec.core.parameters import ParameterStyleConfig, ParameterValidator
 from sqlspec.core.statement import SQL, StatementConfig
-from sqlspec.exceptions import SQLFileNotFoundError, SQLFileParseError, StorageOperationFailedError
+from sqlspec.exceptions import (
+    MissingDependencyError,
+    SQLFileNotFoundError,
+    SQLFileParseError,
+    StorageOperationFailedError,
+)
 from sqlspec.storage import storage_registry
 from sqlspec.storage.registry import StorageRegistry
 from sqlspec.utils.correlation import CorrelationContext
@@ -304,6 +309,12 @@ class SQLFileLoader:
             return backend.read_text(path_str, encoding=self.encoding)
         except KeyError as e:
             raise SQLFileNotFoundError(path_str) from e
+        except MissingDependencyError:
+            # Fall back to standard file reading when no storage backend is available
+            try:
+                return path.read_text(encoding=self.encoding)  # type: ignore[union-attr]
+            except FileNotFoundError as e:
+                raise SQLFileNotFoundError(path_str) from e
         except StorageOperationFailedError as e:
             if "not found" in str(e).lower() or "no such file" in str(e).lower():
                 raise SQLFileNotFoundError(path_str) from e

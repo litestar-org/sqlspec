@@ -277,11 +277,13 @@ class SQLProcessor:
             if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
                 final_sql, final_params = processed_sql, processed_params
             elif ast_was_transformed and expression is not None:
-                final_sql = expression.sql(dialect=dialect_str)
-                final_params = final_parameters
-                logger.debug("AST was transformed - final SQL: %s, final params: %s", final_sql, final_params)
-
-                # Apply output transformer if configured
+                final_sql, final_params = self._parameter_processor.process(
+                    sql=expression.sql(dialect=dialect_str),
+                    parameters=final_parameters,
+                    config=self._config.parameter_config,
+                    dialect=dialect_str,
+                    is_many=is_many,
+                )
                 output_transformer = self._config.output_transformer
                 if output_transformer:
                     final_sql, final_params = output_transformer(final_sql, final_params)

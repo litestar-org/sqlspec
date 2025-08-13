@@ -34,7 +34,16 @@ from sqlspec.core import (
 from sqlspec.core import filters as filters
 from sqlspec.driver import AsyncDriverAdapterBase, ExecutionResult, SyncDriverAdapterBase
 from sqlspec.loader import SQLFile, SQLFileLoader
-from sqlspec.typing import ConnectionT, DictRow, ModelDTOT, ModelT, RowT, StatementParameters, SupportedSchemaModel
+from sqlspec.typing import (
+    ConnectionT,
+    DictRow,
+    ModelDTOT,
+    ModelT,
+    PoolT,
+    RowT,
+    StatementParameters,
+    SupportedSchemaModel,
+)
 
 __all__ = (
     "SQL",
@@ -60,6 +69,7 @@ __all__ = (
     "ParameterProcessor",
     "ParameterStyle",
     "ParameterStyleConfig",
+    "PoolT",
     "QueryBuilder",
     "RowT",
     "SQLFactory",

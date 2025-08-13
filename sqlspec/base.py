@@ -38,22 +38,41 @@ logger = get_logger()
 class SQLSpec:
     """Configuration manager and registry for database connections and pools."""
 
-    __slots__ = ("_cleanup_tasks", "_configs", "_instance_cache_config")
+    __slots__ = ("_configs", "_instance_cache_config")
 
     def __init__(self) -> None:
         self._configs: dict[Any, DatabaseConfigProtocol[Any, Any, Any]] = {}
-        atexit.register(self._cleanup_pools)
+        # Register sync cleanup only for sync resources
+        atexit.register(self._cleanup_sync_pools)
         self._instance_cache_config: Optional[CacheConfig] = None
-        self._cleanup_tasks: list[asyncio.Task[None]] = []
 
     @staticmethod
     def _get_config_name(obj: Any) -> str:
         """Get display name for configuration object."""
         return getattr(obj, "__name__", str(obj))
 
-    def _cleanup_pools(self) -> None:
-        """Clean up all registered connection pools."""
+    def _cleanup_sync_pools(self) -> None:
+        """Clean up only synchronous connection pools at exit."""
         cleaned_count = 0
+
+        for config_type, config in self._configs.items():
+            if config.supports_connection_pooling and not config.is_async:
+                try:
+                    config.close_pool()
+                    cleaned_count += 1
+                except Exception as e:
+                    logger.warning("Failed to clean up sync pool for config %s: %s", config_type.__name__, e)
+
+        if cleaned_count > 0:
+            logger.debug("Sync pool cleanup completed. Cleaned %d pools.", cleaned_count)
+
+    async def close_all_pools(self) -> None:
+        """Explicitly close all connection pools (async and sync).
+
+        This method should be called before application shutdown for proper cleanup.
+        """
+        cleanup_tasks = []
+        sync_configs = []
 
         for config_type, config in self._configs.items():
             if config.supports_connection_pooling:
@@ -61,31 +80,34 @@ class SQLSpec:
                     if config.is_async:
                         close_pool_awaitable = config.close_pool()
                         if close_pool_awaitable is not None:
-                            try:
-                                loop = asyncio.get_running_loop()
-                                if loop.is_running():
-                                    task = asyncio.create_task(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
-                                    self._cleanup_tasks.append(task)
-                                else:
-                                    asyncio.run(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
-                            except RuntimeError:
-                                asyncio.run(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
+                            cleanup_tasks.append(cast("Coroutine[Any, Any, None]", close_pool_awaitable))
                     else:
-                        config.close_pool()
-                    cleaned_count += 1
+                        sync_configs.append((config_type, config))
                 except Exception as e:
-                    logger.warning("Failed to clean up pool for config %s: %s", config_type.__name__, e)
+                    logger.warning("Failed to prepare cleanup for config %s: %s", config_type.__name__, e)
 
-        if self._cleanup_tasks:
+        # Close async pools concurrently
+        if cleanup_tasks:
             try:
-                loop = asyncio.get_running_loop()
-                if loop.is_running():
-                    asyncio.gather(*self._cleanup_tasks, return_exceptions=True)
-            except RuntimeError:
-                pass
+                await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+                logger.debug("Async pool cleanup completed. Cleaned %d pools.", len(cleanup_tasks))
+            except Exception as e:
+                logger.warning("Failed to complete async pool cleanup: %s", e)
 
-        self._configs.clear()
-        logger.info("Pool cleanup completed. Cleaned %d pools.", cleaned_count)
+        # Close sync pools
+        for _config_type, config in sync_configs:
+            config.close_pool()  # Let exceptions propagate for proper logging
+
+        if sync_configs:
+            logger.debug("Sync pool cleanup completed. Cleaned %d pools.", len(sync_configs))
+
+    async def __aenter__(self) -> "SQLSpec":
+        """Async context manager entry."""
+        return self
+
+    async def __aexit__(self, _exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
+        """Async context manager exit with automatic cleanup."""
+        await self.close_all_pools()
 
     @overload
     def add_config(self, config: "SyncConfigT") -> "type[SyncConfigT]":  # pyright: ignore[reportInvalidTypeVarUse]
