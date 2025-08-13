@@ -47,7 +47,7 @@ class SelectClauseMixin:
             builder._expression = builder._expression.select(parse_column_expression(column, builder), copy=False)
         return cast("Self", builder)
 
-    def distinct(self, *columns: Union[str, exp.Expression, "Column", "FunctionColumn"]) -> Self:
+    def distinct(self, *columns: Union[str, exp.Expression, "Column", "FunctionColumn", "SQL"]) -> Self:
         """Add DISTINCT clause to SELECT.
 
         Args:

@@ -3,6 +3,9 @@
 
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
+if TYPE_CHECKING:
+    from sqlspec.core.statement import SQL
+
 from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
@@ -208,7 +211,9 @@ class WhereClauseMixin:
 
     def where(
         self,
-        condition: Union[str, exp.Expression, exp.Condition, tuple[str, Any], tuple[str, str, Any], "ColumnExpression"],
+        condition: Union[
+            str, exp.Expression, exp.Condition, tuple[str, Any], tuple[str, str, Any], "ColumnExpression", "SQL"
+        ],
         value: Optional[Any] = None,
         operator: Optional[str] = None,
     ) -> Self:

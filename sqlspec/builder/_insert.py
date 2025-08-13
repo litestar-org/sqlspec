@@ -142,6 +142,29 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
         for i, value in enumerate(values):
             if isinstance(value, exp.Expression):
                 value_placeholders.append(value)
+            elif hasattr(value, "expression") and hasattr(value, "sql"):
+                # Handle SQL objects (from sql.raw with parameters)
+                expression = getattr(value, "expression", None)
+                if expression is not None and isinstance(expression, exp.Expression):
+                    # Merge parameters from SQL object into builder
+                    if hasattr(value, "parameters"):
+                        sql_parameters = getattr(value, "parameters", {})
+                        for param_name, param_value in sql_parameters.items():
+                            self.add_parameter(param_value, name=param_name)
+                    value_placeholders.append(expression)
+                else:
+                    # If expression is None, fall back to parsing the raw SQL
+                    sql_text = getattr(value, "sql", "")
+                    # Merge parameters even when parsing raw SQL
+                    if hasattr(value, "parameters"):
+                        sql_parameters = getattr(value, "parameters", {})
+                        for param_name, param_value in sql_parameters.items():
+                            self.add_parameter(param_value, name=param_name)
+                    # Check if sql_text is callable (like Expression.sql method)
+                    if callable(sql_text):
+                        sql_text = str(value)
+                    value_expr = exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
+                    value_placeholders.append(value_expr)
             else:
                 if self._columns and i < len(self._columns):
                     column_str = str(self._columns[i])
@@ -228,29 +251,171 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
 
         return self
 
-    def on_conflict_do_nothing(self) -> "Self":
-        """Adds an ON CONFLICT DO NOTHING clause (PostgreSQL syntax).
+    def on_conflict(self, *columns: str) -> "ConflictBuilder":
+        """Adds an ON CONFLICT clause with specified columns.
 
-        This is used to ignore rows that would cause a conflict.
+        Args:
+            *columns: Column names that define the conflict. If no columns provided,
+                     creates an ON CONFLICT without specific columns (catches all conflicts).
+
+        Returns:
+            A ConflictBuilder instance for chaining conflict resolution methods.
+
+        Example:
+            ```python
+            # ON CONFLICT (id) DO NOTHING
+            sql.insert("users").values(id=1, name="John").on_conflict(
+                "id"
+            ).do_nothing()
+
+            # ON CONFLICT (email, username) DO UPDATE SET updated_at = NOW()
+            sql.insert("users").values(...).on_conflict(
+                "email", "username"
+            ).do_update(updated_at=sql.raw("NOW()"))
+
+            # ON CONFLICT DO NOTHING (catches all conflicts)
+            sql.insert("users").values(...).on_conflict().do_nothing()
+            ```
+        """
+        return ConflictBuilder(self, columns)
+
+    def on_conflict_do_nothing(self, *columns: str) -> "Insert":
+        """Adds an ON CONFLICT DO NOTHING clause (convenience method).
+
+        Args:
+            *columns: Column names that define the conflict. If no columns provided,
+                     creates an ON CONFLICT without specific columns.
 
         Returns:
             The current builder instance for method chaining.
 
         Note:
-            This is PostgreSQL-specific syntax. Different databases have different syntax.
-            For a more general solution, you might need dialect-specific handling.
+            This is a convenience method. For more control, use on_conflict().do_nothing().
         """
-        insert_expr = self._get_insert_expression()
-        insert_expr.set("on", exp.OnConflict(this=None, expressions=[]))
-        return self
+        return self.on_conflict(*columns).do_nothing()
 
-    def on_duplicate_key_update(self, **_: Any) -> "Self":
-        """Adds an ON DUPLICATE KEY UPDATE clause (MySQL syntax).
+    def on_duplicate_key_update(self, **kwargs: Any) -> "Insert":
+        """Adds conflict resolution using the ON CONFLICT syntax (cross-database compatible).
 
         Args:
-            **_: Column-value pairs to update on duplicate key.
+            **kwargs: Column-value pairs to update on conflict.
 
         Returns:
             The current builder instance for method chaining.
+
+        Note:
+            This method uses PostgreSQL-style ON CONFLICT syntax but SQLGlot will
+            transpile it to the appropriate syntax for each database (MySQL's
+            ON DUPLICATE KEY UPDATE, etc.).
         """
-        return self
+        if not kwargs:
+            return self
+        return self.on_conflict().do_update(**kwargs)
+
+
+class ConflictBuilder:
+    """Builder for ON CONFLICT clauses in INSERT statements.
+
+    This builder provides a fluent interface for constructing conflict resolution
+    clauses using PostgreSQL-style syntax, which SQLGlot can transpile to other dialects.
+    """
+
+    __slots__ = ("_columns", "_insert_builder")
+
+    def __init__(self, insert_builder: "Insert", columns: tuple[str, ...]) -> None:
+        """Initialize ConflictBuilder.
+
+        Args:
+            insert_builder: The parent Insert builder
+            columns: Column names that define the conflict
+        """
+        self._insert_builder = insert_builder
+        self._columns = columns
+
+    def do_nothing(self) -> "Insert":
+        """Add DO NOTHING conflict resolution.
+
+        Returns:
+            The parent Insert builder for method chaining.
+
+        Example:
+            ```python
+            sql.insert("users").values(id=1, name="John").on_conflict(
+                "id"
+            ).do_nothing()
+            ```
+        """
+        insert_expr = self._insert_builder._get_insert_expression()
+
+        # Create ON CONFLICT with proper structure
+        conflict_keys = [exp.to_identifier(col) for col in self._columns] if self._columns else None
+        on_conflict = exp.OnConflict(conflict_keys=conflict_keys, action=exp.var("DO NOTHING"))
+
+        insert_expr.set("conflict", on_conflict)
+        return self._insert_builder
+
+    def do_update(self, **kwargs: Any) -> "Insert":
+        """Add DO UPDATE conflict resolution with SET clauses.
+
+        Args:
+            **kwargs: Column-value pairs to update on conflict.
+
+        Returns:
+            The parent Insert builder for method chaining.
+
+        Example:
+            ```python
+            sql.insert("users").values(id=1, name="John").on_conflict(
+                "id"
+            ).do_update(
+                name="Updated Name", updated_at=sql.raw("NOW()")
+            )
+            ```
+        """
+        insert_expr = self._insert_builder._get_insert_expression()
+
+        # Create SET expressions for the UPDATE
+        set_expressions = []
+        for col, val in kwargs.items():
+            if hasattr(val, "expression") and hasattr(val, "sql"):
+                # Handle SQL objects (from sql.raw with parameters)
+                expression = getattr(val, "expression", None)
+                if expression is not None and isinstance(expression, exp.Expression):
+                    # Merge parameters from SQL object into builder
+                    if hasattr(val, "parameters"):
+                        sql_parameters = getattr(val, "parameters", {})
+                        for param_name, param_value in sql_parameters.items():
+                            self._insert_builder.add_parameter(param_value, name=param_name)
+                    value_expr = expression
+                else:
+                    # If expression is None, fall back to parsing the raw SQL
+                    sql_text = getattr(val, "sql", "")
+                    # Merge parameters even when parsing raw SQL
+                    if hasattr(val, "parameters"):
+                        sql_parameters = getattr(val, "parameters", {})
+                        for param_name, param_value in sql_parameters.items():
+                            self._insert_builder.add_parameter(param_value, name=param_name)
+                    # Check if sql_text is callable (like Expression.sql method)
+                    if callable(sql_text):
+                        sql_text = str(val)
+                    value_expr = exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
+            elif isinstance(val, exp.Expression):
+                value_expr = val
+            else:
+                # Create parameter for regular values
+                param_name = self._insert_builder._generate_unique_parameter_name(col)
+                _, param_name = self._insert_builder.add_parameter(val, name=param_name)
+                value_expr = exp.Placeholder(this=param_name)
+
+            set_expressions.append(exp.EQ(this=exp.column(col), expression=value_expr))
+
+        # Create ON CONFLICT with proper structure
+        conflict_keys = [exp.to_identifier(col) for col in self._columns] if self._columns else None
+        on_conflict = exp.OnConflict(
+            conflict_keys=conflict_keys,
+            action=exp.var("DO UPDATE"),
+            expressions=set_expressions if set_expressions else None,
+        )
+
+        insert_expr.set("conflict", on_conflict)
+        return self._insert_builder

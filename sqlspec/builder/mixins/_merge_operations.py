@@ -179,14 +179,23 @@ class MergeMatchedClauseMixin:
         whens.append("expressions", when_clause)
 
     def when_matched_then_update(
-        self, set_values: dict[str, Any], condition: Optional[Union[str, exp.Expression]] = None
+        self,
+        set_values: Optional[dict[str, Any]] = None,
+        condition: Optional[Union[str, exp.Expression]] = None,
+        **kwargs: Any,
     ) -> Self:
         """Define the UPDATE action for matched rows.
+
+        Supports:
+        - when_matched_then_update({"column": value})
+        - when_matched_then_update(column=value, other_column=other_value)
+        - when_matched_then_update({"column": value}, other_column=other_value)
 
         Args:
             set_values: A dictionary of column names and their new values to set.
                         The values will be parameterized.
             condition: An optional additional condition for this specific action.
+            **kwargs: Column-value pairs to update on match.
 
         Raises:
             SQLBuilderError: If the condition type is unsupported.
@@ -194,14 +203,48 @@ class MergeMatchedClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
+        # Combine set_values dict and kwargs
+        all_values = dict(set_values or {}, **kwargs)
+
+        if not all_values:
+            msg = "No update values provided. Use set_values dict or kwargs."
+            raise SQLBuilderError(msg)
+
         update_expressions: list[exp.EQ] = []
-        for col, val in set_values.items():
-            column_name = col if isinstance(col, str) else str(col)
-            if "." in column_name:
-                column_name = column_name.split(".")[-1]
-            param_name = self._generate_unique_parameter_name(column_name)
-            param_name = self.add_parameter(val, name=param_name)[1]
-            update_expressions.append(exp.EQ(this=exp.column(col), expression=exp.var(param_name)))
+        for col, val in all_values.items():
+            if hasattr(val, "expression") and hasattr(val, "sql"):
+                # Handle SQL objects (from sql.raw with parameters)
+                expression = getattr(val, "expression", None)
+                if expression is not None and isinstance(expression, exp.Expression):
+                    # Merge parameters from SQL object into builder
+                    if hasattr(val, "parameters"):
+                        sql_parameters = getattr(val, "parameters", {})
+                        for param_name, param_value in sql_parameters.items():
+                            self.add_parameter(param_value, name=param_name)
+                    value_expr = expression
+                else:
+                    # If expression is None, fall back to parsing the raw SQL
+                    sql_text = getattr(val, "sql", "")
+                    # Merge parameters even when parsing raw SQL
+                    if hasattr(val, "parameters"):
+                        sql_parameters = getattr(val, "parameters", {})
+                        for param_name, param_value in sql_parameters.items():
+                            self.add_parameter(param_value, name=param_name)
+                    # Check if sql_text is callable (like Expression.sql method)
+                    if callable(sql_text):
+                        sql_text = str(val)
+                    value_expr = exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
+            elif isinstance(val, exp.Expression):
+                value_expr = val
+            else:
+                column_name = col if isinstance(col, str) else str(col)
+                if "." in column_name:
+                    column_name = column_name.split(".")[-1]
+                param_name = self._generate_unique_parameter_name(column_name)
+                param_name = self.add_parameter(val, name=param_name)[1]
+                value_expr = exp.Placeholder(this=param_name)
+
+            update_expressions.append(exp.EQ(this=exp.column(col), expression=value_expr))
 
         when_args: dict[str, Any] = {"matched": True, "then": exp.Update(expressions=update_expressions)}
 
@@ -386,15 +429,24 @@ class MergeNotMatchedBySourceClauseMixin:
         raise NotImplementedError(msg)
 
     def when_not_matched_by_source_then_update(
-        self, set_values: dict[str, Any], condition: Optional[Union[str, exp.Expression]] = None
+        self,
+        set_values: Optional[dict[str, Any]] = None,
+        condition: Optional[Union[str, exp.Expression]] = None,
+        **kwargs: Any,
     ) -> Self:
         """Define the UPDATE action for rows not matched by source.
 
         This is useful for handling rows that exist in the target but not in the source.
 
+        Supports:
+        - when_not_matched_by_source_then_update({"column": value})
+        - when_not_matched_by_source_then_update(column=value, other_column=other_value)
+        - when_not_matched_by_source_then_update({"column": value}, other_column=other_value)
+
         Args:
             set_values: A dictionary of column names and their new values to set.
             condition: An optional additional condition for this specific action.
+            **kwargs: Column-value pairs to update when not matched by source.
 
         Raises:
             SQLBuilderError: If the condition type is unsupported.
@@ -402,14 +454,48 @@ class MergeNotMatchedBySourceClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
+        # Combine set_values dict and kwargs
+        all_values = dict(set_values or {}, **kwargs)
+
+        if not all_values:
+            msg = "No update values provided. Use set_values dict or kwargs."
+            raise SQLBuilderError(msg)
+
         update_expressions: list[exp.EQ] = []
-        for col, val in set_values.items():
-            column_name = col if isinstance(col, str) else str(col)
-            if "." in column_name:
-                column_name = column_name.split(".")[-1]
-            param_name = self._generate_unique_parameter_name(column_name)
-            param_name = self.add_parameter(val, name=param_name)[1]
-            update_expressions.append(exp.EQ(this=exp.column(col), expression=exp.var(param_name)))
+        for col, val in all_values.items():
+            if hasattr(val, "expression") and hasattr(val, "sql"):
+                # Handle SQL objects (from sql.raw with parameters)
+                expression = getattr(val, "expression", None)
+                if expression is not None and isinstance(expression, exp.Expression):
+                    # Merge parameters from SQL object into builder
+                    if hasattr(val, "parameters"):
+                        sql_parameters = getattr(val, "parameters", {})
+                        for param_name, param_value in sql_parameters.items():
+                            self.add_parameter(param_value, name=param_name)
+                    value_expr = expression
+                else:
+                    # If expression is None, fall back to parsing the raw SQL
+                    sql_text = getattr(val, "sql", "")
+                    # Merge parameters even when parsing raw SQL
+                    if hasattr(val, "parameters"):
+                        sql_parameters = getattr(val, "parameters", {})
+                        for param_name, param_value in sql_parameters.items():
+                            self.add_parameter(param_value, name=param_name)
+                    # Check if sql_text is callable (like Expression.sql method)
+                    if callable(sql_text):
+                        sql_text = str(val)
+                    value_expr = exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
+            elif isinstance(val, exp.Expression):
+                value_expr = val
+            else:
+                column_name = col if isinstance(col, str) else str(col)
+                if "." in column_name:
+                    column_name = column_name.split(".")[-1]
+                param_name = self._generate_unique_parameter_name(column_name)
+                param_name = self.add_parameter(val, name=param_name)[1]
+                value_expr = exp.Placeholder(this=param_name)
+
+            update_expressions.append(exp.EQ(this=exp.column(col), expression=value_expr))
 
         when_args: dict[str, Any] = {
             "matched": False,

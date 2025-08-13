@@ -178,7 +178,9 @@ class SQLFactory:
     # ===================
     # Statement Builders
     # ===================
-    def select(self, *columns_or_sql: Union[str, exp.Expression, Column], dialect: DialectType = None) -> "Select":
+    def select(
+        self, *columns_or_sql: Union[str, exp.Expression, Column, "SQL"], dialect: DialectType = None
+    ) -> "Select":
         builder_dialect = dialect or self.dialect
         if len(columns_or_sql) == 1 and isinstance(columns_or_sql[0], str):
             sql_candidate = columns_or_sql[0].strip()
