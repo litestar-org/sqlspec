@@ -112,36 +112,28 @@ class DictLike(Protocol):
 PYDANTIC_USE_FAILFAST = False
 
 
-if TYPE_CHECKING:
-    T = TypeVar("T")
-    ConnectionT = TypeVar("ConnectionT")
-    """Type variable for connection types.
+T = TypeVar("T")
+ConnectionT = TypeVar("ConnectionT")
+"""Type variable for connection types.
 
-    :class:`~sqlspec.typing.ConnectionT`
-    """
-    PoolT = TypeVar("PoolT")
-    """Type variable for pool types.
+:class:`~sqlspec.typing.ConnectionT`
+"""
+PoolT = TypeVar("PoolT")
+"""Type variable for pool types.
 
-    :class:`~sqlspec.typing.PoolT`
-    """
-    PoolT_co = TypeVar("PoolT_co", covariant=True)
-    """Type variable for covariant pool types.
+:class:`~sqlspec.typing.PoolT`
+"""
+PoolT_co = TypeVar("PoolT_co", covariant=True)
+"""Type variable for covariant pool types.
 
-    :class:`~sqlspec.typing.PoolT_co`
-    """
-    ModelT = TypeVar("ModelT", bound="Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub]")
-    """Type variable for model types.
+:class:`~sqlspec.typing.PoolT_co`
+"""
+ModelT = TypeVar("ModelT", bound="Union[DictLike, StructStub, BaseModelStub, DataclassProtocol, AttrsInstanceStub]")
+"""Type variable for model types.
 
-    :class:`DictLike` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
-    """
-    RowT = TypeVar("RowT", bound="dict[str, Any]")
-else:
-    T = Any
-    ConnectionT = Any
-    PoolT = Any
-    PoolT_co = Any
-    ModelT = Any
-    RowT = dict[str, Any]
+:class:`DictLike` | :class:`msgspec.Struct` | :class:`pydantic.BaseModel` | :class:`DataclassProtocol` | :class:`AttrsInstance`
+"""
+RowT = TypeVar("RowT", bound="dict[str, Any]")
 
 
 DictRow: TypeAlias = "dict[str, Any]"
