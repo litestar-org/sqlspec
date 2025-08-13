@@ -27,7 +27,6 @@ from litestar import Litestar, get
 from sqlspec import SQL
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver, AsyncpgPoolConfig
 from sqlspec.extensions.litestar import DatabaseConfig, SQLSpec
-from sqlspec.typing import ConnectionT, PoolT
 
 
 @get("/")
@@ -83,12 +82,7 @@ sqlspec = SQLSpec(
         )
     ]
 )
-app = Litestar(
-    route_handlers=[hello_world, get_version, list_tables, get_status],
-    plugins=[sqlspec],
-    debug=True,
-    signature_namespace={"ConnectionT": ConnectionT, "PoolT": PoolT},
-)
+app = Litestar(route_handlers=[hello_world, get_version, list_tables, get_status], plugins=[sqlspec], debug=True)
 
 if __name__ == "__main__":
     import os

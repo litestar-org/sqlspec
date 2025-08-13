@@ -75,7 +75,7 @@ class SQLSpec(InitPluginProtocol, CLIPlugin, SQLSpecBase):
             [SQLSpec, ConnectionT, PoolT, DriverT, DatabaseConfig, DatabaseConfigProtocol, SyncConfigT, AsyncConfigT]
         )
 
-        signature_namespace = {"ConnectionT": ConnectionT, "PoolT": PoolT}
+        signature_namespace = {}
 
         for c in self._plugin_configs:
             c.annotation = self.add_config(c.config)
