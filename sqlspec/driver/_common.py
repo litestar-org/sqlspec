@@ -275,7 +275,15 @@ class CommonDriverAttributesMixin:
         kwargs = kwargs or {}
 
         if isinstance(statement, QueryBuilder):
-            return statement.to_statement(statement_config)
+            sql_statement = statement.to_statement(statement_config)
+            if parameters or kwargs:
+                merged_parameters = (
+                    (*sql_statement._positional_parameters, *parameters)
+                    if parameters
+                    else sql_statement._positional_parameters
+                )
+                return SQL(sql_statement.sql, *merged_parameters, statement_config=statement_config, **kwargs)
+            return sql_statement
         if isinstance(statement, SQL):
             if parameters or kwargs:
                 merged_parameters = (

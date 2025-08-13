@@ -312,7 +312,7 @@ class SQLFileLoader:
         except MissingDependencyError:
             # Fall back to standard file reading when no storage backend is available
             try:
-                return path.read_text(encoding=self.encoding)  # pyright: ignore
+                return path.read_text(encoding=self.encoding)  # type: ignore[union-attr]
             except FileNotFoundError as e:
                 raise SQLFileNotFoundError(path_str) from e
         except StorageOperationFailedError as e:

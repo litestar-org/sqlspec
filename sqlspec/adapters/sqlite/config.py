@@ -2,6 +2,7 @@
 
 import sqlite3
 import threading
+import uuid
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypedDict, Union, cast
 
@@ -169,7 +170,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         if pool_config is None:
             pool_config = {}
         if "database" not in pool_config or pool_config["database"] == ":memory:":
-            pool_config["database"] = "file::memory:?cache=shared"
+            pool_config["database"] = f"file:memory_{uuid.uuid4().hex}?mode=memory&cache=private"
             pool_config["uri"] = True
 
         super().__init__(

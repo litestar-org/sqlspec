@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import uuid
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, TypedDict
 
@@ -149,6 +150,10 @@ class AiosqliteConfig(AsyncDatabaseConfig):
         if pool_config:
             connection_params.update(pool_config)
         connection_params.update(kwargs)
+
+        # Make :memory: databases unique per instance to prevent locking
+        if connection_params.get("database") == ":memory:":
+            connection_params["database"] = f"file:memory_{uuid.uuid4().hex}?mode=memory&cache=private"
 
         super().__init__(
             pool_config=connection_params,
