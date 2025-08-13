@@ -80,7 +80,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
 
       - name: Install cibuildwheel
         run: python -m pip install cibuildwheel
@@ -106,8 +106,8 @@ jobs:
           # Skip problematic combinations
           CIBW_SKIP: "cp39-win_arm64 *-musllinux*"
 
-          # Use uv for faster dependency resolution and set mypyc environment
-          CIBW_BEFORE_BUILD: "pip install uv && uv sync --extra mypyc --group build"
+          # Install dependencies using pip for broader compatibility
+          CIBW_BEFORE_BUILD: "pip install hatch-mypyc hatchling"
           CIBW_ENVIRONMENT: "HATCH_BUILD_HOOKS_ENABLE=1 MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1"
 
           # Test the built wheels
