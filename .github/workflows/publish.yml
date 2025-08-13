@@ -57,54 +57,55 @@ jobs:
           path: dist/*.whl
 
   build-wheels-mypyc:
-    name: MyPyC ${{ matrix.os }} py${{ matrix.python-version }}
+    name: Build MyPyC wheels for all platforms
+    runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest, macos-13]
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
-        exclude:
-          - os: windows-latest
-            python-version: "3.9"
-          - os: macos-13
-            python-version: "3.13"
-
-    runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
 
-      - name: Set up Python ${{ matrix.python-version }}
-        run: uv python install ${{ matrix.python-version }}
+      - name: Install cibuildwheel
+        run: python -m pip install cibuildwheel
 
-      - name: Install dependencies with mypyc extras
-        run: uv sync --extra mypyc --group build
-
-      - name: Build MyPyC wheel
-        run: uv build --wheel
+      - name: Build wheels with cibuildwheel
+        run: python -m cibuildwheel --output-dir wheelhouse
         env:
+          # Enable mypyc compilation
           HATCH_BUILD_HOOKS_ENABLE: "1"
           MYPYC_OPT_LEVEL: "3"
           MYPYC_DEBUG_LEVEL: "0"
           MYPYC_MULTI_FILE: "1"
 
-      - name: Repair Linux wheels with auditwheel
-        if: runner.os == 'Linux'
-        run: |
-          for wheel in dist/*.whl; do
-            echo "Repairing $wheel"
-            uv tool run auditwheel repair "$wheel" -w dist/ --plat manylinux_2_17_x86_64
-            rm "$wheel"
-          done
+          # Configure cibuildwheel
+          CIBW_BUILD: "cp${{ matrix.python-version }}-*"
+          CIBW_BUILD_VERBOSITY: 1
 
-      - name: Upload mypyc wheel artifacts
+          # Platform configuration - comprehensive coverage
+          CIBW_ARCHS_LINUX: "x86_64 aarch64"
+          CIBW_ARCHS_MACOS: "x86_64 arm64"
+          CIBW_ARCHS_WINDOWS: "AMD64 ARM64"
+
+          # Skip problematic combinations
+          CIBW_SKIP: "cp39-win_arm64 *-musllinux*"
+
+          # Use uv for faster dependency resolution
+          CIBW_BEFORE_BUILD: "pip install uv && uv sync --extra mypyc --group build"
+
+          # Test the built wheels
+          CIBW_TEST_COMMAND: "python -c \"import sqlspec; print('MyPyC wheel test passed')\""
+
+      - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-mypyc-${{ matrix.os }}-py${{ matrix.python-version }}
-          path: dist/*.whl
+          name: wheels-mypyc-py${{ matrix.python-version }}
+          path: wheelhouse/*.whl
 
 
   test-wheels:
@@ -136,7 +137,8 @@ jobs:
       - name: Download mypyc wheel artifacts
         uses: actions/download-artifact@v4
         with:
-          name: wheels-mypyc-${{ matrix.os }}-py${{ matrix.python-version }}
+          pattern: wheels-mypyc-*
+          merge-multiple: true
           path: dist-mypyc/
 
       - name: Test standard wheel installation
