@@ -219,7 +219,7 @@ check-all: lint test-all coverage                  ## Run all checks (lint, test
 .PHONY: docs-clean
 docs-clean:                                        ## Clean documentation build
 	@echo "${INFO} Cleaning documentation build assets... 🧹"
-	@rm -rf docs/_build >/dev/null 2>&1
+	@rm -rf docs/_build
 	@echo "${OK} Documentation assets cleaned"
 
 .PHONY: docs-serve
@@ -230,7 +230,7 @@ docs-serve: docs-clean                             ## Serve documentation locall
 .PHONY: docs
 docs: docs-clean                                   ## Build documentation
 	@echo "${INFO} Building documentation... 📝"
-	@uv run sphinx-build -M html docs docs/_build/ -E -a -j auto -W --keep-going >/dev/null 2>&1
+	@uv run sphinx-build -M html docs docs/_build/ -E -a -j auto -W --keep-going
 	@echo "${OK} Documentation built successfully"
 
 .PHONY: docs-linkcheck
