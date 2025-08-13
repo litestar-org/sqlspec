@@ -26,7 +26,10 @@ from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
+    from pathlib import Path
 
+    from sqlspec.core.statement import SQL
+    from sqlspec.loader import SQLFileLoader
     from sqlspec.typing import ConnectionT, PoolT
 
 
@@ -38,13 +41,14 @@ logger = get_logger()
 class SQLSpec:
     """Configuration manager and registry for database connections and pools."""
 
-    __slots__ = ("_configs", "_instance_cache_config")
+    __slots__ = ("_configs", "_instance_cache_config", "_sql_loader")
 
-    def __init__(self) -> None:
+    def __init__(self, *, loader: "Optional[SQLFileLoader]" = None) -> None:
         self._configs: dict[Any, DatabaseConfigProtocol[Any, Any, Any]] = {}
         # Register sync cleanup only for sync resources
         atexit.register(self._cleanup_sync_pools)
         self._instance_cache_config: Optional[CacheConfig] = None
+        self._sql_loader: Optional[SQLFileLoader] = loader
 
     @staticmethod
     def _get_config_name(obj: Any) -> str:
@@ -591,3 +595,98 @@ class SQLSpec:
                 else current_config.optimized_cache_enabled,
             )
         )
+
+    # SQL File Loading Integration
+
+    def _ensure_sql_loader(self) -> "SQLFileLoader":
+        """Ensure SQL loader is initialized lazily."""
+        if self._sql_loader is None:
+            # Import here to avoid circular imports
+            from sqlspec.loader import SQLFileLoader
+
+            self._sql_loader = SQLFileLoader()
+        return self._sql_loader
+
+    def load_sql_files(self, *paths: "Union[str, Path]") -> None:
+        """Load SQL files from paths or directories.
+
+        Args:
+            *paths: One or more file paths or directory paths to load.
+        """
+        loader = self._ensure_sql_loader()
+        loader.load_sql(*paths)
+        logger.debug("Loaded SQL files: %s", paths)
+
+    def add_named_sql(self, name: str, sql: str, dialect: "Optional[str]" = None) -> None:
+        """Add a named SQL query directly.
+
+        Args:
+            name: Name for the SQL query.
+            sql: Raw SQL content.
+            dialect: Optional dialect for the SQL statement.
+        """
+        loader = self._ensure_sql_loader()
+        loader.add_named_sql(name, sql, dialect)
+        logger.debug("Added named SQL: %s", name)
+
+    def get_sql(self, name: str) -> "SQL":
+        """Get a SQL object by name.
+
+        Args:
+            name: Name of the statement (from -- name: in SQL file).
+                  Hyphens in names are converted to underscores.
+
+        Returns:
+            SQL object ready for execution.
+        """
+        loader = self._ensure_sql_loader()
+        return loader.get_sql(name)
+
+    def list_sql_queries(self) -> "list[str]":
+        """List all available query names.
+
+        Returns:
+            Sorted list of query names.
+        """
+        if self._sql_loader is None:
+            return []
+        return self._sql_loader.list_queries()
+
+    def has_sql_query(self, name: str) -> bool:
+        """Check if a SQL query exists.
+
+        Args:
+            name: Query name to check.
+
+        Returns:
+            True if query exists.
+        """
+        if self._sql_loader is None:
+            return False
+        return self._sql_loader.has_query(name)
+
+    def clear_sql_cache(self) -> None:
+        """Clear the SQL file cache."""
+        if self._sql_loader is not None:
+            self._sql_loader.clear_cache()
+            logger.debug("Cleared SQL cache")
+
+    def reload_sql_files(self) -> None:
+        """Reload all SQL files.
+
+        Note: This clears the cache and requires calling load_sql_files again.
+        """
+        if self._sql_loader is not None:
+            # Clear cache to force reload
+            self._sql_loader.clear_cache()
+            logger.debug("Cleared SQL cache for reload")
+
+    def get_sql_files(self) -> "list[str]":
+        """Get list of loaded SQL files.
+
+        Returns:
+            Sorted list of file paths.
+        """
+        if self._sql_loader is None:
+            return []
+        return self._sql_loader.list_files()
