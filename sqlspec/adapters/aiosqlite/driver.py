@@ -144,13 +144,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     ) -> None:
         if statement_config is None:
             cache_config = get_cache_config()
-            enhanced_config = aiosqlite_statement_config.replace(
-                enable_caching=cache_config.compiled_cache_enabled,
-                enable_parsing=True,
-                enable_validation=True,
-                dialect="sqlite",
-            )
-            statement_config = enhanced_config
+            statement_config = aiosqlite_statement_config.replace(enable_caching=cache_config.compiled_cache_enabled)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
 

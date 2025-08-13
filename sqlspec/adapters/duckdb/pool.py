@@ -60,9 +60,6 @@ class DuckDBConnectionPool:
 
         Args:
             connection_config: DuckDB connection configuration
-            pool_min_size: Ignored for thread-local pools
-            pool_max_size: Ignored for thread-local pools
-            pool_timeout: Ignored for thread-local pools
             pool_recycle_seconds: Connection recycle time in seconds
             extensions: List of extensions to install/load
             secrets: List of secrets to create
