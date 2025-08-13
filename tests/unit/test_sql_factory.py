@@ -1,5 +1,7 @@
 """Unit tests for SQL factory functionality including parameter binding fixes and new features."""
 
+import math
+
 import pytest
 from sqlglot import exp
 
@@ -267,9 +269,9 @@ def test_raw_parameter_overwrite_behavior() -> None:
     stmt = sql.raw("field1 = :value AND field2 = :value", value="test")
 
     assert isinstance(stmt, SQL)
-    assert stmt.parameters["value"] == "test"
     assert stmt.sql.count(":value") == 2
     assert len(stmt.parameters) == 1
+    assert stmt.parameters["value"] == "test"
 
 
 def test_select_method() -> None:
@@ -496,7 +498,7 @@ def test_parameter_names_use_column_names() -> None:
 
 def test_parameter_values_preserved_correctly() -> None:
     """Test that parameter values are preserved exactly."""
-    test_values = [("string_val", "test"), ("int_val", 42), ("float_val", 3.14159), ("bool_val", True)]
+    test_values = [("string_val", "test"), ("int_val", 42), ("float_val", math.pi), ("bool_val", True)]
 
     query = sql.select("*").from_("test")
     for column_name, value in test_values:
@@ -862,3 +864,660 @@ def test_backward_compatibility_preserved() -> None:
 
     assert isinstance(sql.users, Column)
     assert isinstance(sql.posts, Column)
+
+
+# Tests for type annotation fixes and SQL object compatibility
+def test_case_as_method_type_annotation_fix() -> None:
+    """Test that sql.case().as_() method returns proper type without 'partially unknown' errors."""
+    # This test verifies the fix for the original user issue
+    case_expr = sql.case().when("status = 'active'", "Active").else_("Inactive").as_("status_display")
+
+    # Should be able to use in select without type errors
+    query = sql.select("id", "name", case_expr).from_("users")
+    stmt = query.build()
+
+    assert "CASE" in stmt.sql
+    assert "status_display" in stmt.sql
+    assert "Active" in stmt.sql
+    assert "Inactive" in stmt.sql
+
+    # Verify it's properly aliased
+    assert " AS " in stmt.sql or "status_display" in stmt.sql
+
+
+def test_window_function_as_method_type_annotation_fix() -> None:
+    """Test that window function as_() method also has proper type annotations."""
+    window_func = sql.row_number_.partition_by("department").order_by("salary").as_("row_num")
+
+    query = sql.select("name", window_func).from_("employees")
+    stmt = query.build()
+
+    assert "ROW_NUMBER()" in stmt.sql
+    assert "row_num" in stmt.sql
+    assert "OVER" in stmt.sql
+
+
+def test_sql_raw_object_in_select_clause() -> None:
+    """Test that SQL objects from sql.raw work in SELECT clauses with parameter merging."""
+    raw_expr = sql.raw("COALESCE(name, :default_name)", default_name="Unknown")
+
+    query = sql.select("id", raw_expr).from_("users")
+    stmt = query.build()
+
+    assert "COALESCE" in stmt.sql
+    assert "default_name" in stmt.parameters
+    assert stmt.parameters["default_name"] == "Unknown"
+    assert ":default_name" in stmt.sql
+
+
+def test_sql_raw_object_in_join_conditions() -> None:
+    """Test that SQL objects from sql.raw work in JOIN conditions with parameter merging."""
+    join_condition = sql.raw("users.id = posts.user_id AND posts.status = :status", status="published")
+
+    query = sql.select("users.name", "posts.title").from_("users").left_join("posts", join_condition)
+    stmt = query.build()
+
+    assert "LEFT JOIN" in stmt.sql
+    assert "status" in stmt.parameters
+    assert stmt.parameters["status"] == "published"
+    assert ":status" in stmt.sql
+
+
+def test_sql_raw_object_in_where_clauses() -> None:
+    """Test that SQL objects from sql.raw work in WHERE clauses with parameter merging."""
+    where_condition = sql.raw("LENGTH(name) > :min_length", min_length=5)
+
+    query = sql.select("*").from_("users").where(where_condition)
+    stmt = query.build()
+
+    assert "LENGTH" in stmt.sql
+    assert "min_length" in stmt.parameters
+    assert stmt.parameters["min_length"] == 5
+    assert ":min_length" in stmt.sql
+
+
+def test_sql_raw_object_in_distinct_clause() -> None:
+    """Test that SQL objects work in DISTINCT clauses with parameter merging."""
+    raw_expr = sql.raw("UPPER(category)")
+
+    query = sql.select("*").from_("products").distinct(raw_expr)
+    stmt = query.build()
+
+    assert "DISTINCT" in stmt.sql
+    assert "UPPER" in stmt.sql
+
+
+def test_multiple_sql_raw_objects_parameter_merging() -> None:
+    """Test that multiple SQL objects properly merge their parameters."""
+    select_expr = sql.raw("COALESCE(name, :default_name)", default_name="Unknown")
+    join_condition = sql.raw("users.id = posts.user_id AND posts.status = :status", status="published")
+    where_condition = sql.raw("users.created_at > :min_date", min_date="2023-01-01")
+
+    query = sql.select("id", select_expr).from_("users").left_join("posts", join_condition).where(where_condition)
+    stmt = query.build()
+
+    # All parameters should be merged
+    assert len(stmt.parameters) == 3
+    assert stmt.parameters["default_name"] == "Unknown"
+    assert stmt.parameters["status"] == "published"
+    assert stmt.parameters["min_date"] == "2023-01-01"
+
+    # All placeholders should be in SQL
+    assert ":default_name" in stmt.sql
+    assert ":status" in stmt.sql
+    assert ":min_date" in stmt.sql
+
+
+def test_sql_raw_without_parameters_still_works() -> None:
+    """Test that SQL objects without parameters still work correctly."""
+    raw_expr = sql.raw("NOW()")
+
+    query = sql.select("id", raw_expr).from_("logs")
+    stmt = query.build()
+
+    assert "NOW()" in stmt.sql
+    assert len(stmt.parameters) == 0
+
+
+def test_mixed_sql_objects_and_regular_parameters() -> None:
+    """Test mixing SQL objects with regular builder parameters."""
+    raw_expr = sql.raw("UPPER(name)")
+
+    query = (
+        sql.select("id", raw_expr)
+        .from_("users")
+        .where_eq("status", "active")  # Regular parameter
+        .where(sql.raw("created_at > :min_date", min_date="2023-01-01"))  # SQL object parameter
+    )
+    stmt = query.build()
+
+    # Should have both types of parameters
+    assert "status" in stmt.parameters
+    assert "min_date" in stmt.parameters
+    assert stmt.parameters["status"] == "active"
+    assert stmt.parameters["min_date"] == "2023-01-01"
+
+    assert "UPPER" in stmt.sql
+    assert ":status" in stmt.sql
+    assert ":min_date" in stmt.sql
+
+
+def test_sql_raw_parameter_name_conflicts_handled() -> None:
+    """Test that parameter name conflicts are detected when merging SQL objects."""
+    # Create two SQL objects with different parameter names (should work fine)
+    raw_expr1 = sql.raw("COALESCE(name, :value)", value="default1")
+    raw_expr2 = sql.raw("COALESCE(email, :other_value)", other_value="default2")
+
+    query = sql.select("id", raw_expr1, raw_expr2).from_("users")
+    stmt = query.build()
+
+    assert "value" in stmt.parameters
+    assert "other_value" in stmt.parameters
+    assert stmt.parameters["value"] == "default1"
+    assert stmt.parameters["other_value"] == "default2"
+
+    # Test that actual conflicts are detected
+    raw_conflict1 = sql.raw("COALESCE(name, :conflict)", conflict="first")
+    raw_conflict2 = sql.raw("COALESCE(email, :conflict)", conflict="second")
+
+    with pytest.raises(SQLBuilderError, match="Parameter name 'conflict' already exists"):
+        sql.select("id", raw_conflict1, raw_conflict2).from_("users").build()
+
+
+def test_original_user_case_example_regression_test() -> None:
+    """Regression test for the exact user example that was failing."""
+    # This was the original failing example
+    case_expr = sql.case().when("password IS NOT NULL", True).else_(False).as_("has_password")
+
+    query = sql.select("id", "name", case_expr).from_("users")
+    stmt = query.build()
+
+    # Should work without type annotation errors
+    assert "CASE" in stmt.sql
+    assert "has_password" in stmt.sql
+    assert "password" in stmt.sql and ("NULL" in stmt.sql or "IS" in stmt.sql)
+
+    # Should also work in UPDATE operations
+    update_query = sql.update("users").set({"last_check": sql.raw("NOW()")}).where(case_expr)
+    update_stmt = update_query.build()
+
+    assert "UPDATE" in update_stmt.sql
+    assert "CASE" in update_stmt.sql
+
+
+def test_type_compatibility_across_all_operations() -> None:
+    """Test that SQL objects work across all major SQL operations."""
+    # Test in various contexts to ensure type compatibility
+    raw_condition = sql.raw("LENGTH(name) > :min_len", min_len=3)
+    raw_value = sql.raw("UPPER(:new_name)", new_name="test")
+    raw_select = sql.raw("COUNT(*) as total")
+
+    # SELECT with SQL objects
+    select_query = sql.select("id", raw_select).from_("users").where(raw_condition)
+    select_stmt = select_query.build()
+    assert "COUNT(*)" in select_stmt.sql
+    assert "min_len" in select_stmt.parameters
+
+    # UPDATE with SQL objects using kwargs
+    update_query = sql.update("users").set(name=raw_value, status="updated").where(raw_condition)
+    update_stmt = update_query.build()
+    assert "UPDATE" in update_stmt.sql
+    assert "min_len" in update_stmt.parameters
+    assert "new_name" in update_stmt.parameters
+    assert "status" in update_stmt.parameters
+
+    # DELETE with SQL objects
+    delete_query = sql.delete().from_("users").where(raw_condition)
+    delete_stmt = delete_query.build()
+    assert "DELETE" in delete_stmt.sql
+    assert "min_len" in delete_stmt.parameters
+
+
+def test_update_set_method_with_sql_objects() -> None:
+    """Test that UPDATE.set() method properly handles SQL objects with kwargs."""
+    raw_timestamp = sql.raw("NOW()")
+    raw_computed = sql.raw("UPPER(:value)", value="test")
+
+    # Test using kwargs with SQL objects
+    query = (
+        sql.update("users").set(name="John", last_updated=raw_timestamp, computed_field=raw_computed).where_eq("id", 1)
+    )
+
+    stmt = query.build()
+
+    assert "UPDATE" in stmt.sql
+    assert "NOW()" in stmt.sql
+    assert "UPPER" in stmt.sql
+    assert "name" in stmt.parameters
+    assert "value" in stmt.parameters
+    assert "id" in stmt.parameters
+    assert stmt.parameters["name"] == "John"
+    assert stmt.parameters["value"] == "test"
+    assert stmt.parameters["id"] == 1
+
+
+def test_update_set_method_backward_compatibility() -> None:
+    """Test that UPDATE.set() method maintains backward compatibility with dict."""
+    raw_timestamp = sql.raw("NOW()")
+
+    # Test using dict (original API)
+    query1 = sql.update("users").set({"name": "John", "updated_at": raw_timestamp})
+    stmt1 = query1.build()
+
+    assert "UPDATE" in stmt1.sql
+    assert "NOW()" in stmt1.sql
+    assert "name" in stmt1.parameters
+    assert stmt1.parameters["name"] == "John"
+
+    # Test using positional args (column, value)
+    query2 = sql.update("users").set("status", "active")
+    stmt2 = query2.build()
+
+    assert "UPDATE" in stmt2.sql
+    assert "status" in stmt2.parameters
+    assert stmt2.parameters["status"] == "active"
+
+
+# Tests for ON CONFLICT functionality
+def test_on_conflict_do_nothing_basic() -> None:
+    """Test basic ON CONFLICT DO NOTHING functionality."""
+    query = sql.insert("users").columns("id", "name").values(1, "John").on_conflict("id").do_nothing()
+    stmt = query.build()
+
+    assert "INSERT INTO" in stmt.sql
+    assert "ON CONFLICT" in stmt.sql
+    assert "DO NOTHING" in stmt.sql
+    assert '"id"' in stmt.sql or "id" in stmt.sql
+    assert "id" in stmt.parameters
+    assert "name" in stmt.parameters
+    assert stmt.parameters["id"] == 1
+    assert stmt.parameters["name"] == "John"
+
+
+def test_on_conflict_do_nothing_multiple_columns() -> None:
+    """Test ON CONFLICT DO NOTHING with multiple conflict columns."""
+    query = (
+        sql.insert("users")
+        .columns("email", "username", "name")
+        .values("john@test.com", "john", "John")
+        .on_conflict("email", "username")
+        .do_nothing()
+    )
+    stmt = query.build()
+
+    assert "INSERT INTO" in stmt.sql
+    assert "ON CONFLICT" in stmt.sql
+    assert "DO NOTHING" in stmt.sql
+    assert "email" in stmt.sql and "username" in stmt.sql
+    assert "email" in stmt.parameters
+    assert "username" in stmt.parameters
+    assert "name" in stmt.parameters
+
+
+def test_on_conflict_do_nothing_no_columns() -> None:
+    """Test ON CONFLICT DO NOTHING without specific columns (catches all conflicts)."""
+    query = sql.insert("users").columns("id", "name").values(1, "John").on_conflict().do_nothing()
+    stmt = query.build()
+
+    assert "INSERT INTO" in stmt.sql
+    assert "ON CONFLICT" in stmt.sql
+    assert "DO NOTHING" in stmt.sql
+    # Should not have specific columns in conflict clause
+    assert "ON CONFLICT(" not in stmt.sql
+
+
+def test_on_conflict_do_update_basic() -> None:
+    """Test basic ON CONFLICT DO UPDATE functionality."""
+    query = sql.insert("users").columns("id", "name").values(1, "John").on_conflict("id").do_update(name="Updated John")
+    stmt = query.build()
+
+    assert "INSERT INTO" in stmt.sql
+    assert "ON CONFLICT" in stmt.sql
+    assert "DO UPDATE" in stmt.sql
+    assert "SET" in stmt.sql
+    assert "id" in stmt.parameters
+    assert "name" in stmt.parameters
+    assert "name_1" in stmt.parameters  # The update parameter
+    assert stmt.parameters["id"] == 1
+    assert stmt.parameters["name"] == "John"
+    assert stmt.parameters["name_1"] == "Updated John"
+
+
+def test_on_conflict_do_update_multiple_values() -> None:
+    """Test ON CONFLICT DO UPDATE with multiple update values."""
+    query = (
+        sql.insert("users")
+        .columns("id", "name", "email")
+        .values(1, "John", "john@test.com")
+        .on_conflict("id")
+        .do_update(name="Updated John", email="updated@test.com")
+    )
+    stmt = query.build()
+
+    assert "INSERT INTO" in stmt.sql
+    assert "ON CONFLICT" in stmt.sql
+    assert "DO UPDATE" in stmt.sql
+    assert "SET" in stmt.sql
+    assert "name_1" in stmt.parameters
+    assert "email_1" in stmt.parameters
+    assert stmt.parameters["name_1"] == "Updated John"
+    assert stmt.parameters["email_1"] == "updated@test.com"
+
+
+def test_on_conflict_do_update_with_sql_raw() -> None:
+    """Test ON CONFLICT DO UPDATE with sql.raw expressions."""
+    query = (
+        sql.insert("users")
+        .columns("id", "name")
+        .values(1, "John")
+        .on_conflict("id")
+        .do_update(updated_at=sql.raw("NOW()"), name="Updated")
+    )
+    stmt = query.build()
+
+    assert "INSERT INTO" in stmt.sql
+    assert "ON CONFLICT" in stmt.sql
+    assert "DO UPDATE" in stmt.sql
+    assert "SET" in stmt.sql
+    assert "NOW()" in stmt.sql
+    assert "name_1" in stmt.parameters
+    assert stmt.parameters["name_1"] == "Updated"
+
+
+def test_on_conflict_do_update_with_sql_raw_parameters() -> None:
+    """Test ON CONFLICT DO UPDATE with sql.raw that has parameters."""
+    query = (
+        sql.insert("users")
+        .columns("id", "name")
+        .values(1, "John")
+        .on_conflict("id")
+        .do_update(
+            updated_at=sql.raw("NOW()"), status=sql.raw("COALESCE(:new_status, 'active')", new_status="verified")
+        )
+    )
+    stmt = query.build()
+
+    assert "INSERT INTO" in stmt.sql
+    assert "ON CONFLICT" in stmt.sql
+    assert "DO UPDATE" in stmt.sql
+    assert "NOW()" in stmt.sql
+    assert "COALESCE" in stmt.sql
+    assert "new_status" in stmt.parameters
+    assert stmt.parameters["new_status"] == "verified"
+
+
+def test_on_conflict_convenience_method() -> None:
+    """Test the convenience method on_conflict_do_nothing."""
+    query = sql.insert("users").columns("id", "name").values(1, "John").on_conflict_do_nothing("id")
+    stmt = query.build()
+
+    assert "INSERT INTO" in stmt.sql
+    assert "ON CONFLICT" in stmt.sql
+    assert "DO NOTHING" in stmt.sql
+    assert "id" in stmt.parameters
+    assert stmt.parameters["id"] == 1
+
+
+def test_legacy_on_duplicate_key_update_method() -> None:
+    """Test that the legacy on_duplicate_key_update method uses the new ON CONFLICT API."""
+    query = (
+        sql.insert("users")
+        .columns("id", "name")
+        .values(1, "John")
+        .on_duplicate_key_update(name="Updated", updated_at=sql.raw("NOW()"))
+    )
+    stmt = query.build()
+
+    assert "INSERT INTO" in stmt.sql
+    assert "ON CONFLICT" in stmt.sql
+    assert "DO UPDATE" in stmt.sql
+    assert "SET" in stmt.sql
+    assert "NOW()" in stmt.sql
+    assert "name_1" in stmt.parameters
+    assert stmt.parameters["name_1"] == "Updated"
+
+
+def test_on_conflict_with_insert_from_dict() -> None:
+    """Test ON CONFLICT with insert using from_dict methods."""
+    data = {"id": 1, "name": "John", "email": "john@test.com"}
+    query = sql.insert("users").values_from_dict(data).on_conflict("id").do_update(name="Updated John")
+    stmt = query.build()
+
+    assert "INSERT INTO" in stmt.sql
+    assert "ON CONFLICT" in stmt.sql
+    assert "DO UPDATE" in stmt.sql
+    assert "id" in stmt.parameters
+    assert "name" in stmt.parameters
+    assert "email" in stmt.parameters
+    assert "name_1" in stmt.parameters  # The update parameter
+    assert stmt.parameters["name_1"] == "Updated John"
+
+
+def test_on_conflict_with_multiple_rows() -> None:
+    """Test ON CONFLICT with multiple value rows."""
+    query = sql.insert("users").columns("id", "name").values(1, "John").values(2, "Jane").on_conflict("id").do_nothing()
+    stmt = query.build()
+
+    assert "INSERT INTO" in stmt.sql
+    assert "ON CONFLICT" in stmt.sql
+    assert "DO NOTHING" in stmt.sql
+    # Check that both rows are included
+    assert "id" in stmt.parameters
+    assert "name" in stmt.parameters
+    assert "id_1" in stmt.parameters
+    assert "name_1" in stmt.parameters
+
+
+def test_on_conflict_chaining_with_returning() -> None:
+    """Test ON CONFLICT chaining with RETURNING clause."""
+    query = (
+        sql.insert("users")
+        .columns("id", "name")
+        .values(1, "John")
+        .on_conflict("id")
+        .do_update(name="Updated John")
+        .returning("id", "name", "updated_at")
+    )
+    stmt = query.build()
+
+    assert "INSERT INTO" in stmt.sql
+    assert "ON CONFLICT" in stmt.sql
+    assert "DO UPDATE" in stmt.sql
+    assert "RETURNING" in stmt.sql
+    assert "id" in stmt.sql and "name" in stmt.sql and "updated_at" in stmt.sql
+
+
+def test_on_conflict_empty_do_update() -> None:
+    """Test ON CONFLICT DO UPDATE with no arguments (should work but do nothing)."""
+    query = sql.insert("users").columns("id", "name").values(1, "John").on_conflict("id").do_update()
+    stmt = query.build()
+
+    assert "INSERT INTO" in stmt.sql
+    assert "ON CONFLICT" in stmt.sql
+    assert "DO UPDATE" in stmt.sql
+
+
+def test_on_conflict_sql_generation_postgres_style() -> None:
+    """Test that ON CONFLICT generates PostgreSQL-style syntax that SQLGlot can transpile."""
+    query = sql.insert("users").columns("id", "name").values(1, "John").on_conflict("id").do_update(name="Updated")
+    stmt = query.build()
+
+    # Should generate proper PostgreSQL ON CONFLICT syntax
+    assert "ON CONFLICT(" in stmt.sql or "ON CONFLICT (" in stmt.sql
+    assert "DO UPDATE SET" in stmt.sql
+    assert '"id"' in stmt.sql or "id" in stmt.sql
+
+
+def test_on_conflict_type_safety() -> None:
+    """Test that ON CONFLICT methods return proper types for method chaining."""
+    # This test ensures the ConflictBuilder properly returns Insert builder
+    query_builder = sql.insert("users").columns("id", "name").values(1, "John")
+
+    # on_conflict should return ConflictBuilder
+    conflict_builder = query_builder.on_conflict("id")
+    assert hasattr(conflict_builder, "do_nothing")
+    assert hasattr(conflict_builder, "do_update")
+
+    # do_nothing should return Insert builder for further chaining
+    final_builder = conflict_builder.do_nothing()
+    assert hasattr(final_builder, "returning")
+    assert hasattr(final_builder, "build")
+
+    # Should be able to continue chaining
+    final_query = final_builder.returning("id")
+    stmt = final_query.build()
+    assert "RETURNING" in stmt.sql
+
+
+# Tests for MERGE kwargs functionality
+def test_merge_when_matched_then_update_with_kwargs() -> None:
+    """Test MERGE when_matched_then_update with kwargs support."""
+    query = (
+        sql.merge("users")
+        .using("new_users")
+        .on("users.id = new_users.id")
+        .when_matched_then_update(name="Updated John", email="updated@test.com")
+    )
+    stmt = query.build()
+
+    assert "MERGE INTO" in stmt.sql
+    assert "WHEN MATCHED THEN UPDATE" in stmt.sql
+    assert "name" in stmt.parameters
+    assert "email" in stmt.parameters
+    assert stmt.parameters["name"] == "Updated John"
+    assert stmt.parameters["email"] == "updated@test.com"
+
+
+def test_merge_when_matched_then_update_mixed_dict_kwargs() -> None:
+    """Test MERGE when_matched_then_update with mixed dict and kwargs."""
+    query = (
+        sql.merge("users")
+        .using("new_users")
+        .on("users.id = new_users.id")
+        .when_matched_then_update({"name": "Dict Name"}, email="Kwargs Email", status="active")
+    )
+    stmt = query.build()
+
+    assert "MERGE INTO" in stmt.sql
+    assert "WHEN MATCHED THEN UPDATE" in stmt.sql
+    assert "name" in stmt.parameters
+    assert "email" in stmt.parameters
+    assert "status" in stmt.parameters
+    assert stmt.parameters["name"] == "Dict Name"
+    assert stmt.parameters["email"] == "Kwargs Email"
+    assert stmt.parameters["status"] == "active"
+
+
+def test_merge_when_matched_then_update_with_sql_raw() -> None:
+    """Test MERGE when_matched_then_update with sql.raw expressions."""
+    query = (
+        sql.merge("users")
+        .using("new_users")
+        .on("users.id = new_users.id")
+        .when_matched_then_update(
+            name="Updated John",
+            updated_at=sql.raw("NOW()"),
+            status=sql.raw("COALESCE(:new_status, 'active')", new_status="verified"),
+        )
+    )
+    stmt = query.build()
+
+    assert "MERGE INTO" in stmt.sql
+    assert "WHEN MATCHED THEN UPDATE" in stmt.sql
+    assert "NOW()" in stmt.sql
+    assert "COALESCE" in stmt.sql
+    assert "name" in stmt.parameters
+    assert "new_status" in stmt.parameters
+    assert stmt.parameters["name"] == "Updated John"
+    assert stmt.parameters["new_status"] == "verified"
+
+
+def test_merge_when_not_matched_by_source_then_update_with_kwargs() -> None:
+    """Test MERGE when_not_matched_by_source_then_update with kwargs support."""
+    query = (
+        sql.merge("users")
+        .using("new_users")
+        .on("users.id = new_users.id")
+        .when_not_matched_by_source_then_update(status="inactive", last_seen=sql.raw("NOW()"))
+    )
+    stmt = query.build()
+
+    assert "MERGE INTO" in stmt.sql
+    assert "WHEN NOT MATCHED BY SOURCE THEN UPDATE" in stmt.sql
+    assert "NOW()" in stmt.sql
+    assert "status" in stmt.parameters
+    assert stmt.parameters["status"] == "inactive"
+
+
+def test_merge_when_not_matched_by_source_then_update_mixed() -> None:
+    """Test MERGE when_not_matched_by_source_then_update with mixed dict and kwargs."""
+    query = (
+        sql.merge("users")
+        .using("new_users")
+        .on("users.id = new_users.id")
+        .when_not_matched_by_source_then_update(
+            {"status": "Dict Status"}, last_seen=sql.raw("NOW()"), notes="Kwargs Notes"
+        )
+    )
+    stmt = query.build()
+
+    assert "MERGE INTO" in stmt.sql
+    assert "WHEN NOT MATCHED BY SOURCE THEN UPDATE" in stmt.sql
+    assert "NOW()" in stmt.sql
+    assert "status" in stmt.parameters
+    assert "notes" in stmt.parameters
+    assert stmt.parameters["status"] == "Dict Status"
+    assert stmt.parameters["notes"] == "Kwargs Notes"
+
+
+def test_merge_empty_update_values_error() -> None:
+    """Test that MERGE update methods raise error when no values provided."""
+    merge_builder = sql.merge("users").using("new_users").on("users.id = new_users.id")
+
+    with pytest.raises(SQLBuilderError, match="No update values provided"):
+        merge_builder.when_matched_then_update()
+
+    with pytest.raises(SQLBuilderError, match="No update values provided"):
+        merge_builder.when_not_matched_by_source_then_update()
+
+
+def test_merge_backward_compatibility() -> None:
+    """Test that MERGE methods maintain backward compatibility with dict-only usage."""
+    query = (
+        sql.merge("users")
+        .using("new_users")
+        .on("users.id = new_users.id")
+        .when_matched_then_update({"name": "Updated", "email": "updated@test.com"})
+        .when_not_matched_by_source_then_update({"status": "inactive"})
+    )
+    stmt = query.build()
+
+    assert "MERGE INTO" in stmt.sql
+    assert "WHEN MATCHED THEN UPDATE" in stmt.sql
+    assert "WHEN NOT MATCHED BY SOURCE THEN UPDATE" in stmt.sql
+    assert "name" in stmt.parameters
+    assert "email" in stmt.parameters
+    assert "status" in stmt.parameters
+
+
+def test_merge_comprehensive_example() -> None:
+    """Test comprehensive MERGE example with all features."""
+    query = (
+        sql.merge("users")
+        .using("new_users")
+        .on("users.id = new_users.id")
+        .when_matched_then_update(name="new_users.name", email="new_users.email", updated_at=sql.raw("NOW()"))
+        .when_not_matched_then_insert(
+            ["id", "name", "email", "created_at"],
+            ["new_users.id", "new_users.name", "new_users.email", sql.raw("NOW()")],
+        )
+        .when_not_matched_by_source_then_update(status="archived", archived_at=sql.raw("NOW()"))
+    )
+    stmt = query.build()
+
+    assert "MERGE INTO" in stmt.sql
+    assert "WHEN MATCHED THEN UPDATE" in stmt.sql
+    assert "WHEN NOT MATCHED THEN INSERT" in stmt.sql
+    assert "WHEN NOT MATCHED BY SOURCE THEN UPDATE" in stmt.sql
+    assert "NOW()" in stmt.sql
+    assert len(stmt.parameters) >= 6  # Should have multiple parameters

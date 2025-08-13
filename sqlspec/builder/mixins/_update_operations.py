@@ -1,7 +1,7 @@
 """Update operation mixins for SQL builders."""
 
 from collections.abc import Mapping
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
@@ -61,6 +61,52 @@ class UpdateSetClauseMixin:
         msg = "Method must be provided by QueryBuilder subclass"
         raise NotImplementedError(msg)
 
+    def _process_update_value(self, val: Any, col: Any) -> exp.Expression:
+        """Process a value for UPDATE assignment, handling SQL objects and parameters.
+
+        Args:
+            val: The value to process
+            col: The column name for parameter naming
+
+        Returns:
+            The processed expression for the value
+        """
+        if isinstance(val, exp.Expression):
+            return val
+        if has_query_builder_parameters(val):
+            subquery = val.build()
+            sql_str = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
+            value_expr = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(self, "dialect", None)))
+            if has_query_builder_parameters(val):
+                for p_name, p_value in val.parameters.items():
+                    self.add_parameter(p_value, name=p_name)
+            return value_expr
+        if hasattr(val, "expression") and hasattr(val, "sql"):
+            # Handle SQL objects (from sql.raw with parameters)
+            expression = getattr(val, "expression", None)
+            if expression is not None and isinstance(expression, exp.Expression):
+                # Merge parameters from SQL object into builder
+                if hasattr(val, "parameters"):
+                    sql_parameters = getattr(val, "parameters", {})
+                    for param_name, param_value in sql_parameters.items():
+                        self.add_parameter(param_value, name=param_name)
+                return cast("exp.Expression", expression)
+            # If expression is None, fall back to parsing the raw SQL
+            sql_text = getattr(val, "sql", "")
+            # Merge parameters even when parsing raw SQL
+            if hasattr(val, "parameters"):
+                sql_parameters = getattr(val, "parameters", {})
+                for param_name, param_value in sql_parameters.items():
+                    self.add_parameter(param_value, name=param_name)
+            parsed_expr = exp.maybe_parse(sql_text)
+            return parsed_expr if parsed_expr is not None else exp.convert(str(sql_text))
+        column_name = col if isinstance(col, str) else str(col)
+        if "." in column_name:
+            column_name = column_name.split(".")[-1]
+        param_name = self._generate_unique_parameter_name(column_name)
+        param_name = self.add_parameter(val, name=param_name)[1]
+        return exp.Placeholder(this=param_name)
+
     def set(self, *args: Any, **kwargs: Any) -> Self:
         """Set columns and values for the UPDATE statement.
 
@@ -80,7 +126,6 @@ class UpdateSetClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
-
         if self._expression is None:
             self._expression = exp.Update()
         if not isinstance(self._expression, exp.Update):
@@ -90,42 +135,12 @@ class UpdateSetClauseMixin:
         if len(args) == MIN_SET_ARGS and not kwargs:
             col, val = args
             col_expr = col if isinstance(col, exp.Column) else exp.column(col)
-            if isinstance(val, exp.Expression):
-                value_expr = val
-            elif has_query_builder_parameters(val):
-                subquery = val.build()
-                sql_str = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
-                value_expr = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(self, "dialect", None)))
-                if has_query_builder_parameters(val):
-                    for p_name, p_value in val.parameters.items():
-                        self.add_parameter(p_value, name=p_name)
-            else:
-                column_name = col if isinstance(col, str) else str(col)
-                if "." in column_name:
-                    column_name = column_name.split(".")[-1]
-                param_name = self._generate_unique_parameter_name(column_name)
-                param_name = self.add_parameter(val, name=param_name)[1]
-                value_expr = exp.Placeholder(this=param_name)
+            value_expr = self._process_update_value(val, col)
             assignments.append(exp.EQ(this=col_expr, expression=value_expr))
         elif (len(args) == 1 and isinstance(args[0], Mapping)) or kwargs:
             all_values = dict(args[0] if args else {}, **kwargs)
             for col, val in all_values.items():
-                if isinstance(val, exp.Expression):
-                    value_expr = val
-                elif has_query_builder_parameters(val):
-                    subquery = val.build()
-                    sql_str = subquery.sql if hasattr(subquery, "sql") and not callable(subquery.sql) else str(subquery)
-                    value_expr = exp.paren(exp.maybe_parse(sql_str, dialect=getattr(self, "dialect", None)))
-                    if has_query_builder_parameters(val):
-                        for p_name, p_value in val.parameters.items():
-                            self.add_parameter(p_value, name=p_name)
-                else:
-                    column_name = col if isinstance(col, str) else str(col)
-                    if "." in column_name:
-                        column_name = column_name.split(".")[-1]
-                    param_name = self._generate_unique_parameter_name(column_name)
-                    param_name = self.add_parameter(val, name=param_name)[1]
-                    value_expr = exp.Placeholder(this=param_name)
+                value_expr = self._process_update_value(val, col)
                 assignments.append(exp.EQ(this=exp.column(col), expression=value_expr))
         else:
             msg = "Invalid arguments for set(): use (column, value), mapping, or kwargs."
