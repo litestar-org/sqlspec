@@ -1,0 +1,517 @@
+"""Efficient multi-connection pool for aiosqlite with proper shutdown handling."""
+
+import asyncio
+import logging
+import time
+import uuid
+from contextlib import asynccontextmanager, suppress
+from typing import TYPE_CHECKING, Any, Optional, Union
+
+import aiosqlite
+
+if TYPE_CHECKING:
+    import threading
+    from collections.abc import AsyncGenerator
+
+    from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
+
+__all__ = ("AiosqliteConnectionPool", "PoolAcquisitionTimeoutError", "PoolClosedError", "PoolConnection")
+
+logger = logging.getLogger(__name__)
+
+
+class PoolClosedError(Exception):
+    """Raised when attempting to use a closed connection pool."""
+
+
+class PoolAcquisitionTimeoutError(Exception):
+    """Raised when connection acquisition times out."""
+
+
+class PoolConnection:
+    """Wrapper for database connections with pool lifecycle management."""
+
+    __slots__ = ("_closed", "connection", "id", "idle_since")
+
+    def __init__(self, connection: "AiosqliteConnection") -> None:
+        """Initialize pool connection wrapper.
+
+        Args:
+            connection: The raw aiosqlite connection
+        """
+        self.id = uuid.uuid4().hex
+        self.connection = connection
+        self.idle_since: Optional[float] = None
+        self._closed = False
+
+    @property
+    def idle_time(self) -> float:
+        """Get idle time in seconds.
+
+        Returns:
+            Idle time in seconds, 0.0 if connection is in use
+        """
+        if self.idle_since is None:
+            return 0.0
+        return time.time() - self.idle_since
+
+    @property
+    def is_closed(self) -> bool:
+        """Check if connection is closed.
+
+        Returns:
+            True if connection is closed
+        """
+        return self._closed
+
+    def mark_as_in_use(self) -> None:
+        """Mark connection as in use."""
+        self.idle_since = None
+
+    def mark_as_idle(self) -> None:
+        """Mark connection as idle."""
+        self.idle_since = time.time()
+
+    async def is_alive(self) -> bool:
+        """Check if connection is alive and functional.
+
+        Returns:
+            True if connection is healthy
+        """
+        if self._closed:
+            return False
+        try:
+            await self.connection.execute("SELECT 1")
+        except Exception:
+            return False
+        else:
+            return True
+
+    async def reset(self) -> None:
+        """Reset connection to clean state."""
+        if self._closed:
+            return
+        with suppress(Exception):
+            await self.connection.rollback()
+
+    async def close(self) -> None:
+        """Close the connection with fault tolerance."""
+        if self._closed:
+            return
+        try:
+            await self.connection.close()
+        except Exception:
+            logger.debug("Error closing connection %s", self.id)
+        finally:
+            self._closed = True
+
+
+class AiosqliteConnectionPool:
+    """Multi-connection pool for aiosqlite with proper shutdown handling."""
+
+    __slots__ = (
+        "_closed_event",
+        "_connect_timeout",
+        "_connection_parameters",
+        "_connection_registry",
+        "_idle_timeout",
+        "_lock",
+        "_operation_timeout",
+        "_pool_size",
+        "_queue",
+        "_tracked_threads",
+        "_wal_initialized",
+    )
+
+    def __init__(
+        self,
+        connection_parameters: "dict[str, Any]",
+        pool_size: int = 5,
+        connect_timeout: float = 30.0,
+        idle_timeout: float = 24 * 60 * 60,  # 24 hours
+        operation_timeout: float = 10.0,
+    ) -> None:
+        """Initialize connection pool.
+
+        Args:
+            connection_parameters: SQLite connection parameters
+            pool_size: Maximum number of connections in the pool
+            connect_timeout: Maximum time to wait for connection acquisition
+            idle_timeout: Maximum time a connection can remain idle
+            operation_timeout: Maximum time for connection operations
+        """
+        self._connection_parameters = connection_parameters
+        self._pool_size = pool_size
+        self._connect_timeout = connect_timeout
+        self._idle_timeout = idle_timeout
+        self._operation_timeout = operation_timeout
+
+        self._queue: asyncio.Queue[PoolConnection] = asyncio.Queue(maxsize=pool_size)
+        self._connection_registry: dict[str, PoolConnection] = {}
+        self._lock = asyncio.Lock()
+        self._closed_event = asyncio.Event()
+        self._tracked_threads: set[Union[threading.Thread, AiosqliteConnection]] = set()
+        self._wal_initialized = False
+
+    @property
+    def is_closed(self) -> bool:
+        """Check if pool is closed.
+
+        Returns:
+            True if pool is closed
+        """
+        return self._closed_event.is_set()
+
+    def size(self) -> int:
+        """Get total number of connections in pool.
+
+        Returns:
+            Total connection count
+        """
+        return len(self._connection_registry)
+
+    def checked_out(self) -> int:
+        """Get number of checked out connections.
+
+        Returns:
+            Number of connections currently in use
+        """
+        return len(self._connection_registry) - self._queue.qsize()
+
+    def _track_aiosqlite_thread(self, connection: "AiosqliteConnection") -> None:
+        """Track the background thread associated with an aiosqlite connection.
+
+        Args:
+            connection: The aiosqlite connection whose thread to track
+        """
+        # The aiosqlite Connection IS a thread (inherits from threading.Thread)
+        if hasattr(connection, "is_alive") and connection.is_alive():
+            self._tracked_threads.add(connection)
+            logger.debug("Tracking aiosqlite thread: %s", connection.name)
+
+    async def _create_connection(self) -> PoolConnection:
+        """Create a new connection with SQLite optimizations.
+
+        Returns:
+            New pool connection instance
+        """
+        connection = await aiosqlite.connect(**self._connection_parameters)
+
+        # Detect database type for appropriate optimization
+        database_path = str(self._connection_parameters.get("database", ""))
+        is_shared_cache = "cache=shared" in database_path
+        is_memory_db = ":memory:" in database_path or "mode=memory" in database_path
+
+        try:
+            # Set appropriate journal mode based on database type
+            if is_memory_db:
+                # In-memory databases cannot use WAL mode, use memory journaling
+                # Focus on optimizing for shared cache concurrency
+                await connection.execute("PRAGMA journal_mode = MEMORY")
+                await connection.execute("PRAGMA synchronous = OFF")  # Faster for memory DBs
+                await connection.execute("PRAGMA temp_store = MEMORY")
+                await connection.execute("PRAGMA cache_size = -16000")  # 16MB cache
+            else:
+                # File-based databases can use WAL mode for better concurrency
+                await connection.execute("PRAGMA journal_mode = WAL")
+                await connection.execute("PRAGMA synchronous = NORMAL")
+
+            # Common pragmas for all database types
+            await connection.execute("PRAGMA foreign_keys = ON")
+            await connection.execute("PRAGMA busy_timeout = 30000")  # 30 seconds for shared cache
+
+            # For shared cache in-memory databases, optimize locking behavior
+            if is_shared_cache and is_memory_db:
+                await connection.execute("PRAGMA read_uncommitted = ON")  # Reduce lock contention
+
+            await connection.commit()
+
+            if is_shared_cache:
+                self._wal_initialized = True
+                logger.debug("Database optimized for shared cache (memory: %s)", is_memory_db)
+
+        except Exception as e:
+            logger.warning("Failed to optimize connection: %s", e)
+            # Fallback to minimal configuration
+            await connection.execute("PRAGMA foreign_keys = ON")
+            await connection.execute("PRAGMA busy_timeout = 30000")
+            await connection.commit()
+
+        pool_connection = PoolConnection(connection)
+        pool_connection.mark_as_idle()
+
+        # Track the background thread for proper shutdown
+        self._track_aiosqlite_thread(connection)
+
+        async with self._lock:
+            self._connection_registry[pool_connection.id] = pool_connection
+
+        logger.debug("Created new aiosqlite connection: %s", pool_connection.id)
+        return pool_connection
+
+    async def _claim_if_healthy(self, connection: PoolConnection) -> bool:
+        """Check if connection is healthy and claim it.
+
+        Args:
+            connection: Connection to check and claim
+
+        Returns:
+            True if connection was successfully claimed
+        """
+        if connection.idle_time > self._idle_timeout:
+            logger.debug("Connection %s exceeded idle timeout, retiring", connection.id)
+            await self._retire_connection(connection)
+            return False
+
+        try:
+            await asyncio.wait_for(connection.is_alive(), timeout=self._operation_timeout)
+        except asyncio.TimeoutError:
+            logger.debug("Connection %s health check timed out, retiring", connection.id)
+            await self._retire_connection(connection)
+            return False
+        else:
+            connection.mark_as_in_use()
+            return True
+
+    async def _retire_connection(self, connection: PoolConnection) -> None:
+        """Retire a connection from the pool.
+
+        Args:
+            connection: Connection to retire
+        """
+        async with self._lock:
+            self._connection_registry.pop(connection.id, None)
+
+        try:
+            await asyncio.wait_for(connection.close(), timeout=self._operation_timeout)
+        except asyncio.TimeoutError:
+            logger.warning("Connection %s close timed out during retirement", connection.id)
+
+    async def _try_provision_new_connection(self) -> "Optional[PoolConnection]":
+        """Try to create a new connection if under capacity.
+
+        Returns:
+            New connection if successful, None if at capacity
+        """
+        async with self._lock:
+            if len(self._connection_registry) >= self._pool_size:
+                return None
+
+        try:
+            connection = await self._create_connection()
+        except Exception:
+            logger.exception("Failed to create new connection")
+            return None
+        else:
+            connection.mark_as_in_use()
+            return connection
+
+    async def _wait_for_healthy_connection(self) -> PoolConnection:
+        """Wait for a healthy connection to become available.
+
+        Returns:
+            Available healthy connection
+
+        Raises:
+            PoolClosedError: If pool is closed while waiting
+        """
+        while True:
+            get_connection_task = asyncio.create_task(self._queue.get())
+            pool_closed_task = asyncio.create_task(self._closed_event.wait())
+
+            done, pending = await asyncio.wait(
+                {get_connection_task, pool_closed_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+
+            try:
+                if pool_closed_task in done:
+                    msg = "Pool closed during connection acquisition"
+                    raise PoolClosedError(msg)
+
+                connection = get_connection_task.result()
+                if await self._claim_if_healthy(connection):
+                    return connection
+
+            finally:
+                for task in pending:
+                    task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await task
+
+    async def _run_acquisition_cycle(self) -> PoolConnection:
+        """Run the three-phase connection acquisition cycle.
+
+        Returns:
+            Available connection
+
+        Raises:
+            PoolClosedError: If pool is closed
+        """
+        if self.is_closed:
+            msg = "Cannot acquire connection from closed pool"
+            raise PoolClosedError(msg)
+
+        while not self._queue.empty():
+            connection = self._queue.get_nowait()
+            if await self._claim_if_healthy(connection):
+                return connection
+
+        new_connection = await self._try_provision_new_connection()
+        if new_connection is not None:
+            return new_connection
+
+        return await self._wait_for_healthy_connection()
+
+    async def _wait_for_threads_to_terminate(self, timeout: float = 5.0) -> None:
+        """Wait for all tracked aiosqlite connection threads to terminate.
+
+        Args:
+            timeout: Maximum time to wait for thread termination in seconds
+        """
+        if not self._tracked_threads:
+            return
+
+        logger.debug("Waiting for %d aiosqlite connection threads to terminate...", len(self._tracked_threads))
+        start_time = time.time()
+
+        # Remove already dead threads from tracking
+        dead_threads = {t for t in self._tracked_threads if not t.is_alive()}
+        self._tracked_threads -= dead_threads
+
+        if not self._tracked_threads:
+            logger.debug("All aiosqlite connection threads already terminated")
+            return
+
+        # Try to join threads to ensure proper termination
+        for thread in list(self._tracked_threads):
+            if thread.is_alive():
+                try:
+                    # Join with a short timeout in a separate thread to avoid blocking the async loop
+                    def join_thread(t: "threading.Thread") -> None:
+                        if t.is_alive():
+                            t.join(timeout=0.5)
+                            logger.debug("Joined aiosqlite thread: %s", t.name)
+
+                    # Run join in thread pool to avoid blocking
+                    await asyncio.get_event_loop().run_in_executor(None, join_thread, thread)
+                except Exception as e:
+                    logger.warning("Error joining aiosqlite thread %s: %s", thread.name, e)
+
+        # Wait for remaining threads with timeout
+        while self._tracked_threads and (time.time() - start_time) < timeout:
+            await asyncio.sleep(0.1)  # Check every 100ms
+
+            # Remove newly dead threads
+            dead_threads = {t for t in self._tracked_threads if not t.is_alive()}
+            self._tracked_threads -= dead_threads
+
+        remaining_threads = len(self._tracked_threads)
+        elapsed = time.time() - start_time
+
+        if remaining_threads > 0:
+            thread_names = [getattr(t, "name", str(t)) for t in self._tracked_threads]
+            logger.warning(
+                "Failed to terminate %d aiosqlite connection threads after %.2fs: %s",
+                remaining_threads,
+                elapsed,
+                thread_names,
+            )
+        else:
+            logger.debug("All aiosqlite connection threads terminated successfully in %.2fs", elapsed)
+
+    async def acquire(self) -> PoolConnection:
+        """Acquire a connection from the pool.
+
+        Returns:
+            Available connection
+
+        Raises:
+            PoolAcquisitionTimeoutError: If acquisition times out
+            PoolClosedError: If pool is closed
+        """
+        try:
+            connection = await asyncio.wait_for(self._run_acquisition_cycle(), timeout=self._connect_timeout)
+            # Small delay to ensure WAL mode is fully initialized before first use
+            if not self._wal_initialized and "cache=shared" in str(self._connection_parameters.get("database", "")):
+                await asyncio.sleep(0.01)  # 10ms delay for WAL initialization
+        except asyncio.TimeoutError as e:
+            msg = f"Connection acquisition timed out after {self._connect_timeout}s"
+            raise PoolAcquisitionTimeoutError(msg) from e
+        else:
+            return connection
+
+    async def release(self, connection: PoolConnection) -> None:
+        """Release a connection back to the pool.
+
+        Args:
+            connection: Connection to release
+        """
+        if self.is_closed:
+            await self._retire_connection(connection)
+            return
+
+        if connection.id not in self._connection_registry:
+            logger.warning("Attempted to release unknown connection: %s", connection.id)
+            return
+
+        try:
+            await asyncio.wait_for(connection.reset(), timeout=self._operation_timeout)
+            connection.mark_as_idle()
+            self._queue.put_nowait(connection)
+            logger.debug("Released connection back to pool: %s", connection.id)
+        except Exception as e:
+            logger.warning("Failed to reset connection %s during release: %s", connection.id, e)
+            await self._retire_connection(connection)
+
+    @asynccontextmanager
+    async def get_connection(self) -> "AsyncGenerator[AiosqliteConnection, None]":
+        """Get a connection with automatic release.
+
+        Yields:
+            Raw aiosqlite connection
+
+        Raises:
+            PoolClosedError: If pool is closed
+            PoolAcquisitionTimeoutError: If acquisition times out
+        """
+        connection = await self.acquire()
+        try:
+            yield connection.connection
+        finally:
+            await self.release(connection)
+
+    async def close(self) -> None:
+        """Close the connection pool gracefully.
+
+        Ensures all connections are properly closed and background threads are terminated.
+        """
+        if self.is_closed:
+            return
+
+        logger.debug("Closing aiosqlite connection pool")
+        self._closed_event.set()
+
+        # Clear the queue
+        while not self._queue.empty():
+            self._queue.get_nowait()
+
+        # Get all connections and clear registry
+        async with self._lock:
+            connections = list(self._connection_registry.values())
+            self._connection_registry.clear()
+
+        # Close all connections
+        if connections:
+            logger.debug("Closing %d aiosqlite connections", len(connections))
+            close_tasks = [asyncio.wait_for(conn.close(), timeout=self._operation_timeout) for conn in connections]
+            results = await asyncio.gather(*close_tasks, return_exceptions=True)
+
+            # Log any close errors
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.warning("Error closing connection %s: %s", connections[i].id, result)
+
+        # Wait for background threads to terminate
+        await self._wait_for_threads_to_terminate(timeout=self._operation_timeout)
+
+        logger.debug("Aiosqlite connection pool closed successfully")

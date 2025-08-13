@@ -7,6 +7,7 @@ Provides async SQLite database connectivity with:
 - SQLite-specific optimizations
 """
 
+import asyncio
 import contextlib
 import datetime
 from decimal import Decimal
@@ -223,12 +224,28 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
     async def begin(self) -> None:
-        """Begin a database transaction."""
+        """Begin a database transaction with appropriate locking strategy."""
         try:
             if not self.connection.in_transaction:
-                await self.connection.execute("BEGIN")
+                # For shared cache databases, use IMMEDIATE to reduce lock contention
+                # For other databases, BEGIN IMMEDIATE is also safer for concurrent access
+                await self.connection.execute("BEGIN IMMEDIATE")
         except aiosqlite.Error as e:
-            msg = f"Failed to begin transaction: {e}"
+            # If IMMEDIATE fails due to lock, try with exponential backoff
+            import random
+
+            max_retries = 3
+            for attempt in range(max_retries):
+                delay = 0.01 * (2**attempt) + random.uniform(0, 0.01)  # noqa: S311
+                await asyncio.sleep(delay)
+                try:
+                    await self.connection.execute("BEGIN IMMEDIATE")
+                except aiosqlite.Error:
+                    if attempt == max_retries - 1:  # Last attempt
+                        break
+                else:
+                    return
+            msg = f"Failed to begin transaction after retries: {e}"
             raise SQLSpecError(msg) from e
 
     async def rollback(self) -> None:

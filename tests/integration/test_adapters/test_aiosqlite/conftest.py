@@ -59,3 +59,25 @@ async def aiosqlite_config() -> AsyncGenerator[AiosqliteConfig, None]:
         yield config
     finally:
         await config.close_pool()
+
+
+@pytest.fixture
+async def aiosqlite_config_file() -> AsyncGenerator[AiosqliteConfig, None]:
+    """Provide AiosqliteConfig with temporary file database for concurrent access tests."""
+    import os
+    import tempfile
+
+    # Use a temporary file for better concurrency with WAL mode
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+
+    config = AiosqliteConfig(pool_config={"database": db_path, "pool_size": 5})
+
+    try:
+        yield config
+    finally:
+        await config.close_pool()
+        try:
+            os.unlink(db_path)
+        except Exception:
+            pass

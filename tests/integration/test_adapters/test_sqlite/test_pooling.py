@@ -48,8 +48,9 @@ def test_regular_memory_auto_conversion(sqlite_config_regular_memory: SqliteConf
     assert config.pool_config["pool_min_size"] == 5
     assert config.pool_config["pool_max_size"] == 10
 
-    # Verify database was auto-converted to shared memory
-    assert config._get_connection_config_dict()["database"] == "file::memory:?cache=shared"  # pyright: ignore[reportAttributeAccessIssue]
+    # Verify database was auto-converted to private memory (thread-local pattern)
+    db_uri = config._get_connection_config_dict()["database"]  # pyright: ignore[reportAttributeAccessIssue]
+    assert db_uri.startswith("file:memory_") and "cache=private" in db_uri
     assert config._get_connection_config_dict()["uri"] is True  # pyright: ignore[reportAttributeAccessIssue]
 
     # Test that multiple connections can access the same data (like shared memory test)
@@ -287,8 +288,9 @@ def test_config_memory_database_conversion() -> None:
     config = SqliteConfig(pool_config={"database": ":memory:"})
 
     try:
-        # Should be converted to shared memory
-        assert config.pool_config["database"] == "file::memory:?cache=shared"
+        # Should be converted to private memory (thread-local pattern)
+        db_uri = config.pool_config["database"]
+        assert db_uri.startswith("file:memory_") and "cache=private" in db_uri
         assert config.pool_config["uri"] is True
 
         # Verify it works
@@ -309,8 +311,9 @@ def test_config_default_database() -> None:
     config = SqliteConfig()
 
     try:
-        # Should default to shared memory
-        assert config.pool_config["database"] == "file::memory:?cache=shared"
+        # Should default to private memory (thread-local pattern)
+        db_uri = config.pool_config["database"]
+        assert db_uri.startswith("file:memory_") and "cache=private" in db_uri
         assert config.pool_config["uri"] is True
 
         # Verify it works
