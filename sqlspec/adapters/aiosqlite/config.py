@@ -1,15 +1,13 @@
 """Aiosqlite database configuration with optimized connection management."""
 
-import asyncio
 import logging
-import uuid
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, TypedDict
 
-import aiosqlite
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.aiosqlite.driver import AiosqliteCursor, AiosqliteDriver, aiosqlite_statement_config
+from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool
 from sqlspec.config import AsyncDatabaseConfig
 
 if TYPE_CHECKING:
@@ -18,7 +16,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite._types import AiosqliteConnection
     from sqlspec.core.statement import StatementConfig
 
-__all__ = ("AiosqliteConfig", "AiosqliteConnectionParams", "AiosqliteConnectionPool")
+__all__ = ("AiosqliteConfig", "AiosqliteConnectionParams", "AiosqlitePoolParams")
 
 logger = logging.getLogger(__name__)
 
@@ -27,87 +25,6 @@ WAL_PRAGMA_SQL: Final[str] = "PRAGMA journal_mode = WAL"
 FOREIGN_KEYS_SQL: Final[str] = "PRAGMA foreign_keys = ON"
 SYNC_NORMAL_SQL: Final[str] = "PRAGMA synchronous = NORMAL"
 BUSY_TIMEOUT_SQL: Final[str] = "PRAGMA busy_timeout = 5000"  # 5 seconds
-
-
-class AiosqliteConnectionPool:
-    """Connection pool for Aiosqlite using a single shared connection approach.
-
-    Uses a single shared connection per database file since aiosqlite internally
-    handles queuing and serialization of operations.
-    """
-
-    __slots__ = ("_closed", "_connection", "_connection_parameters", "_lock")
-
-    def __init__(self, connection_parameters: "dict[str, Any]") -> None:
-        """Initialize connection manager.
-
-        Args:
-            connection_parameters: SQLite connection parameters
-        """
-        self._connection: Optional[AiosqliteConnection] = None
-        self._connection_parameters = connection_parameters
-        self._lock = asyncio.Lock()
-        self._closed = False
-
-    async def _ensure_connection(self) -> "AiosqliteConnection":
-        """Ensure we have a valid connection, creating one if needed."""
-        async with self._lock:
-            if self._connection is None or self._closed:
-                self._connection = await aiosqlite.connect(**self._connection_parameters)
-
-                await self._connection.execute(WAL_PRAGMA_SQL)
-                await self._connection.execute(FOREIGN_KEYS_SQL)
-                await self._connection.execute(SYNC_NORMAL_SQL)
-                await self._connection.execute(BUSY_TIMEOUT_SQL)
-                await self._connection.commit()
-
-                self._closed = False
-                logger.debug("Created new aiosqlite connection")
-
-            return self._connection
-
-    @asynccontextmanager
-    async def get_connection(self) -> "AsyncGenerator[AiosqliteConnection, None]":
-        """Get the shared connection.
-
-        Yields:
-            The shared Aiosqlite connection instance.
-        """
-        connection = await self._ensure_connection()
-        yield connection
-
-    async def close(self) -> None:
-        """Close the shared connection."""
-        async with self._lock:
-            if self._connection is not None and not self._closed:
-                await self._connection.close()
-                self._connection = None
-                self._closed = True
-                logger.debug("Closed aiosqlite connection")
-
-    def size(self) -> int:
-        """Get connection count."""
-        return 0 if self._closed or self._connection is None else 1
-
-    def checked_out(self) -> int:
-        """Get number of checked out connections."""
-        return 0
-
-    async def acquire(self) -> "AiosqliteConnection":
-        """Get the shared connection directly.
-
-        Returns:
-            The shared connection instance.
-        """
-        return await self._ensure_connection()
-
-    async def release(self, connection: "AiosqliteConnection") -> None:
-        """No-op release for compatibility.
-
-        Args:
-            connection: Connection to release (ignored)
-        """
-        _ = connection
 
 
 class AiosqliteConnectionParams(TypedDict, total=False):
@@ -122,6 +39,15 @@ class AiosqliteConnectionParams(TypedDict, total=False):
     uri: NotRequired[bool]
 
 
+class AiosqlitePoolParams(AiosqliteConnectionParams, total=False):
+    """Pool parameters for aiosqlite, extending connection parameters."""
+
+    pool_size: NotRequired[int]
+    acquisition_timeout: NotRequired[float]
+    idle_timeout: NotRequired[float]
+    operation_timeout: NotRequired[float]
+
+
 class AiosqliteConfig(AsyncDatabaseConfig):
     """Database configuration for AioSQLite engine."""
 
@@ -132,7 +58,7 @@ class AiosqliteConfig(AsyncDatabaseConfig):
         self,
         *,
         pool_instance: "Optional[AiosqliteConnectionPool]" = None,
-        pool_config: "Optional[dict[str, Any]]" = None,
+        pool_config: "Optional[AiosqlitePoolParams]" = None,
         migration_config: "Optional[dict[str, Any]]" = None,
         statement_config: "Optional[StatementConfig]" = None,
         **kwargs: Any,
@@ -141,31 +67,42 @@ class AiosqliteConfig(AsyncDatabaseConfig):
 
         Args:
             pool_instance: Optional pre-configured connection pool instance.
-            pool_config: Optional pool configuration dict (AiosqliteConnectionParams).
+            pool_config: Optional pool configuration (AiosqlitePoolParams).
             migration_config: Optional migration configuration.
             statement_config: Optional statement configuration.
             **kwargs: Additional connection parameters.
         """
-        connection_params = {}
-        if pool_config:
-            connection_params.update(pool_config)
-        connection_params.update(kwargs)
+        pool_params: dict[str, Any] = dict(pool_config) if pool_config else {}
+        pool_params.update(kwargs)
 
-        # Make :memory: databases unique per instance to prevent locking
-        if connection_params.get("database") == ":memory:":
-            connection_params["database"] = f"file:memory_{uuid.uuid4().hex}?mode=memory&cache=private"
+        # Extract pool-specific parameters
+        pool_size = pool_params.pop("pool_size", 5)
+        acquisition_timeout = pool_params.pop("acquisition_timeout", 30.0)
+        idle_timeout = pool_params.pop("idle_timeout", 24 * 60 * 60)
+        operation_timeout = pool_params.pop("operation_timeout", 10.0)
+
+        # Make :memory: databases shared for multi-connection access
+        if pool_params.get("database") == ":memory:":
+            pool_params["database"] = "file::memory:?cache=shared"
+            pool_params["uri"] = True
 
         super().__init__(
-            pool_config=connection_params,
+            pool_config=pool_params,
             pool_instance=pool_instance,
             migration_config=migration_config or {},
             statement_config=statement_config or aiosqlite_statement_config,
         )
 
-        self._connection_parameters = self._parse_connection_parameters(connection_params)
+        self._connection_parameters = self._parse_connection_parameters(pool_params)
 
         if pool_instance is None:
-            self.pool_instance: AiosqliteConnectionPool = AiosqliteConnectionPool(self._connection_parameters)
+            self.pool_instance: AiosqliteConnectionPool = AiosqliteConnectionPool(
+                connection_parameters=self._connection_parameters,
+                pool_size=pool_size,
+                acquisition_timeout=acquisition_timeout,
+                idle_timeout=idle_timeout,
+                operation_timeout=operation_timeout,
+            )
 
     def _parse_connection_parameters(self, params: "dict[str, Any]") -> "dict[str, Any]":
         """Parse connection parameters for AioSQLite.
@@ -187,7 +124,10 @@ class AiosqliteConfig(AsyncDatabaseConfig):
             result["database"] = "file::memory:?cache=shared"
             result["uri"] = True
 
-        for pool_param in ["pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds"]:
+        for pool_param in [
+            "pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds",
+            "pool_size", "acquisition_timeout", "idle_timeout", "operation_timeout"
+        ]:
             result.pop(pool_param, None)
 
         return result
