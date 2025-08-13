@@ -68,11 +68,16 @@ async def aiosqlite_example() -> None:
         print(f"Products page 2: {len(page_products)} items, Total: {total_count}")
 
 
+async def main_async() -> None:
+    """Run AIOSQLite example with proper cleanup."""
+    print("=== AIOSQLite Driver Example ===")
+    await aiosqlite_example()
+    print("✅ AIOSQLite example completed successfully!")
+
+
 def main() -> None:
     """Run AIOSQLite example."""
-    print("=== AIOSQLite Driver Example ===")
-    asyncio.run(aiosqlite_example())
-    print("✅ AIOSQLite example completed successfully!")
+    asyncio.run(main_async())
 
 
 if __name__ == "__main__":

@@ -175,12 +175,12 @@ async def test_pooling_with_core_round_3(aiosqlite_config: AiosqliteConfig) -> N
 
 
 @pytest.mark.xdist_group("aiosqlite")
-async def test_pool_concurrent_access(aiosqlite_config: AiosqliteConfig) -> None:
+async def test_pool_concurrent_access(aiosqlite_config_file: AiosqliteConfig) -> None:
     """Test concurrent pool access with multiple sessions."""
     import asyncio
 
     # Prepare test table
-    async with aiosqlite_config.provide_session() as setup_session:
+    async with aiosqlite_config_file.provide_session() as setup_session:
         await setup_session.execute_script("""
             CREATE TABLE IF NOT EXISTS concurrent_test (
                 id INTEGER PRIMARY KEY,
@@ -192,7 +192,7 @@ async def test_pool_concurrent_access(aiosqlite_config: AiosqliteConfig) -> None
 
     async def insert_data(session_id: str) -> None:
         """Insert data from a specific session."""
-        async with aiosqlite_config.provide_session() as session:
+        async with aiosqlite_config_file.provide_session() as session:
             await session.execute("INSERT INTO concurrent_test (session_id) VALUES (?)", (session_id,))
             await session.commit()
 
@@ -201,7 +201,7 @@ async def test_pool_concurrent_access(aiosqlite_config: AiosqliteConfig) -> None
     await asyncio.gather(*tasks)
 
     # Verify all data was inserted
-    async with aiosqlite_config.provide_session() as verify_session:
+    async with aiosqlite_config_file.provide_session() as verify_session:
         result = await verify_session.execute("SELECT COUNT(*) as count FROM concurrent_test")
         assert isinstance(result, SQLResult)
         assert result.data is not None
