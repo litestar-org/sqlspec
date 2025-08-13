@@ -77,6 +77,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up QEMU
+        if: github.event.inputs.test_matrix == 'full'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -98,10 +104,10 @@ jobs:
           CIBW_BUILD: "cp${{ matrix.python-version == '3.9' && '39' || matrix.python-version == '3.10' && '310' || matrix.python-version == '3.11' && '311' || matrix.python-version == '3.12' && '312' || matrix.python-version == '3.13' && '313' }}-*"
           CIBW_BUILD_VERBOSITY: 1
 
-          # Platform configuration - limited for testing
+          # Platform configuration - conditional ARM64 support with QEMU
           CIBW_ARCHS_LINUX: ${{ github.event.inputs.test_matrix == 'full' && 'x86_64 aarch64' || 'x86_64' }}
           CIBW_ARCHS_MACOS: ${{ github.event.inputs.test_matrix == 'full' && 'x86_64 arm64' || 'x86_64' }}
-          CIBW_ARCHS_WINDOWS: ${{ github.event.inputs.test_matrix == 'full' && 'AMD64' || 'AMD64' }}
+          CIBW_ARCHS_WINDOWS: "AMD64"
 
           # Skip problematic combinations
           CIBW_SKIP: "cp39-win_arm64 *-musllinux*"
