@@ -191,6 +191,19 @@ def test_raw_without_parameters_backward_compatibility() -> None:
     assert not isinstance(expr, SQL)
 
 
+def test_raw_expression_in_insert_values() -> None:
+    """Test that raw expressions work properly in insert values."""
+    query = sql.insert("logs").values(message="Test", created_at=sql.raw("NOW()"))
+    stmt = query.build()
+
+    assert "INSERT INTO" in stmt.sql
+    assert "logs" in stmt.sql
+    assert "message" in stmt.parameters
+    assert stmt.parameters["message"] == "Test"
+    # The raw expression should be included directly, not as a parameter
+    assert "NOW()" in stmt.sql
+
+
 def test_raw_with_named_parameters_returns_sql_object() -> None:
     """Test that raw() with parameters returns SQL statement object."""
     stmt = sql.raw("name = :name_param", name_param="John")
@@ -280,6 +293,46 @@ def test_insert_method() -> None:
     assert "users" in stmt.sql
     assert "name" in stmt.parameters
     assert "email" in stmt.parameters
+
+
+def test_insert_values_with_kwargs() -> None:
+    """Test Insert.values() method with keyword arguments."""
+    query = (
+        sql.insert("team_member")
+        .values(team_id=1, user_id=2, role="admin", joined_at=sql.raw("NOW()"))
+        .returning("id", "team_id", "user_id", "role", "is_owner", "joined_at")
+    )
+    stmt = query.build()
+
+    assert "INSERT INTO" in stmt.sql
+    assert "team_member" in stmt.sql
+    assert "RETURNING" in stmt.sql
+    assert "team_id" in stmt.parameters
+    assert "user_id" in stmt.parameters
+    assert "role" in stmt.parameters
+    assert stmt.parameters["team_id"] == 1
+    assert stmt.parameters["user_id"] == 2
+    assert stmt.parameters["role"] == "admin"
+
+
+def test_insert_values_mixed_args_error() -> None:
+    """Test Insert.values() raises error when mixing positional and keyword arguments."""
+    with pytest.raises(SQLBuilderError, match="Cannot mix positional values with keyword values"):
+        sql.insert("users").values("John", email="john@test.com")
+
+
+def test_insert_values_with_mapping() -> None:
+    """Test Insert.values() method with a mapping argument."""
+    data = {"name": "John", "email": "john@test.com"}
+    query = sql.insert("users").values(data)
+    stmt = query.build()
+
+    assert "INSERT INTO" in stmt.sql
+    assert "users" in stmt.sql
+    assert "name" in stmt.parameters
+    assert "email" in stmt.parameters
+    assert stmt.parameters["name"] == "John"
+    assert stmt.parameters["email"] == "john@test.com"
 
 
 def test_update_method() -> None:
@@ -460,3 +513,352 @@ def test_parameter_values_preserved_correctly() -> None:
     none_stmt = none_query.build()
     assert "none_col" in none_stmt.parameters
     assert none_stmt.parameters["none_col"] is None
+
+
+def test_case_expression_basic_syntax() -> None:
+    """Test basic CASE expression syntax using sql.case_."""
+    case_expr = sql.case_.when("status = 'active'", "Active").else_("Inactive").end()
+
+    query = sql.select("id", case_expr).from_("users")
+    stmt = query.build()
+
+    assert "CASE" in stmt.sql
+    assert "WHEN" in stmt.sql
+    assert "ELSE" in stmt.sql
+    assert "END" in stmt.sql
+    assert "Active" in stmt.sql
+    assert "Inactive" in stmt.sql
+
+
+def test_case_expression_with_alias() -> None:
+    """Test CASE expression with alias using as_() method."""
+    case_expr = sql.case_.when("status = 'active'", "Active").else_("Inactive").as_("status_display")
+
+    query = sql.select("id", case_expr).from_("users")
+    stmt = query.build()
+
+    assert "CASE" in stmt.sql
+    assert "status_display" in stmt.sql
+    assert "Active" in stmt.sql
+    assert "Inactive" in stmt.sql
+
+
+def test_case_property_syntax() -> None:
+    """Test new sql.case_ property syntax."""
+    case_expr = sql.case_.when("status = 'active'", "Active").else_("Inactive").end()
+
+    query = sql.select("id", case_expr).from_("users")
+    stmt = query.build()
+
+    assert "CASE" in stmt.sql
+    assert "WHEN" in stmt.sql
+    assert "ELSE" in stmt.sql
+    assert "END" in stmt.sql
+    assert "Active" in stmt.sql
+    assert "Inactive" in stmt.sql
+
+
+def test_case_property_with_alias() -> None:
+    """Test new sql.case_ property syntax with alias."""
+    case_expr = sql.case_.when("status = 'active'", "Active").else_("Inactive").as_("status_display")
+
+    query = sql.select("id", case_expr).from_("users")
+    stmt = query.build()
+
+    assert "CASE" in stmt.sql
+    assert "status_display" in stmt.sql
+    assert "Active" in stmt.sql
+    assert "Inactive" in stmt.sql
+
+
+def test_case_multiple_when_clauses() -> None:
+    """Test CASE expression with multiple WHEN clauses."""
+    case_expr = sql.case_.when("age < 18", "Minor").when("age < 65", "Adult").else_("Senior").end()
+
+    query = sql.select("name", case_expr).from_("users")
+    stmt = query.build()
+
+    assert "CASE" in stmt.sql
+    assert "Minor" in stmt.sql
+    assert "Adult" in stmt.sql
+    assert "Senior" in stmt.sql
+
+
+def test_case_expression_type_compatibility() -> None:
+    """Test that all CASE expression variants are compatible with select()."""
+    old_case = sql.case().when("x = 1", "one").end()
+    new_case = sql.case_.when("x = 2", "two").end()
+    aliased_case = sql.case_.when("x = 3", "three").as_("x_desc")
+
+    query = sql.select("id", old_case, new_case, aliased_case).from_("test")
+    stmt = query.build()
+
+    assert "SELECT" in stmt.sql
+    assert "CASE" in stmt.sql
+    assert "one" in stmt.sql
+    assert "two" in stmt.sql
+    assert "three" in stmt.sql
+    assert "x_desc" in stmt.sql
+
+
+def test_case_property_returns_case_builder() -> None:
+    """Test that sql.case_ returns a Case builder instance."""
+    from sqlspec._sql import Case
+
+    case_builder = sql.case_
+    assert isinstance(case_builder, Case)
+    assert hasattr(case_builder, "when")
+    assert hasattr(case_builder, "else_")
+    assert hasattr(case_builder, "end")
+    assert hasattr(case_builder, "as_")
+
+
+def test_window_function_shortcuts() -> None:
+    """Test window function shortcuts like sql.row_number_."""
+    from sqlspec._sql import WindowFunctionBuilder
+
+    # Test that shortcuts return WindowFunctionBuilder instances
+    assert isinstance(sql.row_number_, WindowFunctionBuilder)
+    assert isinstance(sql.rank_, WindowFunctionBuilder)
+    assert isinstance(sql.dense_rank_, WindowFunctionBuilder)
+
+
+def test_window_function_with_alias() -> None:
+    """Test window function with alias and partition/order."""
+    window_func = sql.row_number_.partition_by("department").order_by("salary").as_("row_num")
+
+    query = sql.select("name", window_func).from_("employees")
+    stmt = query.build()
+
+    assert "ROW_NUMBER()" in stmt.sql
+    assert "OVER" in stmt.sql
+    assert "PARTITION BY" in stmt.sql
+    assert "ORDER BY" in stmt.sql
+    assert "row_num" in stmt.sql
+
+
+def test_window_function_without_alias() -> None:
+    """Test window function without alias."""
+    window_func = sql.rank_.partition_by("department").order_by("salary").build()
+
+    query = sql.select("name", window_func).from_("employees")
+    stmt = query.build()
+
+    assert "RANK()" in stmt.sql
+    assert "OVER" in stmt.sql
+    assert "PARTITION BY" in stmt.sql
+    assert "ORDER BY" in stmt.sql
+
+
+def test_multiple_window_functions() -> None:
+    """Test multiple window functions in same query."""
+    row_num = sql.row_number_.partition_by("department").order_by("salary").as_("row_num")
+    rank_val = sql.rank_.partition_by("department").order_by("salary").as_("rank_val")
+
+    query = sql.select("name", row_num, rank_val).from_("employees")
+    stmt = query.build()
+
+    assert "ROW_NUMBER()" in stmt.sql
+    assert "RANK()" in stmt.sql
+    assert "row_num" in stmt.sql
+    assert "rank_val" in stmt.sql
+
+
+def test_window_function_multiple_partition_columns() -> None:
+    """Test window function with multiple partition and order columns."""
+    window_func = sql.dense_rank_.partition_by("department", "team").order_by("salary", "hire_date").build()
+
+    query = sql.select("name", window_func).from_("employees")
+    stmt = query.build()
+
+    assert "DENSE_RANK()" in stmt.sql
+    assert "PARTITION BY" in stmt.sql
+    assert "department" in stmt.sql
+    assert "team" in stmt.sql
+    assert "salary" in stmt.sql
+    assert "hire_date" in stmt.sql
+
+
+def test_normal_column_access_preserved() -> None:
+    """Test that normal column access still works after adding window functions."""
+    # This should still return a Column, not a WindowFunctionBuilder
+    from sqlspec.builder._column import Column
+
+    assert isinstance(sql.department, Column)
+    assert isinstance(sql.some_normal_column, Column)
+
+    # But these should return WindowFunctionBuilder
+    from sqlspec._sql import WindowFunctionBuilder
+
+    assert isinstance(sql.row_number_, WindowFunctionBuilder)
+    assert isinstance(sql.rank_, WindowFunctionBuilder)
+
+
+def test_subquery_builders() -> None:
+    """Test subquery builder shortcuts."""
+    from sqlspec._sql import SubqueryBuilder
+
+    # Test that shortcuts return SubqueryBuilder instances
+    assert isinstance(sql.exists_, SubqueryBuilder)
+    assert isinstance(sql.in_, SubqueryBuilder)
+    assert isinstance(sql.any_, SubqueryBuilder)
+    assert isinstance(sql.all_, SubqueryBuilder)
+
+
+def test_exists_subquery() -> None:
+    """Test EXISTS subquery functionality."""
+    subquery = sql.select("1").from_("orders").where_eq("user_id", "123")
+    exists_expr = sql.exists_(subquery)
+
+    query = sql.select("*").from_("users").where(exists_expr)
+    stmt = query.build()
+
+    assert "EXISTS" in stmt.sql
+    assert "SELECT" in stmt.sql
+    assert "orders" in stmt.sql
+    # Note: The subquery parameters are embedded in the SQL structure
+
+
+def test_in_subquery() -> None:
+    """Test IN subquery functionality."""
+    subquery = sql.select("category_id").from_("categories").where_eq("active", True)
+    in_expr = sql.in_(subquery)
+
+    # Test that the expression is created correctly
+    from sqlglot.expressions import In
+
+    assert isinstance(in_expr, In)
+
+
+def test_any_subquery() -> None:
+    """Test ANY subquery functionality."""
+    subquery = sql.select("salary").from_("employees").where_eq("department", "Engineering")
+    any_expr = sql.any_(subquery)
+
+    from sqlglot.expressions import Any
+
+    assert isinstance(any_expr, Any)
+
+
+def test_all_subquery() -> None:
+    """Test ALL subquery functionality."""
+    subquery = sql.select("salary").from_("employees").where_eq("department", "Sales")
+    all_expr = sql.all_(subquery)
+
+    from sqlglot.expressions import All
+
+    assert isinstance(all_expr, All)
+
+
+def test_join_builders() -> None:
+    """Test join builder shortcuts."""
+    from sqlspec._sql import JoinBuilder
+
+    # Test that shortcuts return JoinBuilder instances
+    assert isinstance(sql.left_join_, JoinBuilder)
+    assert isinstance(sql.inner_join_, JoinBuilder)
+    assert isinstance(sql.right_join_, JoinBuilder)
+    assert isinstance(sql.full_join_, JoinBuilder)
+    assert isinstance(sql.cross_join_, JoinBuilder)
+
+
+def test_left_join_builder() -> None:
+    """Test LEFT JOIN builder functionality."""
+    join_expr = sql.left_join_("posts").on("users.id = posts.user_id")
+
+    from sqlglot.expressions import Join
+
+    assert isinstance(join_expr, Join)
+
+    # Test in a complete query
+    query = sql.select("users.name", "posts.title").from_("users").join(join_expr)
+    stmt = query.build()
+
+    assert "LEFT JOIN" in stmt.sql
+    assert "posts" in stmt.sql
+    assert "users.id" in stmt.sql or "posts.user_id" in stmt.sql
+
+
+def test_inner_join_builder_with_alias() -> None:
+    """Test INNER JOIN builder with table alias."""
+    join_expr = sql.inner_join_("profiles", "p").on("users.id = p.user_id")
+
+    query = sql.select("users.name", "p.bio").from_("users").join(join_expr)
+    stmt = query.build()
+
+    assert "JOIN" in stmt.sql
+    assert "profiles" in stmt.sql or "p" in stmt.sql
+
+
+def test_right_join_builder() -> None:
+    """Test RIGHT JOIN builder functionality."""
+    join_expr = sql.right_join_("comments").on("posts.id = comments.post_id")
+
+    query = sql.select("posts.title", "comments.content").from_("posts").join(join_expr)
+    stmt = query.build()
+
+    assert "RIGHT JOIN" in stmt.sql
+    assert "comments" in stmt.sql
+
+
+def test_full_join_builder() -> None:
+    """Test FULL JOIN builder functionality."""
+    join_expr = sql.full_join_("archive").on("users.id = archive.user_id")
+
+    query = sql.select("users.name", "archive.data").from_("users").join(join_expr)
+    stmt = query.build()
+
+    assert "FULL" in stmt.sql
+    assert "JOIN" in stmt.sql
+    assert "archive" in stmt.sql
+
+
+def test_cross_join_builder() -> None:
+    """Test CROSS JOIN builder functionality."""
+    join_expr = sql.cross_join_("settings").on("1=1")  # ON condition ignored for CROSS JOIN
+
+    query = sql.select("users.name", "settings.value").from_("users").join(join_expr)
+    stmt = query.build()
+
+    assert "CROSS" in stmt.sql or "JOIN" in stmt.sql
+    assert "settings" in stmt.sql
+
+
+def test_multiple_join_builders() -> None:
+    """Test multiple join builders in same query."""
+    left_join = sql.left_join_("posts").on("users.id = posts.user_id")
+    inner_join = sql.inner_join_("categories").on("posts.category_id = categories.id")
+
+    query = sql.select("users.name", "posts.title", "categories.name").from_("users").join(left_join).join(inner_join)
+    stmt = query.build()
+
+    assert "LEFT JOIN" in stmt.sql
+    assert "JOIN" in stmt.sql
+    assert "posts" in stmt.sql
+    assert "categories" in stmt.sql
+
+
+def test_backward_compatibility_preserved() -> None:
+    """Test that all existing functionality still works with new builders."""
+    # Original join methods should still work
+    query1 = sql.select("u.name", "p.title").from_("users u").left_join("posts p", "u.id = p.user_id")
+    stmt1 = query1.build()
+    assert "LEFT JOIN" in stmt1.sql
+
+    # Original case syntax should still work
+    case_expr = sql.case().when("status = 'active'", "Active").else_("Inactive").end()
+    query2 = sql.select("name", case_expr).from_("users")
+    stmt2 = query2.build()
+    assert "CASE" in stmt2.sql
+
+    # New window functions work
+    window_func = sql.row_number_.partition_by("department").order_by("salary").build()
+    query3 = sql.select("name", window_func).from_("employees")
+    stmt3 = query3.build()
+    assert "ROW_NUMBER" in stmt3.sql
+
+    # Column access should still work
+    from sqlspec.builder._column import Column
+
+    assert isinstance(sql.users, Column)
+    assert isinstance(sql.posts, Column)

@@ -2,6 +2,7 @@
 
 from typing import TYPE_CHECKING, Optional, Union, cast
 
+from mypy_extensions import trait
 from sqlglot import exp
 
 if TYPE_CHECKING:
@@ -12,10 +13,14 @@ if TYPE_CHECKING:
 __all__ = ("PivotClauseMixin", "UnpivotClauseMixin")
 
 
+@trait
 class PivotClauseMixin:
     """Mixin class to add PIVOT functionality to a Select."""
 
-    _expression: "Optional[exp.Expression]" = None
+    __slots__ = ()
+    # Type annotation for PyRight - this will be provided by the base class
+    _expression: Optional[exp.Expression]
+
     dialect: "DialectType" = None
 
     def pivot(
@@ -79,10 +84,14 @@ class PivotClauseMixin:
         return cast("Select", self)
 
 
+@trait
 class UnpivotClauseMixin:
     """Mixin class to add UNPIVOT functionality to a Select."""
 
-    _expression: "Optional[exp.Expression]" = None
+    __slots__ = ()
+    # Type annotation for PyRight - this will be provided by the base class
+    _expression: Optional[exp.Expression]
+
     dialect: "DialectType" = None
 
     def unpivot(

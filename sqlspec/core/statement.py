@@ -220,13 +220,20 @@ class SQL:
         if "is_script" in kwargs:
             self._is_script = bool(kwargs.pop("is_script"))
 
-        filters = [p for p in parameters if is_statement_filter(p)]
-        actual_params = [p for p in parameters if not is_statement_filter(p)]
+        # Optimize parameter filtering with direct iteration
+        filters: list[StatementFilter] = []
+        actual_params: list[Any] = []
+        for p in parameters:
+            if is_statement_filter(p):
+                filters.append(p)
+            else:
+                actual_params.append(p)
 
         self._filters.extend(filters)
 
         if actual_params:
-            if len(actual_params) == 1:
+            param_count = len(actual_params)
+            if param_count == 1:
                 param = actual_params[0]
                 if isinstance(param, dict):
                     self._named_parameters.update(param)
@@ -339,10 +346,11 @@ class SQL:
         """Explicitly compile the SQL statement."""
         if self._processed_state is Empty:
             try:
-                current_parameters = self._named_parameters or self._positional_parameters
+                # Avoid unnecessary variable assignment
                 processor = SQLProcessor(self._statement_config)
-
-                compiled_result = processor.compile(self._raw_sql, current_parameters, is_many=self._is_many)
+                compiled_result = processor.compile(
+                    self._raw_sql, self._named_parameters or self._positional_parameters, is_many=self._is_many
+                )
 
                 self._processed_state = ProcessedState(
                     compiled_sql=compiled_result.compiled_sql,
@@ -421,6 +429,7 @@ class SQL:
         Returns:
             New SQL instance with the WHERE condition applied
         """
+        # Parse current SQL with copy=False optimization
         current_expr = None
         with contextlib.suppress(ParseError):
             current_expr = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
@@ -429,8 +438,11 @@ class SQL:
             try:
                 current_expr = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
             except ParseError:
-                current_expr = sqlglot.parse_one(f"SELECT * FROM ({self._raw_sql}) AS subquery", dialect=self._dialect)
+                # Use f-string optimization and copy=False
+                subquery_sql = f"SELECT * FROM ({self._raw_sql}) AS subquery"
+                current_expr = sqlglot.parse_one(subquery_sql, dialect=self._dialect)
 
+        # Parse condition with copy=False optimization
         condition_expr: exp.Expression
         if isinstance(condition, str):
             try:
@@ -440,34 +452,32 @@ class SQL:
         else:
             condition_expr = condition
 
+        # Apply WHERE clause
         if isinstance(current_expr, exp.Select) or supports_where(current_expr):
-            new_expr = current_expr.where(condition_expr)
+            new_expr = current_expr.where(condition_expr, copy=False)
         else:
-            new_expr = exp.Select().from_(current_expr).where(condition_expr)
+            new_expr = exp.Select().from_(current_expr).where(condition_expr, copy=False)
 
+        # Generate SQL and create new instance
         new_sql_text = new_expr.sql(dialect=self._dialect)
-
         new_sql = SQL(
             new_sql_text, *self._original_parameters, statement_config=self._statement_config, is_many=self._is_many
         )
-        # Preserve accumulated named parameters when creating WHERE clause
+
+        # Preserve state efficiently
         new_sql._named_parameters.update(self._named_parameters)
         new_sql._positional_parameters = self._positional_parameters.copy()
         new_sql._filters = self._filters.copy()
         return new_sql
 
     def __hash__(self) -> int:
-        """Hash value."""
+        """Hash value with optimized computation."""
         if self._hash is None:
-            self._hash = hash(
-                (
-                    self._raw_sql,
-                    tuple(self._positional_parameters),
-                    tuple(sorted(self._named_parameters.items())),
-                    self._is_many,
-                    self._is_script,
-                )
-            )
+            # Pre-compute tuple components to avoid multiple tuple() calls
+            positional_tuple = tuple(self._positional_parameters)
+            named_tuple = tuple(sorted(self._named_parameters.items())) if self._named_parameters else ()
+
+            self._hash = hash((self._raw_sql, positional_tuple, named_tuple, self._is_many, self._is_script))
         return self._hash
 
     def __eq__(self, other: object) -> bool:

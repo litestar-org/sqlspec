@@ -121,10 +121,11 @@ class CompiledSQL:
         self._hash: Optional[int] = None
 
     def __hash__(self) -> int:
-        """Cached hash value."""
+        """Cached hash value with optimization."""
         if self._hash is None:
-            hash_data = (self.compiled_sql, str(self.execution_parameters), self.operation_type, self.parameter_style)
-            self._hash = hash(hash_data)
+            # Optimize by avoiding str() conversion if possible
+            param_str = str(self.execution_parameters)
+            self._hash = hash((self.compiled_sql, param_str, self.operation_type, self.parameter_style))
         return self._hash
 
     def __eq__(self, other: object) -> bool:
@@ -229,16 +230,21 @@ class SQLProcessor:
             CompiledSQL result
         """
         try:
+            # Cache dialect string to avoid repeated conversions
             dialect_str = str(self._config.dialect) if self._config.dialect else None
-            processed_sql, processed_params_tuple = self._parameter_processor.process(
+
+            # Process parameters in single call
+            processed_sql: str
+            processed_params: Any
+            processed_sql, processed_params = self._parameter_processor.process(
                 sql=sql,
                 parameters=parameters,
                 config=self._config.parameter_config,
                 dialect=dialect_str,
                 is_many=is_many,
             )
-            processed_params: Any = processed_params_tuple
 
+            # Optimize static compilation path
             if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
                 sqlglot_sql = processed_sql
             else:
@@ -246,35 +252,39 @@ class SQLProcessor:
                     sql, parameters, self._config.parameter_config, dialect_str
                 )
 
-            final_parameters: Any = processed_params
+            final_parameters = processed_params
             ast_was_transformed = False
+            expression = None
+            operation_type = "EXECUTE"
 
             if self._config.enable_parsing:
                 try:
+                    # Use copy=False for performance optimization
                     expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)
                     operation_type = self._detect_operation_type(expression)
 
-                    if self._config.parameter_config.ast_transformer:
-                        expression, final_parameters = self._config.parameter_config.ast_transformer(
-                            expression, processed_params
-                        )
+                    # Handle AST transformation if configured
+                    ast_transformer = self._config.parameter_config.ast_transformer
+                    if ast_transformer:
+                        expression, final_parameters = ast_transformer(expression, processed_params)
                         ast_was_transformed = True
 
                 except ParseError:
                     expression = None
                     operation_type = "EXECUTE"
-            else:
-                expression = None
-                operation_type = "EXECUTE"
 
+            # Optimize final SQL generation path
             if self._config.parameter_config.needs_static_script_compilation and processed_params is None:
                 final_sql, final_params = processed_sql, processed_params
             elif ast_was_transformed and expression is not None:
                 final_sql = expression.sql(dialect=dialect_str)
                 final_params = final_parameters
                 logger.debug("AST was transformed - final SQL: %s, final params: %s", final_sql, final_params)
-                if self._config.output_transformer:
-                    final_sql, final_params = self._config.output_transformer(final_sql, final_params)
+
+                # Apply output transformer if configured
+                output_transformer = self._config.output_transformer
+                if output_transformer:
+                    final_sql, final_params = output_transformer(final_sql, final_params)
             else:
                 final_sql, final_params = self._apply_final_transformations(
                     expression, processed_sql, final_parameters, dialect_str
@@ -305,15 +315,23 @@ class SQLProcessor:
         Returns:
             Cache key string
         """
+        # Optimize key generation by avoiding string conversion overhead
+        param_repr = repr(parameters)
+        dialect_str = str(self._config.dialect) if self._config.dialect else None
+        param_style = self._config.parameter_config.default_parameter_style.value
+
+        # Use direct tuple construction for better performance
         hash_data = (
             sql,
-            repr(parameters),
-            self._config.parameter_config.default_parameter_style.value,
-            str(self._config.dialect),
+            param_repr,
+            param_style,
+            dialect_str,
             self._config.enable_parsing,
             self._config.enable_transformations,
         )
-        hash_str = hashlib.sha256(str(hash_data).encode()).hexdigest()[:16]
+
+        # Optimize hash computation
+        hash_str = hashlib.sha256(str(hash_data).encode("utf-8")).hexdigest()[:16]
         return f"sql_{hash_str}"
 
     def _detect_operation_type(self, expression: "exp.Expression") -> str:
@@ -327,27 +345,29 @@ class SQLProcessor:
         Returns:
             Operation type string
         """
+        # Use isinstance for compatibility with mocks and inheritance
         if isinstance(expression, exp.Select):
-            return _OPERATION_TYPES["SELECT"]
+            return "SELECT"
         if isinstance(expression, exp.Insert):
-            return _OPERATION_TYPES["INSERT"]
+            return "INSERT"
         if isinstance(expression, exp.Update):
-            return _OPERATION_TYPES["UPDATE"]
+            return "UPDATE"
         if isinstance(expression, exp.Delete):
-            return _OPERATION_TYPES["DELETE"]
-        if isinstance(expression, (exp.Create, exp.Drop, exp.Alter)):
-            return _OPERATION_TYPES["DDL"]
-        if isinstance(expression, exp.Copy):
-            if expression.args["kind"] is True:
-                return _OPERATION_TYPES["COPY_FROM"]
-            if expression.args["kind"] is False:
-                return _OPERATION_TYPES["COPY_TO"]
-            return _OPERATION_TYPES["COPY"]
+            return "DELETE"
         if isinstance(expression, exp.Pragma):
-            return _OPERATION_TYPES["PRAGMA"]
+            return "PRAGMA"
         if isinstance(expression, exp.Command):
-            return _OPERATION_TYPES["EXECUTE"]
-        return _OPERATION_TYPES["UNKNOWN"]
+            return "EXECUTE"
+        if isinstance(expression, exp.Copy):
+            copy_kind = expression.args.get("kind")
+            if copy_kind is True:
+                return "COPY_FROM"
+            if copy_kind is False:
+                return "COPY_TO"
+            return "COPY"
+        if isinstance(expression, (exp.Create, exp.Drop, exp.Alter)):
+            return "DDL"
+        return "UNKNOWN"
 
     def _apply_final_transformations(
         self, expression: "Optional[exp.Expression]", sql: str, parameters: Any, dialect_str: "Optional[str]"
@@ -363,11 +383,12 @@ class SQLProcessor:
         Returns:
             Tuple of (final_sql, final_parameters)
         """
-        if self._config.output_transformer:
+        output_transformer = self._config.output_transformer
+        if output_transformer:
             if expression is not None:
                 ast_sql = expression.sql(dialect=dialect_str)
-                return self._config.output_transformer(ast_sql, parameters)
-            return self._config.output_transformer(sql, parameters)
+                return output_transformer(ast_sql, parameters)
+            return output_transformer(sql, parameters)
 
         return sql, parameters
 

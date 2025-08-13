@@ -17,7 +17,9 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from sqlspec.core.filters import StatementFilter
+    from collections.abc import Sequence
+
+    from sqlspec.core.filters import FilterTypeT, StatementFilter
     from sqlspec.typing import StatementParameters
 
 
@@ -424,10 +426,9 @@ class CommonDriverAttributesMixin:
         if isinstance(parameters, dict):
             if not parameters:
                 return []
-            if (
-                statement_config.parameter_config.supported_execution_parameter_styles
-                and ParameterStyle.NAMED_PYFORMAT
-                in statement_config.parameter_config.supported_execution_parameter_styles
+            if statement_config.parameter_config.supported_execution_parameter_styles and (
+                ParameterStyle.NAMED_PYFORMAT in statement_config.parameter_config.supported_execution_parameter_styles
+                or ParameterStyle.NAMED_COLON in statement_config.parameter_config.supported_execution_parameter_styles
             ):
                 return {k: apply_type_coercion(v) for k, v in parameters.items()}
             if statement_config.parameter_config.default_parameter_style in {
@@ -577,6 +578,24 @@ class CommonDriverAttributesMixin:
 
         return max(style_counts.keys(), key=lambda style: (style_counts[style], -precedence.get(style, 99)))
 
+    @staticmethod
+    def find_filter(
+        filter_type: "type[FilterTypeT]",
+        filters: "Sequence[StatementFilter | StatementParameters] | Sequence[StatementFilter]",
+    ) -> "FilterTypeT | None":
+        """Get the filter specified by filter type from the filters.
+
+        Args:
+            filter_type: The type of filter to find.
+            filters: filter types to apply to the query
+
+        Returns:
+            The match filter instance or None
+        """
+        return next(
+            (cast("FilterTypeT | None", filter_) for filter_ in filters if isinstance(filter_, filter_type)), None
+        )
+
     def _create_count_query(self, original_sql: "SQL") -> "SQL":
         """Create a COUNT query from the original SQL statement.
 
@@ -586,7 +605,7 @@ class CommonDriverAttributesMixin:
         if not original_sql.expression:
             msg = "Cannot create COUNT query from empty SQL expression"
             raise ImproperConfigurationError(msg)
-        expr = original_sql.expression.copy()
+        expr = original_sql.expression
 
         if isinstance(expr, exp.Select):
             if expr.args.get("group"):

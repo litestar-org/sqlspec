@@ -2,6 +2,7 @@
 
 from typing import Any, Optional, Union
 
+from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
@@ -10,10 +11,21 @@ from sqlspec.exceptions import SQLBuilderError
 __all__ = ("CommonTableExpressionMixin", "SetOperationMixin")
 
 
+@trait
 class CommonTableExpressionMixin:
     """Mixin providing WITH clause (Common Table Expressions) support for SQL builders."""
 
-    _expression: Optional[exp.Expression] = None
+    __slots__ = ()
+    # Type annotation for PyRight - this will be provided by the base class
+    _expression: Optional[exp.Expression]
+
+    _with_ctes: Any  # Provided by QueryBuilder
+    dialect: Any  # Provided by QueryBuilder
+
+    def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
+        """Add parameter - provided by QueryBuilder."""
+        msg = "Method must be provided by QueryBuilder subclass"
+        raise NotImplementedError(msg)
 
     def with_(
         self, name: str, query: Union[Any, str], recursive: bool = False, columns: Optional[list[str]] = None
@@ -42,22 +54,22 @@ class CommonTableExpressionMixin:
 
         cte_expr: Optional[exp.Expression] = None
         if isinstance(query, str):
-            cte_expr = exp.maybe_parse(query, dialect=self.dialect)  # type: ignore[attr-defined]
+            cte_expr = exp.maybe_parse(query, dialect=self.dialect)
         elif isinstance(query, exp.Expression):
             cte_expr = query
         else:
-            built_query = query.to_statement()  # pyright: ignore
+            built_query = query.to_statement()
             cte_sql = built_query.sql
-            cte_expr = exp.maybe_parse(cte_sql, dialect=self.dialect)  # type: ignore[attr-defined]
+            cte_expr = exp.maybe_parse(cte_sql, dialect=self.dialect)
 
             parameters = built_query.parameters
             if parameters:
                 if isinstance(parameters, dict):
                     for param_name, param_value in parameters.items():
-                        self.add_parameter(param_value, name=param_name)  # type: ignore[attr-defined]
+                        self.add_parameter(param_value, name=param_name)
                 elif isinstance(parameters, (list, tuple)):
                     for param_value in parameters:
-                        self.add_parameter(param_value)  # type: ignore[attr-defined]
+                        self.add_parameter(param_value)
 
         if not cte_expr:
             msg = f"Could not parse CTE query: {query}"
@@ -68,28 +80,41 @@ class CommonTableExpressionMixin:
         else:
             cte_alias_expr = exp.alias_(cte_expr, name)
 
-        existing_with = self._expression.args.get("with")  # pyright: ignore
+        existing_with = self._expression.args.get("with")
         if existing_with:
             existing_with.expressions.append(cte_alias_expr)
             if recursive:
                 existing_with.set("recursive", recursive)
         else:
-            self._expression = self._expression.with_(cte_alias_expr, as_=name, copy=False)  # type: ignore[union-attr]
-            if recursive:
-                with_clause = self._expression.find(exp.With)
-                if with_clause:
-                    with_clause.set("recursive", recursive)
-            self._with_ctes[name] = exp.CTE(this=cte_expr, alias=exp.to_table(name))  # type: ignore[attr-defined]
+            # Only SELECT, INSERT, UPDATE support WITH clauses
+            if hasattr(self._expression, "with_") and isinstance(
+                self._expression, (exp.Select, exp.Insert, exp.Update)
+            ):
+                self._expression = self._expression.with_(cte_alias_expr, as_=name, copy=False)
+                if recursive:
+                    with_clause = self._expression.find(exp.With)
+                    if with_clause:
+                        with_clause.set("recursive", recursive)
+            self._with_ctes[name] = exp.CTE(this=cte_expr, alias=exp.to_table(name))
 
         return self
 
 
+@trait
 class SetOperationMixin:
     """Mixin providing set operations (UNION, INTERSECT, EXCEPT) for SELECT builders."""
 
-    _expression: Any = None
+    __slots__ = ()
+    # Type annotation for PyRight - this will be provided by the base class
+    _expression: Optional[exp.Expression]
+
     _parameters: dict[str, Any]
     dialect: Any = None
+
+    def build(self) -> Any:
+        """Build the query - provided by QueryBuilder."""
+        msg = "Method must be provided by QueryBuilder subclass"
+        raise NotImplementedError(msg)
 
     def union(self, other: Any, all_: bool = False) -> Self:
         """Combine this query with another using UNION.
@@ -104,7 +129,7 @@ class SetOperationMixin:
         Returns:
             The new builder instance for the union query.
         """
-        left_query = self.build()  # type: ignore[attr-defined]
+        left_query = self.build()
         right_query = other.build()
         left_expr: Optional[exp.Expression] = exp.maybe_parse(left_query.sql, dialect=self.dialect)
         right_expr: Optional[exp.Expression] = exp.maybe_parse(right_query.sql, dialect=self.dialect)
@@ -124,9 +149,11 @@ class SetOperationMixin:
                     counter += 1
                     new_param_name = f"{param_name}_right_{counter}"
 
-                def rename_parameter(node: exp.Expression) -> exp.Expression:
-                    if isinstance(node, exp.Placeholder) and node.name == param_name:  # noqa: B023
-                        return exp.Placeholder(this=new_param_name)  # noqa: B023
+                def rename_parameter(
+                    node: exp.Expression, old_name: str = param_name, new_name: str = new_param_name
+                ) -> exp.Expression:
+                    if isinstance(node, exp.Placeholder) and node.name == old_name:
+                        return exp.Placeholder(this=new_name)
                     return node
 
                 right_expr = right_expr.transform(rename_parameter)
@@ -150,7 +177,7 @@ class SetOperationMixin:
         Returns:
             The new builder instance for the intersect query.
         """
-        left_query = self.build()  # type: ignore[attr-defined]
+        left_query = self.build()
         right_query = other.build()
         left_expr: Optional[exp.Expression] = exp.maybe_parse(left_query.sql, dialect=self.dialect)
         right_expr: Optional[exp.Expression] = exp.maybe_parse(right_query.sql, dialect=self.dialect)
@@ -178,7 +205,7 @@ class SetOperationMixin:
         Returns:
             The new builder instance for the except query.
         """
-        left_query = self.build()  # type: ignore[attr-defined]
+        left_query = self.build()
         right_query = other.build()
         left_expr: Optional[exp.Expression] = exp.maybe_parse(left_query.sql, dialect=self.dialect)
         right_expr: Optional[exp.Expression] = exp.maybe_parse(right_query.sql, dialect=self.dialect)

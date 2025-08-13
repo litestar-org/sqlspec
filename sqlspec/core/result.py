@@ -188,19 +188,22 @@ class SQLResult(StatementResult):
         self._operation_type = operation_type
         self.operation_index = operation_index
         self.parameters = parameters
-        self.column_names = column_names if column_names is not None else []
+
+        # Optimize list initialization to avoid unnecessary object creation
+        self.column_names = column_names or []
         self.total_count = total_count
         self.has_more = has_more
-        self.inserted_ids = inserted_ids if inserted_ids is not None else []
-        self.statement_results: list[SQLResult] = statement_results if statement_results is not None else []
-        self.errors = errors if errors is not None else []
+        self.inserted_ids = inserted_ids or []
+        self.statement_results = statement_results or []
+        self.errors = errors or []
         self.total_statements = total_statements
         self.successful_statements = successful_statements
 
-        if not self.column_names and self.data is not None and self.data:
-            self.column_names = list(self.data[0].keys())
+        # Optimize column name extraction and count calculation
+        if not self.column_names and data and len(data) > 0:
+            self.column_names = list(data[0].keys())
         if self.total_count is None:
-            self.total_count = len(self.data) if self.data is not None else 0
+            self.total_count = len(data) if data is not None else 0
 
     @property
     def operation_type(self) -> "OperationType":
@@ -256,18 +259,21 @@ class SQLResult(StatementResult):
         Returns:
             List of result rows or script summary.
         """
-        if self.operation_type.upper() == "SCRIPT":
+        op_type_upper = self.operation_type.upper()
+        if op_type_upper == "SCRIPT":
+            # Cache calculation to avoid redundant work
+            failed_statements = self.total_statements - self.successful_statements
             return [
                 {
                     "total_statements": self.total_statements,
                     "successful_statements": self.successful_statements,
-                    "failed_statements": self.total_statements - self.successful_statements,
+                    "failed_statements": failed_statements,
                     "errors": self.errors,
                     "statement_results": self.statement_results,
                     "total_rows_affected": self.get_total_rows_affected(),
                 }
             ]
-        return self.data if self.data is not None else []
+        return self.data or []
 
     def add_statement_result(self, result: "SQLResult") -> None:
         """Add a statement result to the script execution results.
@@ -287,9 +293,11 @@ class SQLResult(StatementResult):
             Total rows affected.
         """
         if self.statement_results:
-            return sum(
-                stmt.rows_affected for stmt in self.statement_results if stmt.rows_affected and stmt.rows_affected > 0
-            )
+            total = 0
+            for stmt in self.statement_results:
+                if stmt.rows_affected and stmt.rows_affected > 0:
+                    total += stmt.rows_affected
+            return total
         return self.rows_affected if self.rows_affected and self.rows_affected > 0 else 0
 
     @property
@@ -394,9 +402,7 @@ class SQLResult(StatementResult):
         Returns:
             Iterator that yields each row as a dictionary
         """
-        if self.data is None:
-            return iter([])
-        return iter(self.data)
+        return iter(self.data or [])
 
     def all(self) -> list[dict[str, Any]]:
         """Return all rows as a list.
@@ -415,14 +421,18 @@ class SQLResult(StatementResult):
         Raises:
             ValueError: If no results or more than one result
         """
-        data_len = 0 if self.data is None else len(self.data)
+        if not self.data:
+            msg = "No result found, exactly one row expected"
+            raise ValueError(msg)
 
+        data_len = len(self.data)
         if data_len == 0:
             msg = "No result found, exactly one row expected"
             raise ValueError(msg)
         if data_len > 1:
             msg = f"Multiple results found ({data_len}), exactly one row expected"
             raise ValueError(msg)
+
         return cast("dict[str, Any]", self.data[0])
 
     def one_or_none(self) -> "Optional[dict[str, Any]]":
@@ -438,9 +448,12 @@ class SQLResult(StatementResult):
             return None
 
         data_len = len(self.data)
+        if data_len == 0:
+            return None
         if data_len > 1:
             msg = f"Multiple results found ({data_len}), at most one row expected"
             raise ValueError(msg)
+
         return cast("dict[str, Any]", self.data[0])
 
     def scalar(self) -> Any:

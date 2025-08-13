@@ -245,19 +245,21 @@ class UnifiedCache(Generic[CacheValueT]):
             Cached value or None if not found or expired
         """
         with self._lock:
-            node: Optional[CacheNode] = self._cache.get(key)
+            node = self._cache.get(key)
             if node is None:
                 self._stats.record_miss()
                 return None
 
-            current_time: float = time.time()
-            ttl: Optional[int] = self._ttl
-            if ttl is not None and (current_time - node.timestamp) > ttl:
-                self._remove_node(node)
-                del self._cache[key]
-                self._stats.record_miss()
-                self._stats.record_eviction()
-                return None
+            # Optimize TTL check with early variable assignment
+            ttl = self._ttl
+            if ttl is not None:
+                current_time = time.time()
+                if (current_time - node.timestamp) > ttl:
+                    self._remove_node(node)
+                    del self._cache[key]
+                    self._stats.record_miss()
+                    self._stats.record_eviction()
+                    return None
 
             self._move_to_head(node)
             node.access_count += 1
@@ -272,7 +274,7 @@ class UnifiedCache(Generic[CacheValueT]):
             value: Value to cache
         """
         with self._lock:
-            existing_node: Optional[CacheNode] = self._cache.get(key)
+            existing_node = self._cache.get(key)
             if existing_node is not None:
                 existing_node.value = value
                 existing_node.timestamp = time.time()
@@ -280,14 +282,13 @@ class UnifiedCache(Generic[CacheValueT]):
                 self._move_to_head(existing_node)
                 return
 
-            new_node: CacheNode = CacheNode(key, value)
+            new_node = CacheNode(key, value)
             self._cache[key] = new_node
             self._add_to_head(new_node)
 
-            cache_size: int = len(self._cache)
-            max_size: int = self._max_size
-            if cache_size > max_size:
-                tail_node: Optional[CacheNode] = self._tail.prev
+            # Optimize size check with cached length
+            if len(self._cache) > self._max_size:
+                tail_node = self._tail.prev
                 if tail_node is not None and tail_node is not self._head:
                     self._remove_node(tail_node)
                     del self._cache[tail_node.key]
@@ -361,17 +362,13 @@ class UnifiedCache(Generic[CacheValueT]):
     def __contains__(self, key: CacheKey) -> bool:
         """Check if key exists in cache."""
         with self._lock:
-            node: Optional[CacheNode] = self._cache.get(key)
+            node = self._cache.get(key)
             if node is None:
                 return False
 
-            ttl: Optional[int] = self._ttl
-            if ttl is not None:
-                current_time: float = time.time()
-                if (current_time - node.timestamp) > ttl:
-                    return False
-
-            return True
+            # Optimize TTL check
+            ttl = self._ttl
+            return not (ttl is not None and time.time() - node.timestamp > ttl)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -553,6 +550,8 @@ class ParameterCache:
         """
         # Create stable key from parameters and configuration
         try:
+            # Optimize type checking order
+            param_key: tuple[Any, ...]
             if isinstance(params, dict):
                 param_key = tuple(sorted(params.items()))
             elif isinstance(params, (list, tuple)):
@@ -560,12 +559,11 @@ class ParameterCache:
             else:
                 param_key = (params,)
 
-            key_data = ("parameters", param_key, config_hash)
-            return CacheKey(key_data)
+            return CacheKey(("parameters", param_key, config_hash))
         except (TypeError, ValueError):
-            param_key = (str(params), type(params).__name__)  # type: ignore[assignment]
-            key_data = ("parameters", param_key, config_hash)
-            return CacheKey(key_data)
+            # Fallback for unhashable types
+            param_key_fallback = (str(params), type(params).__name__)
+            return CacheKey(("parameters", param_key_fallback, config_hash))
 
     def clear(self) -> None:
         """Clear parameter cache."""

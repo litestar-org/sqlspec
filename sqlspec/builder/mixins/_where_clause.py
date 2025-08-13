@@ -3,6 +3,7 @@
 
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
+from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
@@ -27,9 +28,10 @@ def _extract_column_name(column: Union[str, exp.Column]) -> str:
         return column
     if isinstance(column, exp.Column):
         # Extract the column name from SQLGlot Column expression
-        if column.this and hasattr(column.this, "this"):
+        try:
             return str(column.this.this)
-        return str(column.this) if column.this else "column"
+        except AttributeError:
+            return str(column.this) if column.this else "column"
     return "column"
 
 
@@ -40,8 +42,14 @@ if TYPE_CHECKING:
 __all__ = ("HavingClauseMixin", "WhereClauseMixin")
 
 
+@trait
 class WhereClauseMixin:
     """Mixin providing WHERE clause methods for SELECT, UPDATE, and DELETE builders."""
+
+    __slots__ = ()
+
+    # Type annotation for PyRight - this will be provided by the base class
+    _expression: Optional[exp.Expression]
 
     def _handle_in_operator(
         self, column_exp: exp.Expression, value: Any, column_name: str = "column"
@@ -52,13 +60,13 @@ class WhereClauseMixin:
             placeholders = []
             for i, v in enumerate(value):
                 if len(value) == 1:
-                    param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+                    param_name = builder._generate_unique_parameter_name(column_name)
                 else:
-                    param_name = builder._generate_unique_parameter_name(f"{column_name}_{i + 1}")  # type: ignore[attr-defined]
+                    param_name = builder._generate_unique_parameter_name(f"{column_name}_{i + 1}")
                 _, param_name = builder.add_parameter(v, name=param_name)
                 placeholders.append(exp.Placeholder(this=param_name))
             return exp.In(this=column_exp, expressions=placeholders)
-        param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+        param_name = builder._generate_unique_parameter_name(column_name)
         _, param_name = builder.add_parameter(value, name=param_name)
         return exp.In(this=column_exp, expressions=[exp.Placeholder(this=param_name)])
 
@@ -71,13 +79,13 @@ class WhereClauseMixin:
             placeholders = []
             for i, v in enumerate(value):
                 if len(value) == 1:
-                    param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+                    param_name = builder._generate_unique_parameter_name(column_name)
                 else:
-                    param_name = builder._generate_unique_parameter_name(f"{column_name}_{i + 1}")  # type: ignore[attr-defined]
+                    param_name = builder._generate_unique_parameter_name(f"{column_name}_{i + 1}")
                 _, param_name = builder.add_parameter(v, name=param_name)
                 placeholders.append(exp.Placeholder(this=param_name))
             return exp.Not(this=exp.In(this=column_exp, expressions=placeholders))
-        param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+        param_name = builder._generate_unique_parameter_name(column_name)
         _, param_name = builder.add_parameter(value, name=param_name)
         return exp.Not(this=exp.In(this=column_exp, expressions=[exp.Placeholder(this=param_name)]))
 
@@ -98,8 +106,8 @@ class WhereClauseMixin:
         if is_iterable_parameters(value) and len(value) == 2:
             builder = cast("SQLBuilderProtocol", self)
             low, high = value
-            low_param = builder._generate_unique_parameter_name(f"{column_name}_low")  # type: ignore[attr-defined]
-            high_param = builder._generate_unique_parameter_name(f"{column_name}_high")  # type: ignore[attr-defined]
+            low_param = builder._generate_unique_parameter_name(f"{column_name}_low")
+            high_param = builder._generate_unique_parameter_name(f"{column_name}_high")
             _, low_param = builder.add_parameter(low, name=low_param)
             _, high_param = builder.add_parameter(high, name=high_param)
             return exp.Between(
@@ -115,8 +123,8 @@ class WhereClauseMixin:
         if is_iterable_parameters(value) and len(value) == 2:
             builder = cast("SQLBuilderProtocol", self)
             low, high = value
-            low_param = builder._generate_unique_parameter_name(f"{column_name}_low")  # type: ignore[attr-defined]
-            high_param = builder._generate_unique_parameter_name(f"{column_name}_high")  # type: ignore[attr-defined]
+            low_param = builder._generate_unique_parameter_name(f"{column_name}_low")
+            high_param = builder._generate_unique_parameter_name(f"{column_name}_high")
             _, low_param = builder.add_parameter(low, name=low_param)
             _, high_param = builder.add_parameter(high, name=high_param)
             return exp.Not(
@@ -137,7 +145,7 @@ class WhereClauseMixin:
         if len(condition) == 2:
             # (column, value) tuple for equality
             value = condition[1]
-            param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+            param_name = builder._generate_unique_parameter_name(column_name)
             _, param_name = builder.add_parameter(value, name=param_name)
             return exp.EQ(this=column_exp, expression=exp.Placeholder(this=param_name))
 
@@ -147,35 +155,35 @@ class WhereClauseMixin:
             value = condition[2]
 
             if operator == "=":
-                param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+                param_name = builder._generate_unique_parameter_name(column_name)
                 _, param_name = builder.add_parameter(value, name=param_name)
                 return exp.EQ(this=column_exp, expression=exp.Placeholder(this=param_name))
             if operator in {"!=", "<>"}:
-                param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+                param_name = builder._generate_unique_parameter_name(column_name)
                 _, param_name = builder.add_parameter(value, name=param_name)
                 return exp.NEQ(this=column_exp, expression=exp.Placeholder(this=param_name))
             if operator == ">":
-                param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+                param_name = builder._generate_unique_parameter_name(column_name)
                 _, param_name = builder.add_parameter(value, name=param_name)
                 return exp.GT(this=column_exp, expression=exp.Placeholder(this=param_name))
             if operator == ">=":
-                param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+                param_name = builder._generate_unique_parameter_name(column_name)
                 _, param_name = builder.add_parameter(value, name=param_name)
                 return exp.GTE(this=column_exp, expression=exp.Placeholder(this=param_name))
             if operator == "<":
-                param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+                param_name = builder._generate_unique_parameter_name(column_name)
                 _, param_name = builder.add_parameter(value, name=param_name)
                 return exp.LT(this=column_exp, expression=exp.Placeholder(this=param_name))
             if operator == "<=":
-                param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+                param_name = builder._generate_unique_parameter_name(column_name)
                 _, param_name = builder.add_parameter(value, name=param_name)
                 return exp.LTE(this=column_exp, expression=exp.Placeholder(this=param_name))
             if operator == "LIKE":
-                param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+                param_name = builder._generate_unique_parameter_name(column_name)
                 _, param_name = builder.add_parameter(value, name=param_name)
                 return exp.Like(this=column_exp, expression=exp.Placeholder(this=param_name))
             if operator == "NOT LIKE":
-                param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+                param_name = builder._generate_unique_parameter_name(column_name)
                 _, param_name = builder.add_parameter(value, name=param_name)
                 return exp.Not(this=exp.Like(this=column_exp, expression=exp.Placeholder(this=param_name)))
 
@@ -222,7 +230,7 @@ class WhereClauseMixin:
         Returns:
             The current builder instance for method chaining.
         """
-        if self.__class__.__name__ == "Update" and not isinstance(self._expression, exp.Update):  # type: ignore[attr-defined]
+        if self.__class__.__name__ == "Update" and not isinstance(self._expression, exp.Update):
             msg = "Cannot add WHERE clause to non-UPDATE expression"
             raise SQLBuilderError(msg)
 
@@ -274,7 +282,7 @@ class WhereClauseMixin:
         """Add WHERE column = value clause."""
         builder = cast("SQLBuilderProtocol", self)
         column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+        param_name = builder._generate_unique_parameter_name(column_name)
         _, param_name = builder.add_parameter(value, name=param_name)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.eq(exp.Placeholder(this=param_name))
@@ -284,7 +292,7 @@ class WhereClauseMixin:
         """Add WHERE column != value clause."""
         builder = cast("SQLBuilderProtocol", self)
         column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+        param_name = builder._generate_unique_parameter_name(column_name)
         _, param_name = builder.add_parameter(value, name=param_name)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.neq(exp.Placeholder(this=param_name))
@@ -294,7 +302,7 @@ class WhereClauseMixin:
         """Add WHERE column < value clause."""
         builder = cast("SQLBuilderProtocol", self)
         column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+        param_name = builder._generate_unique_parameter_name(column_name)
         _, param_name = builder.add_parameter(value, name=param_name)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = exp.LT(this=col_expr, expression=exp.Placeholder(this=param_name))
@@ -304,7 +312,7 @@ class WhereClauseMixin:
         """Add WHERE column <= value clause."""
         builder = cast("SQLBuilderProtocol", self)
         column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+        param_name = builder._generate_unique_parameter_name(column_name)
         _, param_name = builder.add_parameter(value, name=param_name)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = exp.LTE(this=col_expr, expression=exp.Placeholder(this=param_name))
@@ -314,7 +322,7 @@ class WhereClauseMixin:
         """Add WHERE column > value clause."""
         builder = cast("SQLBuilderProtocol", self)
         column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+        param_name = builder._generate_unique_parameter_name(column_name)
         _, param_name = builder.add_parameter(value, name=param_name)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = exp.GT(this=col_expr, expression=exp.Placeholder(this=param_name))
@@ -324,7 +332,7 @@ class WhereClauseMixin:
         """Add WHERE column >= value clause."""
         builder = cast("SQLBuilderProtocol", self)
         column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+        param_name = builder._generate_unique_parameter_name(column_name)
         _, param_name = builder.add_parameter(value, name=param_name)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = exp.GTE(this=col_expr, expression=exp.Placeholder(this=param_name))
@@ -334,8 +342,8 @@ class WhereClauseMixin:
         """Add WHERE column BETWEEN low AND high clause."""
         builder = cast("SQLBuilderProtocol", self)
         column_name = _extract_column_name(column)
-        low_param = builder._generate_unique_parameter_name(f"{column_name}_low")  # type: ignore[attr-defined]
-        high_param = builder._generate_unique_parameter_name(f"{column_name}_high")  # type: ignore[attr-defined]
+        low_param = builder._generate_unique_parameter_name(f"{column_name}_low")
+        high_param = builder._generate_unique_parameter_name(f"{column_name}_high")
         _, low_param = builder.add_parameter(low, name=low_param)
         _, high_param = builder.add_parameter(high, name=high_param)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
@@ -346,7 +354,7 @@ class WhereClauseMixin:
         """Add WHERE column LIKE pattern clause."""
         builder = cast("SQLBuilderProtocol", self)
         column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+        param_name = builder._generate_unique_parameter_name(column_name)
         _, param_name = builder.add_parameter(pattern, name=param_name)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         if escape is not None:
@@ -360,7 +368,7 @@ class WhereClauseMixin:
         """Add WHERE column NOT LIKE pattern clause."""
         builder = cast("SQLBuilderProtocol", self)
         column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+        param_name = builder._generate_unique_parameter_name(column_name)
         _, param_name = builder.add_parameter(pattern, name=param_name)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.like(exp.Placeholder(this=param_name)).not_()
@@ -370,7 +378,7 @@ class WhereClauseMixin:
         """Add WHERE column ILIKE pattern clause."""
         builder = cast("SQLBuilderProtocol", self)
         column_name = _extract_column_name(column)
-        param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+        param_name = builder._generate_unique_parameter_name(column_name)
         _, param_name = builder.add_parameter(pattern, name=param_name)
         col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
         condition: exp.Expression = col_expr.ilike(exp.Placeholder(this=param_name))
@@ -399,7 +407,7 @@ class WhereClauseMixin:
                 sql_str = subquery.sql
                 subquery_exp = exp.paren(exp.maybe_parse(sql_str, dialect=builder.dialect_name))  # pyright: ignore
                 # Merge subquery parameters into parent builder
-                if hasattr(subquery, "parameters"):
+                if hasattr(subquery, "parameters") and isinstance(subquery.parameters, dict):  # pyright: ignore[reportAttributeAccessIssue]
                     for param_name, param_value in subquery.parameters.items():  # pyright: ignore[reportAttributeAccessIssue]
                         builder.add_parameter(param_value, name=param_name)
             else:
@@ -413,9 +421,9 @@ class WhereClauseMixin:
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:
-                param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+                param_name = builder._generate_unique_parameter_name(column_name)
             else:
-                param_name = builder._generate_unique_parameter_name(f"{column_name}_{i + 1}")  # type: ignore[attr-defined]
+                param_name = builder._generate_unique_parameter_name(f"{column_name}_{i + 1}")
             _, param_name = builder.add_parameter(v, name=param_name)
             parameters.append(exp.Placeholder(this=param_name))
         condition = col_expr.isin(*parameters)
@@ -442,9 +450,9 @@ class WhereClauseMixin:
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:
-                param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+                param_name = builder._generate_unique_parameter_name(column_name)
             else:
-                param_name = builder._generate_unique_parameter_name(f"{column_name}_{i + 1}")  # type: ignore[attr-defined]
+                param_name = builder._generate_unique_parameter_name(f"{column_name}_{i + 1}")
             _, param_name = builder.add_parameter(v, name=param_name)
             parameters.append(exp.Placeholder(this=param_name))
         condition = exp.Not(this=col_expr.isin(*parameters))
@@ -532,9 +540,9 @@ class WhereClauseMixin:
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:
-                param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+                param_name = builder._generate_unique_parameter_name(column_name)
             else:
-                param_name = builder._generate_unique_parameter_name(f"{column_name}_any_{i + 1}")  # type: ignore[attr-defined]
+                param_name = builder._generate_unique_parameter_name(f"{column_name}_any_{i + 1}")
             _, param_name = builder.add_parameter(v, name=param_name)
             parameters.append(exp.Placeholder(this=param_name))
         tuple_expr = exp.Tuple(expressions=parameters)
@@ -572,9 +580,9 @@ class WhereClauseMixin:
         parameters = []
         for i, v in enumerate(values):
             if len(values) == 1:
-                param_name = builder._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
+                param_name = builder._generate_unique_parameter_name(column_name)
             else:
-                param_name = builder._generate_unique_parameter_name(f"{column_name}_not_any_{i + 1}")  # type: ignore[attr-defined]
+                param_name = builder._generate_unique_parameter_name(f"{column_name}_not_any_{i + 1}")
             _, param_name = builder.add_parameter(v, name=param_name)
             parameters.append(exp.Placeholder(this=param_name))
         tuple_expr = exp.Tuple(expressions=parameters)
@@ -582,10 +590,14 @@ class WhereClauseMixin:
         return self.where(condition)
 
 
+@trait
 class HavingClauseMixin:
     """Mixin providing HAVING clause for SELECT builders."""
 
-    _expression: Optional[exp.Expression] = None
+    __slots__ = ()
+
+    # Type annotation for PyRight - this will be provided by the base class
+    _expression: Optional[exp.Expression]
 
     def having(self, condition: Union[str, exp.Expression]) -> Self:
         """Add HAVING clause.

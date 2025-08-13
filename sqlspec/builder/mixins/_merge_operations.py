@@ -2,6 +2,7 @@
 
 from typing import Any, Optional, Union
 
+from mypy_extensions import trait
 from sqlglot import exp
 from typing_extensions import Self
 
@@ -18,10 +19,12 @@ __all__ = (
 )
 
 
+@trait
 class MergeIntoClauseMixin:
     """Mixin providing INTO clause for MERGE builders."""
 
-    _expression: Optional[exp.Expression] = None
+    __slots__ = ()
+    _expression: Optional[exp.Expression]
 
     def into(self, table: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
         """Set the target table for the MERGE operation (INTO clause).
@@ -35,17 +38,24 @@ class MergeIntoClauseMixin:
             The current builder instance for method chaining.
         """
         if self._expression is None:
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # pyright: ignore
-        if not isinstance(self._expression, exp.Merge):  # pyright: ignore
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # pyright: ignore
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
+        if not isinstance(self._expression, exp.Merge):
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
         self._expression.set("this", exp.to_table(table, alias=alias) if isinstance(table, str) else table)
         return self
 
 
+@trait
 class MergeUsingClauseMixin:
     """Mixin providing USING clause for MERGE builders."""
 
-    _expression: Optional[exp.Expression] = None
+    __slots__ = ()
+    _expression: Optional[exp.Expression]
+
+    def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
+        """Add parameter - provided by QueryBuilder."""
+        msg = "Method must be provided by QueryBuilder subclass"
+        raise NotImplementedError(msg)
 
     def using(self, source: Union[str, exp.Expression, Any], alias: Optional[str] = None) -> Self:
         """Set the source data for the MERGE operation (USING clause).
@@ -73,7 +83,7 @@ class MergeUsingClauseMixin:
             subquery_builder_parameters = source.parameters
             if subquery_builder_parameters:
                 for p_name, p_value in subquery_builder_parameters.items():
-                    self.add_parameter(p_value, name=p_name)  # type: ignore[attr-defined]
+                    self.add_parameter(p_value, name=p_name)
 
             subquery_exp = exp.paren(getattr(source, "_expression", exp.select()))
             source_expr = exp.alias_(subquery_exp, alias) if alias else subquery_exp
@@ -89,10 +99,12 @@ class MergeUsingClauseMixin:
         return self
 
 
+@trait
 class MergeOnClauseMixin:
     """Mixin providing ON clause for MERGE builders."""
 
-    _expression: Optional[exp.Expression] = None
+    __slots__ = ()
+    _expression: Optional[exp.Expression]
 
     def on(self, condition: Union[str, exp.Expression]) -> Self:
         """Set the join condition for the MERGE operation (ON clause).
@@ -131,10 +143,22 @@ class MergeOnClauseMixin:
         return self
 
 
+@trait
 class MergeMatchedClauseMixin:
     """Mixin providing WHEN MATCHED THEN ... clauses for MERGE builders."""
 
-    _expression: Optional[exp.Expression] = None
+    __slots__ = ()
+    _expression: Optional[exp.Expression]
+
+    def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
+        """Add parameter - provided by QueryBuilder."""
+        msg = "Method must be provided by QueryBuilder subclass"
+        raise NotImplementedError(msg)
+
+    def _generate_unique_parameter_name(self, base_name: str) -> str:
+        """Generate unique parameter name - provided by QueryBuilder."""
+        msg = "Method must be provided by QueryBuilder subclass"
+        raise NotImplementedError(msg)
 
     def _add_when_clause(self, when_clause: exp.When) -> None:
         """Helper to add a WHEN clause to the MERGE statement.
@@ -143,9 +167,9 @@ class MergeMatchedClauseMixin:
             when_clause: The WHEN clause to add.
         """
         if self._expression is None:
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[misc]
         if not isinstance(self._expression, exp.Merge):
-            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
+            self._expression = exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))  # type: ignore[misc]
 
         whens = self._expression.args.get("whens")
         if not whens:
@@ -175,8 +199,8 @@ class MergeMatchedClauseMixin:
             column_name = col if isinstance(col, str) else str(col)
             if "." in column_name:
                 column_name = column_name.split(".")[-1]
-            param_name = self._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
-            param_name = self.add_parameter(val, name=param_name)[1]  # type: ignore[attr-defined]
+            param_name = self._generate_unique_parameter_name(column_name)
+            param_name = self.add_parameter(val, name=param_name)[1]
             update_expressions.append(exp.EQ(this=exp.column(col), expression=exp.var(param_name)))
 
         when_args: dict[str, Any] = {"matched": True, "then": exp.Update(expressions=update_expressions)}
@@ -238,10 +262,28 @@ class MergeMatchedClauseMixin:
         return self
 
 
+@trait
 class MergeNotMatchedClauseMixin:
     """Mixin providing WHEN NOT MATCHED THEN ... clauses for MERGE builders."""
 
-    _expression: Optional[exp.Expression] = None
+    __slots__ = ()
+
+    _expression: Optional[exp.Expression]
+
+    def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
+        """Add parameter - provided by QueryBuilder."""
+        msg = "Method must be provided by QueryBuilder subclass"
+        raise NotImplementedError(msg)
+
+    def _generate_unique_parameter_name(self, base_name: str) -> str:
+        """Generate unique parameter name - provided by QueryBuilder."""
+        msg = "Method must be provided by QueryBuilder subclass"
+        raise NotImplementedError(msg)
+
+    def _add_when_clause(self, when_clause: exp.When) -> None:
+        """Helper to add a WHEN clause to the MERGE statement - provided by QueryBuilder."""
+        msg = "Method must be provided by QueryBuilder subclass"
+        raise NotImplementedError(msg)
 
     def when_not_matched_then_insert(
         self,
@@ -278,8 +320,8 @@ class MergeNotMatchedClauseMixin:
                 column_name = columns[i] if isinstance(columns[i], str) else str(columns[i])
                 if "." in column_name:
                     column_name = column_name.split(".")[-1]
-                param_name = self._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
-                param_name = self.add_parameter(val, name=param_name)[1]  # type: ignore[attr-defined]
+                param_name = self._generate_unique_parameter_name(column_name)
+                param_name = self.add_parameter(val, name=param_name)[1]
                 parameterized_values.append(exp.var(param_name))
 
             insert_args["this"] = exp.Tuple(expressions=[exp.column(c) for c in columns])
@@ -316,14 +358,32 @@ class MergeNotMatchedClauseMixin:
             when_args["this"] = condition_expr
 
         when_clause = exp.When(**when_args)
-        self._add_when_clause(when_clause)  # type: ignore[attr-defined]
+        self._add_when_clause(when_clause)
         return self
 
 
+@trait
 class MergeNotMatchedBySourceClauseMixin:
     """Mixin providing WHEN NOT MATCHED BY SOURCE THEN ... clauses for MERGE builders."""
 
-    _expression: Optional[exp.Expression] = None
+    __slots__ = ()
+
+    _expression: Optional[exp.Expression]
+
+    def add_parameter(self, value: Any, name: Optional[str] = None) -> tuple[Any, str]:
+        """Add parameter - provided by QueryBuilder."""
+        msg = "Method must be provided by QueryBuilder subclass"
+        raise NotImplementedError(msg)
+
+    def _generate_unique_parameter_name(self, base_name: str) -> str:
+        """Generate unique parameter name - provided by QueryBuilder."""
+        msg = "Method must be provided by QueryBuilder subclass"
+        raise NotImplementedError(msg)
+
+    def _add_when_clause(self, when_clause: exp.When) -> None:
+        """Helper to add a WHEN clause to the MERGE statement - provided by QueryBuilder."""
+        msg = "Method must be provided by QueryBuilder subclass"
+        raise NotImplementedError(msg)
 
     def when_not_matched_by_source_then_update(
         self, set_values: dict[str, Any], condition: Optional[Union[str, exp.Expression]] = None
@@ -347,8 +407,8 @@ class MergeNotMatchedBySourceClauseMixin:
             column_name = col if isinstance(col, str) else str(col)
             if "." in column_name:
                 column_name = column_name.split(".")[-1]
-            param_name = self._generate_unique_parameter_name(column_name)  # type: ignore[attr-defined]
-            param_name = self.add_parameter(val, name=param_name)[1]  # type: ignore[attr-defined]
+            param_name = self._generate_unique_parameter_name(column_name)
+            param_name = self.add_parameter(val, name=param_name)[1]
             update_expressions.append(exp.EQ(this=exp.column(col), expression=exp.var(param_name)))
 
         when_args: dict[str, Any] = {
@@ -375,7 +435,7 @@ class MergeNotMatchedBySourceClauseMixin:
             when_args["this"] = condition_expr
 
         when_clause = exp.When(**when_args)
-        self._add_when_clause(when_clause)  # type: ignore[attr-defined]
+        self._add_when_clause(when_clause)
         return self
 
     def when_not_matched_by_source_then_delete(self, condition: Optional[Union[str, exp.Expression]] = None) -> Self:
@@ -412,5 +472,5 @@ class MergeNotMatchedBySourceClauseMixin:
             when_args["this"] = condition_expr
 
         when_clause = exp.When(**when_args)
-        self._add_when_clause(when_clause)  # type: ignore[attr-defined]
+        self._add_when_clause(when_clause)
         return self

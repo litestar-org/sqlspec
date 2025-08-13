@@ -4,8 +4,7 @@ This module provides a fluent interface for building SQL queries safely,
 with automatic parameter binding and validation.
 """
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from sqlglot import exp
 from typing_extensions import Self
@@ -21,15 +20,14 @@ if TYPE_CHECKING:
 
 __all__ = ("Insert",)
 
-ERR_MSG_TABLE_NOT_SET = "The target table must be set using .into() before adding values."
-ERR_MSG_VALUES_COLUMNS_MISMATCH = (
+ERR_MSG_TABLE_NOT_SET: Final[str] = "The target table must be set using .into() before adding values."
+ERR_MSG_VALUES_COLUMNS_MISMATCH: Final[str] = (
     "Number of values ({values_len}) does not match the number of specified columns ({columns_len})."
 )
-ERR_MSG_INTERNAL_EXPRESSION_TYPE = "Internal error: expression is not an Insert instance as expected."
-ERR_MSG_EXPRESSION_NOT_INITIALIZED = "Internal error: base expression not initialized."
+ERR_MSG_INTERNAL_EXPRESSION_TYPE: Final[str] = "Internal error: expression is not an Insert instance as expected."
+ERR_MSG_EXPRESSION_NOT_INITIALIZED: Final[str] = "Internal error: base expression not initialized."
 
 
-@dataclass(unsafe_hash=True)
 class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSelectMixin, InsertIntoClauseMixin):
     """Builder for INSERT statements.
 
@@ -37,9 +35,7 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
     in a safe and dialect-agnostic manner with automatic parameter binding.
     """
 
-    _table: "Optional[str]" = field(default=None, init=False)
-    _columns: list[str] = field(default_factory=list, init=False)
-    _values_added_count: int = field(default=0, init=False)
+    __slots__ = ("_columns", "_table", "_values_added_count")
 
     def __init__(self, table: Optional[str] = None, **kwargs: Any) -> None:
         """Initialize INSERT with optional table.
@@ -50,9 +46,12 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
         """
         super().__init__(**kwargs)
 
-        self._table = None
-        self._columns = []
-        self._values_added_count = 0
+        # Initialize Insert-specific attributes
+        self._table: Optional[str] = None
+        self._columns: list[str] = []
+        self._values_added_count: int = 0
+
+        self._initialize_expression()
 
         if table:
             self.into(table)
@@ -91,16 +90,22 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
             raise SQLBuilderError(ERR_MSG_INTERNAL_EXPRESSION_TYPE)
         return self._expression
 
-    def values(self, *values: Any) -> "Self":
+    def values(self, *values: Any, **kwargs: Any) -> "Self":
         """Adds a row of values to the INSERT statement.
 
         This method can be called multiple times to insert multiple rows,
         resulting in a multi-row INSERT statement like `VALUES (...), (...)`.
 
+        Supports:
+        - values(val1, val2, val3)
+        - values(col1=val1, col2=val2)
+        - values(mapping)
+
         Args:
             *values: The values for the row to be inserted. The number of values
                      must match the number of columns set by `columns()`, if `columns()` was called
                      and specified any non-empty list of columns.
+            **kwargs: Column-value pairs for named values.
 
         Returns:
             The current builder instance for method chaining.
@@ -113,36 +118,49 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
         if not self._table:
             raise SQLBuilderError(ERR_MSG_TABLE_NOT_SET)
 
+        if kwargs:
+            if values:
+                msg = "Cannot mix positional values with keyword values."
+                raise SQLBuilderError(msg)
+            return self.values_from_dict(kwargs)
+
+        if len(values) == 1:
+            try:
+                values_0 = values[0]
+                if hasattr(values_0, "items"):
+                    return self.values_from_dict(values_0)
+            except (AttributeError, TypeError):
+                pass
+
         insert_expr = self._get_insert_expression()
 
         if self._columns and len(values) != len(self._columns):
             msg = ERR_MSG_VALUES_COLUMNS_MISMATCH.format(values_len=len(values), columns_len=len(self._columns))
             raise SQLBuilderError(msg)
 
-        param_names = []
+        value_placeholders: list[exp.Expression] = []
         for i, value in enumerate(values):
-            # Try to use column name if available, otherwise use position-based name
-            if self._columns and i < len(self._columns):
-                column_name = (
-                    str(self._columns[i]).split(".")[-1] if "." in str(self._columns[i]) else str(self._columns[i])
-                )
-                param_name = self._generate_unique_parameter_name(column_name)
+            if isinstance(value, exp.Expression):
+                value_placeholders.append(value)
             else:
-                param_name = self._generate_unique_parameter_name(f"value_{i + 1}")
-            _, param_name = self.add_parameter(value, name=param_name)
-            param_names.append(param_name)
-        value_placeholders = tuple(exp.var(name) for name in param_names)
+                if self._columns and i < len(self._columns):
+                    column_str = str(self._columns[i])
+                    column_name = column_str.rsplit(".", maxsplit=1)[-1] if "." in column_str else column_str
+                    param_name = self._generate_unique_parameter_name(column_name)
+                else:
+                    param_name = self._generate_unique_parameter_name(f"value_{i + 1}")
+                _, param_name = self.add_parameter(value, name=param_name)
+                value_placeholders.append(exp.var(param_name))
 
-        current_values_expression = insert_expr.args.get("expression")
-
+        tuple_expr = exp.Tuple(expressions=value_placeholders)
         if self._values_added_count == 0:
-            new_values_node = exp.Values(expressions=[exp.Tuple(expressions=list(value_placeholders))])
-            insert_expr.set("expression", new_values_node)
-        elif isinstance(current_values_expression, exp.Values):
-            current_values_expression.expressions.append(exp.Tuple(expressions=list(value_placeholders)))
+            insert_expr.set("expression", exp.Values(expressions=[tuple_expr]))
         else:
-            new_values_node = exp.Values(expressions=[exp.Tuple(expressions=list(value_placeholders))])
-            insert_expr.set("expression", new_values_node)
+            current_values = insert_expr.args.get("expression")
+            if isinstance(current_values, exp.Values):
+                current_values.expressions.append(tuple_expr)
+            else:
+                insert_expr.set("expression", exp.Values(expressions=[tuple_expr]))
 
         self._values_added_count += 1
         return self
@@ -165,10 +183,11 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
         if not self._table:
             raise SQLBuilderError(ERR_MSG_TABLE_NOT_SET)
 
+        data_keys = list(data.keys())
         if not self._columns:
-            self.columns(*data.keys())
-        elif set(self._columns) != set(data.keys()):
-            msg = f"Dictionary keys {set(data.keys())} do not match existing columns {set(self._columns)}."
+            self.columns(*data_keys)
+        elif set(self._columns) != set(data_keys):
+            msg = f"Dictionary keys {set(data_keys)} do not match existing columns {set(self._columns)}."
             raise SQLBuilderError(msg)
 
         return self.values(*[data[col] for col in self._columns])
@@ -222,18 +241,14 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
             For a more general solution, you might need dialect-specific handling.
         """
         insert_expr = self._get_insert_expression()
-        try:
-            on_conflict = exp.OnConflict(this=None, expressions=[])
-            insert_expr.set("on", on_conflict)
-        except AttributeError:
-            pass
+        insert_expr.set("on", exp.OnConflict(this=None, expressions=[]))
         return self
 
-    def on_duplicate_key_update(self, **set_values: Any) -> "Self":
+    def on_duplicate_key_update(self, **_: Any) -> "Self":
         """Adds an ON DUPLICATE KEY UPDATE clause (MySQL syntax).
 
         Args:
-            **set_values: Column-value pairs to update on duplicate key.
+            **_: Column-value pairs to update on duplicate key.
 
         Returns:
             The current builder instance for method chaining.
