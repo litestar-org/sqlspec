@@ -16,10 +16,10 @@ def adbc_example() -> None:
     # Create SQLSpec instance with ADBC (connects to dev PostgreSQL container)
     spec = SQLSpec()
     config = AdbcConfig(connection_config={"uri": "postgresql://postgres:postgres@localhost:5433/postgres"})
-    spec.add_config(config)
+    db = spec.add_config(config)
 
     # Get a driver directly (drivers now have built-in query methods)
-    with spec.provide_session(config) as driver:
+    with spec.provide_session(db) as driver:
         # Create a table
         driver.execute("""
             CREATE TABLE IF NOT EXISTS analytics_data (

@@ -10,6 +10,9 @@ from sqlspec.builder._parsing_utils import parse_order_expression
 from sqlspec.exceptions import SQLBuilderError
 
 if TYPE_CHECKING:
+    from sqlspec.builder._column import Column
+    from sqlspec.builder._expression_wrappers import ExpressionWrapper
+    from sqlspec.builder.mixins._select_operations import Case
     from sqlspec.protocols import SQLBuilderProtocol
 
 __all__ = ("LimitOffsetClauseMixin", "OrderByClauseMixin", "ReturningClauseMixin")
@@ -24,7 +27,7 @@ class OrderByClauseMixin:
     # Type annotation for PyRight - this will be provided by the base class
     _expression: Optional[exp.Expression]
 
-    def order_by(self, *items: Union[str, exp.Ordered], desc: bool = False) -> Self:
+    def order_by(self, *items: Union[str, exp.Ordered, "Column"], desc: bool = False) -> Self:
         """Add ORDER BY clause.
 
         Args:
@@ -49,7 +52,13 @@ class OrderByClauseMixin:
                 if desc:
                     order_item = order_item.desc()
             else:
-                order_item = item
+                # Extract expression from Column objects or use as-is for sqlglot expressions
+                from sqlspec._sql import SQLFactory
+
+                extracted_item = SQLFactory._extract_expression(item)
+                order_item = extracted_item
+                if desc and not isinstance(item, exp.Ordered):
+                    order_item = order_item.desc()
             current_expr = current_expr.order_by(order_item, copy=False)
         builder._expression = current_expr
         return cast("Self", builder)
@@ -111,7 +120,7 @@ class ReturningClauseMixin:
     # Type annotation for PyRight - this will be provided by the base class
     _expression: Optional[exp.Expression]
 
-    def returning(self, *columns: Union[str, exp.Expression]) -> Self:
+    def returning(self, *columns: Union[str, exp.Expression, "Column", "ExpressionWrapper", "Case"]) -> Self:
         """Add RETURNING clause to the statement.
 
         Args:
@@ -130,6 +139,9 @@ class ReturningClauseMixin:
         if not isinstance(self._expression, valid_types):
             msg = "RETURNING is only supported for INSERT, UPDATE, and DELETE statements."
             raise SQLBuilderError(msg)
-        returning_exprs = [exp.column(c) if isinstance(c, str) else c for c in columns]
+        # Extract expressions from various wrapper types
+        from sqlspec._sql import SQLFactory
+
+        returning_exprs = [SQLFactory._extract_expression(c) for c in columns]
         self._expression.set("returning", exp.Returning(expressions=returning_exprs))
         return self

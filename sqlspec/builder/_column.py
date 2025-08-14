@@ -5,7 +5,7 @@ for building SQL conditions with type safety and parameter binding.
 """
 
 from collections.abc import Iterable
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from sqlglot import exp
 
@@ -240,6 +240,10 @@ class Column:
     def desc(self) -> exp.Ordered:
         """Create a DESC ordering expression."""
         return exp.Ordered(this=self._expression, desc=True)
+
+    def as_(self, alias: str) -> exp.Alias:
+        """Create an aliased expression."""
+        return cast("exp.Alias", exp.alias_(self._expression, alias))
 
     def __repr__(self) -> str:
         if self.table:

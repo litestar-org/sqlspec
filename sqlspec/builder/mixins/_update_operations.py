@@ -111,10 +111,10 @@ class UpdateSetClauseMixin:
         """Set columns and values for the UPDATE statement.
 
         Supports:
-        - set(column, value)
-        - set(mapping)
-        - set(**kwargs)
-        - set(mapping, **kwargs)
+        - set_(column, value)
+        - set_(mapping)
+        - set_(**kwargs)
+        - set_(mapping, **kwargs)
 
         Args:
             *args: Either (column, value) or a mapping.

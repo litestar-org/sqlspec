@@ -13,6 +13,8 @@ Tests cover:
 - Edge cases and error conditions
 """
 
+import string
+
 from sqlspec import sql
 
 
@@ -329,7 +331,7 @@ def test_parameter_names_are_sql_safe() -> None:
         assert "--" not in param_name
 
         # Should be valid identifier-like
-        assert param_name.replace("_", "").replace("0123456789", "").isalpha() or "_" in param_name
+        assert param_name.replace("_", "").replace(string.digits, "").isalpha() or "_" in param_name
 
 
 def test_empty_and_null_values_preserve_column_names() -> None:
