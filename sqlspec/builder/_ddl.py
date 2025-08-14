@@ -1,6 +1,5 @@
 """DDL builders for SQLSpec: DROP, CREATE INDEX, TRUNCATE, etc."""
 
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from sqlglot import exp
@@ -37,16 +36,14 @@ __all__ = (
 )
 
 
-@dataclass
 class DDLBuilder(QueryBuilder):
     """Base class for DDL builders (CREATE, DROP, ALTER, etc)."""
 
-    dialect: DialectType = None
-    _expression: Optional[exp.Expression] = field(default=None, init=False, repr=False, compare=False, hash=False)
+    __slots__ = ()
 
-    def __post_init__(self) -> None:
-        # Initialize parent class attributes since dataclass doesn't call super().__init__()
-        super().__init__(dialect=self.dialect)
+    def __init__(self, dialect: DialectType = None) -> None:
+        super().__init__(dialect=dialect)
+        self._expression: Optional[exp.Expression] = None
 
     def _create_base_expression(self) -> exp.Expression:
         msg = "Subclasses must implement _create_base_expression."
@@ -65,40 +62,91 @@ class DDLBuilder(QueryBuilder):
         return super().to_statement(config=config)
 
 
-@dataclass
 class ColumnDefinition:
     """Column definition for CREATE TABLE."""
 
-    name: str
-    dtype: str
-    default: "Optional[Any]" = None
-    not_null: bool = False
-    primary_key: bool = False
-    unique: bool = False
-    auto_increment: bool = False
-    comment: "Optional[str]" = None
-    check: "Optional[str]" = None
-    generated: "Optional[str]" = None
-    collate: "Optional[str]" = None
+    __slots__ = (
+        "auto_increment",
+        "check",
+        "collate",
+        "comment",
+        "default",
+        "dtype",
+        "generated",
+        "name",
+        "not_null",
+        "primary_key",
+        "unique",
+    )
+
+    def __init__(
+        self,
+        name: str,
+        dtype: str,
+        default: "Optional[Any]" = None,
+        not_null: bool = False,
+        primary_key: bool = False,
+        unique: bool = False,
+        auto_increment: bool = False,
+        comment: "Optional[str]" = None,
+        check: "Optional[str]" = None,
+        generated: "Optional[str]" = None,
+        collate: "Optional[str]" = None,
+    ) -> None:
+        self.name = name
+        self.dtype = dtype
+        self.default = default
+        self.not_null = not_null
+        self.primary_key = primary_key
+        self.unique = unique
+        self.auto_increment = auto_increment
+        self.comment = comment
+        self.check = check
+        self.generated = generated
+        self.collate = collate
 
 
-@dataclass
 class ConstraintDefinition:
     """Constraint definition for CREATE TABLE."""
 
-    constraint_type: str
-    name: "Optional[str]" = None
-    columns: "list[str]" = field(default_factory=list)
-    references_table: "Optional[str]" = None
-    references_columns: "list[str]" = field(default_factory=list)
-    condition: "Optional[str]" = None
-    on_delete: "Optional[str]" = None
-    on_update: "Optional[str]" = None
-    deferrable: bool = False
-    initially_deferred: bool = False
+    __slots__ = (
+        "columns",
+        "condition",
+        "constraint_type",
+        "deferrable",
+        "initially_deferred",
+        "name",
+        "on_delete",
+        "on_update",
+        "references_columns",
+        "references_table",
+    )
+
+    def __init__(
+        self,
+        constraint_type: str,
+        name: "Optional[str]" = None,
+        columns: "Optional[list[str]]" = None,
+        references_table: "Optional[str]" = None,
+        references_columns: "Optional[list[str]]" = None,
+        condition: "Optional[str]" = None,
+        on_delete: "Optional[str]" = None,
+        on_update: "Optional[str]" = None,
+        deferrable: bool = False,
+        initially_deferred: bool = False,
+    ) -> None:
+        self.constraint_type = constraint_type
+        self.name = name
+        self.columns = columns or []
+        self.references_table = references_table
+        self.references_columns = references_columns or []
+        self.condition = condition
+        self.on_delete = on_delete
+        self.on_update = on_update
+        self.deferrable = deferrable
+        self.initially_deferred = initially_deferred
 
 
-@dataclass
 class CreateTable(DDLBuilder):
     """Builder for CREATE TABLE statements with columns and constraints.
 
@@ -113,20 +161,31 @@ class CreateTable(DDLBuilder):
         sql = builder.build().sql
     """
 
-    _table_name: str = field(default="", init=False)
-    _if_not_exists: bool = False
-    _temporary: bool = False
-    _columns: "list[ColumnDefinition]" = field(default_factory=list)
-    _constraints: "list[ConstraintDefinition]" = field(default_factory=list)
-    _table_options: "dict[str, Any]" = field(default_factory=dict)
-    _schema: "Optional[str]" = None
-    _tablespace: "Optional[str]" = None
-    _like_table: "Optional[str]" = None
-    _partition_by: "Optional[str]" = None
+    __slots__ = (
+        "_columns",
+        "_constraints",
+        "_if_not_exists",
+        "_like_table",
+        "_partition_by",
+        "_schema",
+        "_table_name",
+        "_table_options",
+        "_tablespace",
+        "_temporary",
+    )
 
-    def __init__(self, table_name: str) -> None:
-        super().__init__()
+    def __init__(self, table_name: str, dialect: DialectType = None) -> None:
+        super().__init__(dialect=dialect)
         self._table_name = table_name
+        self._if_not_exists = False
+        self._temporary = False
+        self._columns: list[ColumnDefinition] = []
+        self._constraints: list[ConstraintDefinition] = []
+        self._table_options: dict[str, Any] = {}
+        self._schema: Optional[str] = None
+        self._tablespace: Optional[str] = None
+        self._like_table: Optional[str] = None
+        self._partition_by: Optional[str] = None
 
     def in_schema(self, schema_name: str) -> "Self":
         """Set the schema for the table."""
@@ -385,23 +444,22 @@ class CreateTable(DDLBuilder):
         return build_constraint_expression(constraint)
 
 
-@dataclass
 class DropTable(DDLBuilder):
     """Builder for DROP TABLE [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
-    _table_name: Optional[str] = None
-    _if_exists: bool = False
-    _cascade: Optional[bool] = None
+    __slots__ = ("_cascade", "_if_exists", "_table_name")
 
-    def __init__(self, table_name: str, **kwargs: Any) -> None:
+    def __init__(self, table_name: str, dialect: DialectType = None) -> None:
         """Initialize DROP TABLE with table name.
 
         Args:
             table_name: Name of the table to drop
-            **kwargs: Additional DDLBuilder arguments
+            dialect: SQL dialect to use
         """
-        super().__init__(**kwargs)
+        super().__init__(dialect=dialect)
         self._table_name = table_name
+        self._if_exists = False
+        self._cascade: Optional[bool] = None
 
     def table(self, name: str) -> Self:
         self._table_name = name
@@ -427,24 +485,23 @@ class DropTable(DDLBuilder):
         )
 
 
-@dataclass
 class DropIndex(DDLBuilder):
     """Builder for DROP INDEX [IF EXISTS] ... [ON table] [CASCADE|RESTRICT]."""
 
-    _index_name: Optional[str] = None
-    _table_name: Optional[str] = None
-    _if_exists: bool = False
-    _cascade: Optional[bool] = None
+    __slots__ = ("_cascade", "_if_exists", "_index_name", "_table_name")
 
-    def __init__(self, index_name: str, **kwargs: Any) -> None:
+    def __init__(self, index_name: str, dialect: DialectType = None) -> None:
         """Initialize DROP INDEX with index name.
 
         Args:
             index_name: Name of the index to drop
-            **kwargs: Additional DDLBuilder arguments
+            dialect: SQL dialect to use
         """
-        super().__init__(**kwargs)
+        super().__init__(dialect=dialect)
         self._index_name = index_name
+        self._table_name: Optional[str] = None
+        self._if_exists = False
+        self._cascade: Optional[bool] = None
 
     def name(self, index_name: str) -> Self:
         self._index_name = index_name
@@ -478,13 +535,22 @@ class DropIndex(DDLBuilder):
         )
 
 
-@dataclass
 class DropView(DDLBuilder):
     """Builder for DROP VIEW [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
-    _view_name: Optional[str] = None
-    _if_exists: bool = False
-    _cascade: Optional[bool] = None
+    __slots__ = ("_cascade", "_if_exists", "_view_name")
+
+    def __init__(self, view_name: str, dialect: DialectType = None) -> None:
+        """Initialize DROP VIEW with view name.
+
+        Args:
+            view_name: Name of the view to drop
+            dialect: SQL dialect to use
+        """
+        super().__init__(dialect=dialect)
+        self._view_name = view_name
+        self._if_exists = False
+        self._cascade: Optional[bool] = None
 
     def name(self, view_name: str) -> Self:
         self._view_name = view_name
@@ -510,13 +576,22 @@ class DropView(DDLBuilder):
         )
 
 
-@dataclass
 class DropSchema(DDLBuilder):
     """Builder for DROP SCHEMA [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
-    _schema_name: Optional[str] = None
-    _if_exists: bool = False
-    _cascade: Optional[bool] = None
+    __slots__ = ("_cascade", "_if_exists", "_schema_name")
+
+    def __init__(self, schema_name: str, dialect: DialectType = None) -> None:
+        """Initialize DROP SCHEMA with schema name.
+
+        Args:
+            schema_name: Name of the schema to drop
+            dialect: SQL dialect to use
+        """
+        super().__init__(dialect=dialect)
+        self._schema_name = schema_name
+        self._if_exists = False
+        self._cascade: Optional[bool] = None
 
     def name(self, schema_name: str) -> Self:
         self._schema_name = schema_name
@@ -542,32 +617,29 @@ class DropSchema(DDLBuilder):
         )
 
 
-@dataclass
 class CreateIndex(DDLBuilder):
     """Builder for CREATE [UNIQUE] INDEX [IF NOT EXISTS] ... ON ... (...).
 
     Supports columns, expressions, ordering, using, and where.
     """
 
-    _index_name: Optional[str] = None
-    _table_name: Optional[str] = None
-    _columns: list[Union[str, exp.Ordered, exp.Expression]] = field(default_factory=list)
-    _unique: bool = False
-    _if_not_exists: bool = False
-    _using: Optional[str] = None
-    _where: Optional[Union[str, exp.Expression]] = None
+    __slots__ = ("_columns", "_if_not_exists", "_index_name", "_table_name", "_unique", "_using", "_where")
 
-    def __init__(self, index_name: str, **kwargs: Any) -> None:
+    def __init__(self, index_name: str, dialect: DialectType = None) -> None:
         """Initialize CREATE INDEX with index name.
 
         Args:
             index_name: Name of the index to create
-            **kwargs: Additional DDLBuilder arguments
+            dialect: SQL dialect to use
         """
-        super().__init__(**kwargs)
+        super().__init__(dialect=dialect)
         self._index_name = index_name
-        if not hasattr(self, "_columns"):
-            self._columns = []
+        self._table_name: Optional[str] = None
+        self._columns: list[Union[str, exp.Ordered, exp.Expression]] = []
+        self._unique = False
+        self._if_not_exists = False
+        self._using: Optional[str] = None
+        self._where: Optional[Union[str, exp.Expression]] = None
 
     def name(self, index_name: str) -> Self:
         self._index_name = index_name
@@ -625,13 +697,22 @@ class CreateIndex(DDLBuilder):
         )
 
 
-@dataclass
 class Truncate(DDLBuilder):
     """Builder for TRUNCATE TABLE ... [CASCADE|RESTRICT] [RESTART IDENTITY|CONTINUE IDENTITY]."""
 
-    _table_name: Optional[str] = None
-    _cascade: Optional[bool] = None
-    _identity: Optional[str] = None
+    __slots__ = ("_cascade", "_identity", "_table_name")
+
+    def __init__(self, table_name: str, dialect: DialectType = None) -> None:
+        """Initialize TRUNCATE with table name.
+
+        Args:
+            table_name: Name of the table to truncate
+            dialect: SQL dialect to use
+        """
+        super().__init__(dialect=dialect)
+        self._table_name = table_name
+        self._cascade: Optional[bool] = None
+        self._identity: Optional[str] = None
 
     def table(self, name: str) -> Self:
         self._table_name = name
@@ -660,29 +741,63 @@ class Truncate(DDLBuilder):
         return exp.TruncateTable(this=exp.to_table(self._table_name), cascade=self._cascade, identity=identity_expr)
 
 
-@dataclass
 class AlterOperation:
     """Represents a single ALTER TABLE operation."""
 
-    operation_type: str
-    column_name: "Optional[str]" = None
-    column_definition: "Optional[ColumnDefinition]" = None
-    constraint_name: "Optional[str]" = None
-    constraint_definition: "Optional[ConstraintDefinition]" = None
-    new_type: "Optional[str]" = None
-    new_name: "Optional[str]" = None
-    after_column: "Optional[str]" = None
-    first: bool = False
-    using_expression: "Optional[str]" = None
+    __slots__ = (
+        "after_column",
+        "column_definition",
+        "column_name",
+        "constraint_definition",
+        "constraint_name",
+        "first",
+        "new_name",
+        "new_type",
+        "operation_type",
+        "using_expression",
+    )
+
+    def __init__(
+        self,
+        operation_type: str,
+        column_name: "Optional[str]" = None,
+        column_definition: "Optional[ColumnDefinition]" = None,
+        constraint_name: "Optional[str]" = None,
+        constraint_definition: "Optional[ConstraintDefinition]" = None,
+        new_type: "Optional[str]" = None,
+        new_name: "Optional[str]" = None,
+        after_column: "Optional[str]" = None,
+        first: bool = False,
+        using_expression: "Optional[str]" = None,
+    ) -> None:
+        self.operation_type = operation_type
+        self.column_name = column_name
+        self.column_definition = column_definition
+        self.constraint_name = constraint_name
+        self.constraint_definition = constraint_definition
+        self.new_type = new_type
+        self.new_name = new_name
+        self.after_column = after_column
+        self.first = first
+        self.using_expression = using_expression
 
 
-@dataclass
 class CreateSchema(DDLBuilder):
     """Builder for CREATE SCHEMA [IF NOT EXISTS] schema_name [AUTHORIZATION user_name]."""
 
-    _schema_name: Optional[str] = None
-    _if_not_exists: bool = False
-    _authorization: Optional[str] = None
+    __slots__ = ("_authorization", "_if_not_exists", "_schema_name")
+
+    def __init__(self, schema_name: str, dialect: DialectType = None) -> None:
+        """Initialize CREATE SCHEMA with schema name.
+
+        Args:
+            schema_name: Name of the schema to create
+            dialect: SQL dialect to use
+        """
+        super().__init__(dialect=dialect)
+        self._schema_name = schema_name
+        self._if_not_exists = False
+        self._authorization: Optional[str] = None
 
     def name(self, schema_name: str) -> Self:
         self._schema_name = schema_name
@@ -713,7 +828,6 @@ class CreateSchema(DDLBuilder):
         )
 
 
-@dataclass
 class CreateTableAsSelect(DDLBuilder):
     """Builder for CREATE TABLE [IF NOT EXISTS] ... AS SELECT ... (CTAS).
 
@@ -736,10 +850,14 @@ class CreateTableAsSelect(DDLBuilder):
         - as_select(select_query): Set the SELECT source (SQL, SelectBuilder, or str).
     """
 
-    _table_name: Optional[str] = None
-    _if_not_exists: bool = False
-    _columns: list[str] = field(default_factory=list)
-    _select_query: Optional[object] = None
+    __slots__ = ("_columns", "_if_not_exists", "_select_query", "_table_name")
+
+    def __init__(self, dialect: DialectType = None) -> None:
+        super().__init__(dialect=dialect)
+        self._table_name: Optional[str] = None
+        self._if_not_exists = False
+        self._columns: list[str] = []
+        self._select_query: Optional[object] = None
 
     def name(self, table_name: str) -> Self:
         self._table_name = table_name
@@ -753,7 +871,7 @@ class CreateTableAsSelect(DDLBuilder):
         self._columns = list(cols)
         return self
 
-    def as_select(self, select_query: object) -> Self:
+    def as_select(self, select_query: "Union[str, exp.Expression]") -> Self:
         self._select_query = select_query
         return self
 
@@ -805,23 +923,43 @@ class CreateTableAsSelect(DDLBuilder):
         )
 
 
-@dataclass
 class CreateMaterializedView(DDLBuilder):
     """Builder for CREATE MATERIALIZED VIEW [IF NOT EXISTS] ... AS SELECT ...
 
     Supports optional column list, parameterized SELECT sources, and dialect-specific options.
     """
 
-    _view_name: Optional[str] = None
-    _if_not_exists: bool = False
-    _columns: list[str] = field(default_factory=list)
-    _select_query: Optional[object] = None
-    _with_data: Optional[bool] = None
-    _refresh_mode: Optional[str] = None
-    _storage_parameters: dict[str, Any] = field(default_factory=dict)
-    _tablespace: Optional[str] = None
-    _using_index: Optional[str] = None
-    _hints: list[str] = field(default_factory=list)
+    __slots__ = (
+        "_columns",
+        "_hints",
+        "_if_not_exists",
+        "_refresh_mode",
+        "_select_query",
+        "_storage_parameters",
+        "_tablespace",
+        "_using_index",
+        "_view_name",
+        "_with_data",
+    )
+
+    def __init__(self, view_name: str, dialect: DialectType = None) -> None:
+        """Initialize CREATE MATERIALIZED VIEW with view name.
+
+        Args:
+            view_name: Name of the materialized view to create
+            dialect: SQL dialect to use
+        """
+        super().__init__(dialect=dialect)
+        self._view_name = view_name
+        self._if_not_exists = False
+        self._columns: list[str] = []
+        self._select_query: Optional[Union[str, exp.Expression]] = None
+        self._with_data: Optional[bool] = None
+        self._refresh_mode: Optional[str] = None
+        self._storage_parameters: dict[str, Any] = {}
+        self._tablespace: Optional[str] = None
+        self._using_index: Optional[str] = None
+        self._hints: list[str] = []
 
     def name(self, view_name: str) -> Self:
         self._view_name = view_name
@@ -835,7 +973,7 @@ class CreateMaterializedView(DDLBuilder):
         self._columns = list(cols)
         return self
 
-    def as_select(self, select_query: object) -> Self:
+    def as_select(self, select_query: "Union[str, exp.Expression]") -> Self:
         self._select_query = select_query
         return self
 
@@ -926,18 +1064,27 @@ class CreateMaterializedView(DDLBuilder):
         )
 
 
-@dataclass
 class CreateView(DDLBuilder):
     """Builder for CREATE VIEW [IF NOT EXISTS] ... AS SELECT ...
 
     Supports optional column list, parameterized SELECT sources, and hints.
     """
 
-    _view_name: Optional[str] = None
-    _if_not_exists: bool = False
-    _columns: list[str] = field(default_factory=list)
-    _select_query: Optional[object] = None
-    _hints: list[str] = field(default_factory=list)
+    __slots__ = ("_columns", "_hints", "_if_not_exists", "_select_query", "_view_name")
+
+    def __init__(self, view_name: str, dialect: DialectType = None) -> None:
+        """Initialize CREATE VIEW with view name.
+
+        Args:
+            view_name: Name of the view to create
+            dialect: SQL dialect to use
+        """
+        super().__init__(dialect=dialect)
+        self._view_name = view_name
+        self._if_not_exists = False
+        self._columns: list[str] = []
+        self._select_query: Optional[Union[str, exp.Expression]] = None
+        self._hints: list[str] = []
 
     def name(self, view_name: str) -> Self:
         self._view_name = view_name
@@ -951,7 +1098,7 @@ class CreateView(DDLBuilder):
         self._columns = list(cols)
         return self
 
-    def as_select(self, select_query: object) -> Self:
+    def as_select(self, select_query: "Union[str, exp.Expression]") -> Self:
         self._select_query = select_query
         return self
 
@@ -1007,7 +1154,6 @@ class CreateView(DDLBuilder):
         )
 
 
-@dataclass
 class AlterTable(DDLBuilder):
     """Builder for ALTER TABLE with granular operations.
 
@@ -1015,23 +1161,20 @@ class AlterTable(DDLBuilder):
 
     Example:
         builder = (
-            AlterTableBuilder("users")
+            AlterTable("users")
             .add_column("email", "VARCHAR(255)", not_null=True)
             .drop_column("old_field")
             .add_constraint("check_age", "CHECK (age >= 18)")
         )
     """
 
-    _table_name: str = field(default="", init=False)
-    _operations: "list[AlterOperation]" = field(default_factory=list)
-    _schema: "Optional[str]" = None
-    _if_exists: bool = False
+    __slots__ = ("_if_exists", "_operations", "_schema", "_table_name")
 
-    def __init__(self, table_name: str) -> None:
-        super().__init__()
+    def __init__(self, table_name: str, dialect: DialectType = None) -> None:
+        super().__init__(dialect=dialect)
         self._table_name = table_name
-        self._operations = []
-        self._schema = None
+        self._operations: list[AlterOperation] = []
+        self._schema: Optional[str] = None
         self._if_exists = False
 
     def if_exists(self) -> "Self":
@@ -1277,17 +1420,25 @@ class AlterTable(DDLBuilder):
         raise AssertionError
 
 
-@dataclass
 class CommentOn(DDLBuilder):
     """Builder for COMMENT ON ... IS ... statements.
 
     Supports COMMENT ON TABLE and COMMENT ON COLUMN.
     """
 
-    _target_type: Optional[str] = None
-    _table: Optional[str] = None
-    _column: Optional[str] = None
-    _comment: Optional[str] = None
+    __slots__ = ("_column", "_comment", "_table", "_target_type")
+
+    def __init__(self, dialect: DialectType = None) -> None:
+        """Initialize COMMENT ON builder.
+
+        Args:
+            dialect: SQL dialect to use
+        """
+        super().__init__(dialect=dialect)
+        self._target_type: Optional[str] = None
+        self._table: Optional[str] = None
+        self._column: Optional[str] = None
+        self._comment: Optional[str] = None
 
     def on_table(self, table: str) -> Self:
         self._target_type = "TABLE"
@@ -1318,15 +1469,24 @@ class CommentOn(DDLBuilder):
         raise AssertionError
 
 
-@dataclass
 class RenameTable(DDLBuilder):
     """Builder for ALTER TABLE ... RENAME TO ... statements.
 
     Supports renaming a table.
     """
 
-    _old_name: Optional[str] = None
-    _new_name: Optional[str] = None
+    __slots__ = ("_new_name", "_old_name")
+
+    def __init__(self, old_name: str, dialect: DialectType = None) -> None:
+        """Initialize RENAME TABLE with old name.
+
+        Args:
+            old_name: Current name of the table
+            dialect: SQL dialect to use
+        """
+        super().__init__(dialect=dialect)
+        self._old_name = old_name
+        self._new_name: Optional[str] = None
 
     def table(self, old_name: str) -> Self:
         self._old_name = old_name

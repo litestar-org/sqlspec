@@ -55,12 +55,15 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase"]):
         Returns:
             Tuple of (sql_content, execution_time_ms).
         """
-        upgrade_sql = self._get_migration_sql(migration, "up")
-        if upgrade_sql is None:
+        upgrade_sql_list = self._get_migration_sql(migration, "up")
+        if upgrade_sql_list is None:
             return None, 0
 
         start_time = time.time()
-        driver.execute(upgrade_sql)
+        # Execute each SQL statement separately
+        for sql_statement in upgrade_sql_list:
+            if sql_statement.strip():
+                driver.execute_script(sql_statement)
         execution_time = int((time.time() - start_time) * 1000)
         return None, execution_time
 
@@ -76,12 +79,15 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase"]):
         Returns:
             Tuple of (sql_content, execution_time_ms).
         """
-        downgrade_sql = self._get_migration_sql(migration, "down")
-        if downgrade_sql is None:
+        downgrade_sql_list = self._get_migration_sql(migration, "down")
+        if downgrade_sql_list is None:
             return None, 0
 
         start_time = time.time()
-        driver.execute(downgrade_sql)
+        # Execute each SQL statement separately
+        for sql_statement in downgrade_sql_list:
+            if sql_statement.strip():
+                driver.execute_script(sql_statement)
         execution_time = int((time.time() - start_time) * 1000)
         return None, execution_time
 
@@ -151,12 +157,15 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase"]):
         Returns:
             Tuple of (sql_content, execution_time_ms).
         """
-        upgrade_sql = self._get_migration_sql(migration, "up")
-        if upgrade_sql is None:
+        upgrade_sql_list = self._get_migration_sql(migration, "up")
+        if upgrade_sql_list is None:
             return None, 0
 
         start_time = time.time()
-        await driver.execute(upgrade_sql)
+        # Execute each SQL statement separately
+        for sql_statement in upgrade_sql_list:
+            if sql_statement.strip():
+                await driver.execute_script(sql_statement)
         execution_time = int((time.time() - start_time) * 1000)
         return None, execution_time
 
@@ -172,12 +181,15 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase"]):
         Returns:
             Tuple of (sql_content, execution_time_ms).
         """
-        downgrade_sql = self._get_migration_sql(migration, "down")
-        if downgrade_sql is None:
+        downgrade_sql_list = self._get_migration_sql(migration, "down")
+        if downgrade_sql_list is None:
             return None, 0
 
         start_time = time.time()
-        await driver.execute(downgrade_sql)
+        # Execute each SQL statement separately
+        for sql_statement in downgrade_sql_list:
+            if sql_statement.strip():
+                await driver.execute_script(sql_statement)
         execution_time = int((time.time() - start_time) * 1000)
         return None, execution_time
 

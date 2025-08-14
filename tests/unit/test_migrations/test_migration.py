@@ -19,7 +19,6 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from sqlspec.core.statement import SQL
 from sqlspec.migrations.base import BaseMigrationRunner
 
 
@@ -649,9 +648,9 @@ def test_get_migration_sql_upgrade() -> None:
 
         result = runner._get_migration_sql(migration, "up")
 
-        # Should create SQL object with the statement
-        assert isinstance(result, SQL)
-        assert "CREATE TABLE test (id INTEGER);" in result.sql
+        # Should return list of SQL statements
+        assert isinstance(result, list)
+        assert result == ["CREATE TABLE test (id INTEGER);"]
 
 
 def test_get_migration_sql_downgrade() -> None:
@@ -672,9 +671,9 @@ def test_get_migration_sql_downgrade() -> None:
 
         result = runner._get_migration_sql(migration, "down")
 
-        # Should create SQL object with the statement
-        assert isinstance(result, SQL)
-        assert "DROP TABLE test;" in result.sql
+        # Should return list of SQL statements
+        assert isinstance(result, list)
+        assert result == ["DROP TABLE test;"]
 
 
 def test_get_migration_sql_no_downgrade() -> None:

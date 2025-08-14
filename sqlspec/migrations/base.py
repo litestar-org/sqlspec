@@ -6,10 +6,9 @@ This module provides abstract base classes for migration components.
 import operator
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Generic, Optional, TypeVar
+from typing import Any, Generic, Optional, TypeVar, cast
 
 from sqlspec._sql import sql
-from sqlspec.builder._ddl import CreateTable
 from sqlspec.core.statement import SQL
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.loaders import get_migration_loader
@@ -42,23 +41,19 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         Returns:
             SQL object for table creation.
         """
-        builder = CreateTable(self.version_table)
-        if not hasattr(builder, "_columns"):
-            builder._columns = []
-        if not hasattr(builder, "_constraints"):
-            builder._constraints = []
-        if not hasattr(builder, "_table_options"):
-            builder._table_options = {}
-
-        return (
-            builder.if_not_exists()
-            .column("version_num", "VARCHAR(32)", primary_key=True)
-            .column("description", "TEXT")
-            .column("applied_at", "TIMESTAMP", not_null=True, default="CURRENT_TIMESTAMP")
-            .column("execution_time_ms", "INTEGER")
-            .column("checksum", "VARCHAR(64)")
-            .column("applied_by", "VARCHAR(255)")
-        ).to_statement()
+        # Use raw SQL to avoid builder dataclass initialization issues
+        # The driver will automatically adjust the dialect when executing
+        table_sql = f"""
+        CREATE TABLE IF NOT EXISTS {self.version_table} (
+            version_num VARCHAR(32) PRIMARY KEY,
+            description TEXT,
+            applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            execution_time_ms INTEGER,
+            checksum VARCHAR(64),
+            applied_by VARCHAR(255)
+        )
+        """
+        return SQL(table_sql.strip())
 
     def _get_current_version_sql(self) -> SQL:
         """Get SQL for retrieving current version.
@@ -240,7 +235,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             "loader": loader,
         }
 
-    def _get_migration_sql(self, migration: "dict[str, Any]", direction: str) -> Optional[SQL]:
+    def _get_migration_sql(self, migration: "dict[str, Any]", direction: str) -> "Optional[list[str]]":
         """Get migration SQL for given direction.
 
         Args:
@@ -271,7 +266,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             raise ValueError(msg) from e
         else:
             if sql_statements:
-                return SQL(sql_statements[0])
+                return cast("list[str]", sql_statements)
             return None
 
     @abstractmethod

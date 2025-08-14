@@ -173,7 +173,7 @@ class Insert(QueryBuilder, ReturningClauseMixin, InsertValuesMixin, InsertFromSe
                 else:
                     param_name = self._generate_unique_parameter_name(f"value_{i + 1}")
                 _, param_name = self.add_parameter(value, name=param_name)
-                value_placeholders.append(exp.var(param_name))
+                value_placeholders.append(exp.Placeholder(this=param_name))
 
         tuple_expr = exp.Tuple(expressions=value_placeholders)
         if self._values_added_count == 0:

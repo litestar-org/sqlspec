@@ -137,6 +137,9 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             to_revert = []
             if revision == "-1":
                 to_revert = [applied[-1]]
+            elif revision == "base":
+                # Revert all migrations to get back to base state
+                to_revert = list(reversed(applied))
             else:
                 for migration in reversed(applied):
                     if migration["version_num"] > revision:
@@ -297,6 +300,9 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             to_revert = []
             if revision == "-1":
                 to_revert = [applied[-1]]
+            elif revision == "base":
+                # Revert all migrations to get back to base state
+                to_revert = list(reversed(applied))
             else:
                 for migration in reversed(applied):
                     if migration["version_num"] > revision:
@@ -382,7 +388,9 @@ class MigrationCommands:
             package: Whether to create __init__.py file.
         """
         if self._is_async:
-            await_(cast("AsyncMigrationCommands[Any]", self._impl).init)(directory, package=package)
+            await_(cast("AsyncMigrationCommands[Any]", self._impl).init, raise_sync_error=False)(
+                directory, package=package
+            )
         else:
             cast("SyncMigrationCommands[Any]", self._impl).init(directory, package=package)
 

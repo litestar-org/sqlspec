@@ -42,11 +42,11 @@ from sqlspec.builder._expression_wrappers import (
 )
 from sqlspec.builder.mixins._join_operations import JoinBuilder
 from sqlspec.builder.mixins._select_operations import Case, SubqueryBuilder, WindowFunctionBuilder
+from sqlspec.core.statement import SQL
 from sqlspec.exceptions import SQLBuilderError
 
 if TYPE_CHECKING:
     from sqlspec.builder._expression_wrappers import ExpressionWrapper
-    from sqlspec.core.statement import SQL
 
 
 __all__ = (
@@ -285,9 +285,7 @@ class SQLFactory:
         Returns:
             CreateTable builder instance
         """
-        builder = CreateTable(table_name)
-        builder.dialect = dialect or self.dialect
-        return builder
+        return CreateTable(table_name, dialect=dialect or self.dialect)
 
     def create_table_as_select(self, dialect: DialectType = None) -> "CreateTableAsSelect":
         """Create a CREATE TABLE AS SELECT builder.
@@ -298,35 +296,31 @@ class SQLFactory:
         Returns:
             CreateTableAsSelect builder instance
         """
-        builder = CreateTableAsSelect()
-        builder.dialect = dialect or self.dialect
-        return builder
+        return CreateTableAsSelect(dialect=dialect or self.dialect)
 
-    def create_view(self, dialect: DialectType = None) -> "CreateView":
+    def create_view(self, view_name: str, dialect: DialectType = None) -> "CreateView":
         """Create a CREATE VIEW builder.
 
         Args:
+            view_name: Name of the view to create
             dialect: Optional SQL dialect
 
         Returns:
             CreateView builder instance
         """
-        builder = CreateView()
-        builder.dialect = dialect or self.dialect
-        return builder
+        return CreateView(view_name, dialect=dialect or self.dialect)
 
-    def create_materialized_view(self, dialect: DialectType = None) -> "CreateMaterializedView":
+    def create_materialized_view(self, view_name: str, dialect: DialectType = None) -> "CreateMaterializedView":
         """Create a CREATE MATERIALIZED VIEW builder.
 
         Args:
+            view_name: Name of the materialized view to create
             dialect: Optional SQL dialect
 
         Returns:
             CreateMaterializedView builder instance
         """
-        builder = CreateMaterializedView()
-        builder.dialect = dialect or self.dialect
-        return builder
+        return CreateMaterializedView(view_name, dialect=dialect or self.dialect)
 
     def create_index(self, index_name: str, dialect: DialectType = None) -> "CreateIndex":
         """Create a CREATE INDEX builder.
@@ -340,18 +334,17 @@ class SQLFactory:
         """
         return CreateIndex(index_name, dialect=dialect or self.dialect)
 
-    def create_schema(self, dialect: DialectType = None) -> "CreateSchema":
+    def create_schema(self, schema_name: str, dialect: DialectType = None) -> "CreateSchema":
         """Create a CREATE SCHEMA builder.
 
         Args:
+            schema_name: Name of the schema to create
             dialect: Optional SQL dialect
 
         Returns:
             CreateSchema builder instance
         """
-        builder = CreateSchema()
-        builder.dialect = dialect or self.dialect
-        return builder
+        return CreateSchema(schema_name, dialect=dialect or self.dialect)
 
     def drop_table(self, table_name: str, dialect: DialectType = None) -> "DropTable":
         """Create a DROP TABLE builder.
@@ -365,16 +358,17 @@ class SQLFactory:
         """
         return DropTable(table_name, dialect=dialect or self.dialect)
 
-    def drop_view(self, dialect: DialectType = None) -> "DropView":
+    def drop_view(self, view_name: str, dialect: DialectType = None) -> "DropView":
         """Create a DROP VIEW builder.
 
         Args:
+            view_name: Name of the view to drop
             dialect: Optional SQL dialect
 
         Returns:
             DropView builder instance
         """
-        return DropView(dialect=dialect or self.dialect)
+        return DropView(view_name, dialect=dialect or self.dialect)
 
     def drop_index(self, index_name: str, dialect: DialectType = None) -> "DropIndex":
         """Create a DROP INDEX builder.
@@ -388,16 +382,17 @@ class SQLFactory:
         """
         return DropIndex(index_name, dialect=dialect or self.dialect)
 
-    def drop_schema(self, dialect: DialectType = None) -> "DropSchema":
+    def drop_schema(self, schema_name: str, dialect: DialectType = None) -> "DropSchema":
         """Create a DROP SCHEMA builder.
 
         Args:
+            schema_name: Name of the schema to drop
             dialect: Optional SQL dialect
 
         Returns:
             DropSchema builder instance
         """
-        return DropSchema(dialect=dialect or self.dialect)
+        return DropSchema(schema_name, dialect=dialect or self.dialect)
 
     def alter_table(self, table_name: str, dialect: DialectType = None) -> "AlterTable":
         """Create an ALTER TABLE builder.
@@ -409,22 +404,19 @@ class SQLFactory:
         Returns:
             AlterTable builder instance
         """
-        builder = AlterTable(table_name)
-        builder.dialect = dialect or self.dialect
-        return builder
+        return AlterTable(table_name, dialect=dialect or self.dialect)
 
-    def rename_table(self, dialect: DialectType = None) -> "RenameTable":
+    def rename_table(self, old_name: str, dialect: DialectType = None) -> "RenameTable":
         """Create a RENAME TABLE builder.
 
         Args:
+            old_name: Current name of the table
             dialect: Optional SQL dialect
 
         Returns:
             RenameTable builder instance
         """
-        builder = RenameTable()
-        builder.dialect = dialect or self.dialect
-        return builder
+        return RenameTable(old_name, dialect=dialect or self.dialect)
 
     def comment_on(self, dialect: DialectType = None) -> "CommentOn":
         """Create a COMMENT ON builder.
@@ -435,9 +427,7 @@ class SQLFactory:
         Returns:
             CommentOn builder instance
         """
-        builder = CommentOn()
-        builder.dialect = dialect or self.dialect
-        return builder
+        return CommentOn(dialect=dialect or self.dialect)
 
     # ===================
     # SQL Analysis Helpers
@@ -746,7 +736,6 @@ class SQLFactory:
                 raise SQLBuilderError(msg) from e
 
         # New behavior - return SQL statement with parameters
-        from sqlspec.core.statement import SQL
 
         return SQL(sql_fragment, parameters)
 
@@ -1331,9 +1320,7 @@ class SQLFactory:
             )
             ```
         """
-        builder = Truncate(dialect=self.dialect)
-        builder._table_name = table_name
-        return builder
+        return Truncate(table_name, dialect=self.dialect)
 
     # ===================
     # Case Expressions

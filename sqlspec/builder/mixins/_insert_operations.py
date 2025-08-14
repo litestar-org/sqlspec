@@ -75,14 +75,34 @@ class InsertValuesMixin:
         if not isinstance(self._expression, exp.Insert):
             msg = "Cannot set columns on a non-INSERT expression."
             raise SQLBuilderError(msg)
-        column_exprs = [exp.column(col) if isinstance(col, str) else col for col in columns]
-        self._expression.set("columns", column_exprs)
+
+        # Get the current table from the expression
+        current_this = self._expression.args.get("this")
+        if current_this is None:
+            msg = "Table must be set using .into() before setting columns."
+            raise SQLBuilderError(msg)
+
+        if columns:
+            # Create identifiers for columns
+            column_identifiers = [exp.to_identifier(col) if isinstance(col, str) else col for col in columns]
+
+            # Get table name from current this
+            table_name = current_this.this
+
+            # Create Schema object with table and columns
+            schema = exp.Schema(this=table_name, expressions=column_identifiers)
+            self._expression.set("this", schema)
+        # No columns specified - ensure we have just a Table object
+        elif isinstance(current_this, exp.Schema):
+            table_name = current_this.this
+            self._expression.set("this", exp.Table(this=table_name))
+
         try:
             cols = self._columns
             if not columns:
                 cols.clear()
             else:
-                cols[:] = [col.name if isinstance(col, exp.Column) else str(col) for col in columns]
+                cols[:] = [col if isinstance(col, str) else str(col) for col in columns]
         except AttributeError:
             pass
         return self
@@ -128,7 +148,7 @@ class InsertValuesMixin:
                         column_name = column_name.split(".")[-1]
                     param_name = self._generate_unique_parameter_name(column_name)
                     _, param_name = self.add_parameter(val, name=param_name)
-                    row_exprs.append(exp.var(param_name))
+                    row_exprs.append(exp.Placeholder(this=param_name))
         elif len(values) == 1 and hasattr(values[0], "items"):
             mapping = values[0]
             try:
@@ -147,7 +167,7 @@ class InsertValuesMixin:
                         column_name = column_name.split(".")[-1]
                     param_name = self._generate_unique_parameter_name(column_name)
                     _, param_name = self.add_parameter(val, name=param_name)
-                    row_exprs.append(exp.var(param_name))
+                    row_exprs.append(exp.Placeholder(this=param_name))
         else:
             try:
                 _columns = self._columns
@@ -173,7 +193,7 @@ class InsertValuesMixin:
                     except AttributeError:
                         param_name = self._generate_unique_parameter_name(f"value_{i + 1}")
                     _, param_name = self.add_parameter(v, name=param_name)
-                    row_exprs.append(exp.var(param_name))
+                    row_exprs.append(exp.Placeholder(this=param_name))
 
         values_expr = exp.Values(expressions=[row_exprs])
         self._expression.set("expression", values_expr)
