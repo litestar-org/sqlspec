@@ -29,10 +29,13 @@ from sqlspec.builder._merge import Merge
 from sqlspec.builder._select import Select
 from sqlspec.builder._update import Update
 from sqlspec.builder.mixins import WhereClauseMixin
+from sqlspec.builder.mixins._join_operations import JoinBuilder
+from sqlspec.builder.mixins._select_operations import Case, SubqueryBuilder, WindowFunctionBuilder
 from sqlspec.exceptions import SQLBuilderError
 
 __all__ = (
     "AlterTable",
+    "Case",
     "Column",
     "ColumnExpression",
     "CommentOn",
@@ -50,13 +53,16 @@ __all__ = (
     "DropView",
     "FunctionColumn",
     "Insert",
+    "JoinBuilder",
     "Merge",
     "QueryBuilder",
     "RenameTable",
     "SQLBuilderError",
     "SafeQuery",
     "Select",
+    "SubqueryBuilder",
     "Truncate",
     "Update",
     "WhereClauseMixin",
+    "WindowFunctionBuilder",
 )
