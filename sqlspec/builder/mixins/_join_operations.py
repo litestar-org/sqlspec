@@ -9,10 +9,11 @@ from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_query_builder_parameters
 
 if TYPE_CHECKING:
+    from sqlspec.builder._column import ColumnExpression
     from sqlspec.core.statement import SQL
     from sqlspec.protocols import SQLBuilderProtocol
 
-__all__ = ("JoinClauseMixin",)
+__all__ = ("JoinBuilder", "JoinClauseMixin")
 
 
 @trait
@@ -147,3 +148,116 @@ class JoinClauseMixin:
         join_expr = exp.Join(this=table_expr, kind="CROSS")
         builder._expression = builder._expression.join(join_expr, copy=False)
         return cast("Self", builder)
+
+
+@trait
+class JoinBuilder:
+    """Builder for JOIN operations with fluent syntax.
+
+    Example:
+        ```python
+        from sqlspec import sql
+
+        # sql.left_join_("posts").on("users.id = posts.user_id")
+        join_clause = sql.left_join_("posts").on(
+            "users.id = posts.user_id"
+        )
+
+        # Or with query builder
+        query = (
+            sql.select("users.name", "posts.title")
+            .from_("users")
+            .join(
+                sql.left_join_("posts").on(
+                    "users.id = posts.user_id"
+                )
+            )
+        )
+        ```
+    """
+
+    def __init__(self, join_type: str) -> None:
+        """Initialize the join builder.
+
+        Args:
+            join_type: Type of join (inner, left, right, full, cross)
+        """
+        self._join_type = join_type.upper()
+        self._table: Optional[Union[str, exp.Expression]] = None
+        self._condition: Optional[exp.Expression] = None
+        self._alias: Optional[str] = None
+
+    def __eq__(self, other: object) -> "ColumnExpression":  # type: ignore[override]
+        """Equal to (==) - not typically used but needed for type consistency."""
+        from sqlspec.builder._column import ColumnExpression
+
+        # JoinBuilder doesn't have a direct expression, so this is a placeholder
+        # In practice, this shouldn't be called as joins are used differently
+        placeholder_expr = exp.Literal.string(f"join_{self._join_type.lower()}")
+        if other is None:
+            return ColumnExpression(exp.Is(this=placeholder_expr, expression=exp.Null()))
+        return ColumnExpression(exp.EQ(this=placeholder_expr, expression=exp.convert(other)))
+
+    def __hash__(self) -> int:
+        """Make JoinBuilder hashable."""
+        return hash(id(self))
+
+    def __call__(self, table: Union[str, exp.Expression], alias: Optional[str] = None) -> Self:
+        """Set the table to join.
+
+        Args:
+            table: Table name or expression to join
+            alias: Optional alias for the table
+
+        Returns:
+            Self for method chaining
+        """
+        self._table = table
+        self._alias = alias
+        return self
+
+    def on(self, condition: Union[str, exp.Expression]) -> exp.Expression:
+        """Set the join condition and build the JOIN expression.
+
+        Args:
+            condition: JOIN condition (e.g., "users.id = posts.user_id")
+
+        Returns:
+            Complete JOIN expression
+        """
+        if not self._table:
+            msg = "Table must be set before calling .on()"
+            raise SQLBuilderError(msg)
+
+        # Parse the condition
+        condition_expr: exp.Expression
+        if isinstance(condition, str):
+            parsed: Optional[exp.Expression] = exp.maybe_parse(condition)
+            condition_expr = parsed or exp.condition(condition)
+        else:
+            condition_expr = condition
+
+        # Build table expression
+        table_expr: exp.Expression
+        if isinstance(self._table, str):
+            table_expr = exp.to_table(self._table)
+            if self._alias:
+                table_expr = exp.alias_(table_expr, self._alias)
+        else:
+            table_expr = self._table
+            if self._alias:
+                table_expr = exp.alias_(table_expr, self._alias)
+
+        # Create the appropriate join type using same pattern as existing JoinClauseMixin
+        if self._join_type == "INNER JOIN":
+            return exp.Join(this=table_expr, on=condition_expr)
+        if self._join_type == "LEFT JOIN":
+            return exp.Join(this=table_expr, on=condition_expr, side="LEFT")
+        if self._join_type == "RIGHT JOIN":
+            return exp.Join(this=table_expr, on=condition_expr, side="RIGHT")
+        if self._join_type == "FULL JOIN":
+            return exp.Join(this=table_expr, on=condition_expr, side="FULL", kind="OUTER")
+        if self._join_type == "CROSS JOIN":
+            # CROSS JOIN doesn't use ON condition
+            return exp.Join(this=table_expr, kind="CROSS")
+        return exp.Join(this=table_expr, on=condition_expr)

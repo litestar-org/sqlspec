@@ -4,10 +4,9 @@ Provides both statement builders (select, insert, update, etc.) and column expre
 """
 
 import logging
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import sqlglot
-from mypy_extensions import trait
 from sqlglot import exp
 from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
@@ -34,10 +33,11 @@ from sqlspec.builder import (
     Truncate,
     Update,
 )
+from sqlspec.builder.mixins._join_operations import JoinBuilder
+from sqlspec.builder.mixins._select_operations import Case, SubqueryBuilder, WindowFunctionBuilder
 from sqlspec.exceptions import SQLBuilderError
 
 if TYPE_CHECKING:
-    from sqlspec.builder._column import ColumnExpression
     from sqlspec.core.statement import SQL
 
 __all__ = (
@@ -179,7 +179,7 @@ class SQLFactory:
     # Statement Builders
     # ===================
     def select(
-        self, *columns_or_sql: Union[str, exp.Expression, Column, "SQL"], dialect: DialectType = None
+        self, *columns_or_sql: Union[str, exp.Expression, Column, "SQL", "Case"], dialect: DialectType = None
     ) -> "Select":
         builder_dialect = dialect or self.dialect
         if len(columns_or_sql) == 1 and isinstance(columns_or_sql[0], str):
@@ -223,7 +223,10 @@ class SQLFactory:
             if self._looks_like_sql(table_or_sql):
                 detected = self.detect_sql_type(table_or_sql, dialect=builder_dialect)
                 if detected != "UPDATE":
-                    msg = f"sql.update() expects UPDATE statement, got {detected}. Use sql.{detected.lower()}() if a dedicated builder exists."
+                    msg = (
+                        f"sql.update() expects UPDATE statement, got {detected}. "
+                        f"Use sql.{detected.lower()}() if a dedicated builder exists."
+                    )
                     raise SQLBuilderError(msg)
                 return self._populate_update_from_sql(builder, table_or_sql)
             return builder.table(table_or_sql)
@@ -235,7 +238,10 @@ class SQLFactory:
         if table_or_sql and self._looks_like_sql(table_or_sql):
             detected = self.detect_sql_type(table_or_sql, dialect=builder_dialect)
             if detected != "DELETE":
-                msg = f"sql.delete() expects DELETE statement, got {detected}. Use sql.{detected.lower()}() if a dedicated builder exists."
+                msg = (
+                    f"sql.delete() expects DELETE statement, got {detected}. "
+                    f"Use sql.{detected.lower()}() if a dedicated builder exists."
+                )
                 raise SQLBuilderError(msg)
             return self._populate_delete_from_sql(builder, table_or_sql)
         return builder
@@ -247,7 +253,10 @@ class SQLFactory:
             if self._looks_like_sql(table_or_sql):
                 detected = self.detect_sql_type(table_or_sql, dialect=builder_dialect)
                 if detected != "MERGE":
-                    msg = f"sql.merge() expects MERGE statement, got {detected}. Use sql.{detected.lower()}() if a dedicated builder exists."
+                    msg = (
+                        f"sql.merge() expects MERGE statement, got {detected}. "
+                        f"Use sql.{detected.lower()}() if a dedicated builder exists."
+                    )
                     raise SQLBuilderError(msg)
                 return self._populate_merge_from_sql(builder, table_or_sql)
             return builder.into(table_or_sql)
@@ -1371,411 +1380,6 @@ class SQLFactory:
                 over_args["order"] = [order_by]
 
         return exp.Window(this=func_expr, **over_args)
-
-
-@trait
-class Case:
-    """Builder for CASE expressions using the SQL factory.
-
-    Example:
-        ```python
-        from sqlspec import sql
-
-        case_expr = (
-            sql.case()
-            .when(sql.age < 18, "Minor")
-            .when(sql.age < 65, "Adult")
-            .else_("Senior")
-            .end()
-        )
-        ```
-    """
-
-    def __init__(self) -> None:
-        """Initialize the CASE expression builder."""
-        self._conditions: list[exp.If] = []
-        self._default: Optional[exp.Expression] = None
-
-    def __eq__(self, other: object) -> "ColumnExpression":  # type: ignore[override]
-        """Equal to (==) - convert to expression then compare."""
-        from sqlspec.builder._column import ColumnExpression
-
-        case_expr = exp.Case(ifs=self._conditions, default=self._default)
-        if other is None:
-            return ColumnExpression(exp.Is(this=case_expr, expression=exp.Null()))
-        return ColumnExpression(exp.EQ(this=case_expr, expression=exp.convert(other)))
-
-    def __hash__(self) -> int:
-        """Make Case hashable."""
-        return hash(id(self))
-
-    def when(self, condition: Union[str, exp.Expression], value: Union[str, exp.Expression, Any]) -> "Case":
-        """Add a WHEN clause.
-
-        Args:
-            condition: Condition to test.
-            value: Value to return if condition is true.
-
-        Returns:
-            Self for method chaining.
-        """
-        cond_expr = exp.maybe_parse(condition) or exp.column(condition) if isinstance(condition, str) else condition
-        val_expr = SQLFactory._to_literal(value)
-
-        # SQLGlot uses exp.If for CASE WHEN clauses, not exp.When
-        when_clause = exp.If(this=cond_expr, true=val_expr)
-        self._conditions.append(when_clause)
-        return self
-
-    def else_(self, value: Union[str, exp.Expression, Any]) -> "Case":
-        """Add an ELSE clause.
-
-        Args:
-            value: Default value to return.
-
-        Returns:
-            Self for method chaining.
-        """
-        self._default = SQLFactory._to_literal(value)
-        return self
-
-    def end(self) -> exp.Expression:
-        """Complete the CASE expression.
-
-        Returns:
-            Complete CASE expression.
-        """
-        return exp.Case(ifs=self._conditions, default=self._default)
-
-    def as_(self, alias: str) -> exp.Alias:
-        """Complete the CASE expression with an alias.
-
-        Args:
-            alias: Alias name for the CASE expression.
-
-        Returns:
-            Aliased CASE expression.
-        """
-        case_expr = exp.Case(ifs=self._conditions, default=self._default)
-        return cast("exp.Alias", exp.alias_(case_expr, alias))
-
-
-@trait
-class WindowFunctionBuilder:
-    """Builder for window functions with fluent syntax.
-
-    Example:
-        ```python
-        from sqlspec import sql
-
-        # sql.row_number_.partition_by("department").order_by("salary")
-        window_func = (
-            sql.row_number_.partition_by("department")
-            .order_by("salary")
-            .as_("row_num")
-        )
-        ```
-    """
-
-    def __init__(self, function_name: str) -> None:
-        """Initialize the window function builder.
-
-        Args:
-            function_name: Name of the window function (row_number, rank, etc.)
-        """
-        self._function_name = function_name
-        self._partition_by_cols: list[exp.Expression] = []
-        self._order_by_cols: list[exp.Expression] = []
-        self._alias: Optional[str] = None
-
-    def __eq__(self, other: object) -> "ColumnExpression":  # type: ignore[override]
-        """Equal to (==) - convert to expression then compare."""
-        from sqlspec.builder._column import ColumnExpression
-
-        window_expr = self._build_expression()
-        if other is None:
-            return ColumnExpression(exp.Is(this=window_expr, expression=exp.Null()))
-        return ColumnExpression(exp.EQ(this=window_expr, expression=exp.convert(other)))
-
-    def __hash__(self) -> int:
-        """Make WindowFunctionBuilder hashable."""
-        return hash(id(self))
-
-    def partition_by(self, *columns: Union[str, exp.Expression]) -> "WindowFunctionBuilder":
-        """Add PARTITION BY clause.
-
-        Args:
-            *columns: Columns to partition by.
-
-        Returns:
-            Self for method chaining.
-        """
-        for col in columns:
-            col_expr = exp.column(col) if isinstance(col, str) else col
-            self._partition_by_cols.append(col_expr)
-        return self
-
-    def order_by(self, *columns: Union[str, exp.Expression]) -> "WindowFunctionBuilder":
-        """Add ORDER BY clause.
-
-        Args:
-            *columns: Columns to order by.
-
-        Returns:
-            Self for method chaining.
-        """
-        for col in columns:
-            if isinstance(col, str):
-                col_expr = exp.column(col).asc()
-                self._order_by_cols.append(col_expr)
-            else:
-                # Convert to ordered expression
-                self._order_by_cols.append(exp.Ordered(this=col, desc=False))
-        return self
-
-    def as_(self, alias: str) -> exp.Alias:
-        """Complete the window function with an alias.
-
-        Args:
-            alias: Alias name for the window function.
-
-        Returns:
-            Aliased window function expression.
-        """
-        window_expr = self._build_expression()
-        return cast("exp.Alias", exp.alias_(window_expr, alias))
-
-    def build(self) -> exp.Expression:
-        """Complete the window function without an alias.
-
-        Returns:
-            Window function expression.
-        """
-        return self._build_expression()
-
-    def _build_expression(self) -> exp.Expression:
-        """Build the complete window function expression."""
-        # Create the function expression
-        func_expr = exp.Anonymous(this=self._function_name.upper(), expressions=[])
-
-        # Build the OVER clause arguments
-        over_args: dict[str, Any] = {}
-
-        if self._partition_by_cols:
-            over_args["partition_by"] = self._partition_by_cols
-
-        if self._order_by_cols:
-            over_args["order"] = exp.Order(expressions=self._order_by_cols)
-
-        return exp.Window(this=func_expr, **over_args)
-
-
-@trait
-class SubqueryBuilder:
-    """Builder for subquery operations with fluent syntax.
-
-    Example:
-        ```python
-        from sqlspec import sql
-
-        # sql.exists_(subquery)
-        exists_check = sql.exists_(
-            sql.select("1")
-            .from_("orders")
-            .where_eq("user_id", sql.users.id)
-        )
-
-        # sql.in_(subquery)
-        in_check = sql.in_(
-            sql.select("category_id")
-            .from_("categories")
-            .where_eq("active", True)
-        )
-        ```
-    """
-
-    def __init__(self, operation: str) -> None:
-        """Initialize the subquery builder.
-
-        Args:
-            operation: Type of subquery operation (exists, in, any, all)
-        """
-        self._operation = operation
-
-    def __eq__(self, other: object) -> "ColumnExpression":  # type: ignore[override]
-        """Equal to (==) - not typically used but needed for type consistency."""
-        from sqlspec.builder._column import ColumnExpression
-
-        # SubqueryBuilder doesn't have a direct expression, so this is a placeholder
-        # In practice, this shouldn't be called as subqueries are used differently
-        placeholder_expr = exp.Literal.string(f"subquery_{self._operation}")
-        if other is None:
-            return ColumnExpression(exp.Is(this=placeholder_expr, expression=exp.Null()))
-        return ColumnExpression(exp.EQ(this=placeholder_expr, expression=exp.convert(other)))
-
-    def __hash__(self) -> int:
-        """Make SubqueryBuilder hashable."""
-        return hash(id(self))
-
-    def __call__(self, subquery: Union[str, exp.Expression, Any]) -> exp.Expression:
-        """Build the subquery expression.
-
-        Args:
-            subquery: The subquery - can be a SQL string, SelectBuilder, or expression
-
-        Returns:
-            The subquery expression (EXISTS, IN, ANY, ALL, etc.)
-        """
-        subquery_expr: exp.Expression
-        if isinstance(subquery, str):
-            # Parse as SQL
-            parsed: Optional[exp.Expression] = exp.maybe_parse(subquery)
-            if not parsed:
-                msg = f"Could not parse subquery SQL: {subquery}"
-                raise SQLBuilderError(msg)
-            subquery_expr = parsed
-        elif hasattr(subquery, "build") and callable(getattr(subquery, "build", None)):
-            # It's a query builder - build it to get the SQL and parse
-            built_query = subquery.build()  # pyright: ignore[reportAttributeAccessIssue]
-            subquery_expr = exp.maybe_parse(built_query.sql)
-            if not subquery_expr:
-                msg = f"Could not parse built query: {built_query.sql}"
-                raise SQLBuilderError(msg)
-        elif isinstance(subquery, exp.Expression):
-            subquery_expr = subquery
-        else:
-            # Try to convert to expression
-            parsed = exp.maybe_parse(str(subquery))
-            if not parsed:
-                msg = f"Could not convert subquery to expression: {subquery}"
-                raise SQLBuilderError(msg)
-            subquery_expr = parsed
-
-        # Build the appropriate expression based on operation
-        if self._operation == "exists":
-            return exp.Exists(this=subquery_expr)
-        if self._operation == "in":
-            # For IN, we create a subquery that can be used with WHERE column IN (subquery)
-            return exp.In(expressions=[subquery_expr])
-        if self._operation == "any":
-            return exp.Any(this=subquery_expr)
-        if self._operation == "all":
-            return exp.All(this=subquery_expr)
-        msg = f"Unknown subquery operation: {self._operation}"
-        raise SQLBuilderError(msg)
-
-
-@trait
-class JoinBuilder:
-    """Builder for JOIN operations with fluent syntax.
-
-    Example:
-        ```python
-        from sqlspec import sql
-
-        # sql.left_join_("posts").on("users.id = posts.user_id")
-        join_clause = sql.left_join_("posts").on(
-            "users.id = posts.user_id"
-        )
-
-        # Or with query builder
-        query = (
-            sql.select("users.name", "posts.title")
-            .from_("users")
-            .join(
-                sql.left_join_("posts").on(
-                    "users.id = posts.user_id"
-                )
-            )
-        )
-        ```
-    """
-
-    def __init__(self, join_type: str) -> None:
-        """Initialize the join builder.
-
-        Args:
-            join_type: Type of join (inner, left, right, full, cross)
-        """
-        self._join_type = join_type.upper()
-        self._table: Optional[Union[str, exp.Expression]] = None
-        self._condition: Optional[exp.Expression] = None
-        self._alias: Optional[str] = None
-
-    def __eq__(self, other: object) -> "ColumnExpression":  # type: ignore[override]
-        """Equal to (==) - not typically used but needed for type consistency."""
-        from sqlspec.builder._column import ColumnExpression
-
-        # JoinBuilder doesn't have a direct expression, so this is a placeholder
-        # In practice, this shouldn't be called as joins are used differently
-        placeholder_expr = exp.Literal.string(f"join_{self._join_type.lower()}")
-        if other is None:
-            return ColumnExpression(exp.Is(this=placeholder_expr, expression=exp.Null()))
-        return ColumnExpression(exp.EQ(this=placeholder_expr, expression=exp.convert(other)))
-
-    def __hash__(self) -> int:
-        """Make JoinBuilder hashable."""
-        return hash(id(self))
-
-    def __call__(self, table: Union[str, exp.Expression], alias: Optional[str] = None) -> "JoinBuilder":
-        """Set the table to join.
-
-        Args:
-            table: Table name or expression to join
-            alias: Optional alias for the table
-
-        Returns:
-            Self for method chaining
-        """
-        self._table = table
-        self._alias = alias
-        return self
-
-    def on(self, condition: Union[str, exp.Expression]) -> exp.Expression:
-        """Set the join condition and build the JOIN expression.
-
-        Args:
-            condition: JOIN condition (e.g., "users.id = posts.user_id")
-
-        Returns:
-            Complete JOIN expression
-        """
-        if not self._table:
-            msg = "Table must be set before calling .on()"
-            raise SQLBuilderError(msg)
-
-        # Parse the condition
-        condition_expr: exp.Expression
-        if isinstance(condition, str):
-            parsed: Optional[exp.Expression] = exp.maybe_parse(condition)
-            condition_expr = parsed or exp.condition(condition)
-        else:
-            condition_expr = condition
-
-        # Build table expression
-        table_expr: exp.Expression
-        if isinstance(self._table, str):
-            table_expr = exp.to_table(self._table)
-            if self._alias:
-                table_expr = exp.alias_(table_expr, self._alias)
-        else:
-            table_expr = self._table
-            if self._alias:
-                table_expr = exp.alias_(table_expr, self._alias)
-
-        # Create the appropriate join type using same pattern as existing JoinClauseMixin
-        if self._join_type == "INNER JOIN":
-            return exp.Join(this=table_expr, on=condition_expr)
-        if self._join_type == "LEFT JOIN":
-            return exp.Join(this=table_expr, on=condition_expr, side="LEFT")
-        if self._join_type == "RIGHT JOIN":
-            return exp.Join(this=table_expr, on=condition_expr, side="RIGHT")
-        if self._join_type == "FULL JOIN":
-            return exp.Join(this=table_expr, on=condition_expr, side="FULL", kind="OUTER")
-        if self._join_type == "CROSS JOIN":
-            # CROSS JOIN doesn't use ON condition
-            return exp.Join(this=table_expr, kind="CROSS")
-        return exp.Join(this=table_expr, on=condition_expr)
 
 
 # Create a default SQL factory instance
