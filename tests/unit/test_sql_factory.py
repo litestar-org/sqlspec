@@ -416,35 +416,63 @@ def test_all_ddl_methods_exist() -> None:
 
 def test_count_function() -> None:
     """Test sql.count() function."""
+    from sqlspec.builder._expression_wrappers import AggregateExpression
+
     expr = sql.count()
-    assert isinstance(expr, exp.Expression)
+    assert isinstance(expr, AggregateExpression)
+    assert hasattr(expr, "as_")
+    assert hasattr(expr, "expression")
+    assert isinstance(expr.expression, exp.Expression)
 
     count_column = sql.count("user_id")
-    assert isinstance(count_column, exp.Expression)
+    assert isinstance(count_column, AggregateExpression)
+    assert hasattr(count_column, "as_")
+    assert hasattr(count_column, "expression")
+    assert isinstance(count_column.expression, exp.Expression)
 
 
 def test_sum_function() -> None:
     """Test sql.sum() function."""
+    from sqlspec.builder._expression_wrappers import AggregateExpression
+
     expr = sql.sum("amount")
-    assert isinstance(expr, exp.Expression)
+    assert isinstance(expr, AggregateExpression)
+    assert hasattr(expr, "as_")
+    assert hasattr(expr, "expression")
+    assert isinstance(expr.expression, exp.Expression)
 
 
 def test_avg_function() -> None:
     """Test sql.avg() function."""
+    from sqlspec.builder._expression_wrappers import AggregateExpression
+
     expr = sql.avg("score")
-    assert isinstance(expr, exp.Expression)
+    assert isinstance(expr, AggregateExpression)
+    assert hasattr(expr, "as_")
+    assert hasattr(expr, "expression")
+    assert isinstance(expr.expression, exp.Expression)
 
 
 def test_max_function() -> None:
     """Test sql.max() function."""
+    from sqlspec.builder._expression_wrappers import AggregateExpression
+
     expr = sql.max("created_at")
-    assert isinstance(expr, exp.Expression)
+    assert isinstance(expr, AggregateExpression)
+    assert hasattr(expr, "as_")
+    assert hasattr(expr, "expression")
+    assert isinstance(expr.expression, exp.Expression)
 
 
 def test_min_function() -> None:
     """Test sql.min() function."""
+    from sqlspec.builder._expression_wrappers import AggregateExpression
+
     expr = sql.min("price")
-    assert isinstance(expr, exp.Expression)
+    assert isinstance(expr, AggregateExpression)
+    assert hasattr(expr, "as_")
+    assert hasattr(expr, "expression")
+    assert isinstance(expr.expression, exp.Expression)
 
 
 def test_column_method() -> None:
