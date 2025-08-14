@@ -412,9 +412,7 @@ class ConflictBuilder:
         # Create ON CONFLICT with proper structure
         conflict_keys = [exp.to_identifier(col) for col in self._columns] if self._columns else None
         on_conflict = exp.OnConflict(
-            conflict_keys=conflict_keys,
-            action=exp.var("DO UPDATE"),
-            expressions=set_expressions if set_expressions else None,
+            conflict_keys=conflict_keys, action=exp.var("DO UPDATE"), expressions=set_expressions or None
         )
 
         insert_expr.set("conflict", on_conflict)

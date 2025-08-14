@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 __all__ = (
     "BytesConvertibleProtocol",
     "DictProtocol",
+    "ExpressionWithAliasProtocol",
     "FilterAppenderProtocol",
     "FilterParameterProtocol",
     "HasExpressionProtocol",
@@ -169,6 +170,15 @@ class BytesConvertibleProtocol(Protocol):
 
     def __bytes__(self) -> bytes:
         """Convert object to bytes."""
+        ...
+
+
+@runtime_checkable
+class ExpressionWithAliasProtocol(Protocol):
+    """Protocol for SQL expressions that support aliasing with as_() method."""
+
+    def as_(self, alias: str, **kwargs: Any) -> "exp.Alias":
+        """Create an aliased expression."""
         ...
 
 

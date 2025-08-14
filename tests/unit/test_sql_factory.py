@@ -1074,7 +1074,7 @@ def test_type_compatibility_across_all_operations() -> None:
 
 
 def test_update_set_method_with_sql_objects() -> None:
-    """Test that UPDATE.set() method properly handles SQL objects with kwargs."""
+    """Test that UPDATE.set_() method properly handles SQL objects with kwargs."""
     raw_timestamp = sql.raw("NOW()")
     raw_computed = sql.raw("UPPER(:value)", value="test")
 
@@ -1097,7 +1097,7 @@ def test_update_set_method_with_sql_objects() -> None:
 
 
 def test_update_set_method_backward_compatibility() -> None:
-    """Test that UPDATE.set() method maintains backward compatibility with dict."""
+    """Test that UPDATE.set_() method maintains backward compatibility with dict."""
     raw_timestamp = sql.raw("NOW()")
 
     # Test using dict (original API)

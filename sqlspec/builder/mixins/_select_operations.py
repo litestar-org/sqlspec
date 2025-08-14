@@ -858,7 +858,7 @@ class Case:
         from sqlspec._sql import SQLFactory
 
         cond_expr = exp.maybe_parse(condition) or exp.column(condition) if isinstance(condition, str) else condition
-        val_expr = SQLFactory._to_literal(value)
+        val_expr = SQLFactory._to_expression(value)
 
         # SQLGlot uses exp.If for CASE WHEN clauses, not exp.When
         when_clause = exp.If(this=cond_expr, true=val_expr)
@@ -876,7 +876,7 @@ class Case:
         """
         from sqlspec._sql import SQLFactory
 
-        self._default = SQLFactory._to_literal(value)
+        self._default = SQLFactory._to_expression(value)
         return self
 
     def end(self) -> Self:
