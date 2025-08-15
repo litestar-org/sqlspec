@@ -76,7 +76,13 @@ def run_(async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]") -
             loop = None
 
         if loop is not None:
-            return asyncio.run(partial_f())
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, partial_f())
+                    return future.result()
+            else:
+                return asyncio.run(partial_f())
         if uvloop and sys.platform != "win32":
             uvloop.install()  # pyright: ignore[reportUnknownMemberType]
         return asyncio.run(partial_f())
