@@ -19,10 +19,7 @@ def test_aiosqlite_migration_full_workflow() -> None:
         # Create AioSQLite config with migration directory
         config = AiosqliteConfig(
             pool_config={"database": str(db_path)},
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -65,16 +62,11 @@ def down():
         # Note: We use the unified MigrationCommands interface which handles async/sync internally
         with config.provide_session() as driver:
             # Check that table exists
-            result = driver.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
-            )
+            result = driver.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
             assert len(result.data) == 1
 
             # Insert test data
-            driver.execute(
-                "INSERT INTO users (name, email) VALUES (?, ?)",
-                ("John Doe", "john@example.com")
-            )
+            driver.execute("INSERT INTO users (name, email) VALUES (?, ?)", ("John Doe", "john@example.com"))
 
             # Verify data
             users_result = driver.execute("SELECT * FROM users")
@@ -87,9 +79,7 @@ def down():
 
         # 6. Verify table was dropped
         with config.provide_session() as driver:
-            result = driver.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
-            )
+            result = driver.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
             assert len(result.data) == 0
 
 
@@ -103,10 +93,7 @@ def test_aiosqlite_multiple_migrations_workflow() -> None:
         # Create AioSQLite config with migration directory
         config = AiosqliteConfig(
             pool_config={"database": str(db_path)},
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -164,17 +151,16 @@ def down():
 
         # Verify both tables exist
         with config.provide_session() as driver:
-            tables_result = driver.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-            )
+            tables_result = driver.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
             table_names = [t["name"] for t in tables_result.data]
             assert "users" in table_names
             assert "posts" in table_names
 
             # Test the relationship
             driver.execute("INSERT INTO users (name, email) VALUES (?, ?)", ("Author", "author@example.com"))
-            driver.execute("INSERT INTO posts (title, content, user_id) VALUES (?, ?, ?)",
-                         ("My Post", "Post content", 1))
+            driver.execute(
+                "INSERT INTO posts (title, content, user_id) VALUES (?, ?, ?)", ("My Post", "Post content", 1)
+            )
 
             posts_result = driver.execute("SELECT * FROM posts")
             assert len(posts_result.data) == 1
@@ -184,9 +170,7 @@ def down():
         commands.downgrade("0001")
 
         with config.provide_session() as driver:
-            tables_result = driver.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
+            tables_result = driver.execute("SELECT name FROM sqlite_master WHERE type='table'")
             table_names = [t["name"] for t in tables_result.data]
             assert "users" in table_names
             assert "posts" not in table_names
@@ -213,10 +197,7 @@ def test_aiosqlite_migration_current_command() -> None:
         # Create AioSQLite config with migration directory
         config = AiosqliteConfig(
             pool_config={"database": str(db_path)},
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -259,10 +240,7 @@ def test_aiosqlite_migration_error_handling() -> None:
         # Create AioSQLite config with migration directory
         config = AiosqliteConfig(
             pool_config={"database": str(db_path)},
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -275,7 +253,7 @@ def test_aiosqlite_migration_error_handling() -> None:
 
 def up():
     """Invalid SQL - should cause error."""
-    return ["CREATE TABL invalid_sql"]
+    return ["CREATE A TABLE invalid_sql"]
 
 
 def down():
@@ -300,10 +278,7 @@ def test_aiosqlite_migration_with_transactions() -> None:
         # Create AioSQLite config with migration directory
         config = AiosqliteConfig(
             pool_config={"database": str(db_path)},
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -347,7 +322,5 @@ def down():
         commands.downgrade("base")
 
         with config.provide_session() as driver:
-            result = driver.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='customers'"
-            )
+            result = driver.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='customers'")
             assert len(result.data) == 0

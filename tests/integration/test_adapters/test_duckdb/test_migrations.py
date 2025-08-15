@@ -19,10 +19,7 @@ def test_duckdb_migration_full_workflow() -> None:
         # Create DuckDB config with migration directory
         config = DuckDBConfig(
             pool_config={"database": str(db_path)},
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -64,16 +61,11 @@ def down():
         # 4. Verify migration was applied
         with config.provide_session() as driver:
             # Check that table exists
-            result = driver.execute(
-                "SELECT table_name FROM information_schema.tables WHERE table_name = 'users'"
-            )
+            result = driver.execute("SELECT table_name FROM information_schema.tables WHERE table_name = 'users'")
             assert len(result.data) == 1
 
             # Insert test data
-            driver.execute(
-                "INSERT INTO users (name, email) VALUES (?, ?)",
-                ("John Doe", "john@example.com")
-            )
+            driver.execute("INSERT INTO users (name, email) VALUES (?, ?)", ("John Doe", "john@example.com"))
 
             # Verify data
             users_result = driver.execute("SELECT * FROM users")
@@ -86,9 +78,7 @@ def down():
 
         # 6. Verify table was dropped
         with config.provide_session() as driver:
-            result = driver.execute(
-                "SELECT table_name FROM information_schema.tables WHERE table_name = 'users'"
-            )
+            result = driver.execute("SELECT table_name FROM information_schema.tables WHERE table_name = 'users'")
             assert len(result.data) == 0
 
 
@@ -102,10 +92,7 @@ def test_duckdb_multiple_migrations_workflow() -> None:
         # Create DuckDB config with migration directory
         config = DuckDBConfig(
             pool_config={"database": str(db_path)},
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -172,8 +159,9 @@ def down():
 
             # Test the relationship
             driver.execute("INSERT INTO users (name, email) VALUES (?, ?)", ("Author", "author@example.com"))
-            driver.execute("INSERT INTO posts (title, content, user_id) VALUES (?, ?, ?)",
-                         ("My Post", "Post content", 1))
+            driver.execute(
+                "INSERT INTO posts (title, content, user_id) VALUES (?, ?, ?)", ("My Post", "Post content", 1)
+            )
 
             posts_result = driver.execute("SELECT * FROM posts")
             assert len(posts_result.data) == 1
@@ -212,10 +200,7 @@ def test_duckdb_migration_current_command() -> None:
         # Create DuckDB config with migration directory
         config = DuckDBConfig(
             pool_config={"database": str(db_path)},
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -258,10 +243,7 @@ def test_duckdb_migration_error_handling() -> None:
         # Create DuckDB config with migration directory
         config = DuckDBConfig(
             pool_config={"database": str(db_path)},
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -274,7 +256,7 @@ def test_duckdb_migration_error_handling() -> None:
 
 def up():
     """Invalid SQL - should cause error."""
-    return ["CREATE TABL invalid_sql"]
+    return ["CREATE BIG_TABLE invalid_sql"]
 
 
 def down():
@@ -299,10 +281,7 @@ def test_duckdb_migration_with_transactions() -> None:
         # Create DuckDB config with migration directory
         config = DuckDBConfig(
             pool_config={"database": str(db_path)},
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -346,7 +325,5 @@ def down():
         commands.downgrade("base")
 
         with config.provide_session() as driver:
-            result = driver.execute(
-                "SELECT table_name FROM information_schema.tables WHERE table_name = 'customers'"
-            )
+            result = driver.execute("SELECT table_name FROM information_schema.tables WHERE table_name = 'customers'")
             assert len(result.data) == 0

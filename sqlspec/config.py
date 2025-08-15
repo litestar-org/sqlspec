@@ -62,7 +62,7 @@ class LifecycleConfig(TypedDict, total=False):
 
 class MigrationConfig(TypedDict, total=False):
     """Configuration options for SQLSpec database migrations.
-    
+
     This TypedDict provides type safety and IDE completion for migration configuration.
     All fields are optional with sensible defaults.
     """
@@ -171,7 +171,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     ) -> None:
         self.pool_instance = None
         self.connection_config = connection_config or {}
-        self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
+        self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}
 
         if statement_config is None:
             default_parameter_config = ParameterStyleConfig(
@@ -224,7 +224,7 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     ) -> None:
         self.pool_instance = None
         self.connection_config = connection_config or {}
-        self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
+        self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}
 
         if statement_config is None:
             default_parameter_config = ParameterStyleConfig(
@@ -278,7 +278,7 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     ) -> None:
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
-        self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
+        self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}
 
         if statement_config is None:
             default_parameter_config = ParameterStyleConfig(
@@ -354,7 +354,7 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     ) -> None:
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
-        self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
+        self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}
 
         if statement_config is None:
             self.statement_config = StatementConfig(

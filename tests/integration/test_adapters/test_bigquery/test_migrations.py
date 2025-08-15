@@ -1,6 +1,5 @@
 """Integration tests for BigQuery migration workflow."""
 
-
 import pytest
 
 

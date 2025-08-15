@@ -25,10 +25,7 @@ def test_oracledb_sync_migration_full_workflow(oracle_23ai_service: OracleServic
                 "user": oracle_23ai_service.user,
                 "password": oracle_23ai_service.password,
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -71,16 +68,11 @@ def down():
             # 4. Verify migration was applied
             with config.provide_session() as driver:
                 # Check that table exists
-                result = driver.execute(
-                    "SELECT table_name FROM user_tables WHERE table_name = 'USERS'"
-                )
+                result = driver.execute("SELECT table_name FROM user_tables WHERE table_name = 'USERS'")
                 assert len(result.data) == 1
 
                 # Insert test data
-                driver.execute(
-                    "INSERT INTO users (name, email) VALUES (:1, :2)",
-                    ("John Doe", "john@example.com")
-                )
+                driver.execute("INSERT INTO users (name, email) VALUES (:1, :2)", ("John Doe", "john@example.com"))
 
                 # Verify data
                 users_result = driver.execute("SELECT * FROM users")
@@ -93,9 +85,7 @@ def down():
 
             # 6. Verify table was dropped
             with config.provide_session() as driver:
-                result = driver.execute(
-                    "SELECT table_name FROM user_tables WHERE table_name = 'USERS'"
-                )
+                result = driver.execute("SELECT table_name FROM user_tables WHERE table_name = 'USERS'")
                 assert len(result.data) == 0
         finally:
             # Ensure pool is closed
@@ -120,10 +110,7 @@ def test_oracledb_async_migration_full_workflow(oracle_23ai_service: OracleServi
                 "min": 1,
                 "max": 5,
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -166,16 +153,11 @@ def down():
             # 4. Verify migration was applied
             with config.provide_session() as driver:
                 # Check that table exists
-                result = driver.execute(
-                    "SELECT table_name FROM user_tables WHERE table_name = 'USERS'"
-                )
+                result = driver.execute("SELECT table_name FROM user_tables WHERE table_name = 'USERS'")
                 assert len(result.data) == 1
 
                 # Insert test data
-                driver.execute(
-                    "INSERT INTO users (name, email) VALUES (:1, :2)",
-                    ("John Doe", "john@example.com")
-                )
+                driver.execute("INSERT INTO users (name, email) VALUES (:1, :2)", ("John Doe", "john@example.com"))
 
                 # Verify data
                 users_result = driver.execute("SELECT * FROM users")
@@ -188,14 +170,13 @@ def down():
 
             # 6. Verify table was dropped
             with config.provide_session() as driver:
-                result = driver.execute(
-                    "SELECT table_name FROM user_tables WHERE table_name = 'USERS'"
-                )
+                result = driver.execute("SELECT table_name FROM user_tables WHERE table_name = 'USERS'")
                 assert len(result.data) == 0
         finally:
             # Ensure pool is closed
             if config.pool_instance:
                 import asyncio
+
                 asyncio.get_event_loop().run_until_complete(config.close_pool())
 
 
@@ -213,10 +194,7 @@ def test_oracledb_sync_multiple_migrations_workflow(oracle_23ai_service: OracleS
                 "user": oracle_23ai_service.user,
                 "password": oracle_23ai_service.password,
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -275,23 +253,16 @@ def down():
 
             # 5. Verify both tables exist
             with config.provide_session() as driver:
-                users_result = driver.execute(
-                    "SELECT table_name FROM user_tables WHERE table_name = 'USERS'"
-                )
-                posts_result = driver.execute(
-                    "SELECT table_name FROM user_tables WHERE table_name = 'POSTS'"
-                )
+                users_result = driver.execute("SELECT table_name FROM user_tables WHERE table_name = 'USERS'")
+                posts_result = driver.execute("SELECT table_name FROM user_tables WHERE table_name = 'POSTS'")
                 assert len(users_result.data) == 1
                 assert len(posts_result.data) == 1
 
                 # Test relational integrity
-                driver.execute(
-                    "INSERT INTO users (name, email) VALUES (:1, :2)",
-                    ("John Doe", "john@example.com")
-                )
+                driver.execute("INSERT INTO users (name, email) VALUES (:1, :2)", ("John Doe", "john@example.com"))
                 driver.execute(
                     "INSERT INTO posts (title, content, user_id) VALUES (:1, :2, :3)",
-                    ("Test Post", "This is a test post", 1)
+                    ("Test Post", "This is a test post", 1),
                 )
 
             # 6. Downgrade to version 0001 (should remove posts table)
@@ -299,12 +270,8 @@ def down():
 
             # 7. Verify only users table remains
             with config.provide_session() as driver:
-                users_result = driver.execute(
-                    "SELECT table_name FROM user_tables WHERE table_name = 'USERS'"
-                )
-                posts_result = driver.execute(
-                    "SELECT table_name FROM user_tables WHERE table_name = 'POSTS'"
-                )
+                users_result = driver.execute("SELECT table_name FROM user_tables WHERE table_name = 'USERS'")
+                posts_result = driver.execute("SELECT table_name FROM user_tables WHERE table_name = 'POSTS'")
                 assert len(users_result.data) == 1
                 assert len(posts_result.data) == 0
 
@@ -338,10 +305,7 @@ def test_oracledb_async_multiple_migrations_workflow(oracle_23ai_service: Oracle
                 "min": 1,
                 "max": 5,
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -400,23 +364,16 @@ def down():
 
             # 5. Verify both tables exist
             with config.provide_session() as driver:
-                users_result = driver.execute(
-                    "SELECT table_name FROM user_tables WHERE table_name = 'USERS'"
-                )
-                posts_result = driver.execute(
-                    "SELECT table_name FROM user_tables WHERE table_name = 'POSTS'"
-                )
+                users_result = driver.execute("SELECT table_name FROM user_tables WHERE table_name = 'USERS'")
+                posts_result = driver.execute("SELECT table_name FROM user_tables WHERE table_name = 'POSTS'")
                 assert len(users_result.data) == 1
                 assert len(posts_result.data) == 1
 
                 # Test relational integrity
-                driver.execute(
-                    "INSERT INTO users (name, email) VALUES (:1, :2)",
-                    ("John Doe", "john@example.com")
-                )
+                driver.execute("INSERT INTO users (name, email) VALUES (:1, :2)", ("John Doe", "john@example.com"))
                 driver.execute(
                     "INSERT INTO posts (title, content, user_id) VALUES (:1, :2, :3)",
-                    ("Test Post", "This is a test post", 1)
+                    ("Test Post", "This is a test post", 1),
                 )
 
             # 6. Downgrade to version 0001 (should remove posts table)
@@ -424,12 +381,8 @@ def down():
 
             # 7. Verify only users table remains
             with config.provide_session() as driver:
-                users_result = driver.execute(
-                    "SELECT table_name FROM user_tables WHERE table_name = 'USERS'"
-                )
-                posts_result = driver.execute(
-                    "SELECT table_name FROM user_tables WHERE table_name = 'POSTS'"
-                )
+                users_result = driver.execute("SELECT table_name FROM user_tables WHERE table_name = 'USERS'")
+                posts_result = driver.execute("SELECT table_name FROM user_tables WHERE table_name = 'POSTS'")
                 assert len(users_result.data) == 1
                 assert len(posts_result.data) == 0
 
@@ -445,6 +398,7 @@ def down():
         finally:
             if config.pool_instance:
                 import asyncio
+
                 asyncio.get_event_loop().run_until_complete(config.close_pool())
 
 
@@ -462,10 +416,7 @@ def test_oracledb_sync_migration_current_command(oracle_23ai_service: OracleServ
                 "user": oracle_23ai_service.user,
                 "password": oracle_23ai_service.password,
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -531,10 +482,7 @@ def test_oracledb_async_migration_current_command(oracle_23ai_service: OracleSer
                 "min": 1,
                 "max": 5,
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -582,6 +530,7 @@ def down():
         finally:
             if config.pool_instance:
                 import asyncio
+
                 asyncio.get_event_loop().run_until_complete(config.close_pool())
 
 
@@ -599,10 +548,7 @@ def test_oracledb_sync_migration_error_handling(oracle_23ai_service: OracleServi
                 "user": oracle_23ai_service.user,
                 "password": oracle_23ai_service.password,
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -659,10 +605,7 @@ def test_oracledb_async_migration_error_handling(oracle_23ai_service: OracleServ
                 "min": 1,
                 "max": 5,
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -701,6 +644,7 @@ def down():
         finally:
             if config.pool_instance:
                 import asyncio
+
                 asyncio.get_event_loop().run_until_complete(config.close_pool())
 
 
@@ -718,10 +662,7 @@ def test_oracledb_sync_migration_with_transactions(oracle_23ai_service: OracleSe
                 "user": oracle_23ai_service.user,
                 "password": oracle_23ai_service.password,
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -759,10 +700,9 @@ def down():
                 with driver.transaction():
                     # Insert data within transaction
                     driver.execute(
-                        "INSERT INTO users (name, email) VALUES (:1, :2)",
-                        ("Transaction User", "trans@example.com")
+                        "INSERT INTO users (name, email) VALUES (:1, :2)", ("Transaction User", "trans@example.com")
                     )
-                    
+
                     # Verify data exists within transaction
                     result = driver.execute("SELECT * FROM users WHERE name = 'Transaction User'")
                     assert len(result.data) == 1
@@ -776,8 +716,7 @@ def down():
                 try:
                     with driver.transaction():
                         driver.execute(
-                            "INSERT INTO users (name, email) VALUES (:1, :2)",
-                            ("Rollback User", "rollback@example.com")
+                            "INSERT INTO users (name, email) VALUES (:1, :2)", ("Rollback User", "rollback@example.com")
                         )
                         # Force an error to trigger rollback
                         raise Exception("Intentional rollback")
@@ -808,10 +747,7 @@ def test_oracledb_async_migration_with_transactions(oracle_23ai_service: OracleS
                 "min": 1,
                 "max": 5,
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -849,10 +785,9 @@ def down():
                 with driver.transaction():
                     # Insert data within transaction
                     driver.execute(
-                        "INSERT INTO users (name, email) VALUES (:1, :2)",
-                        ("Transaction User", "trans@example.com")
+                        "INSERT INTO users (name, email) VALUES (:1, :2)", ("Transaction User", "trans@example.com")
                     )
-                    
+
                     # Verify data exists within transaction
                     result = driver.execute("SELECT * FROM users WHERE name = 'Transaction User'")
                     assert len(result.data) == 1
@@ -866,8 +801,7 @@ def down():
                 try:
                     with driver.transaction():
                         driver.execute(
-                            "INSERT INTO users (name, email) VALUES (:1, :2)",
-                            ("Rollback User", "rollback@example.com")
+                            "INSERT INTO users (name, email) VALUES (:1, :2)", ("Rollback User", "rollback@example.com")
                         )
                         # Force an error to trigger rollback
                         raise Exception("Intentional rollback")
@@ -880,4 +814,5 @@ def down():
         finally:
             if config.pool_instance:
                 import asyncio
+
                 asyncio.get_event_loop().run_until_complete(config.close_pool())

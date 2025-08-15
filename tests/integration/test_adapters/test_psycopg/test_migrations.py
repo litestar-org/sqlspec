@@ -21,10 +21,7 @@ def test_psycopg_sync_migration_full_workflow(postgres_service: PostgresService)
             pool_config={
                 "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -73,10 +70,7 @@ def down():
                 assert len(result.data) == 1
 
                 # Insert test data
-                driver.execute(
-                    "INSERT INTO users (name, email) VALUES (%s, %s)",
-                    ("John Doe", "john@example.com")
-                )
+                driver.execute("INSERT INTO users (name, email) VALUES (%s, %s)", ("John Doe", "john@example.com"))
 
                 # Verify data
                 users_result = driver.execute("SELECT * FROM users")
@@ -192,15 +186,12 @@ def test_psycopg_async_migration_full_workflow(postgres_service: PostgresService
             from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig
         except ImportError:
             pytest.skip("PsycopgAsyncConfig not available")
-            
+
         config = PsycopgAsyncConfig(
             pool_config={
                 "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -249,10 +240,7 @@ def down():
                 assert len(result.data) == 1
 
                 # Insert test data
-                driver.execute(
-                    "INSERT INTO users (name, email) VALUES (%s, %s)",
-                    ("John Doe", "john@example.com")
-                )
+                driver.execute("INSERT INTO users (name, email) VALUES (%s, %s)", ("John Doe", "john@example.com"))
 
                 # Verify data
                 users_result = driver.execute("SELECT * FROM users")
@@ -273,6 +261,7 @@ def down():
             # Ensure pool is closed
             if config.pool_instance:
                 import asyncio
+
                 asyncio.get_event_loop().run_until_complete(config.close_pool())
 
 
@@ -286,10 +275,7 @@ def test_psycopg_sync_multiple_migrations_workflow(postgres_service: PostgresSer
             pool_config={
                 "conninfo": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 

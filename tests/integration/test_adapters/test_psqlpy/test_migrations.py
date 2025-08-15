@@ -21,10 +21,7 @@ def test_psqlpy_migration_full_workflow(postgres_service: PostgresService) -> No
             pool_config={
                 "dsn": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -73,10 +70,7 @@ def down():
                 assert len(result.data) == 1
 
                 # Insert test data
-                driver.execute(
-                    "INSERT INTO users (name, email) VALUES ($1, $2)",
-                    ("John Doe", "john@example.com")
-                )
+                driver.execute("INSERT INTO users (name, email) VALUES ($1, $2)", ("John Doe", "john@example.com"))
 
                 # Verify data
                 users_result = driver.execute("SELECT * FROM users")
@@ -97,6 +91,7 @@ def down():
             # Ensure pool is closed
             if config.pool_instance:
                 import asyncio
+
                 asyncio.get_event_loop().run_until_complete(config.close_pool())
 
 
@@ -110,10 +105,7 @@ def test_psqlpy_multiple_migrations_workflow(postgres_service: PostgresService) 
             pool_config={
                 "dsn": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -181,13 +173,10 @@ def down():
                 assert len(posts_result.data) == 1
 
                 # Test relational integrity
-                driver.execute(
-                    "INSERT INTO users (name, email) VALUES ($1, $2)",
-                    ("John Doe", "john@example.com")
-                )
+                driver.execute("INSERT INTO users (name, email) VALUES ($1, $2)", ("John Doe", "john@example.com"))
                 driver.execute(
                     "INSERT INTO posts (title, content, user_id) VALUES ($1, $2, $3)",
-                    ("Test Post", "This is a test post", 1)
+                    ("Test Post", "This is a test post", 1),
                 )
 
             # 6. Downgrade to version 0001 (should remove posts table)
@@ -216,6 +205,7 @@ def down():
         finally:
             if config.pool_instance:
                 import asyncio
+
                 asyncio.get_event_loop().run_until_complete(config.close_pool())
 
 
@@ -229,10 +219,7 @@ def test_psqlpy_migration_current_command(postgres_service: PostgresService) -> 
             pool_config={
                 "dsn": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -280,6 +267,7 @@ def down():
         finally:
             if config.pool_instance:
                 import asyncio
+
                 asyncio.get_event_loop().run_until_complete(config.close_pool())
 
 
@@ -293,10 +281,7 @@ def test_psqlpy_migration_error_handling(postgres_service: PostgresService) -> N
             pool_config={
                 "dsn": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -335,6 +320,7 @@ def down():
         finally:
             if config.pool_instance:
                 import asyncio
+
                 asyncio.get_event_loop().run_until_complete(config.close_pool())
 
 
@@ -348,10 +334,7 @@ def test_psqlpy_migration_with_transactions(postgres_service: PostgresService) -
             pool_config={
                 "dsn": f"postgresql://{postgres_service.user}:{postgres_service.password}@{postgres_service.host}:{postgres_service.port}/{postgres_service.database}"
             },
-            migration_config={
-                "script_location": str(migration_dir),
-                "version_table_name": "sqlspec_migrations"
-            }
+            migration_config={"script_location": str(migration_dir), "version_table_name": "sqlspec_migrations"},
         )
         commands = MigrationCommands(config)
 
@@ -389,10 +372,9 @@ def down():
                 with driver.transaction():
                     # Insert data within transaction
                     driver.execute(
-                        "INSERT INTO users (name, email) VALUES ($1, $2)",
-                        ("Transaction User", "trans@example.com")
+                        "INSERT INTO users (name, email) VALUES ($1, $2)", ("Transaction User", "trans@example.com")
                     )
-                    
+
                     # Verify data exists within transaction
                     result = driver.execute("SELECT * FROM users WHERE name = 'Transaction User'")
                     assert len(result.data) == 1
@@ -406,8 +388,7 @@ def down():
                 try:
                     with driver.transaction():
                         driver.execute(
-                            "INSERT INTO users (name, email) VALUES ($1, $2)",
-                            ("Rollback User", "rollback@example.com")
+                            "INSERT INTO users (name, email) VALUES ($1, $2)", ("Rollback User", "rollback@example.com")
                         )
                         # Force an error to trigger rollback
                         raise Exception("Intentional rollback")
@@ -420,4 +401,5 @@ def down():
         finally:
             if config.pool_instance:
                 import asyncio
+
                 asyncio.get_event_loop().run_until_complete(config.close_pool())

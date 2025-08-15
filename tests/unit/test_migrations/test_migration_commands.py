@@ -62,9 +62,10 @@ def test_migration_commands_sync_init_delegation(sync_config: SqliteConfig) -> N
 
 def test_migration_commands_async_init_delegation(async_config: AiosqliteConfig) -> None:
     """Test that async config init uses await_ wrapper."""
-    with patch.object(AsyncMigrationCommands, "init") as mock_init, \
-         patch("sqlspec.migrations.commands.await_") as mock_await:
-
+    with (
+        patch.object(AsyncMigrationCommands, "init") as mock_init,
+        patch("sqlspec.migrations.commands.await_") as mock_await,
+    ):
         # Set up await_ to return a callable that calls our mock
         mock_await.return_value = Mock(side_effect=lambda *args, **kwargs: mock_init(*args, **kwargs))
 
@@ -93,9 +94,10 @@ def test_migration_commands_sync_current_delegation(sync_config: SqliteConfig) -
 
 def test_migration_commands_async_current_delegation(async_config: AiosqliteConfig) -> None:
     """Test that async config current uses await_ wrapper."""
-    with patch.object(AsyncMigrationCommands, "current") as mock_current, \
-         patch("sqlspec.migrations.commands.await_") as mock_await:
-
+    with (
+        patch.object(AsyncMigrationCommands, "current") as mock_current,
+        patch("sqlspec.migrations.commands.await_") as mock_await,
+    ):
         # Set up await_ to return a callable that calls our mock
         mock_await.return_value = Mock(side_effect=lambda *args, **kwargs: mock_current(*args, **kwargs))
 
@@ -121,9 +123,10 @@ def test_migration_commands_sync_upgrade_delegation(sync_config: SqliteConfig) -
 
 def test_migration_commands_async_upgrade_delegation(async_config: AiosqliteConfig) -> None:
     """Test that async config upgrade uses await_ wrapper."""
-    with patch.object(AsyncMigrationCommands, "upgrade") as mock_upgrade, \
-         patch("sqlspec.migrations.commands.await_") as mock_await:
-
+    with (
+        patch.object(AsyncMigrationCommands, "upgrade") as mock_upgrade,
+        patch("sqlspec.migrations.commands.await_") as mock_await,
+    ):
         # Set up await_ to return a callable that calls our mock
         mock_await.return_value = Mock(side_effect=lambda *args, **kwargs: mock_upgrade(*args, **kwargs))
 
@@ -149,9 +152,10 @@ def test_migration_commands_sync_downgrade_delegation(sync_config: SqliteConfig)
 
 def test_migration_commands_async_downgrade_delegation(async_config: AiosqliteConfig) -> None:
     """Test that async config downgrade uses await_ wrapper."""
-    with patch.object(AsyncMigrationCommands, "downgrade") as mock_downgrade, \
-         patch("sqlspec.migrations.commands.await_") as mock_await:
-
+    with (
+        patch.object(AsyncMigrationCommands, "downgrade") as mock_downgrade,
+        patch("sqlspec.migrations.commands.await_") as mock_await,
+    ):
         # Set up await_ to return a callable that calls our mock
         mock_await.return_value = Mock(side_effect=lambda *args, **kwargs: mock_downgrade(*args, **kwargs))
 
@@ -177,9 +181,10 @@ def test_migration_commands_sync_stamp_delegation(sync_config: SqliteConfig) -> 
 
 def test_migration_commands_async_stamp_delegation(async_config: AiosqliteConfig) -> None:
     """Test that async config stamp uses await_ wrapper."""
-    with patch.object(AsyncMigrationCommands, "stamp") as mock_stamp, \
-         patch("sqlspec.migrations.commands.await_") as mock_await:
-
+    with (
+        patch.object(AsyncMigrationCommands, "stamp") as mock_stamp,
+        patch("sqlspec.migrations.commands.await_") as mock_await,
+    ):
         # Set up await_ to return a callable that calls our mock
         mock_await.return_value = Mock(side_effect=lambda *args, **kwargs: mock_stamp(*args, **kwargs))
 
@@ -205,9 +210,10 @@ def test_migration_commands_sync_revision_delegation(sync_config: SqliteConfig) 
 
 def test_migration_commands_async_revision_delegation(async_config: AiosqliteConfig) -> None:
     """Test that async config revision uses await_ wrapper."""
-    with patch.object(AsyncMigrationCommands, "revision") as mock_revision, \
-         patch("sqlspec.migrations.commands.await_") as mock_await:
-
+    with (
+        patch.object(AsyncMigrationCommands, "revision") as mock_revision,
+        patch("sqlspec.migrations.commands.await_") as mock_await,
+    ):
         # Set up await_ to return a callable that calls our mock
         mock_await.return_value = Mock(side_effect=lambda *args, **kwargs: mock_revision(*args, **kwargs))
 
@@ -267,9 +273,10 @@ def test_sync_migration_commands_init_without_package(sync_config: SqliteConfig)
 
 def test_migration_commands_error_propagation(async_config: AiosqliteConfig) -> None:
     """Test that errors from underlying implementations are properly propagated."""
-    with patch.object(AsyncMigrationCommands, "upgrade", side_effect=ValueError("Test error")), \
-         patch("sqlspec.migrations.commands.await_") as mock_await:
-
+    with (
+        patch.object(AsyncMigrationCommands, "upgrade", side_effect=ValueError("Test error")),
+        patch("sqlspec.migrations.commands.await_") as mock_await,
+    ):
         # Set up await_ to raise the same error
         mock_await.return_value = Mock(side_effect=ValueError("Test error"))
 
