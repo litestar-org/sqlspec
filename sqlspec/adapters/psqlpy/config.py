@@ -145,6 +145,10 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, ConnectionPool, PsqlpyD
             logger.exception("Failed to close psqlpy connection pool", extra={"adapter": "psqlpy", "error": str(e)})
             raise
 
+    async def close_pool(self) -> None:
+        """Close the connection pool."""
+        await self._close_pool()
+
     async def create_connection(self) -> "PsqlpyConnection":
         """Create a single async connection (not from pool).
 

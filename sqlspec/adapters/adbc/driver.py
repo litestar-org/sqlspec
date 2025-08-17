@@ -48,7 +48,7 @@ DIALECT_PARAMETER_STYLES = {
     "postgres": (ParameterStyle.NUMERIC, [ParameterStyle.NUMERIC]),
     "postgresql": (ParameterStyle.NUMERIC, [ParameterStyle.NUMERIC]),
     "bigquery": (ParameterStyle.NAMED_AT, [ParameterStyle.NAMED_AT]),
-    "sqlite": (ParameterStyle.QMARK, [ParameterStyle.QMARK, ParameterStyle.NAMED_COLON]),
+    "sqlite": (ParameterStyle.QMARK, [ParameterStyle.QMARK]),
     "duckdb": (ParameterStyle.QMARK, [ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR]),
     "mysql": (ParameterStyle.POSITIONAL_PYFORMAT, [ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT]),
     "snowflake": (ParameterStyle.QMARK, [ParameterStyle.QMARK, ParameterStyle.NUMERIC]),

@@ -252,7 +252,7 @@ def down():
 
         with (
             patch("sqlspec.migrations.base.get_migration_loader") as mock_get_loader,
-            patch("sqlspec.migrations.base.run_") as mock_run,
+            patch("sqlspec.migrations.base.await_") as mock_await,
         ):
             mock_loader = Mock()
             mock_loader.validate_migration_file = Mock()
@@ -261,7 +261,7 @@ def down():
             mock_get_loader.return_value = mock_loader
 
             # Mock successful down_sql execution
-            mock_run.return_value = Mock(return_value=True)
+            mock_await.return_value = Mock(return_value=True)
 
             metadata = runner.load_migration(migration_file)
 
@@ -287,9 +287,9 @@ def test_get_migration_sql_upgrade_success() -> None:
         "loader": Mock(),
     }
 
-    with patch("sqlspec.migrations.base.run_") as mock_run:
-        # Mock successful SQL generation - run_ should return a callable that returns the statements
-        mock_run.return_value = Mock(return_value=["CREATE TABLE test (id INTEGER PRIMARY KEY);"])
+    with patch("sqlspec.migrations.base.await_") as mock_await:
+        # Mock successful SQL generation - await_ should return a callable that returns the statements
+        mock_await.return_value = Mock(return_value=["CREATE TABLE test (id INTEGER PRIMARY KEY);"])
 
         result = runner._get_migration_sql(migration, "up")
 
@@ -311,9 +311,9 @@ def test_get_migration_sql_downgrade_success() -> None:
         "loader": Mock(),
     }
 
-    with patch("sqlspec.migrations.base.run_") as mock_run:
-        # Mock successful SQL generation - run_ should return a callable that returns the statements
-        mock_run.return_value = Mock(return_value=["DROP TABLE test;"])
+    with patch("sqlspec.migrations.base.await_") as mock_await:
+        # Mock successful SQL generation - await_ should return a callable that returns the statements
+        mock_await.return_value = Mock(return_value=["DROP TABLE test;"])
 
         result = runner._get_migration_sql(migration, "down")
 
@@ -373,9 +373,9 @@ def test_get_migration_sql_loader_exception_upgrade() -> None:
         "loader": Mock(),
     }
 
-    with patch("sqlspec.migrations.base.run_") as mock_run:
-        # Mock loader exception - run_ should return a callable that raises an exception
-        mock_run.return_value = Mock(side_effect=Exception("Loader failed to parse migration"))
+    with patch("sqlspec.migrations.base.await_") as mock_await:
+        # Mock loader exception - await_ should return a callable that raises an exception
+        mock_await.return_value = Mock(side_effect=Exception("Loader failed to parse migration"))
 
         with pytest.raises(ValueError) as exc_info:
             runner._get_migration_sql(migration, "up")
@@ -395,9 +395,13 @@ def test_get_migration_sql_loader_exception_downgrade() -> None:
         "loader": Mock(),
     }
 
-    with patch("sqlspec.migrations.base.run_") as mock_run, patch("sqlspec.migrations.base.logger") as mock_logger:
-        # Mock loader exception for downgrade - run_ should return a callable that raises an exception
-        mock_run.return_value = Mock(side_effect=Exception("Downgrade loader failed"))
+    with patch("sqlspec.migrations.base.await_") as mock_await, patch("sqlspec.migrations.base.logger") as mock_logger:
+        # Mock loader exception for downgrade - await_ should return a callable that raises an exception
+        # Use a regular function instead of Mock to avoid async coroutine issues
+        def mock_loader_function() -> None:
+            raise Exception("Downgrade loader failed")
+
+        mock_await.return_value = mock_loader_function
 
         result = runner._get_migration_sql(migration, "down")
 
@@ -422,9 +426,9 @@ def test_get_migration_sql_empty_statements() -> None:
         "loader": Mock(),
     }
 
-    with patch("sqlspec.migrations.base.run_") as mock_run:
-        # Mock empty statements list - run_ should return a callable that returns an empty list
-        mock_run.return_value = Mock(return_value=[])
+    with patch("sqlspec.migrations.base.await_") as mock_await:
+        # Mock empty statements list - await_ should return a callable that returns an empty list
+        mock_await.return_value = Mock(return_value=[])
 
         result = runner._get_migration_sql(migration, "up")
 
@@ -444,9 +448,9 @@ def test_get_migration_sql_none_statements() -> None:
         "loader": Mock(),
     }
 
-    with patch("sqlspec.migrations.base.run_") as mock_run:
-        # Mock None return - run_ should return a callable that returns None
-        mock_run.return_value = Mock(return_value=None)
+    with patch("sqlspec.migrations.base.await_") as mock_await:
+        # Mock None return - await_ should return a callable that returns None
+        mock_await.return_value = Mock(return_value=None)
 
         result = runner._get_migration_sql(migration, "up")
 

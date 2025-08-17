@@ -65,7 +65,7 @@ PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))
 
 SPECIAL_TYPE_REGEX: Final[re.Pattern[str]] = re.compile(
     r"^(?:"
-    r"(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})|"
+    r"(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})|"
     r"(?P<ipv4>(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?:/(?:3[0-2]|[12]?[0-9]))?)|"
     r"(?P<ipv6>(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:|:(?::[0-9a-f]{1,4}){1,7}|(?:[0-9a-f]{1,4}:){1,6}:[0-9a-f]{1,4}|::(?:ffff:)?(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?))(?:/(?:12[0-8]|1[01][0-9]|[1-9]?[0-9]))?)|"
     r"(?P<mac>(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}|[0-9a-f]{12})|"
@@ -84,7 +84,7 @@ def _detect_postgresql_type(value: str) -> Optional[str]:
     """Detect PostgreSQL data type from string value using enhanced regex.
 
     The SPECIAL_TYPE_REGEX pattern matches the following PostgreSQL types:
-    - uuid: Standard UUID format (with dashes) or 32 hex characters (without dashes)
+    - uuid: Standard UUID format (with dashes only, not 32 hex characters to avoid false positives)
     - ipv4: IPv4 addresses with optional CIDR notation (e.g., 192.168.1.1/24)
     - ipv6: All IPv6 formats including compressed forms and IPv4-mapped addresses
     - mac: MAC addresses in colon/dash separated or continuous format

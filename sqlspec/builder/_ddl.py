@@ -7,7 +7,6 @@ from sqlglot.dialects.dialect import DialectType
 from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder, SafeQuery
-from sqlspec.builder._ddl_utils import build_column_expression, build_constraint_expression
 from sqlspec.core.result import SQLResult
 
 if TYPE_CHECKING:
@@ -34,6 +33,103 @@ __all__ = (
     "RenameTable",
     "Truncate",
 )
+
+
+def build_column_expression(col: "ColumnDefinition") -> "exp.Expression":
+    """Build SQLGlot expression for a column definition."""
+    col_def = exp.ColumnDef(this=exp.to_identifier(col.name), kind=exp.DataType.build(col.dtype))
+
+    constraints: list[exp.ColumnConstraint] = []
+
+    if col.not_null:
+        constraints.append(exp.ColumnConstraint(kind=exp.NotNullColumnConstraint()))
+
+    if col.primary_key:
+        constraints.append(exp.ColumnConstraint(kind=exp.PrimaryKeyColumnConstraint()))
+
+    if col.unique:
+        constraints.append(exp.ColumnConstraint(kind=exp.UniqueColumnConstraint()))
+
+    if col.default is not None:
+        default_expr: Optional[exp.Expression] = None
+        if isinstance(col.default, str):
+            # Use SQLGlot's built-in functions for database-specific default values
+            default_upper = col.default.upper()
+            if default_upper == "CURRENT_TIMESTAMP":
+                default_expr = exp.CurrentTimestamp()
+            elif default_upper == "CURRENT_DATE":
+                default_expr = exp.CurrentDate()
+            elif default_upper == "CURRENT_TIME":
+                default_expr = exp.CurrentTime()
+            elif "(" in col.default:
+                default_expr = exp.maybe_parse(col.default)
+            else:
+                default_expr = exp.convert(col.default)
+        else:
+            default_expr = exp.convert(col.default)
+
+        # Use DefaultColumnConstraint for proper default value handling
+        constraints.append(exp.ColumnConstraint(kind=exp.DefaultColumnConstraint(this=default_expr)))
+
+    if col.check:
+        constraints.append(exp.ColumnConstraint(kind=exp.Check(this=exp.maybe_parse(col.check))))
+
+    if col.comment:
+        constraints.append(exp.ColumnConstraint(kind=exp.CommentColumnConstraint(this=exp.convert(col.comment))))
+
+    if col.generated:
+        constraints.append(
+            exp.ColumnConstraint(kind=exp.GeneratedAsIdentityColumnConstraint(this=exp.maybe_parse(col.generated)))
+        )
+
+    if col.collate:
+        constraints.append(exp.ColumnConstraint(kind=exp.CollateColumnConstraint(this=exp.to_identifier(col.collate))))
+
+    if constraints:
+        col_def.set("constraints", constraints)
+
+    return col_def
+
+
+def build_constraint_expression(constraint: "ConstraintDefinition") -> "Optional[exp.Expression]":
+    """Build SQLGlot expression for a table constraint."""
+    if constraint.constraint_type == "PRIMARY KEY":
+        pk_constraint = exp.PrimaryKey(expressions=[exp.to_identifier(col) for col in constraint.columns])
+
+        if constraint.name:
+            return exp.Constraint(this=exp.to_identifier(constraint.name), expression=pk_constraint)
+        return pk_constraint
+
+    if constraint.constraint_type == "FOREIGN KEY":
+        fk_constraint = exp.ForeignKey(
+            expressions=[exp.to_identifier(col) for col in constraint.columns],
+            reference=exp.Reference(
+                this=exp.to_table(constraint.references_table) if constraint.references_table else None,
+                expressions=[exp.to_identifier(col) for col in constraint.references_columns],
+                on_delete=constraint.on_delete,
+                on_update=constraint.on_update,
+            ),
+        )
+
+        if constraint.name:
+            return exp.Constraint(this=exp.to_identifier(constraint.name), expression=fk_constraint)
+        return fk_constraint
+
+    if constraint.constraint_type == "UNIQUE":
+        unique_constraint = exp.UniqueKeyProperty(expressions=[exp.to_identifier(col) for col in constraint.columns])
+
+        if constraint.name:
+            return exp.Constraint(this=exp.to_identifier(constraint.name), expression=unique_constraint)
+        return unique_constraint
+
+    if constraint.constraint_type == "CHECK":
+        check_expr = exp.Check(this=exp.maybe_parse(constraint.condition) if constraint.condition else None)
+
+        if constraint.name:
+            return exp.Constraint(this=exp.to_identifier(constraint.name), expression=check_expr)
+        return check_expr
+
+    return None
 
 
 class DDLBuilder(QueryBuilder):
@@ -379,11 +475,7 @@ class CreateTable(DDLBuilder):
         if not self._columns and not self._like_table:
             self._raise_sql_builder_error("Table must have at least one column or use LIKE clause")
 
-        if self._schema:
-            table = exp.Table(this=exp.to_identifier(self._table_name), db=exp.to_identifier(self._schema))
-        else:
-            table = exp.to_table(self._table_name)
-
+        # Build column definitions and constraints
         column_defs: list[exp.Expression] = []
         for col in self._columns:
             col_expr = build_column_expression(col)
@@ -399,6 +491,7 @@ class CreateTable(DDLBuilder):
             if constraint_expr:
                 column_defs.append(constraint_expr)
 
+        # Build table properties
         props: list[exp.Property] = []
         if self._table_options.get("engine"):
             props.append(
@@ -417,7 +510,17 @@ class CreateTable(DDLBuilder):
 
         properties_node = exp.Properties(expressions=props) if props else None
 
-        schema_expr = exp.Schema(expressions=column_defs) if column_defs else None
+        # FIXED: Create Schema with table name and columns (not Table object)
+        # This ensures SQLGlot generates "CREATE TABLE name (...)" instead of "CREATE TABLE name AS (...)"
+        if self._schema:
+            table_identifier = exp.Table(this=exp.to_identifier(self._table_name), db=exp.to_identifier(self._schema))
+        else:
+            table_identifier = exp.Table(this=exp.to_identifier(self._table_name))
+
+        schema_expr = exp.Schema(
+            this=table_identifier,  # Table name goes here
+            expressions=column_defs,  # Column definitions go here
+        )
 
         like_expr = None
         if self._like_table:
@@ -425,23 +528,13 @@ class CreateTable(DDLBuilder):
 
         return exp.Create(
             kind="TABLE",
-            this=table,
+            this=schema_expr,  # FIXED: Use Schema as 'this', not Table
             exists=self._if_not_exists,
             temporary=self._temporary,
-            expression=schema_expr,
             properties=properties_node,
             like=like_expr,
         )
 
-    @staticmethod
-    def _build_column_expression(col: "ColumnDefinition") -> "exp.Expression":
-        """Build SQLGlot expression for a column definition."""
-        return build_column_expression(col)
-
-    @staticmethod
-    def _build_constraint_expression(constraint: "ConstraintDefinition") -> "Optional[exp.Expression]":
-        """Build SQLGlot expression for a table constraint."""
-        return build_constraint_expression(constraint)
 
 
 class DropTable(DDLBuilder):

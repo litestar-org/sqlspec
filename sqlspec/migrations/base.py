@@ -3,17 +3,19 @@
 This module provides abstract base classes for migration components.
 """
 
+import hashlib
 import operator
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Generic, Optional, TypeVar, cast
 
 from sqlspec._sql import sql
-from sqlspec.core.statement import SQL
+from sqlspec.builder import Delete, Insert, Select
+from sqlspec.builder._ddl import CreateTable
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.sync_tools import run_
+from sqlspec.utils.sync_tools import await_
 
 __all__ = ("BaseMigrationCommands", "BaseMigrationRunner", "BaseMigrationTracker")
 
@@ -35,50 +37,43 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
         """
         self.version_table = version_table_name
 
-    def _get_create_table_sql(self) -> SQL:
-        """Get SQL for creating the tracking table.
+    def _get_create_table_sql(self) -> CreateTable:
+        """Get SQL builder for creating the tracking table.
 
         Returns:
-            SQL object for table creation.
+            SQL builder object for table creation.
         """
-        # Use raw SQL to avoid builder dataclass initialization issues
-        # The driver will automatically adjust the dialect when executing
-        table_sql = f"""
-        CREATE TABLE IF NOT EXISTS {self.version_table} (
-            version_num VARCHAR(32) PRIMARY KEY,
-            description TEXT,
-            applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            execution_time_ms INTEGER,
-            checksum VARCHAR(64),
-            applied_by VARCHAR(255)
-        )
-        """
-        return SQL(table_sql.strip())
-
-    def _get_current_version_sql(self) -> SQL:
-        """Get SQL for retrieving current version.
-
-        Returns:
-            SQL object for version query.
-        """
-
         return (
-            sql.select("version_num").from_(self.version_table).order_by("version_num DESC").limit(1)
-        ).to_statement()
+            sql.create_table(self.version_table)
+            .if_not_exists()
+            .column("version_num", "VARCHAR(32)", primary_key=True)
+            .column("description", "TEXT")
+            .column("applied_at", "TIMESTAMP", default="CURRENT_TIMESTAMP", not_null=True)
+            .column("execution_time_ms", "INTEGER")
+            .column("checksum", "VARCHAR(64)")
+            .column("applied_by", "VARCHAR(255)")
+        )
 
-    def _get_applied_migrations_sql(self) -> SQL:
-        """Get SQL for retrieving all applied migrations.
+    def _get_current_version_sql(self) -> Select:
+        """Get SQL builder for retrieving current version.
 
         Returns:
-            SQL object for migrations query.
+            SQL builder object for version query.
         """
+        return sql.select("version_num").from_(self.version_table).order_by("version_num DESC").limit(1)
 
-        return (sql.select("*").from_(self.version_table).order_by("version_num")).to_statement()
+    def _get_applied_migrations_sql(self) -> Select:
+        """Get SQL builder for retrieving all applied migrations.
+
+        Returns:
+            SQL builder object for migrations query.
+        """
+        return sql.select("*").from_(self.version_table).order_by("version_num")
 
     def _get_record_migration_sql(
         self, version: str, description: str, execution_time_ms: int, checksum: str, applied_by: str
-    ) -> SQL:
-        """Get SQL for recording a migration.
+    ) -> Insert:
+        """Get SQL builder for recording a migration.
 
         Args:
             version: Version number of the migration.
@@ -88,26 +83,24 @@ class BaseMigrationTracker(ABC, Generic[DriverT]):
             applied_by: User who applied the migration.
 
         Returns:
-            SQL object for insert.
+            SQL builder object for insert.
         """
-
         return (
             sql.insert(self.version_table)
             .columns("version_num", "description", "execution_time_ms", "checksum", "applied_by")
             .values(version, description, execution_time_ms, checksum, applied_by)
-        ).to_statement()
+        )
 
-    def _get_remove_migration_sql(self, version: str) -> SQL:
-        """Get SQL for removing a migration record.
+    def _get_remove_migration_sql(self, version: str) -> Delete:
+        """Get SQL builder for removing a migration record.
 
         Args:
             version: Version number to remove.
 
         Returns:
-            SQL object for delete.
+            SQL builder object for delete.
         """
-
-        return (sql.delete().from_(self.version_table).where(sql.version_num == version)).to_statement()
+        return sql.delete().from_(self.version_table).where(sql.version_num == version)
 
     @abstractmethod
     def ensure_tracking_table(self, driver: DriverT) -> Any:
@@ -171,7 +164,6 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
         Returns:
             MD5 checksum hex string.
         """
-        import hashlib
 
         return hashlib.md5(content.encode()).hexdigest()  # noqa: S324
 
@@ -221,7 +213,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
             has_upgrade, has_downgrade = self.loader.has_query(up_query), self.loader.has_query(down_query)
         else:
             try:
-                has_downgrade = bool(run_(loader.get_down_sql)(file_path))
+                has_downgrade = bool(await_(loader.get_down_sql, raise_sync_error=False)(file_path))
             except Exception:
                 has_downgrade = False
 
@@ -256,7 +248,7 @@ class BaseMigrationRunner(ABC, Generic[DriverT]):
 
         try:
             method = loader.get_up_sql if direction == "up" else loader.get_down_sql
-            sql_statements = run_(method)(file_path)
+            sql_statements = await_(method, raise_sync_error=False)(file_path)
 
         except Exception as e:
             if direction == "down":
@@ -307,7 +299,7 @@ class BaseMigrationCommands(ABC, Generic[ConfigT, DriverT]):
         self.config = config
         migration_config = getattr(self.config, "migration_config", {}) or {}
 
-        self.version_table = migration_config.get("version_table_name", "sqlspec_migrations")
+        self.version_table = migration_config.get("version_table_name", "ddl_migrations")
         self.migrations_path = Path(migration_config.get("script_location", "migrations"))
         self.project_root = Path(migration_config["project_root"]) if "project_root" in migration_config else None
 

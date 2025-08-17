@@ -5,13 +5,13 @@ This module handles migration file loading and execution using SQLFileLoader.
 
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from sqlspec.core.statement import SQL
 from sqlspec.migrations.base import BaseMigrationRunner
 from sqlspec.migrations.loaders import get_migration_loader
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.sync_tools import run_
+from sqlspec.utils.sync_tools import await_
 
 if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
@@ -109,8 +109,8 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase"]):
                 loader = get_migration_loader(file_path, self.migrations_path, self.project_root)
 
                 try:
-                    up_sql = run_(loader.get_up_sql)(file_path)
-                    down_sql = run_(loader.get_down_sql)(file_path)
+                    up_sql = await_(loader.get_up_sql, raise_sync_error=False)(file_path)
+                    down_sql = await_(loader.get_down_sql, raise_sync_error=False)(file_path)
 
                     if up_sql:
                         all_queries[f"migrate-{version}-up"] = SQL(up_sql[0])
@@ -143,7 +143,80 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase"]):
         Returns:
             Dictionary containing migration metadata.
         """
-        return self._load_migration_metadata(file_path)
+        return await self._load_migration_metadata_async(file_path)
+
+    async def _load_migration_metadata_async(self, file_path: Path) -> "dict[str, Any]":
+        """Load migration metadata from file (async version).
+
+        Args:
+            file_path: Path to the migration file.
+
+        Returns:
+            Migration metadata dictionary.
+        """
+        loader = get_migration_loader(file_path, self.migrations_path, self.project_root)
+        loader.validate_migration_file(file_path)
+        content = file_path.read_text(encoding="utf-8")
+        checksum = self._calculate_checksum(content)
+        version = self._extract_version(file_path.name)
+        description = file_path.stem.split("_", 1)[1] if "_" in file_path.stem else ""
+
+        has_upgrade, has_downgrade = True, False
+
+        if file_path.suffix == ".sql":
+            up_query, down_query = f"migrate-{version}-up", f"migrate-{version}-down"
+            self.loader.clear_cache()
+            self.loader.load_sql(file_path)
+            has_upgrade, has_downgrade = self.loader.has_query(up_query), self.loader.has_query(down_query)
+        else:
+            try:
+                has_downgrade = bool(await loader.get_down_sql(file_path))
+            except Exception:
+                has_downgrade = False
+
+        return {
+            "version": version,
+            "description": description,
+            "file_path": file_path,
+            "checksum": checksum,
+            "has_upgrade": has_upgrade,
+            "has_downgrade": has_downgrade,
+            "loader": loader,
+        }
+
+    async def _get_migration_sql_async(self, migration: "dict[str, Any]", direction: str) -> "Optional[list[str]]":
+        """Get migration SQL for given direction (async version).
+
+        Args:
+            migration: Migration metadata.
+            direction: Either 'up' or 'down'.
+
+        Returns:
+            SQL statements for the migration.
+        """
+        if not migration.get(f"has_{direction}grade"):
+            if direction == "down":
+                logger.warning("Migration %s has no downgrade query", migration["version"])
+                return None
+            msg = f"Migration {migration['version']} has no upgrade query"
+            raise ValueError(msg)
+
+        file_path, loader = migration["file_path"], migration["loader"]
+
+        try:
+            method = loader.get_up_sql if direction == "up" else loader.get_down_sql
+            sql_statements = await method(file_path)
+
+        except Exception as e:
+            if direction == "down":
+                logger.warning("Failed to load downgrade for migration %s: %s", migration["version"], e)
+                return None
+            msg = f"Failed to load upgrade for migration {migration['version']}: {e}"
+            raise ValueError(msg) from e
+        else:
+            if sql_statements:
+                return cast("list[str]", sql_statements)
+            return None
 
     async def execute_upgrade(
         self, driver: "AsyncDriverAdapterBase", migration: "dict[str, Any]"
@@ -157,7 +230,7 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase"]):
         Returns:
             Tuple of (sql_content, execution_time_ms).
         """
-        upgrade_sql_list = self._get_migration_sql(migration, "up")
+        upgrade_sql_list = await self._get_migration_sql_async(migration, "up")
         if upgrade_sql_list is None:
             return None, 0
 
@@ -181,7 +254,7 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase"]):
         Returns:
             Tuple of (sql_content, execution_time_ms).
         """
-        downgrade_sql_list = self._get_migration_sql(migration, "down")
+        downgrade_sql_list = await self._get_migration_sql_async(migration, "down")
         if downgrade_sql_list is None:
             return None, 0
 

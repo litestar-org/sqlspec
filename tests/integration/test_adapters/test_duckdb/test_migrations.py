@@ -65,7 +65,7 @@ def down():
             assert len(result.data) == 1
 
             # Insert test data
-            driver.execute("INSERT INTO users (name, email) VALUES (?, ?)", ("John Doe", "john@example.com"))
+            driver.execute("INSERT INTO users (id, name, email) VALUES (?, ?, ?)", (1, "John Doe", "john@example.com"))
 
             # Verify data
             users_result = driver.execute("SELECT * FROM users")
@@ -158,9 +158,9 @@ def down():
             assert "posts" in table_names
 
             # Test the relationship
-            driver.execute("INSERT INTO users (name, email) VALUES (?, ?)", ("Author", "author@example.com"))
+            driver.execute("INSERT INTO users (id, name, email) VALUES (?, ?, ?)", (1, "Author", "author@example.com"))
             driver.execute(
-                "INSERT INTO posts (title, content, user_id) VALUES (?, ?, ?)", ("My Post", "Post content", 1)
+                "INSERT INTO posts (id, title, content, user_id) VALUES (?, ?, ?, ?)", (1, "My Post", "Post content", 1)
             )
 
             posts_result = driver.execute("SELECT * FROM posts")
@@ -299,8 +299,8 @@ def up():
             id INTEGER PRIMARY KEY,
             name VARCHAR NOT NULL
         )""",
-        "INSERT INTO customers (name) VALUES ('Customer 1')",
-        "INSERT INTO customers (name) VALUES ('Customer 2')"
+        "INSERT INTO customers (id, name) VALUES (1, 'Customer 1')",
+        "INSERT INTO customers (id, name) VALUES (2, 'Customer 2')"
     ]
 
 

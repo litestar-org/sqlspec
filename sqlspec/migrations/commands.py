@@ -3,15 +3,15 @@
 This module provides the main command interface for database migrations.
 """
 
-from typing import TYPE_CHECKING, Any, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from rich.console import Console
 from rich.table import Table
 
 from sqlspec._sql import sql
+from sqlspec.migrations.adapter_discovery import discover_migration_tracker
 from sqlspec.migrations.base import BaseMigrationCommands
 from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
-from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.migrations.utils import create_migration_file
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import await_
@@ -35,7 +35,8 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             config: The SQLSpec configuration.
         """
         super().__init__(config)
-        self.tracker = SyncMigrationTracker(self.version_table)
+        tracker_class = discover_migration_tracker(config, sync=True)
+        self.tracker = tracker_class(self.version_table)
         self.runner = SyncMigrationRunner(self.migrations_path)
 
     def init(self, directory: str, package: bool = True) -> None:
@@ -47,11 +48,14 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         """
         self.init_directory(directory, package)
 
-    def current(self, verbose: bool = False) -> None:
+    def current(self, verbose: bool = False) -> "Optional[str]":
         """Show current migration version.
 
         Args:
             verbose: Whether to show detailed migration history.
+
+        Returns:
+            The current migration version or None if no migrations applied.
         """
         with self.config.provide_session() as driver:
             self.tracker.ensure_tracking_table(driver)
@@ -59,7 +63,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             current = self.tracker.get_current_version(driver)
             if not current:
                 console.print("[yellow]No migrations applied yet[/]")
-                return
+                return None
 
             console.print(f"[green]Current version:[/] {current}")
 
@@ -83,6 +87,8 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                     )
 
                 console.print(table)
+
+            return cast("Optional[str]", current)
 
     def upgrade(self, revision: str = "head") -> None:
         """Upgrade to a target revision.
@@ -207,7 +213,8 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             sqlspec_config: The SQLSpec configuration.
         """
         super().__init__(sqlspec_config)
-        self.tracker = AsyncMigrationTracker(self.version_table)
+        tracker_class = discover_migration_tracker(sqlspec_config, sync=False)
+        self.tracker = tracker_class(self.version_table)
         self.runner = AsyncMigrationRunner(self.migrations_path)
 
     async def init(self, directory: str, package: bool = True) -> None:
@@ -219,11 +226,14 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         """
         self.init_directory(directory, package)
 
-    async def current(self, verbose: bool = False) -> None:
+    async def current(self, verbose: bool = False) -> "Optional[str]":
         """Show current migration version.
 
         Args:
             verbose: Whether to show detailed migration history.
+
+        Returns:
+            The current migration version or None if no migrations applied.
         """
         async with self.config.provide_session() as driver:
             await self.tracker.ensure_tracking_table(driver)
@@ -231,7 +241,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             current = await self.tracker.get_current_version(driver)
             if not current:
                 console.print("[yellow]No migrations applied yet[/]")
-                return
+                return None
 
             console.print(f"[green]Current version:[/] {current}")
             if verbose:
@@ -251,6 +261,8 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                         migration.get("applied_by", ""),
                     )
                 console.print(table)
+
+            return cast("Optional[str]", current)
 
     async def upgrade(self, revision: str = "head") -> None:
         """Upgrade to a target revision.
@@ -394,16 +406,20 @@ class MigrationCommands:
         else:
             cast("SyncMigrationCommands[Any]", self._impl).init(directory, package=package)
 
-    def current(self, verbose: bool = False) -> None:
+    def current(self, verbose: bool = False) -> "Optional[str]":
         """Show current migration version.
 
         Args:
             verbose: Whether to show detailed migration history.
+
+        Returns:
+            The current migration version or None if no migrations applied.
         """
         if self._is_async:
-            await_(cast("AsyncMigrationCommands[Any]", self._impl).current, raise_sync_error=False)(verbose=verbose)
-        else:
-            cast("SyncMigrationCommands[Any]", self._impl).current(verbose=verbose)
+            return await_(cast("AsyncMigrationCommands[Any]", self._impl).current, raise_sync_error=False)(
+                verbose=verbose
+            )
+        return cast("SyncMigrationCommands[Any]", self._impl).current(verbose=verbose)
 
     def upgrade(self, revision: str = "head") -> None:
         """Upgrade to a target revision.
