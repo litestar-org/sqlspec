@@ -21,6 +21,7 @@ __all__ = (
     "DatabaseConfigProtocol",
     "DriverT",
     "LifecycleConfig",
+    "MigrationConfig",
     "NoPoolAsyncConfig",
     "NoPoolSyncConfig",
     "SyncConfigT",
@@ -59,6 +60,23 @@ class LifecycleConfig(TypedDict, total=False):
     on_error: NotRequired[list[Callable[[Exception, str, dict], None]]]
 
 
+class MigrationConfig(TypedDict, total=False):
+    """Configuration options for SQLSpec database migrations.
+
+    This TypedDict provides type safety and IDE completion for migration configuration.
+    All fields are optional with sensible defaults.
+    """
+
+    script_location: NotRequired[str]
+    """Path to the migrations directory. Defaults to 'migrations'."""
+
+    version_table_name: NotRequired[str]
+    """Name of the table used to track applied migrations. Defaults to 'sqlspec_migrations'."""
+
+    project_root: NotRequired[str]
+    """Path to the project root directory. Used for relative path resolution."""
+
+
 class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     """Protocol defining the interface for database configurations."""
 
@@ -73,7 +91,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     supports_native_parquet_export: "ClassVar[bool]" = False
     statement_config: "StatementConfig"
     pool_instance: "Optional[PoolT]"
-    migration_config: "dict[str, Any]"
+    migration_config: "Union[dict[str, Any], MigrationConfig]"
 
     def __hash__(self) -> int:
         return id(self)
@@ -147,13 +165,13 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self,
         *,
         connection_config: Optional[dict[str, Any]] = None,
-        migration_config: "Optional[dict[str, Any]]" = None,
+        migration_config: "Optional[Union[dict[str, Any], MigrationConfig]]" = None,
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
         self.pool_instance = None
         self.connection_config = connection_config or {}
-        self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
+        self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}
 
         if statement_config is None:
             default_parameter_config = ParameterStyleConfig(
@@ -200,13 +218,13 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
         self,
         *,
         connection_config: "Optional[dict[str, Any]]" = None,
-        migration_config: "Optional[dict[str, Any]]" = None,
+        migration_config: "Optional[Union[dict[str, Any], MigrationConfig]]" = None,
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
         self.pool_instance = None
         self.connection_config = connection_config or {}
-        self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
+        self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}
 
         if statement_config is None:
             default_parameter_config = ParameterStyleConfig(
@@ -254,13 +272,13 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         *,
         pool_config: "Optional[dict[str, Any]]" = None,
         pool_instance: "Optional[PoolT]" = None,
-        migration_config: "Optional[dict[str, Any]]" = None,
+        migration_config: "Optional[Union[dict[str, Any], MigrationConfig]]" = None,
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
-        self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
+        self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}
 
         if statement_config is None:
             default_parameter_config = ParameterStyleConfig(
@@ -330,13 +348,13 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
         *,
         pool_config: "Optional[dict[str, Any]]" = None,
         pool_instance: "Optional[PoolT]" = None,
-        migration_config: "Optional[dict[str, Any]]" = None,
+        migration_config: "Optional[Union[dict[str, Any], MigrationConfig]]" = None,
         statement_config: "Optional[StatementConfig]" = None,
         driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
         self.pool_instance = pool_instance
         self.pool_config = pool_config or {}
-        self.migration_config: dict[str, Any] = migration_config if migration_config is not None else {}
+        self.migration_config: Union[dict[str, Any], MigrationConfig] = migration_config or {}
 
         if statement_config is None:
             self.statement_config = StatementConfig(

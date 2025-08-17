@@ -365,7 +365,7 @@ class MergeNotMatchedClauseMixin:
                     column_name = column_name.split(".")[-1]
                 param_name = self._generate_unique_parameter_name(column_name)
                 param_name = self.add_parameter(val, name=param_name)[1]
-                parameterized_values.append(exp.var(param_name))
+                parameterized_values.append(exp.Placeholder())
 
             insert_args["this"] = exp.Tuple(expressions=[exp.column(c) for c in columns])
             insert_args["expression"] = exp.Tuple(expressions=parameterized_values)

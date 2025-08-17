@@ -107,7 +107,11 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "Pool", AsyncmyDriver
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
         if self.pool_instance:
-            await self.pool_instance.close()
+            self.pool_instance.close()
+
+    async def close_pool(self) -> None:
+        """Close the connection pool."""
+        await self._close_pool()
 
     async def create_connection(self) -> AsyncmyConnection:  # pyright: ignore
         """Create a single async connection (not from pool).

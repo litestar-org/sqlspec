@@ -1,6 +1,5 @@
 """SELECT clause mixins consolidated into a single module."""
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from mypy_extensions import trait
@@ -538,13 +537,10 @@ class SelectClauseMixin:
         return CaseBuilder(builder, alias)
 
 
-@dataclass
 class CaseBuilder:
     """Builder for CASE expressions."""
 
-    _parent: "SelectBuilderProtocol"
-    _alias: Optional[str]
-    _case_expr: exp.Case
+    __slots__ = ("_alias", "_case_expr", "_parent")
 
     def __init__(self, parent: "SelectBuilderProtocol", alias: "Optional[str]" = None) -> None:
         """Initialize CaseBuilder.

@@ -223,6 +223,11 @@ class QueryBuilder(ABC):
         import hashlib
 
         dialect_name: str = self.dialect_name or "default"
+
+        # Ensure expression is built before generating cache key
+        if self._expression is None:
+            self._expression = self._create_base_expression()
+
         expr_sql: str = self._expression.sql() if self._expression else "None"
 
         state_parts = [
@@ -387,7 +392,7 @@ class QueryBuilder(ABC):
         """
         cache_config = get_cache_config()
         if not cache_config.compiled_cache_enabled:
-            return self._to_statement_without_cache(config)
+            return self._to_statement(config)
 
         cache_key_str = self._generate_builder_cache_key(config)
         cache_key = CacheKey((cache_key_str,))
@@ -397,13 +402,13 @@ class QueryBuilder(ABC):
         if cached_sql is not None:
             return cast("SQL", cached_sql)
 
-        sql_statement = self._to_statement_without_cache(config)
+        sql_statement = self._to_statement(config)
         unified_cache.put(cache_key, sql_statement)
 
         return sql_statement
 
-    def _to_statement_without_cache(self, config: "Optional[StatementConfig]" = None) -> "SQL":
-        """Internal method to create SQL statement without caching.
+    def _to_statement(self, config: "Optional[StatementConfig]" = None) -> "SQL":
+        """Internal method to create SQL statement.
 
         Args:
             config: Optional SQL configuration.
@@ -427,18 +432,32 @@ class QueryBuilder(ABC):
             )
 
         if config is None:
-            from sqlspec.core.statement import StatementConfig
-
-            parameter_config = ParameterStyleConfig(
-                default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+            config = StatementConfig(
+                parameter_config=ParameterStyleConfig(
+                    default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
+                ),
+                dialect=safe_query.dialect,
             )
-            config = StatementConfig(parameter_config=parameter_config, dialect=safe_query.dialect)
+
+        # Re-generate SQL if config dialect differs from SafeQuery dialect
+        sql_string = safe_query.sql
+        if (
+            config.dialect is not None
+            and config.dialect != safe_query.dialect
+            and self._expression is not None
+            and hasattr(self._expression, "sql")
+        ):
+            try:
+                sql_string = self._expression.sql(dialect=config.dialect, pretty=True)
+            except Exception:
+                # Fall back to original SQL if dialect-specific generation fails
+                sql_string = safe_query.sql
 
         if kwargs:
-            return SQL(safe_query.sql, statement_config=config, **kwargs)
+            return SQL(sql_string, statement_config=config, **kwargs)
         if parameters:
-            return SQL(safe_query.sql, *parameters, statement_config=config)
-        return SQL(safe_query.sql, statement_config=config)
+            return SQL(sql_string, *parameters, statement_config=config)
+        return SQL(sql_string, statement_config=config)
 
     def __str__(self) -> str:
         """Return the SQL string representation of the query.

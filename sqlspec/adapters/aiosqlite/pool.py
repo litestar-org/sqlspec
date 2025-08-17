@@ -123,15 +123,15 @@ class AiosqliteConnectionPool:
     """Multi-connection pool for aiosqlite with proper shutdown handling."""
 
     __slots__ = (
-        "_closed_event",
+        "_closed_event_instance",
         "_connect_timeout",
         "_connection_parameters",
         "_connection_registry",
         "_idle_timeout",
-        "_lock",
+        "_lock_instance",
         "_operation_timeout",
         "_pool_size",
-        "_queue",
+        "_queue_instance",
         "_tracked_threads",
         "_wal_initialized",
     )
@@ -159,12 +159,35 @@ class AiosqliteConnectionPool:
         self._idle_timeout = idle_timeout
         self._operation_timeout = operation_timeout
 
-        self._queue: asyncio.Queue[AiosqlitePoolConnection] = asyncio.Queue(maxsize=pool_size)
         self._connection_registry: dict[str, AiosqlitePoolConnection] = {}
-        self._lock = asyncio.Lock()
-        self._closed_event = asyncio.Event()
         self._tracked_threads: set[Union[threading.Thread, AiosqliteConnection]] = set()
         self._wal_initialized = False
+
+        # Lazy initialization for Python 3.9 compatibility (asyncio objects can't be created without event loop)
+        self._queue_instance: Optional[asyncio.Queue[AiosqlitePoolConnection]] = None
+        self._lock_instance: Optional[asyncio.Lock] = None
+        self._closed_event_instance: Optional[asyncio.Event] = None
+
+    @property
+    def _queue(self) -> "asyncio.Queue[AiosqlitePoolConnection]":
+        """Lazy initialization of asyncio.Queue for Python 3.9 compatibility."""
+        if self._queue_instance is None:
+            self._queue_instance = asyncio.Queue(maxsize=self._pool_size)
+        return self._queue_instance
+
+    @property
+    def _lock(self) -> asyncio.Lock:
+        """Lazy initialization of asyncio.Lock for Python 3.9 compatibility."""
+        if self._lock_instance is None:
+            self._lock_instance = asyncio.Lock()
+        return self._lock_instance
+
+    @property
+    def _closed_event(self) -> asyncio.Event:
+        """Lazy initialization of asyncio.Event for Python 3.9 compatibility."""
+        if self._closed_event_instance is None:
+            self._closed_event_instance = asyncio.Event()
+        return self._closed_event_instance
 
     @property
     def is_closed(self) -> bool:
@@ -173,7 +196,7 @@ class AiosqliteConnectionPool:
         Returns:
             True if pool is closed
         """
-        return self._closed_event.is_set()
+        return self._closed_event_instance is not None and self._closed_event.is_set()
 
     def size(self) -> int:
         """Get total number of connections in pool.
@@ -189,6 +212,8 @@ class AiosqliteConnectionPool:
         Returns:
             Number of connections currently in use
         """
+        if self._queue_instance is None:
+            return len(self._connection_registry)
         return len(self._connection_registry) - self._queue.qsize()
 
     def _track_aiosqlite_thread(self, connection: "AiosqliteConnection") -> None:

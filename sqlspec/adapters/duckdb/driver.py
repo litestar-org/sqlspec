@@ -45,11 +45,7 @@ duckdb_statement_config = StatementConfig(
         default_parameter_style=ParameterStyle.QMARK,
         supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
         default_execution_parameter_style=ParameterStyle.QMARK,
-        supported_execution_parameter_styles={
-            ParameterStyle.QMARK,
-            ParameterStyle.NUMERIC,
-            ParameterStyle.NAMED_DOLLAR,
-        },
+        supported_execution_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC},
         type_coercion_map={},
         has_native_list_expansion=True,
         needs_static_script_compilation=False,

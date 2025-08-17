@@ -489,7 +489,9 @@ class CommonDriverAttributesMixin:
             if cached_result is not None:
                 return cached_result
 
-        compiled_sql, execution_parameters = statement.compile()
+        # Ensure the statement uses the correct dialect for this driver
+        prepared_statement = self.prepare_statement(statement, statement_config=statement_config)
+        compiled_sql, execution_parameters = prepared_statement.compile()
 
         prepared_parameters = self.prepare_driver_parameters(
             execution_parameters, statement_config, is_many=statement.is_many

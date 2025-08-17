@@ -26,7 +26,16 @@ class CapacityLimiter:
     """Limits the number of concurrent operations using a semaphore."""
 
     def __init__(self, total_tokens: int) -> None:
-        self._semaphore = asyncio.Semaphore(total_tokens)
+        self._total_tokens = total_tokens
+        # Lazy initialization for Python 3.9 compatibility (asyncio.Semaphore can't be created without event loop)
+        self._semaphore_instance: Optional[asyncio.Semaphore] = None
+
+    @property
+    def _semaphore(self) -> asyncio.Semaphore:
+        """Lazy initialization of asyncio.Semaphore for Python 3.9 compatibility."""
+        if self._semaphore_instance is None:
+            self._semaphore_instance = asyncio.Semaphore(self._total_tokens)
+        return self._semaphore_instance
 
     async def acquire(self) -> None:
         await self._semaphore.acquire()
@@ -36,11 +45,13 @@ class CapacityLimiter:
 
     @property
     def total_tokens(self) -> int:
-        return self._semaphore._value
+        return self._total_tokens
 
     @total_tokens.setter
     def total_tokens(self, value: int) -> None:
-        self._semaphore = asyncio.Semaphore(value)
+        self._total_tokens = value
+        # Reset the semaphore instance so it gets recreated with new value
+        self._semaphore_instance = None
 
     async def __aenter__(self) -> None:
         await self.acquire()
@@ -76,7 +87,14 @@ def run_(async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]") -
             loop = None
 
         if loop is not None:
-            return asyncio.run(partial_f())
+            if loop.is_running():
+                import concurrent.futures
+
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, partial_f())
+                    return future.result()
+            else:
+                return asyncio.run(partial_f())
         if uvloop and sys.platform != "win32":
             uvloop.install()  # pyright: ignore[reportUnknownMemberType]
         return asyncio.run(partial_f())
