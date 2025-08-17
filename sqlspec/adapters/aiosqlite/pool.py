@@ -212,6 +212,8 @@ class AiosqliteConnectionPool:
         Returns:
             Number of connections currently in use
         """
+        if self._queue_instance is None:
+            return len(self._connection_registry)
         return len(self._connection_registry) - self._queue.qsize()
 
     def _track_aiosqlite_thread(self, connection: "AiosqliteConnection") -> None:
