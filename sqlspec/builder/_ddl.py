@@ -536,7 +536,6 @@ class CreateTable(DDLBuilder):
         )
 
 
-
 class DropTable(DDLBuilder):
     """Builder for DROP TABLE [IF EXISTS] ... [CASCADE|RESTRICT]."""
 
