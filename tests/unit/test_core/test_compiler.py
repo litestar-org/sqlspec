@@ -28,7 +28,7 @@ import sqlglot
 from sqlglot import expressions as exp
 from sqlglot.errors import ParseError
 
-from sqlspec.core.compiler import CompiledSQL, SQLProcessor
+from sqlspec.core.compiler import CompiledSQL, OperationType, SQLProcessor
 from sqlspec.core.parameters import ParameterProcessor, ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import StatementConfig
 
@@ -141,7 +141,7 @@ def test_compiled_sql_creation() -> None:
     """Test CompiledSQL object creation and basic properties."""
     compiled_sql = "SELECT * FROM users WHERE id = ?"
     execution_parameters = [123]
-    operation_type = "SELECT"
+    operation_type: OperationType = "SELECT"
     expression = Mock(spec=exp.Select)
 
     result = CompiledSQL(

@@ -9,7 +9,7 @@ from sqlspec.exceptions import SQLConversionError
 
 __all__ = ("SQLTranslatorMixin",)
 
-# Constants for better performance
+
 _DEFAULT_PRETTY: Final[bool] = True
 
 
@@ -35,7 +35,7 @@ class SQLTranslatorMixin:
         Raises:
             SQLConversionError: If parsing or conversion fails
         """
-        # Fast path: get the parsed expression with minimal allocations
+
         parsed_expression: Optional[exp.Expression] = None
 
         if statement is not None and isinstance(statement, SQL):
@@ -47,19 +47,16 @@ class SQLTranslatorMixin:
         else:
             parsed_expression = self._parse_statement_safely(statement)
 
-        # Get target dialect with fallback
-        target_dialect = to_dialect or self.dialect  # type: ignore[attr-defined]
+        target_dialect = to_dialect or self.dialect
 
-        # Generate SQL with error handling
         return self._generate_sql_safely(parsed_expression, target_dialect, pretty)
 
     def _parse_statement_safely(self, statement: "Statement") -> "exp.Expression":
         """Parse statement with copy=False optimization and proper error handling."""
         try:
-            # Convert statement to string if needed
             sql_string = str(statement)
-            # Use copy=False for better performance
-            return parse_one(sql_string, dialect=self.dialect, copy=False)  # type: ignore[attr-defined]
+
+            return parse_one(sql_string, dialect=self.dialect, copy=False)
         except Exception as e:
             self._raise_parse_error(e)
 

@@ -1,8 +1,4 @@
-"""Asynchronous driver protocol implementation.
-
-This module provides the async driver infrastructure for database adapters,
-including connection management, transaction support, and result processing.
-"""
+"""Asynchronous driver protocol implementation."""
 
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Optional, Union, cast, overload
@@ -32,21 +28,12 @@ EMPTY_FILTERS: Final["list[StatementFilter]"] = []
 
 
 class AsyncDriverAdapterBase(CommonDriverAttributesMixin, SQLTranslatorMixin, ToSchemaMixin):
-    """Base class for asynchronous database drivers.
-
-    Provides the foundation for async database adapters, including connection management,
-    transaction support, and SQL execution methods. All database operations are performed
-    asynchronously and support context manager patterns for proper resource cleanup.
-    """
+    """Base class for asynchronous database drivers."""
 
     __slots__ = ()
 
     async def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
         """Central execution dispatcher using the Template Method Pattern.
-
-        Orchestrates the common execution flow, delegating database-specific steps
-        to abstract methods that concrete adapters must implement.
-        All database operations are wrapped in exception handling.
 
         Args:
             statement: The SQL statement to execute

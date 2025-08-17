@@ -1,8 +1,4 @@
-"""Common driver attributes and utilities.
-
-This module provides core driver infrastructure including execution result handling,
-common driver attributes, parameter processing, and SQL compilation utilities.
-"""
+"""Common driver attributes and utilities."""
 
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Optional, Union, cast
 
@@ -10,7 +6,7 @@ from mypy_extensions import trait
 from sqlglot import exp
 
 from sqlspec.builder import QueryBuilder
-from sqlspec.core import SQL, OperationType, ParameterStyle, SQLResult, Statement, StatementConfig, TypedParameter
+from sqlspec.core import SQL, ParameterStyle, SQLResult, Statement, StatementConfig, TypedParameter
 from sqlspec.core.cache import get_cache_config, sql_cache
 from sqlspec.core.splitter import split_sql_script
 from sqlspec.exceptions import ImproperConfigurationError
@@ -38,19 +34,7 @@ logger = get_logger("driver")
 
 
 class ScriptExecutionResult(NamedTuple):
-    """Result from script execution with statement count information.
-
-    This named tuple eliminates the need for redundant script splitting
-    by providing statement count information during execution rather than
-    requiring re-parsing after execution.
-
-    Attributes:
-        cursor_result: The result returned by the database cursor/driver
-        rowcount_override: Optional override for the number of affected rows
-        special_data: Any special metadata or additional information
-        statement_count: Total number of statements in the script
-        successful_statements: Number of statements that executed successfully
-    """
+    """Result from script execution with statement count information."""
 
     cursor_result: Any
     rowcount_override: Optional[int]
@@ -60,24 +44,7 @@ class ScriptExecutionResult(NamedTuple):
 
 
 class ExecutionResult(NamedTuple):
-    """Comprehensive execution result containing all data needed for SQLResult building.
-
-    This named tuple consolidates all execution result data to eliminate the need
-    for additional data extraction calls and script re-parsing in build_statement_result.
-
-    Attributes:
-        cursor_result: The raw result returned by the database cursor/driver
-        rowcount_override: Optional override for the number of affected rows
-        special_data: Any special metadata or additional information from execution
-        selected_data: For SELECT operations, the extracted row data
-        column_names: For SELECT operations, the column names
-        data_row_count: For SELECT operations, the number of rows returned
-        statement_count: For script operations, total number of statements
-        successful_statements: For script operations, number of successful statements
-        is_script_result: Whether this result is from script execution
-        is_select_result: Whether this result is from a SELECT operation
-        is_many_result: Whether this result is from an execute_many operation
-    """
+    """Execution result containing all data needed for SQLResult building."""
 
     cursor_result: Any
     rowcount_override: Optional[int]
@@ -93,20 +60,15 @@ class ExecutionResult(NamedTuple):
     last_inserted_id: Optional[Union[int, str]] = None
 
 
-EXEC_CURSOR_RESULT = 0
-EXEC_ROWCOUNT_OVERRIDE = 1
-EXEC_SPECIAL_DATA = 2
+EXEC_CURSOR_RESULT: Final[int] = 0
+EXEC_ROWCOUNT_OVERRIDE: Final[int] = 1
+EXEC_SPECIAL_DATA: Final[int] = 2
 DEFAULT_EXECUTION_RESULT: Final[tuple[Any, Optional[int], Any]] = (None, None, None)
 
 
 @trait
 class CommonDriverAttributesMixin:
-    """Common attributes and methods for driver adapters.
-
-    This mixin provides the foundation for all SQLSpec drivers, including
-    connection and configuration management, parameter processing, caching,
-    and SQL compilation.
-    """
+    """Common attributes and methods for driver adapters."""
 
     __slots__ = ("connection", "driver_features", "statement_config")
     connection: "Any"
@@ -180,9 +142,6 @@ class CommonDriverAttributesMixin:
     def build_statement_result(self, statement: "SQL", execution_result: ExecutionResult) -> "SQLResult":
         """Build and return the SQLResult from ExecutionResult data.
 
-        Creates SQLResult objects from ExecutionResult data without requiring
-        additional data extraction calls or script re-parsing.
-
         Args:
             statement: SQL statement that was executed
             execution_result: ExecutionResult containing all necessary data
@@ -215,50 +174,10 @@ class CommonDriverAttributesMixin:
             statement=statement,
             data=[],
             rows_affected=execution_result.rowcount_override or 0,
-            operation_type=self._determine_operation_type(statement),
+            operation_type=statement.operation_type,
             last_inserted_id=execution_result.last_inserted_id,
             metadata=execution_result.special_data or {"status_message": "OK"},
         )
-
-    def _determine_operation_type(self, statement: "Any") -> OperationType:
-        """Determine operation type from SQL statement expression.
-
-        Examines the statement's expression type to determine if it's
-        INSERT, UPDATE, DELETE, SELECT, SCRIPT, or generic EXECUTE.
-
-        Args:
-            statement: SQL statement object with expression attribute
-
-        Returns:
-            OperationType literal value
-        """
-        if statement.is_script:
-            return "SCRIPT"
-
-        try:
-            expression = statement.expression
-        except AttributeError:
-            return "EXECUTE"
-
-        if not expression:
-            return "EXECUTE"
-
-        expr_type = type(expression).__name__.upper()
-
-        if "ANONYMOUS" in expr_type and statement.is_script:
-            return "SCRIPT"
-
-        if "INSERT" in expr_type:
-            return "INSERT"
-        if "UPDATE" in expr_type:
-            return "UPDATE"
-        if "DELETE" in expr_type:
-            return "DELETE"
-        if "SELECT" in expr_type:
-            return "SELECT"
-        if "COPY" in expr_type:
-            return "COPY"
-        return "EXECUTE"
 
     def prepare_statement(
         self,
@@ -489,7 +408,6 @@ class CommonDriverAttributesMixin:
             if cached_result is not None:
                 return cached_result
 
-        # Ensure the statement uses the correct dialect for this driver
         prepared_statement = self.prepare_statement(statement, statement_config=statement_config)
         compiled_sql, execution_parameters = prepared_statement.compile()
 
@@ -592,7 +510,7 @@ class CommonDriverAttributesMixin:
     def find_filter(
         filter_type: "type[FilterTypeT]",
         filters: "Sequence[StatementFilter | StatementParameters] | Sequence[StatementFilter]",
-    ) -> "FilterTypeT | None":
+    ) -> "Optional[FilterTypeT]":
         """Get the filter specified by filter type from the filters.
 
         Args:
@@ -602,9 +520,10 @@ class CommonDriverAttributesMixin:
         Returns:
             The match filter instance or None
         """
-        return next(
-            (cast("FilterTypeT | None", filter_) for filter_ in filters if isinstance(filter_, filter_type)), None
-        )
+        for filter_ in filters:
+            if isinstance(filter_, filter_type):
+                return filter_
+        return None
 
     def _create_count_query(self, original_sql: "SQL") -> "SQL":
         """Create a COUNT query from the original SQL statement.

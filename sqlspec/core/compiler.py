@@ -52,21 +52,6 @@ __all__ = ("CompiledSQL", "OperationType", "SQLProcessor")
 
 logger = get_logger("sqlspec.core.compiler")
 
-_OPERATION_TYPES = {
-    "SELECT": "SELECT",
-    "INSERT": "INSERT",
-    "UPDATE": "UPDATE",
-    "DELETE": "DELETE",
-    "COPY": "COPY",
-    "COPY_FROM": "COPY_FROM",
-    "COPY_TO": "COPY_TO",
-    "EXECUTE": "EXECUTE",
-    "SCRIPT": "SCRIPT",
-    "DDL": "DDL",
-    "PRAGMA": "PRAGMA",
-    "UNKNOWN": "UNKNOWN",
-}
-
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class CompiledSQL:
@@ -97,7 +82,7 @@ class CompiledSQL:
         self,
         compiled_sql: str,
         execution_parameters: Any,
-        operation_type: str,
+        operation_type: "OperationType",
         expression: Optional["exp.Expression"] = None,
         parameter_style: Optional[str] = None,
         supports_many: bool = False,
@@ -255,7 +240,7 @@ class SQLProcessor:
             final_parameters = processed_params
             ast_was_transformed = False
             expression = None
-            operation_type = "EXECUTE"
+            operation_type: OperationType = "EXECUTE"
 
             if self._config.enable_parsing:
                 try:
@@ -303,9 +288,7 @@ class SQLProcessor:
 
         except Exception as e:
             logger.warning("Compilation failed, using fallback: %s", e)
-            return CompiledSQL(
-                compiled_sql=sql, execution_parameters=parameters, operation_type=_OPERATION_TYPES["UNKNOWN"]
-            )
+            return CompiledSQL(compiled_sql=sql, execution_parameters=parameters, operation_type="UNKNOWN")
 
     def _make_cache_key(self, sql: str, parameters: Any) -> str:
         """Generate cache key for compilation result.
@@ -336,7 +319,7 @@ class SQLProcessor:
         hash_str = hashlib.sha256(str(hash_data).encode("utf-8")).hexdigest()[:16]
         return f"sql_{hash_str}"
 
-    def _detect_operation_type(self, expression: "exp.Expression") -> str:
+    def _detect_operation_type(self, expression: "exp.Expression") -> "OperationType":
         """Detect operation type from AST.
 
         Uses SQLGlot AST structure to determine operation type.
@@ -345,7 +328,7 @@ class SQLProcessor:
             expression: SQLGlot AST expression
 
         Returns:
-            Operation type string
+            Operation type literal
         """
         # Use isinstance for compatibility with mocks and inheritance
         if isinstance(expression, exp.Select):
