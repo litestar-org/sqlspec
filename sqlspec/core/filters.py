@@ -25,6 +25,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Generic, Literal, Optional, Union
 
+import sqlglot
 from sqlglot import exp
 from typing_extensions import TypeAlias, TypeVar
 
@@ -160,7 +161,6 @@ class BeforeAfterFilter(StatementFilter):
         conditions: list[Condition] = []
         col_expr = exp.column(self.field_name)
 
-        # Resolve parameter name conflicts
         proposed_names = []
         if self.before and self._param_name_before:
             proposed_names.append(self._param_name_before)
@@ -238,7 +238,6 @@ class OnBeforeAfterFilter(StatementFilter):
     def append_to_statement(self, statement: "SQL") -> "SQL":
         conditions: list[Condition] = []
 
-        # Resolve parameter name conflicts
         proposed_names = []
         if self.on_or_before and self._param_name_on_or_before:
             proposed_names.append(self._param_name_on_or_before)
@@ -328,7 +327,6 @@ class InCollectionFilter(InAnyFilter[T]):
         if not self.values:
             return statement.where(exp.false())
 
-        # Resolve parameter name conflicts
         resolved_names = self._resolve_parameter_conflicts(statement, self._param_names)
 
         placeholder_expressions: list[exp.Placeholder] = [
@@ -337,7 +335,6 @@ class InCollectionFilter(InAnyFilter[T]):
 
         result = statement.where(exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions))
 
-        # Add parameters with resolved names
         for resolved_name, value in zip(resolved_names, self.values):
             result = result.add_named_parameter(resolved_name, value)
         return result
@@ -383,7 +380,6 @@ class NotInCollectionFilter(InAnyFilter[T]):
         if self.values is None or not self.values:
             return statement
 
-        # Resolve parameter name conflicts
         resolved_names = self._resolve_parameter_conflicts(statement, self._param_names)
 
         placeholder_expressions: list[exp.Placeholder] = [
@@ -394,7 +390,6 @@ class NotInCollectionFilter(InAnyFilter[T]):
             exp.Not(this=exp.In(this=exp.column(self.field_name), expressions=placeholder_expressions))
         )
 
-        # Add parameters with resolved names
         for resolved_name, value in zip(resolved_names, self.values):
             result = result.add_named_parameter(resolved_name, value)
         return result
@@ -445,7 +440,6 @@ class AnyCollectionFilter(InAnyFilter[T]):
         if not self.values:
             return statement.where(exp.false())
 
-        # Resolve parameter name conflicts
         resolved_names = self._resolve_parameter_conflicts(statement, self._param_names)
 
         placeholder_expressions: list[exp.Expression] = [
@@ -455,7 +449,6 @@ class AnyCollectionFilter(InAnyFilter[T]):
         array_expr = exp.Array(expressions=placeholder_expressions)
         result = statement.where(exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr)))
 
-        # Add parameters with resolved names
         for resolved_name, value in zip(resolved_names, self.values):
             result = result.add_named_parameter(resolved_name, value)
         return result
@@ -500,7 +493,6 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
         if self.values is None or not self.values:
             return statement
 
-        # Resolve parameter name conflicts
         resolved_names = self._resolve_parameter_conflicts(statement, self._param_names)
 
         placeholder_expressions: list[exp.Expression] = [
@@ -511,7 +503,6 @@ class NotAnyCollectionFilter(InAnyFilter[T]):
         condition = exp.EQ(this=exp.column(self.field_name), expression=exp.Any(this=array_expr))
         result = statement.where(exp.Not(this=condition))
 
-        # Add parameters with resolved names
         for resolved_name, value in zip(resolved_names, self.values):
             result = result.add_named_parameter(resolved_name, value)
         return result
@@ -558,27 +549,20 @@ class LimitOffsetFilter(PaginationFilter):
         return [], {self._limit_param_name: self.limit, self._offset_param_name: self.offset}
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
-        import sqlglot
-        from sqlglot import exp
-
-        # Resolve parameter name conflicts
         resolved_names = self._resolve_parameter_conflicts(statement, [self._limit_param_name, self._offset_param_name])
         limit_param_name, offset_param_name = resolved_names
 
         limit_placeholder = exp.Placeholder(this=limit_param_name)
         offset_placeholder = exp.Placeholder(this=offset_param_name)
 
-        # Parse the current SQL to get the statement structure
         try:
             current_statement = sqlglot.parse_one(statement._raw_sql, dialect=getattr(statement, "_dialect", None))
         except Exception:
-            # Fallback to wrapping in subquery if parsing fails
             current_statement = exp.Select().from_(f"({statement._raw_sql})")
 
         if isinstance(current_statement, exp.Select):
             new_statement = current_statement.limit(limit_placeholder).offset(offset_placeholder)
         else:
-            # Wrap non-SELECT statements in a subquery
             new_statement = exp.Select().from_(current_statement).limit(limit_placeholder).offset(offset_placeholder)
 
         result = statement.copy(statement=new_statement)
@@ -678,7 +662,6 @@ class SearchFilter(StatementFilter):
         if not self.value or not self._param_name:
             return statement
 
-        # Resolve parameter name conflicts
         resolved_names = self._resolve_parameter_conflicts(statement, [self._param_name])
         param_name = resolved_names[0]
 
@@ -701,7 +684,6 @@ class SearchFilter(StatementFilter):
         else:
             result = statement
 
-        # Add parameter with resolved name
         search_value_with_wildcards = f"%{self.value}%"
         return result.add_named_parameter(param_name, search_value_with_wildcards)
 
@@ -745,7 +727,6 @@ class NotInSearchFilter(SearchFilter):
         if not self.value or not self._param_name:
             return statement
 
-        # Resolve parameter name conflicts
         resolved_names = self._resolve_parameter_conflicts(statement, [self._param_name])
         param_name = resolved_names[0]
 
@@ -768,7 +749,6 @@ class NotInSearchFilter(SearchFilter):
                     final_condition = exp.And(this=final_condition, expression=cond)
             result = statement.where(final_condition)
 
-        # Add parameter with resolved name
         search_value_with_wildcards = f"%{self.value}%"
         return result.add_named_parameter(param_name, search_value_with_wildcards)
 

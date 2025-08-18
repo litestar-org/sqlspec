@@ -4,22 +4,21 @@ This module provides a caching system with LRU eviction and TTL support for
 SQL statement processing, parameter processing, and expression caching.
 
 Components:
-- CacheKey: Immutable cache key with optimized hashing
+- CacheKey: Immutable cache key
 - UnifiedCache: Main cache implementation with LRU eviction and TTL
 - StatementCache: Specialized cache for compiled SQL statements
-- ExpressionCache: Specialized cache for parsed SQLGlot expressions
+- ExpressionCache: Specialized cache for parsed expressions
 - ParameterCache: Specialized cache for processed parameters
 
 Features:
 - LRU caching with configurable size and TTL
 - Thread-safe cache operations for concurrent access
-- Cached hash values to avoid recomputation
-- O(1) cache lookup and insertion operations
+- Cache lookup and insertion operations
 """
 
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Generic, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
@@ -49,29 +48,28 @@ __all__ = (
 T = TypeVar("T")
 CacheValueT = TypeVar("CacheValueT")
 
-# Cache configuration constants
-DEFAULT_MAX_SIZE = 10000  # LRU cache size limit
-DEFAULT_TTL_SECONDS = 3600  # 1 hour default TTL
-CACHE_STATS_UPDATE_INTERVAL = 100  # Update stats every N operations
 
-# Cache slots - optimized structure
-CACHE_KEY_SLOTS = ("_hash", "_key_data")
-CACHE_NODE_SLOTS = ("key", "value", "prev", "next", "timestamp", "access_count")
-UNIFIED_CACHE_SLOTS = ("_cache", "_lock", "_max_size", "_ttl", "_head", "_tail", "_stats")
-CACHE_STATS_SLOTS = ("hits", "misses", "evictions", "total_operations", "memory_usage")
+DEFAULT_MAX_SIZE: Final = 10000
+DEFAULT_TTL_SECONDS: Final = 3600
+CACHE_STATS_UPDATE_INTERVAL: Final = 100
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+CACHE_KEY_SLOTS: Final = ("_hash", "_key_data")
+CACHE_NODE_SLOTS: Final = ("key", "value", "prev", "next", "timestamp", "access_count")
+UNIFIED_CACHE_SLOTS: Final = ("_cache", "_lock", "_max_size", "_ttl", "_head", "_tail", "_stats")
+CACHE_STATS_SLOTS: Final = ("hits", "misses", "evictions", "total_operations", "memory_usage")
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
 class CacheKey:
-    """Immutable cache key with optimized hashing.
+    """Immutable cache key.
 
     This class provides an immutable cache key for consistent cache operations
     across all cache types.
 
     Features:
-    - Cached hash value to avoid recomputation
     - Immutable design for safe sharing across threads
-    - Fast equality comparison with short-circuit evaluation
+    - Equality comparison with short-circuit evaluation
 
     Args:
         key_data: Tuple of hashable values that uniquely identify the cached item
@@ -101,7 +99,7 @@ class CacheKey:
         """Equality comparison with short-circuit evaluation."""
         if type(other) is not CacheKey:
             return False
-        other_key = other  # type: CacheKey
+        other_key = other
         if self._hash != other_key._hash:
             return False
         return self._key_data == other_key._key_data
@@ -111,7 +109,7 @@ class CacheKey:
         return f"CacheKey({self._key_data!r})"
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=False)
 class CacheStats:
     """Cache statistics tracking.
 
@@ -171,12 +169,12 @@ class CacheStats:
         )
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=False)
 class CacheNode:
     """Internal cache node for LRU linked list implementation.
 
     This class represents a node in the doubly-linked list used for
-    LRU cache implementation with O(1) operations.
+    LRU cache implementation.
     """
 
     __slots__ = CACHE_NODE_SLOTS
@@ -196,15 +194,15 @@ class CacheNode:
         self.access_count = 1
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
-class UnifiedCache(Generic[CacheValueT]):
+@mypyc_attr(allow_interpreted_subclasses=False)
+class UnifiedCache:
     """Cache with LRU eviction and TTL support.
 
     This class provides a thread-safe cache implementation with LRU eviction
     and time-based expiration.
 
     Features:
-    - O(1) cache lookup, insertion, and deletion operations
+    - Cache lookup, insertion, and deletion operations
     - LRU eviction policy with configurable size limits
     - TTL-based expiration for cache entries
     - Thread-safe operations
@@ -235,7 +233,7 @@ class UnifiedCache(Generic[CacheValueT]):
         self._head.next = self._tail
         self._tail.prev = self._head
 
-    def get(self, key: CacheKey) -> Optional[CacheValueT]:
+    def get(self, key: CacheKey) -> Optional[Any]:
         """Get value from cache with LRU update.
 
         Args:
@@ -250,7 +248,6 @@ class UnifiedCache(Generic[CacheValueT]):
                 self._stats.record_miss()
                 return None
 
-            # Optimize TTL check with early variable assignment
             ttl = self._ttl
             if ttl is not None:
                 current_time = time.time()
@@ -264,9 +261,9 @@ class UnifiedCache(Generic[CacheValueT]):
             self._move_to_head(node)
             node.access_count += 1
             self._stats.record_hit()
-            return node.value  # type: ignore[no-any-return]
+            return node.value
 
-    def put(self, key: CacheKey, value: CacheValueT) -> None:
+    def put(self, key: CacheKey, value: Any) -> None:
         """Put value in cache with LRU management.
 
         Args:
@@ -286,7 +283,6 @@ class UnifiedCache(Generic[CacheValueT]):
             self._cache[key] = new_node
             self._add_to_head(new_node)
 
-            # Optimize size check with cached length
             if len(self._cache) > self._max_size:
                 tail_node = self._tail.prev
                 if tail_node is not None and tail_node is not self._head:
@@ -326,7 +322,7 @@ class UnifiedCache(Generic[CacheValueT]):
 
     def is_empty(self) -> bool:
         """Check if cache is empty."""
-        return len(self._cache) == 0
+        return not self._cache
 
     def get_stats(self) -> CacheStats:
         """Get cache statistics."""
@@ -366,7 +362,6 @@ class UnifiedCache(Generic[CacheValueT]):
             if node is None:
                 return False
 
-            # Optimize TTL check
             ttl = self._ttl
             return not (ttl is not None and time.time() - node.timestamp > ttl)
 
@@ -384,7 +379,7 @@ class StatementCache:
         Args:
             max_size: Maximum number of statements to cache
         """
-        self._cache: UnifiedCache[tuple[str, Any]] = UnifiedCache(max_size)
+        self._cache: UnifiedCache = UnifiedCache(max_size)
 
     def get_compiled(self, statement: "SQL") -> Optional[tuple[str, Any]]:
         """Get compiled SQL and parameters from cache.
@@ -418,11 +413,11 @@ class StatementCache:
         Returns:
             Cache key for the statement
         """
-        # Create key from SQL text, parameters, and configuration
+
         key_data = (
             "statement",
             statement._raw_sql,
-            hash(statement),  # Includes parameters and flags
+            hash(statement),
             str(statement.dialect) if statement.dialect else None,
             statement.is_many,
             statement.is_script,
@@ -440,9 +435,9 @@ class StatementCache:
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ExpressionCache:
-    """Specialized cache for parsed SQLGlot expressions.
+    """Specialized cache for parsed expressions.
 
-    Caches parsed SQLGlot expressions to avoid redundant parsing operations.
+    Caches parsed expressions to avoid redundant parsing operations.
     """
 
     def __init__(self, max_size: int = DEFAULT_MAX_SIZE) -> None:
@@ -451,7 +446,7 @@ class ExpressionCache:
         Args:
             max_size: Maximum number of expressions to cache
         """
-        self._cache: UnifiedCache[exp.Expression] = UnifiedCache(max_size)
+        self._cache: UnifiedCache = UnifiedCache(max_size)
 
     def get_expression(self, sql: str, dialect: Optional[str] = None) -> "Optional[exp.Expression]":
         """Get parsed expression from cache.
@@ -512,7 +507,7 @@ class ParameterCache:
         Args:
             max_size: Maximum number of parameter sets to cache
         """
-        self._cache: UnifiedCache[Any] = UnifiedCache(max_size)
+        self._cache: UnifiedCache = UnifiedCache(max_size)
 
     def get_parameters(self, original_params: Any, config_hash: int) -> Optional[Any]:
         """Get processed parameters from cache.
@@ -548,9 +543,8 @@ class ParameterCache:
         Returns:
             Cache key for the parameters
         """
-        # Create stable key from parameters and configuration
+
         try:
-            # Optimize type checking order
             param_key: tuple[Any, ...]
             if isinstance(params, dict):
                 param_key = tuple(sorted(params.items()))
@@ -561,7 +555,6 @@ class ParameterCache:
 
             return CacheKey(("parameters", param_key, config_hash))
         except (TypeError, ValueError):
-            # Fallback for unhashable types
             param_key_fallback = (str(params), type(params).__name__)
             return CacheKey(("parameters", param_key_fallback, config_hash))
 
@@ -574,14 +567,14 @@ class ParameterCache:
         return self._cache.get_stats()
 
 
-_default_cache: Optional[UnifiedCache[Any]] = None
+_default_cache: Optional[UnifiedCache] = None
 _statement_cache: Optional[StatementCache] = None
 _expression_cache: Optional[ExpressionCache] = None
 _parameter_cache: Optional[ParameterCache] = None
 _cache_lock = threading.Lock()
 
 
-def get_default_cache() -> UnifiedCache[Any]:
+def get_default_cache() -> UnifiedCache:
     """Get the default unified cache instance.
 
     Returns:
@@ -591,7 +584,7 @@ def get_default_cache() -> UnifiedCache[Any]:
     if _default_cache is None:
         with _cache_lock:
             if _default_cache is None:
-                _default_cache = UnifiedCache[Any]()
+                _default_cache = UnifiedCache()
     return _default_cache
 
 
@@ -670,7 +663,7 @@ def get_cache_statistics() -> dict[str, CacheStats]:
 _global_cache_config: "Optional[CacheConfig]" = None
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=False)
 class CacheConfig:
     """Global cache configuration for SQLSpec.
 
@@ -752,7 +745,7 @@ def update_cache_config(config: CacheConfig) -> None:
     )
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=False)
 class CacheStatsAggregate:
     """Aggregated cache statistics from all cache instances."""
 

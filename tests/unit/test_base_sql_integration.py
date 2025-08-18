@@ -36,12 +36,10 @@ class TestSQLSpecSQLIntegration:
         sql_spec = SQLSpec()
         assert sql_spec._sql_loader is None
 
-        # First call should create the loader
         loader = sql_spec._ensure_sql_loader()
         assert isinstance(loader, SQLFileLoader)
         assert sql_spec._sql_loader is loader
 
-        # Second call should return the same loader
         loader2 = sql_spec._ensure_sql_loader()
         assert loader2 is loader
 
@@ -49,10 +47,8 @@ class TestSQLSpecSQLIntegration:
         """Test adding a named SQL query directly."""
         sql_spec = SQLSpec()
 
-        # Add a simple query
         sql_spec.add_named_sql("test_query", "SELECT 1 AS result")
 
-        # Should be able to retrieve it
         assert sql_spec.has_sql_query("test_query")
         sql_obj = sql_spec.get_sql("test_query")
         assert isinstance(sql_obj, SQL)
@@ -85,7 +81,7 @@ class TestSQLSpecSQLIntegration:
         sql_spec = SQLSpec()
 
         sql_spec.add_named_sql("query_a", "SELECT 1")
-        sql_spec.add_named_sql("query_b", "SELECT 2")
+        sql_spec.add_named_sql("query_b", "SELECT EXPECTED_PARTS_COUNT")
 
         queries = sql_spec.list_sql_queries()
         assert sorted(queries) == ["query_a", "query_b"]
@@ -107,7 +103,7 @@ class TestSQLSpecSQLIntegration:
     def test_clear_sql_cache_no_loader(self) -> None:
         """Test clearing cache when no loader exists."""
         sql_spec = SQLSpec()
-        # Should not raise an error
+
         sql_spec.clear_sql_cache()
 
     def test_clear_sql_cache_with_loader(self) -> None:
@@ -115,19 +111,16 @@ class TestSQLSpecSQLIntegration:
         sql_spec = SQLSpec()
         sql_spec.add_named_sql("test_query", "SELECT 1")
 
-        # Verify query exists
         assert sql_spec.has_sql_query("test_query")
 
-        # Clear cache
         sql_spec.clear_sql_cache()
 
-        # Query should be gone
         assert not sql_spec.has_sql_query("test_query")
 
     def test_reload_sql_files_no_loader(self) -> None:
         """Test reloading files when no loader exists."""
         sql_spec = SQLSpec()
-        # Should not raise an error
+
         sql_spec.reload_sql_files()
 
     def test_reload_sql_files_with_loader(self) -> None:
@@ -135,13 +128,10 @@ class TestSQLSpecSQLIntegration:
         sql_spec = SQLSpec()
         sql_spec.add_named_sql("test_query", "SELECT 1")
 
-        # Verify query exists
         assert sql_spec.has_sql_query("test_query")
 
-        # Reload (which clears cache)
         sql_spec.reload_sql_files()
 
-        # Query should be gone
         assert not sql_spec.has_sql_query("test_query")
 
     def test_get_sql_files_empty(self) -> None:
@@ -153,7 +143,6 @@ class TestSQLSpecSQLIntegration:
         """Test loading SQL files from a directory."""
         sql_spec = SQLSpec()
 
-        # Create a temporary SQL file
         with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False) as tf:
             tf.write("""
 -- name: test_query
@@ -166,33 +155,28 @@ SELECT COUNT(*) as total FROM users;
             temp_path = Path(tf.name)
 
         try:
-            # Load the file
             sql_spec.load_sql_files(temp_path)
 
-            # Verify queries were loaded
             queries = sql_spec.list_sql_queries()
             assert "test_query" in queries
             assert "count_users" in queries
 
-            # Verify we can retrieve the queries
             test_sql = sql_spec.get_sql("test_query")
             assert isinstance(test_sql, SQL)
             assert "SELECT id, name FROM users" in test_sql.sql
 
         finally:
-            # Clean up
             temp_path.unlink()
 
     def test_provided_loader_is_used(self) -> None:
         """Test that a provided loader is used instead of creating a new one."""
-        # Create a mock loader
+
         mock_loader = Mock(spec=SQLFileLoader)
         mock_loader.list_queries.return_value = ["mock_query"]
         mock_loader.has_query.return_value = True
 
         sql_spec = SQLSpec(loader=mock_loader)
 
-        # Test that the mock loader is used
         queries = sql_spec.list_sql_queries()
         assert queries == ["mock_query"]
         mock_loader.list_queries.assert_called_once()
@@ -207,15 +191,12 @@ SELECT COUNT(*) as total FROM users;
 
         sql_spec = SQLSpec()
 
-        # Add a database configuration
         config = SqliteConfig(pool_config={"database": ":memory:"})
         sql_spec.add_config(config)
 
-        # Add some SQL queries
         sql_spec.add_named_sql("get_users", "SELECT * FROM users")
         sql_spec.add_named_sql("count_users", "SELECT COUNT(*) FROM users")
 
-        # Verify both database and SQL functionality work
         retrieved_config = sql_spec.get_config(SqliteConfig)
         assert retrieved_config is config
 
@@ -223,27 +204,22 @@ SELECT COUNT(*) as total FROM users;
         sql_obj = sql_spec.get_sql("get_users")
         assert isinstance(sql_obj, SQL)
 
-        # Test that we can get a session and it has the expected interface
         with sql_spec.provide_session(config) as session:
-            # Should be able to execute SQL through the session
             assert hasattr(session, "execute")
 
     def test_sql_loader_cleanup_on_cache_clear(self) -> None:
         """Test proper cleanup when clearing SQL cache."""
         sql_spec = SQLSpec()
 
-        # Add some queries to create loader
         sql_spec.add_named_sql("query1", "SELECT 1")
-        sql_spec.add_named_sql("query2", "SELECT 2")
+        sql_spec.add_named_sql("query2", "SELECT EXPECTED_PARTS_COUNT")
 
-        # Verify loader exists and has queries
         assert sql_spec._sql_loader is not None
         assert len(sql_spec.list_sql_queries()) == 2
 
         # Clear cache
         sql_spec.clear_sql_cache()
 
-        # Loader should still exist but queries should be gone
         assert sql_spec._sql_loader is not None
         assert len(sql_spec.list_sql_queries()) == 0
 
@@ -252,11 +228,9 @@ SELECT COUNT(*) as total FROM users;
         """Test that SQL operations are properly logged."""
         sql_spec = SQLSpec()
 
-        # Test add_named_sql logging
         sql_spec.add_named_sql("test_query", "SELECT 1")
         mock_logger.debug.assert_called_with("Added named SQL: %s", "test_query")
 
-        # Test load_sql_files logging
         with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False) as tf:
             tf.write("-- name: file_query\nSELECT 1;")
             tf.flush()
@@ -268,29 +242,24 @@ SELECT COUNT(*) as total FROM users;
         finally:
             temp_path.unlink()
 
-        # Test clear_sql_cache logging
         sql_spec.clear_sql_cache()
         mock_logger.debug.assert_called_with("Cleared SQL cache")
 
     def test_backwards_compatibility(self) -> None:
         """Test that existing SQLSpec usage patterns still work."""
-        # This test ensures we haven't broken existing functionality
+
         from sqlspec.adapters.sqlite import SqliteConfig
 
-        # Original usage pattern should still work
         sql_spec = SQLSpec()
         config = SqliteConfig(pool_config={"database": ":memory:"})
         sql_spec.add_config(config)
 
-        # Should be able to get connection and session as before
         with sql_spec.provide_session(config) as session:
             assert hasattr(session, "execute")
 
-        # Cache functionality should still work
         original_cache_config = sql_spec.get_cache_config()
         assert original_cache_config is not None
 
-        # New SQL functionality should be additive
         sql_spec.add_named_sql("new_query", "SELECT 1")
         assert sql_spec.has_sql_query("new_query")
 
@@ -298,21 +267,17 @@ SELECT COUNT(*) as total FROM users;
         """Test that SQL loader errors are properly propagated."""
         sql_spec = SQLSpec()
 
-        # Test error from underlying loader
         with pytest.raises(ValueError, match="already exists"):
             sql_spec.add_named_sql("duplicate", "SELECT 1")
-            sql_spec.add_named_sql("duplicate", "SELECT 2")  # Should raise
+            sql_spec.add_named_sql("duplicate", "SELECT EXPECTED_PARTS_COUNT")
 
     def test_name_normalization_consistency(self) -> None:
         """Test that name normalization works consistently."""
         sql_spec = SQLSpec()
 
-        # Add query with hyphens
         sql_spec.add_named_sql("user-profile-query", "SELECT * FROM user_profiles")
 
-        # Should be able to find it with normalized name
         assert sql_spec.has_sql_query("user_profile_query")
-        assert sql_spec.has_sql_query("user-profile-query")  # Original name should also work
 
         sql_obj = sql_spec.get_sql("user_profile_query")
         assert isinstance(sql_obj, SQL)

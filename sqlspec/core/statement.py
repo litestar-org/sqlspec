@@ -1,6 +1,6 @@
 """SQL statement and configuration management."""
 
-from typing import TYPE_CHECKING, Any, Callable, Final, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Final, Optional, Union, cast
 
 import sqlglot
 from mypy_extensions import mypyc_attr
@@ -64,7 +64,7 @@ PROCESSED_STATE_SLOTS: Final = (
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ProcessedState:
-    """Cached processing results for SQL statements."""
+    """Processing results for SQL statements."""
 
     __slots__ = PROCESSED_STATE_SLOTS
     operation_type: "OperationType"
@@ -89,7 +89,7 @@ class ProcessedState:
         return hash((self.compiled_sql, str(self.execution_parameters), self.operation_type))
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=False)
 class SQL:
     """SQL statement with parameter and filter support."""
 
@@ -335,7 +335,7 @@ class SQL:
                     compiled_sql=compiled_result.compiled_sql,
                     execution_parameters=compiled_result.execution_parameters,
                     parsed_expression=compiled_result.expression,
-                    operation_type=compiled_result.operation_type,  # pyright: ignore[reportArgumentType]
+                    operation_type=cast("OperationType", compiled_result.operation_type),
                     validation_errors=[],
                     is_many=self._is_many,
                 )
@@ -344,7 +344,7 @@ class SQL:
                 self._processed_state = ProcessedState(
                     compiled_sql=self._raw_sql,
                     execution_parameters=self._named_parameters or self._positional_parameters,
-                    operation_type="UNKNOWN",  # pyright: ignore[reportArgumentType]
+                    operation_type=cast("OperationType", "UNKNOWN"),
                     is_many=self._is_many,
                 )
 
@@ -480,7 +480,7 @@ class SQL:
         return f"SQL({self._raw_sql!r}{params_str}{flags_str})"
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=False)
 class StatementConfig:
     """Configuration for SQL statement processing."""
 
@@ -509,16 +509,16 @@ class StatementConfig:
 
         Args:
             parameter_config: Parameter style configuration
-            enable_parsing: Enable SQL parsing using sqlglot
-            enable_validation: Run SQL validators to check for safety issues
+            enable_parsing: Enable SQL parsing
+            enable_validation: Run SQL validators
             enable_transformations: Apply SQL transformers
-            enable_analysis: Run SQL analyzers for metadata extraction
+            enable_analysis: Run SQL analyzers
             enable_expression_simplification: Apply expression simplification
             enable_parameter_type_wrapping: Wrap parameters with type information
             enable_caching: Cache processed SQL statements
             parameter_converter: Handles parameter style conversions
             parameter_validator: Validates parameter usage and styles
-            dialect: SQL dialect for parsing and generation
+            dialect: SQL dialect
             pre_process_steps: Optional list of preprocessing steps
             post_process_steps: Optional list of postprocessing steps
             execution_mode: Special execution mode
@@ -559,7 +559,7 @@ class StatementConfig:
                 msg = f"{key!r} is not a field in {type(self).__name__}"
                 raise TypeError(msg)
 
-        current_kwargs = {
+        current_kwargs: dict[str, Any] = {
             "parameter_config": self.parameter_config,
             "enable_parsing": self.enable_parsing,
             "enable_validation": self.enable_validation,
@@ -643,7 +643,7 @@ class StatementConfig:
 
     def _compare_parameter_configs(self, config1: Any, config2: Any) -> bool:
         """Compare parameter configs by key attributes."""
-        return (
+        return bool(
             config1.default_parameter_style == config2.default_parameter_style
             and config1.supported_parameter_styles == config2.supported_parameter_styles
             and config1.supported_execution_parameter_styles == config2.supported_execution_parameter_styles

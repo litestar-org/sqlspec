@@ -117,10 +117,9 @@ class MockSyncCursor:
         self.connection.last_sql = sql
         self.connection.last_parameters = parameters
 
-        # Set mock results based on SQL type
         if sql.upper().strip().startswith("SELECT"):
             self.description = [("id", "INTEGER"), ("name", "TEXT")]
-            # Always return 2 rows - tests expect this
+
             self.fetchall_result = [(1, "test"), (2, "example")]
             self.rowcount = len(self.fetchall_result)
         else:
@@ -160,10 +159,9 @@ class MockAsyncCursor:
         self.connection.last_sql = sql
         self.connection.last_parameters = parameters
 
-        # Set mock results based on SQL type
         if sql.upper().strip().startswith("SELECT"):
             self.description = [("id", "INTEGER"), ("name", "TEXT")]
-            # Always return 2 rows - tests expect this
+
             self.fetchall_result = [(1, "test"), (2, "example")]
             self.rowcount = len(self.fetchall_result)
         else:
@@ -209,7 +207,7 @@ class MockSyncDriver(SyncDriverAdapterBase):
         if statement_config is None:
             statement_config = StatementConfig(
                 dialect="sqlite",
-                enable_caching=False,  # Disable caching to avoid hash issues
+                enable_caching=False,
                 parameter_config=ParameterStyleConfig(
                     default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
                 ),
@@ -239,10 +237,10 @@ class MockSyncDriver(SyncDriverAdapterBase):
 
     def _execute_statement(self, cursor: MockSyncCursor, statement: SQL) -> ExecutionResult:
         """Mock execute statement."""
-        # If this is an is_many statement, delegate to _execute_many
+
         if statement.is_many:
             return self._execute_many(cursor, statement)
-        # If this is a script statement, delegate to _execute_script
+
         if statement.is_script:
             return self._execute_script(cursor, statement)
 
@@ -312,7 +310,7 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
         if statement_config is None:
             statement_config = StatementConfig(
                 dialect="sqlite",
-                enable_caching=False,  # Disable caching to avoid hash issues
+                enable_caching=False,
                 parameter_config=ParameterStyleConfig(
                     default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
                 ),
@@ -342,10 +340,10 @@ class MockAsyncDriver(AsyncDriverAdapterBase):
 
     async def _execute_statement(self, cursor: MockAsyncCursor, statement: SQL) -> ExecutionResult:
         """Mock async execute statement."""
-        # If this is an is_many statement, delegate to _execute_many
+
         if statement.is_many:
             return await self._execute_many(cursor, statement)
-        # If this is a script statement, delegate to _execute_script
+
         if statement.is_script:
             return await self._execute_script(cursor, statement)
 
@@ -430,7 +428,7 @@ def sample_statement_config() -> StatementConfig:
     """Sample statement configuration for testing."""
     return StatementConfig(
         dialect="sqlite",
-        enable_caching=False,  # Disable caching to avoid hash issues
+        enable_caching=False,
         parameter_config=ParameterStyleConfig(
             default_parameter_style=ParameterStyle.QMARK,
             supported_parameter_styles={ParameterStyle.QMARK},

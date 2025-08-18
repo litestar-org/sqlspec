@@ -19,7 +19,6 @@ def sqlite_session() -> Generator[SqliteDriver, None, None]:
 
     try:
         with config.provide_session() as session:
-            # Create test table
             session.execute_script("""
                 CREATE TABLE IF NOT EXISTS test_table (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,24 +27,21 @@ def sqlite_session() -> Generator[SqliteDriver, None, None]:
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            # Commit DDL to prevent table locking issues in subsequent operations
+
             session.commit()
 
             try:
                 yield session
             finally:
-                # Ensure any pending transactions are committed before test ends
                 try:
                     session.commit()
                 except Exception:
-                    # If commit fails, try rollback to clean up transaction state
                     try:
                         session.rollback()
                     except Exception:
                         pass
-            # Cleanup is automatic with in-memory database
+
     finally:
-        # Ensure pool is closed properly to avoid threading issues during test shutdown
         config.close_pool()
 
 
@@ -58,13 +54,11 @@ def sqlite_driver() -> Generator[SqliteDriver, None, None]:
     """
     import sqlite3
 
-    # Create in-memory database
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
 
     driver = SqliteDriver(conn)
 
-    # Create test table
     driver.execute_script("""
         CREATE TABLE users (
             id INTEGER PRIMARY KEY,

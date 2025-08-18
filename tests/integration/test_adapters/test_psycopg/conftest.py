@@ -20,7 +20,7 @@ def psycopg_sync_config(postgres_service: PostgresService) -> "Generator[Psycopg
         }
     )
     yield config
-    # Ensure pool is closed
+
     if config.pool_instance:
         config.close_pool()
 
@@ -34,18 +34,15 @@ def psycopg_async_config(postgres_service: PostgresService) -> "Generator[Psycop
         }
     )
     yield config
-    # Ensure pool is closed
+
     if config.pool_instance:
         import asyncio
 
         try:
-            # If we're in an async context
             loop = asyncio.get_running_loop()
             if not loop.is_closed():
                 loop.run_until_complete(config.close_pool())
         except RuntimeError:
-            # Not in an async context, create a new event loop
-            # Use a new event loop to avoid conflicts
             new_loop = asyncio.new_event_loop()
             try:
                 new_loop.run_until_complete(config.close_pool())

@@ -9,7 +9,7 @@ from sqlspec.core.statement import StatementConfig
 
 def test_asyncmy_typed_dict_structure() -> None:
     """Test Asyncmy TypedDict structure."""
-    # Test that we can create valid connection parameters
+
     connection_parameters: AsyncmyConnectionParams = {
         "host": "localhost",
         "port": 3306,
@@ -28,7 +28,7 @@ def test_asyncmy_typed_dict_structure() -> None:
 
 def test_asyncmy_config_basic_creation() -> None:
     """Test Asyncmy config creation with basic parameters."""
-    # Test minimal config creation
+
     pool_config = {
         "host": "localhost",
         "port": 3306,
@@ -43,14 +43,13 @@ def test_asyncmy_config_basic_creation() -> None:
     assert config.pool_config["password"] == "test_password"
     assert config.pool_config["database"] == "test_db"
 
-    # Test with additional parameters
     pool_config_full = {
         "host": "localhost",
         "port": 3306,
         "user": "test_user",
         "password": "test_password",
         "database": "test_db",
-        "custom": "value",  # Additional parameters
+        "custom": "value",
     }
     config_full = AsyncmyConfig(pool_config=pool_config_full)
     assert config_full.pool_config["host"] == "localhost"
@@ -63,7 +62,7 @@ def test_asyncmy_config_basic_creation() -> None:
 
 def test_asyncmy_config_initialization() -> None:
     """Test Asyncmy config initialization."""
-    # Test with default parameters
+
     pool_config = {
         "host": "localhost",
         "port": 3306,
@@ -74,7 +73,6 @@ def test_asyncmy_config_initialization() -> None:
     config = AsyncmyConfig(pool_config=pool_config)
     assert isinstance(config.statement_config, StatementConfig)
 
-    # Test with custom parameters
     custom_statement_config = StatementConfig()
     config = AsyncmyConfig(pool_config=pool_config, statement_config=custom_statement_config)
     assert config.statement_config is custom_statement_config
@@ -94,13 +92,11 @@ async def test_asyncmy_config_provide_session(mysql_service: MySQLService) -> No
     }
     config = AsyncmyConfig(pool_config=pool_config)
 
-    # Test session context manager behavior
     async with config.provide_session() as session:
         assert isinstance(session, AsyncmyDriver)
-        # Check that parameter styles were set
+
         assert session.statement_config is not None
         assert session.statement_config.parameter_config is not None
-        # asyncmy uses pyformat, which is %s style parameters
 
 
 def test_asyncmy_config_driver_type() -> None:
