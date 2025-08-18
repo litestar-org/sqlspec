@@ -89,21 +89,16 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             driver: The database driver to use.
         """
         try:
-            # Check if the connection has autocommit enabled
             connection = getattr(driver, "connection", None)
             if connection and hasattr(connection, "autocommit") and getattr(connection, "autocommit", False):
                 return
 
-            # For ADBC and other drivers, check the driver_features
             driver_features = getattr(driver, "driver_features", {})
             if driver_features and driver_features.get("autocommit", False):
                 return
 
-            # Safe to commit manually
             driver.commit()
         except Exception:
-            # If commit fails due to no active transaction, that's acceptable
-            # Some drivers with autocommit will fail when trying to commit
             logger.debug("Failed to commit transaction, likely due to autocommit being enabled")
 
 
@@ -179,19 +174,14 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             driver: The database driver to use.
         """
         try:
-            # Check if the connection has autocommit enabled
             connection = getattr(driver, "connection", None)
             if connection and hasattr(connection, "autocommit") and getattr(connection, "autocommit", False):
                 return
 
-            # For ADBC and other drivers, check the driver_features
             driver_features = getattr(driver, "driver_features", {})
             if driver_features and driver_features.get("autocommit", False):
                 return
 
-            # Safe to commit manually
             await driver.commit()
         except Exception:
-            # If commit fails due to no active transaction, that's acceptable
-            # Some drivers with autocommit will fail when trying to commit
             logger.debug("Failed to commit transaction, likely due to autocommit being enabled")

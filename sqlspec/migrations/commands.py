@@ -9,7 +9,6 @@ from rich.console import Console
 from rich.table import Table
 
 from sqlspec._sql import sql
-from sqlspec.migrations.adapter_discovery import discover_migration_tracker
 from sqlspec.migrations.base import BaseMigrationCommands
 from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
 from sqlspec.migrations.utils import create_migration_file
@@ -35,8 +34,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             config: The SQLSpec configuration.
         """
         super().__init__(config)
-        tracker_class = discover_migration_tracker(config, sync=True)
-        self.tracker = tracker_class(self.version_table)
+        self.tracker = config.migration_tracker_type(self.version_table)
         self.runner = SyncMigrationRunner(self.migrations_path)
 
     def init(self, directory: str, package: bool = True) -> None:
@@ -144,7 +142,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             if revision == "-1":
                 to_revert = [applied[-1]]
             elif revision == "base":
-                # Revert all migrations to get back to base state
                 to_revert = list(reversed(applied))
             else:
                 for migration in reversed(applied):
@@ -213,8 +210,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             sqlspec_config: The SQLSpec configuration.
         """
         super().__init__(sqlspec_config)
-        tracker_class = discover_migration_tracker(sqlspec_config, sync=False)
-        self.tracker = tracker_class(self.version_table)
+        self.tracker = sqlspec_config.migration_tracker_type(self.version_table)
         self.runner = AsyncMigrationRunner(self.migrations_path)
 
     async def init(self, directory: str, package: bool = True) -> None:
@@ -313,7 +309,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             if revision == "-1":
                 to_revert = [applied[-1]]
             elif revision == "base":
-                # Revert all migrations to get back to base state
                 to_revert = list(reversed(applied))
             else:
                 for migration in reversed(applied):

@@ -5,6 +5,7 @@ from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
 from sqlspec.core.statement import StatementConfig
+from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -160,6 +161,7 @@ class NoPoolSyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     __slots__ = ("connection_config",)
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = False
+    migration_tracker_type: "ClassVar[type[Any]]" = SyncMigrationTracker
 
     def __init__(
         self,
@@ -210,9 +212,9 @@ class NoPoolAsyncConfig(DatabaseConfigProtocol[ConnectionT, None, DriverT]):
     """Base class for an async database configurations that do not implement a pool."""
 
     __slots__ = ("connection_config",)
-
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = False
+    migration_tracker_type: "ClassVar[type[Any]]" = AsyncMigrationTracker
 
     def __init__(
         self,
@@ -263,9 +265,9 @@ class SyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Generic Sync Database Configuration."""
 
     __slots__ = ("pool_config",)
-
     is_async: "ClassVar[bool]" = False
     supports_connection_pooling: "ClassVar[bool]" = True
+    migration_tracker_type: "ClassVar[type[Any]]" = SyncMigrationTracker
 
     def __init__(
         self,
@@ -339,9 +341,9 @@ class AsyncDatabaseConfig(DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]):
     """Generic Async Database Configuration."""
 
     __slots__ = ("pool_config",)
-
     is_async: "ClassVar[bool]" = True
     supports_connection_pooling: "ClassVar[bool]" = True
+    migration_tracker_type: "ClassVar[type[Any]]" = AsyncMigrationTracker
 
     def __init__(
         self,

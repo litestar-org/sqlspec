@@ -60,7 +60,7 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase"]):
             return None, 0
 
         start_time = time.time()
-        # Execute each SQL statement separately
+
         for sql_statement in upgrade_sql_list:
             if sql_statement.strip():
                 driver.execute_script(sql_statement)
@@ -84,7 +84,7 @@ class SyncMigrationRunner(BaseMigrationRunner["SyncDriverAdapterBase"]):
             return None, 0
 
         start_time = time.time()
-        # Execute each SQL statement separately
+
         for sql_statement in downgrade_sql_list:
             if sql_statement.strip():
                 driver.execute_script(sql_statement)
@@ -235,7 +235,7 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase"]):
             return None, 0
 
         start_time = time.time()
-        # Execute each SQL statement separately
+
         for sql_statement in upgrade_sql_list:
             if sql_statement.strip():
                 await driver.execute_script(sql_statement)
@@ -259,7 +259,7 @@ class AsyncMigrationRunner(BaseMigrationRunner["AsyncDriverAdapterBase"]):
             return None, 0
 
         start_time = time.time()
-        # Execute each SQL statement separately
+
         for sql_statement in downgrade_sql_list:
             if sql_statement.strip():
                 await driver.execute_script(sql_statement)
