@@ -79,15 +79,17 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         self,
         *,
         connection_config: Optional[Union[AdbcConnectionParams, dict[str, Any]]] = None,
-        statement_config: Optional[StatementConfig] = None,
         migration_config: Optional[dict[str, Any]] = None,
+        statement_config: Optional[StatementConfig] = None,
+        driver_features: Optional[dict[str, Any]] = None,
     ) -> None:
         """Initialize ADBC configuration.
 
         Args:
             connection_config: Connection configuration parameters
-            statement_config: Default SQL statement configuration
             migration_config: Migration configuration
+            statement_config: Default SQL statement configuration
+            driver_features: Driver feature configuration
         """
         if connection_config is None:
             connection_config = {}
@@ -106,7 +108,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             connection_config=self.connection_config,
             migration_config=migration_config,
             statement_config=statement_config,
-            driver_features={},
+            driver_features=driver_features or {},
         )
 
     def _resolve_driver_name(self) -> str:

@@ -71,6 +71,7 @@ class BigQueryDriverFeatures(TypedDict, total=False):
     Only non-standard BigQuery client parameters that are SQLSpec-specific extensions.
     """
 
+    connection_instance: NotRequired["BigQueryConnection"]
     on_job_start: NotRequired["Callable[[str], None]"]
     on_job_complete: NotRequired["Callable[[str, Any], None]"]
     on_connection_create: NotRequired["Callable[[Any], None]"]
@@ -93,7 +94,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
     def __init__(
         self,
         *,
-        connection_instance: "Optional[BigQueryConnection]" = None,
         connection_config: "Optional[Union[BigQueryConnectionParams, dict[str, Any]]]" = None,
         migration_config: Optional[dict[str, Any]] = None,
         statement_config: "Optional[StatementConfig]" = None,
@@ -103,10 +103,10 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
         Args:
             connection_config: Standard connection configuration parameters
-            connection_instance: Existing connection instance to use
             migration_config: Migration configuration
             statement_config: Statement configuration override
-            driver_features: BigQuery-specific driver features and configurations
+            driver_features: BigQuery-specific driver features and configurations.
+                Can include 'connection_instance' to reuse an existing BigQuery connection.
 
         Example:
             >>> # Basic BigQuery connection
@@ -143,19 +143,16 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             ... )
         """
 
-        # Store connection instance
-        self._connection_instance = connection_instance
-
-        # Setup configuration following DuckDB pattern
         self.connection_config: dict[str, Any] = dict(connection_config) if connection_config else {}
         if "extra" in self.connection_config:
             extras = self.connection_config.pop("extra")
             self.connection_config.update(extras)
 
-        # Setup driver features
         self.driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
 
-        # Setup default job config if not provided
+        # Initialize connection instance cache (for performance optimization)
+        self._connection_instance: Optional[BigQueryConnection] = self.driver_features.get("connection_instance")
+
         if "default_query_job_config" not in self.connection_config:
             self._setup_default_job_config()
 
@@ -237,8 +234,8 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             if on_connection_create:
                 on_connection_create(connection)
 
+            # Cache the connection for reuse (BigQuery connections are expensive)
             self._connection_instance = connection
-
         except Exception as e:
             project = self.connection_config.get("project", "Unknown")
             msg = f"Could not configure BigQuery connection for project '{project}'. Error: {e}"

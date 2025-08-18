@@ -177,7 +177,9 @@ async def test_config_with_kwargs_override() -> None:
     pool_config = {"database": "base.db", "timeout": 5.0}
 
     unique_db = f"file:override_{uuid4().hex}.db?mode=memory&cache=shared"
-    config = AiosqliteConfig(pool_config=pool_config, database=unique_db, timeout=15.0)
+    # Override pool_config with specific test values
+    test_pool_config = {**pool_config, "database": unique_db, "timeout": 15.0}
+    config = AiosqliteConfig(pool_config=test_pool_config)
 
     try:
         connection_config = config._get_connection_config_dict()

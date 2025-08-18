@@ -83,18 +83,20 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
     def __init__(
         self,
         *,
-        pool_instance: "Optional[ConnectionPool]" = None,
         pool_config: "Optional[Union[OraclePoolParams, dict[str, Any]]]" = None,
-        statement_config: "Optional[StatementConfig]" = None,
+        pool_instance: "Optional[ConnectionPool]" = None,
         migration_config: Optional[dict[str, Any]] = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
         """Initialize Oracle synchronous configuration.
 
         Args:
             pool_config: Pool configuration parameters
             pool_instance: Existing pool instance to use
-            statement_config: Default SQL statement configuration
             migration_config: Migration configuration
+            statement_config: Default SQL statement configuration
+            driver_features: Optional driver feature configuration
         """
         # Store the pool config as a dict and extract/merge extras
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
@@ -107,6 +109,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "ConnectionPool"
             pool_instance=pool_instance,
             migration_config=migration_config,
             statement_config=statement_config,
+            driver_features=driver_features or {},
         )
 
     def _create_pool(self) -> "ConnectionPool":
@@ -208,16 +211,18 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
         *,
         pool_config: "Optional[Union[OraclePoolParams, dict[str, Any]]]" = None,
         pool_instance: "Optional[AsyncConnectionPool]" = None,
-        statement_config: "Optional[StatementConfig]" = None,
         migration_config: Optional[dict[str, Any]] = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
         """Initialize Oracle asynchronous configuration.
 
         Args:
             pool_config: Pool configuration parameters
             pool_instance: Existing pool instance to use
-            statement_config: Default SQL statement configuration
             migration_config: Migration configuration
+            statement_config: Default SQL statement configuration
+            driver_features: Optional driver feature configuration
         """
         # Store the pool config as a dict and extract/merge extras
         processed_pool_config: dict[str, Any] = dict(pool_config) if pool_config else {}
@@ -230,6 +235,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "AsyncConnect
             pool_instance=pool_instance,
             migration_config=migration_config,
             statement_config=statement_config or oracledb_statement_config,
+            driver_features=driver_features or {},
         )
 
     async def _create_pool(self) -> "AsyncConnectionPool":

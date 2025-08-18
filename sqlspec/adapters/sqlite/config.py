@@ -44,16 +44,18 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         *,
         pool_config: "Optional[Union[SqliteConnectionParams, dict[str, Any]]]" = None,
         pool_instance: "Optional[SqliteConnectionPool]" = None,
-        statement_config: "Optional[StatementConfig]" = None,
         migration_config: "Optional[dict[str, Any]]" = None,
+        statement_config: "Optional[StatementConfig]" = None,
+        driver_features: "Optional[dict[str, Any]]" = None,
     ) -> None:
         """Initialize SQLite configuration.
 
         Args:
             pool_config: Configuration parameters including connection settings
             pool_instance: Pre-created pool instance
-            statement_config: Default SQL statement configuration
             migration_config: Migration configuration
+            statement_config: Default SQL statement configuration
+            driver_features: Optional driver feature configuration
         """
         if pool_config is None:
             pool_config = {}
@@ -66,7 +68,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             pool_config=cast("dict[str, Any]", pool_config),
             migration_config=migration_config,
             statement_config=statement_config or sqlite_statement_config,
-            driver_features={},
+            driver_features=driver_features or {},
         )
 
     def _get_connection_config_dict(self) -> "dict[str, Any]":
